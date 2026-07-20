@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="HRPulsar mark">
+<path d="M 100 28 A 72 72 0 1 1 32.342 124.625" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round"></path>
+<path d="M 32.342 124.625 A 72 72 0 0 1 32.342 75.375" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round"></path>
+<circle cx="100" cy="100" r="9" fill="#FFFFFF"></circle>
+</svg>

@@ -1,0 +1,30 @@
+# Applies to builds with the repo root as context (backend and frontend
+# Dockerfiles). Keeps the build context small: only sources the images
+# actually COPY are sent to the daemon.
+.git
+.venv
+# Never ship local env files: the root .env holds secrets, and
+# frontend/.env.local would be inlined into the production bundle by
+# `next build` (NEXT_PUBLIC_*).
+**/.env
+**/.env.*
+!**/.env.example
+**/__pycache__
+**/node_modules
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.idea
+temp
+backend/tests
+backend/celerybeat-schedule*
+frontend/.next
+frontend/test-results
+frontend/playwright-report
+marketing/.next
+marketing/test-results
+marketing/playwright-report
+enterprise
+devtools
+status
+.claude

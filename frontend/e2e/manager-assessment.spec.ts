@@ -1,0 +1,232 @@
+import { test, expect } from "@playwright/test";
+import { registerUser, loginViaUI } from "./helpers";
+
+const API_BASE = "http://localhost:8100/api";
+
+test.describe("Manager assessments (HRP-186)", () => {
+  test("candidate card mounts Assessments section and creates a round", async ({
+    page,
+  }) => {
+    const { email, password, accessToken } = await registerUser(page);
+
+    const vacResp = await page.request.post(
+      `${API_BASE}/recruitment/vacancies`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: { title: "HRP-186 e2e vacancy", language: "en" },
+      },
+    );
+    expect(vacResp.ok()).toBeTruthy();
+    const vacancy = await vacResp.json();
+
+    const candResp = await page.request.post(
+      `${API_BASE}/recruitment/vacancies/${vacancy.id}/candidates`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: {
+          full_name: "Jane Assessment",
+          email: `jane-${Date.now()}@example.com`,
+        },
+      },
+    );
+    expect(candResp.ok()).toBeTruthy();
+    const candidate = await candResp.json();
+
+    await loginViaUI(page, email, password);
+    await page.goto(`/recruitment/candidates/${candidate.id}`);
+
+    const section = page.getByTestId("candidate-section-assessments");
+    await expect(section).toBeVisible({ timeout: 10000 });
+    await expect(section).toContainText("Manager assessments");
+
+    await page.getByTestId("assessment-round-new-btn").click();
+    // HRP-186 REDO: a confirm dialog now guards the round creation.
+    await page
+      .getByTestId("assessment-round-new-confirm-modal-confirm")
+      .click();
+    const firstTab = page.locator(
+      '[data-testid^="assessment-round-tab-"]',
+    );
+    await expect(firstTab).toHaveCount(1, { timeout: 10000 });
+    await expect(firstTab.first()).toContainText("Interview");
+
+    // HRP-352: no competences in the vacancy profile yet → the invite
+    // button is disabled (tooltip explains why).
+    const inviteBtn = page.getByTestId("invite-evaluator-modal-open");
+    await expect(inviteBtn).toBeDisabled();
+
+    // Seed a profile matrix, reload — the button unlocks.
+    const profSeedResp = await page.request.put(
+      `${API_BASE}/recruitment/vacancies/${vacancy.id}/profile`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: {
+          profile_data: {
+            competences: [
+              { name: "Communication", criticality: "critical" },
+            ],
+          },
+        },
+      },
+    );
+    expect(profSeedResp.ok()).toBeTruthy();
+    await page.reload();
+    await expect(inviteBtn).toBeEnabled({ timeout: 10000 });
+    await inviteBtn.click();
+    const modal = page.getByTestId("invite-evaluator-modal");
+    await expect(modal).toBeVisible();
+
+    // HRP-350: Remove on the only row clears it back to placeholders.
+    await page.getByTestId("invite-evaluator-modal-email-0").fill("a@b.com");
+    await page.getByTestId("invite-evaluator-modal-name-0").fill("Some Name");
+    await page.getByTestId("invite-evaluator-modal-remove-0").click();
+    await expect(
+      page.getByTestId("invite-evaluator-modal-email-0"),
+    ).toHaveValue("");
+    await expect(
+      page.getByTestId("invite-evaluator-modal-name-0"),
+    ).toHaveValue("");
+
+    // HRP-350: a malformed email is rejected client-side; the modal stays
+    // open and no invite row appears.
+    await page.getByTestId("invite-evaluator-modal-email-0").fill("Aaa");
+    await page.getByTestId("invite-evaluator-modal-name-0").fill("Bad Email");
+    await page.getByTestId("invite-evaluator-modal-submit").click();
+    await expect(modal).toBeVisible();
+    await expect(
+      page.locator('[data-testid^="assessment-round-invite-"]'),
+    ).toHaveCount(0);
+  });
+
+  // HRP-348 REDO: the sheet renders indicators + criticality chips, and
+  // `Mark as complete` stays locked until every critical competence has
+  // an overall score.
+  test("assessment sheet shows indicators, criticality chip and gates completion", async ({
+    page,
+  }) => {
+    const { email, password, accessToken } = await registerUser(page);
+
+    const vacResp = await page.request.post(
+      `${API_BASE}/recruitment/vacancies`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: { title: "HRP-348 e2e vacancy", language: "en" },
+      },
+    );
+    expect(vacResp.ok()).toBeTruthy();
+    const vacancy = await vacResp.json();
+
+    const profResp = await page.request.put(
+      `${API_BASE}/recruitment/vacancies/${vacancy.id}/profile`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: {
+          profile_data: {
+            competences: [
+              {
+                name: "Python",
+                group: "Hard",
+                subgroup: "Core",
+                criticality: "critical",
+                indicators: ["Writes idiomatic code", "Knows asyncio"],
+              },
+              {
+                name: "Teamwork",
+                group: "Soft",
+                subgroup: "Core",
+                criticality: "desirable",
+              },
+            ],
+          },
+        },
+      },
+    );
+    expect(profResp.ok()).toBeTruthy();
+
+    const candResp = await page.request.post(
+      `${API_BASE}/recruitment/vacancies/${vacancy.id}/candidates`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: {
+          full_name: "John Sheet",
+          email: `john-${Date.now()}@example.com`,
+        },
+      },
+    );
+    expect(candResp.ok()).toBeTruthy();
+    const candidate = await candResp.json();
+
+    await loginViaUI(page, email, password);
+    await page.goto(`/recruitment/candidates/${candidate.id}`);
+
+    const section = page.getByTestId("candidate-section-assessments");
+    await expect(section).toBeVisible({ timeout: 10000 });
+
+    await page.getByTestId("assessment-round-new-btn").click();
+    await page
+      .getByTestId("assessment-round-new-confirm-modal-confirm")
+      .click();
+    await expect(
+      page.locator('[data-testid^="assessment-round-tab-"]'),
+    ).toHaveCount(1, { timeout: 10000 });
+
+    // Start scoring — creates the per-user sheet.
+    await page.getByRole("button", { name: "Start scoring this round" }).click();
+
+    const cards = page.locator(
+      '[data-testid^="assessment-competence-card-"]',
+    );
+    await expect(cards).toHaveCount(2, { timeout: 10000 });
+    await expect(section).toContainText("0 / 2 competences assessed");
+
+    // Criticality chips are rendered for both competences.
+    await expect(
+      page.locator('[data-testid^="assessment-competence-criticality-"]'),
+    ).toHaveCount(2);
+    await expect(section).toContainText("Critical");
+    await expect(section).toContainText("Desirable");
+
+    // Completion is locked while the critical competence is unscored.
+    const completeBtn = page.getByTestId("assessment-round-complete-btn");
+    await expect(completeBtn).toBeDisabled();
+
+    // Open the critical competence card — indicators are listed with
+    // their own score rows.
+    const criticalCard = cards.filter({ hasText: "Python" });
+    await criticalCard.locator("summary").click();
+    await expect(
+      criticalCard.locator('[data-testid^="assessment-indicators-"]'),
+    ).toBeVisible();
+    await expect(criticalCard).toContainText("Writes idiomatic code");
+    await expect(criticalCard).toContainText("Knows asyncio");
+
+    // Scoring only the desirable competence keeps completion locked.
+    const desirableCard = cards.filter({ hasText: "Teamwork" });
+    await desirableCard.locator("summary").click();
+    await desirableCard
+      .locator(
+        'label:has(input[data-testid^="assessment-competence-overall-radio-"][data-testid$="-3"])',
+      )
+      .click();
+    await expect(section).toContainText("1 / 2 competences assessed");
+    await expect(completeBtn).toBeDisabled();
+
+    // Scoring the critical competence through its indicators computes the
+    // overall server-side and unlocks Mark as complete.
+    const indicatorRadios = criticalCard.locator(
+      'label:has(input[data-testid^="assessment-indicator-radio-"][data-testid$="-3"])',
+    );
+    await expect(indicatorRadios).toHaveCount(2);
+    await indicatorRadios.nth(0).click();
+    await indicatorRadios.nth(1).click();
+    await expect(section).toContainText("2 / 2 competences assessed", {
+      timeout: 10000,
+    });
+    await expect(
+      criticalCard.locator(
+        '[data-testid^="assessment-competence-overall-computed-badge-"]',
+      ),
+    ).toBeVisible();
+    await expect(completeBtn).toBeEnabled();
+  });
+});

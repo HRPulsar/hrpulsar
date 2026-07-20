@@ -1,0 +1,18 @@
+-r requirements.in
+# Dev/test versions must agree with the runtime lock (HRP-398)
+-c requirements.txt
+pytest
+pytest-asyncio
+pytest-cov
+httpx
+black
+ruff
+mypy
+types-PyYAML
+# Stubs the pinned mypy (1.x) requires under --ignore-missing-imports; the
+# unpinned pre-HRP-398 CI ran a newer mypy that did not flag these
+types-bleach
+types-python-dateutil
+bandit
+# Lock-file tooling: `make lock` regenerates requirements*.txt via pip-compile
+pip-tools

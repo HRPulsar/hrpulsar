@@ -1,0 +1,96 @@
+Interview · Senior Backend Engineer — Payments
+Candidate: Elena Volkov
+Interviewer: Maxim Berg (Hiring Manager)
+Date: 2026-06-08
+Duration: 47 minutes
+Type: Technical + system design
+
+[00:00:14] Recruiter: Thanks for making time, Elena. I want to spend the first 20 minutes on a system design problem, then the rest on your background and questions for us. Sound good?
+
+[00:00:28] Candidate: Sounds good. Fire away.
+
+[00:00:34] Recruiter: Imagine we need to build the merchant settlement pipeline. End of every day we aggregate transactions for each merchant, compute payouts after fees, and trigger SEPA transfers. Walk me through how you'd design it.
+
+[00:01:05] Candidate: Okay. First question — what's the volume?
+
+[00:01:11] Recruiter: Let's say 50,000 active merchants, 2 million transactions per day.
+
+[00:01:20] Candidate: And what's the SLA on the payout being available the next morning?
+
+[00:01:28] Recruiter: Funds available by 9am local time, every business day.
+
+[00:01:35] Candidate: Right. So I'd think of this as three stages — aggregation, settlement, transfer initiation. Each stage idempotent. The aggregation runs as a windowed stream job, not a midnight batch — that way if it fails partway we can resume from the last committed offset instead of restarting from scratch.
+
+[00:02:10] Candidate: For the data store, I'd use PostgreSQL for the settlement records and Kafka as the source of truth for transactions. Settlement records have a unique key — merchant_id plus settlement_date — so retries are safe.
+
+[00:02:45] Recruiter: How do you handle a partial failure during transfer initiation — say we sent 30,000 transfers and then the SEPA gateway times out?
+
+[00:03:02] Candidate: This is exactly where idempotency keys earn their keep. Each transfer gets a deterministic key derived from settlement_id plus merchant_id. When the gateway recovers, we replay every settlement that doesn't have a confirmed transaction reference. The gateway sees the key, recognises it, returns the original result instead of double-paying.
+
+[00:03:40] Recruiter: And what if the gateway loses the key? Some providers do.
+
+[00:03:50] Candidate: Then we need a reconciliation job that runs every few hours and compares our outbox to the gateway's statement. Anything that's in our outbox but not in the statement gets retried with a fresh key after a cooldown. We log every double-debit detection — those are incidents.
+
+[00:04:30] Recruiter: Good. Let's talk about your team at Klarna. You said you led the payments reconciliation rewrite. What was the hardest part?
+
+[00:04:48] Candidate: Honestly? Not the technical work. The hardest part was that the old system had four years of edge cases buried in the code. We did a six-week parallel run where the new system shadowed production, and we caught seven cases the team had completely forgotten about. One was a Norwegian VAT rule that only applied to merchants who registered before 2019.
+
+[00:05:30] Recruiter: How did you find them?
+
+[00:05:35] Candidate: We logged divergences between old and new outputs and triaged them weekly. The team called it "the divergence Tuesday." We didn't ship until divergence-Tuesday was empty for two weeks straight.
+
+[00:06:00] Recruiter: That's a pattern I haven't seen at this stage. Did you write it up?
+
+[00:06:08] Candidate: I gave an internal talk. Never published it externally. Should I?
+
+[00:06:14] Recruiter: Yes. Okay, let's go deeper on Postgres. You've got 50,000 merchants each with a settlement_records row every day. That's 18M rows a year. Tell me how you'd keep this fast.
+
+[00:06:38] Candidate: Partitioning by month is the obvious move. Index on merchant_id and settlement_date. The interesting question is what to do with the older partitions — most queries are last-90-days, so I'd archive everything older than a year to cold storage and detach the partition.
+
+[00:07:15] Candidate: One trap I'd avoid is partitioning by merchant_id. Tempting because it gives you per-tenant isolation, but the cardinality is too high — you end up with 50,000 partitions and the planner gets unhappy.
+
+[00:07:45] Recruiter: We've made that mistake. Tell me about your on-call experience.
+
+[00:07:58] Candidate: At Klarna I'm primary for the reconciliation pipeline. Last year I was paged eight times. Two were real incidents, six were noise from a flaky alert I eventually rewrote. I keep a personal runbook in our shared docs.
+
+[00:08:35] Recruiter: What's the worst incident you led?
+
+[00:08:42] Candidate: A timezone bug. Daylight saving change caused settlement_date to roll over an hour early for a subset of merchants. About 1,200 merchants saw two settlements on the same day for ten minutes. I rolled back the deploy, then we manually reconciled. Wrote the post-mortem the next day.
+
+[00:09:30] Recruiter: Did you change anything in the team's process after that?
+
+[00:09:38] Candidate: Yes — we now require any date logic to ship with explicit timezone tests. And we have a deploy freeze in the week around DST transitions.
+
+[00:10:10] Recruiter: Okay, mentorship. You mentioned you mentor two engineers at Klarna. What does that actually look like week to week?
+
+[00:10:24] Candidate: One is a mid-level who wants to grow into senior. We do a weekly 1:1 where I usually ask about one technical decision they're sitting on and one career thing they're worried about. The other is a junior I onboarded six months ago. With her I do more pair programming — once a week, two hours, working on a real ticket.
+
+[00:11:00] Candidate: I try to push the mid-level to write more — design docs, ADRs. She's gotten good at it. The junior I push more on confidence — she knows the answer half the time but assumes she doesn't.
+
+[00:11:30] Recruiter: How do you measure if your mentorship is working?
+
+[00:11:38] Candidate: Honestly I don't have a clean metric. The mid-level got promoted last cycle, which felt like a win. But promotion is a lagging indicator. I think the better signal is whether they bring me harder problems over time — at some point I should be a sounding board, not an oracle.
+
+[00:12:20] Recruiter: Why are you leaving Klarna?
+
+[00:12:25] Candidate: I've been there three and a half years. The payments rewrite was the big thing I wanted to ship, and it's done. The next twelve months for me there look like a maintenance phase plus org politics. I'd rather be the second or third engineer at a smaller team that's still defining its core systems.
+
+[00:13:05] Recruiter: That's a fair answer. What are you looking for in a team?
+
+[00:13:12] Candidate: Three things. First, a high bar on engineering quality — I don't want to spend energy re-litigating tests-or-no-tests every quarter. Second, a willingness to invest in tooling — if I'm fighting CI for an hour a day, something's wrong. Third, peers I learn from. The last part is the one that's hardest to evaluate from the outside.
+
+[00:13:55] Recruiter: Any questions for us?
+
+[00:14:05] Candidate: A few. One — what's the hardest unsolved problem on the payments roadmap right now? Two — what's the team's relationship with security and compliance? At Klarna it was adversarial; I'd want to know what it's like here. And three — what does the team do that you'd want to keep doing in five years?
+
+[00:14:50] Recruiter: Good questions. Let me take them in order...
+
+[00:32:00] Recruiter: All right, last five minutes. Anything we didn't cover that you'd want me to know?
+
+[00:32:14] Candidate: One thing. I don't have payments-domain experience in EUR settlements at the volume you're describing — Klarna is bigger. So if your bar is "she's done exactly this before at scale," I'm not it. But the systems thinking transfers. I'd want six weeks to ramp on the domain, not six months.
+
+[00:33:00] Recruiter: That's helpful framing, thank you. We'll be in touch by end of week.
+
+[00:33:08] Candidate: Thanks, Maxim.
+
+[End of interview]

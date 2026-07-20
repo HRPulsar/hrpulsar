@@ -1,0 +1,38 @@
+fastapi
+uvicorn[standard]
+pydantic-settings
+email-validator
+sqlalchemy[asyncio]
+asyncpg
+psycopg2-binary
+alembic
+redis
+passlib[bcrypt]
+PyJWT[crypto]
+python-multipart
+jinja2
+httpx
+boto3
+celery
+python-json-logger
+resend
+openpyxl
+pypdf
+python-docx
+reportlab
+xlrd<2.0
+openai
+anthropic
+google-genai
+pgvector
+slowapi
+prometheus-client
+sentry-sdk[fastapi]
+pyyaml
+python-docx
+PyPDF2
+mutagen
+# Used directly by app.modules.employee.duration.relativedelta math.
+# Currently pulled in transitively via botocore — declare it explicitly
+# so a future boto3 minor that drops the dep doesn't break duration UI.
+python-dateutil

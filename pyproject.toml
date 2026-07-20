@@ -1,0 +1,40 @@
+[tool.black]
+line-length = 88
+target-version = ["py312", "py313"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "BLE"]
+ignore = ["E501", "B008", "E402", "B904"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may catch broadly; production code must justify every broad except
+# with a `# noqa: BLE001 - <reason>` annotation (review item [32]).
+"**/tests/**" = ["BLE001"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = [".venv", "tests", "migrations"]
+
+[tool.bandit]
+exclude_dirs = [".venv", "tests", "migrations"]
+skips = ["B101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "load: long-running QueuePool/connection load tests (excluded by default; run with -m load)",
+]
+addopts = "-m 'not load'"
+
+[tool.coverage.run]
+source = ["backend"]
+omit = ["tests/*", ".venv/*", "migrations/*"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]

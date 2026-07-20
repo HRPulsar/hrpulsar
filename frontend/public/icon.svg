@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="HRPulsar mark">
+<defs>
+<linearGradient id="g" x1="20%" y1="10%" x2="80%" y2="90%">
+<stop offset="0" stop-color="#33E5D2"></stop>
+<stop offset="1" stop-color="#3E5EF5"></stop>
+</linearGradient>
+</defs>
+<path d="M 100 28 A 72 72 0 1 1 32.342 124.625" fill="none" stroke="url(#g)" stroke-width="14" stroke-linecap="round"></path>
+<path d="M 32.342 124.625 A 72 72 0 0 1 32.342 75.375" fill="none" stroke="#7DF9FF" stroke-width="14" stroke-linecap="round"></path>
+<line x1="100" y1="100" x2="100" y2="28" stroke="url(#g)" stroke-width="9" stroke-linecap="round"></line>
+<circle cx="100" cy="100" r="9" fill="url(#g)"></circle>
+</svg>

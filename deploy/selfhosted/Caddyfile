@@ -1,0 +1,16 @@
+# HRPulsar self-hosted reverse proxy.
+#
+# HTTPS: replace ":80" with your domain (e.g. app.yourcompany.com) and
+# restart caddy — a Let's Encrypt certificate is obtained automatically.
+:80 {
+	encode gzip
+
+	@backend path /api/* /health
+	handle @backend {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

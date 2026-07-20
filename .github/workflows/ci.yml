@@ -1,0 +1,277 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: hrpulsar_test
+          POSTGRES_USER: hrpulsar
+          POSTGRES_PASSWORD: hrpulsar
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Cache pip
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('backend/requirements.test.txt', 'backend/ee/requirements.txt') }}
+          restore-keys: pip-
+
+      - name: Install dependencies
+        # ee/requirements.txt only exists in the monorepo (it's excluded
+        # from the public sync). The conditional install keeps community
+        # CI green while letting the monorepo pull in EE-only deps like
+        # bleach + beautifulsoup4 needed by ee.blog.
+        run: |
+          cd backend
+          pip install -r requirements.test.txt
+          [ -f ee/requirements.txt ] && pip install -r ee/requirements.txt || true
+
+      - name: Lint (ruff)
+        run: cd backend && ruff check app/
+
+      - name: Type check (mypy)
+        run: cd backend && mypy app/ --ignore-missing-imports
+
+      - name: Run tests
+        run: cd backend && pytest tests/ -v --tb=short
+        env:
+          DATABASE_URL: postgresql+asyncpg://hrpulsar:hrpulsar@localhost:5432/hrpulsar_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Cache npm
+        uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('frontend/package-lock.json', 'marketing/package-lock.json') }}
+          restore-keys: npm-
+
+      - name: Install dependencies
+        run: cd frontend && npm ci
+
+      - name: Lint
+        run: cd frontend && npm run lint
+
+      - name: Unit tests
+        run: cd frontend && npm test
+
+      - name: Build
+        run: cd frontend && npm run build
+
+      # marketing/ only exists in the monorepo / enterprise repo — the
+      # public repo ships the product without the marketing site (HRP-389).
+      - name: Marketing lint + test + build
+        run: |
+          if [ -d marketing ]; then
+            cd marketing
+            npm ci
+            npm run lint
+            npm test
+            npm run build
+          else
+            echo "marketing/ not present (community build) — skipping"
+          fi
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: hrpulsar_test
+          POSTGRES_USER: hrpulsar
+          POSTGRES_PASSWORD: hrpulsar
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Cache pip
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('backend/requirements.txt', 'backend/ee/requirements.txt') }}
+          restore-keys: pip-
+
+      - name: Cache npm
+        uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('frontend/package-lock.json', 'marketing/package-lock.json') }}
+          restore-keys: npm-
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          [ -f ee/requirements.txt ] && pip install -r ee/requirements.txt || true
+
+      - name: Set deployment mode
+        # saas only when the EE package is present (monorepo / enterprise CI);
+        # community builds run e2e in the default onprem mode.
+        run: |
+          if [ -d backend/ee ]; then
+            echo "DEPLOYMENT_MODE=saas" >> "$GITHUB_ENV"
+          else
+            echo "DEPLOYMENT_MODE=onprem" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+
+      - name: Install Playwright browsers
+        run: cd frontend && npx playwright install --with-deps chromium
+
+      - name: Enable pgvector extension
+        run: PGPASSWORD=hrpulsar psql -h localhost -U hrpulsar -d hrpulsar_test -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+
+      - name: Run database migrations
+        run: cd backend && alembic upgrade heads
+        env:
+          DATABASE_URL: postgresql+asyncpg://hrpulsar:hrpulsar@localhost:5432/hrpulsar_test
+
+      - name: Build frontend
+        run: cd frontend && npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8100/api
+
+      - name: Build marketing
+        run: |
+          if [ -d marketing ]; then
+            cd marketing && npm ci && npm run build
+          else
+            echo "marketing/ not present (community build) — skipping"
+          fi
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8100/api
+
+      - name: Start backend
+        run: cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8100 &
+        env:
+          DATABASE_URL: postgresql+asyncpg://hrpulsar:hrpulsar@localhost:5432/hrpulsar_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret
+          E2E_MODE: "true"
+
+      - name: Start celery worker + beat
+        # -B runs the beat scheduler in-process, so the
+        # write_celery_heartbeat task (every 30s) keeps /health green.
+        run: cd backend && celery -A app.core.celery_app worker -B --loglevel=warning --concurrency=1 &
+        env:
+          DATABASE_URL: postgresql+asyncpg://hrpulsar:hrpulsar@localhost:5432/hrpulsar_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret
+          E2E_MODE: "true"
+
+      - name: Start frontend
+        run: cd frontend && npm start -- --port 3100 &
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8100/api
+
+      - name: Start marketing
+        # NEXT_PUBLIC_APP_DOMAIN mirrors the SaaS domain split: the demo CTA
+        # hands the session off cross-origin to the product app on 3100.
+        run: |
+          if [ -d marketing ]; then
+            cd marketing && npm start -- --port 3300 &
+          fi
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8100/api
+          NEXT_PUBLIC_APP_DOMAIN: localhost:3100
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for backend..."
+          # 90s window: celery beat heartbeats at 30s, allow a couple of cycles.
+          timeout 90 bash -c 'until curl -sf http://localhost:8100/health; do sleep 1; done'
+          echo "Waiting for frontend..."
+          timeout 60 bash -c 'until curl -sf http://localhost:3100; do sleep 1; done'
+          if [ -d marketing ]; then
+            echo "Waiting for marketing..."
+            timeout 60 bash -c 'until curl -sf http://localhost:3300; do sleep 1; done'
+          fi
+
+      - name: Run E2E tests
+        run: cd frontend && npx playwright test
+        env:
+          CI: "true"
+
+      - name: Run marketing E2E tests
+        # marketing/ resolves its own @playwright/test from its own lockfile —
+        # install its matching browser build instead of assuming frontend's.
+        run: |
+          if [ -d marketing ]; then
+            cd marketing
+            npx playwright install chromium
+            npx playwright test
+          else
+            echo "marketing/ not present (community build) — skipping"
+          fi
+        env:
+          CI: "true"
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14
+
+      - name: Upload marketing test report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: marketing-playwright-report
+          path: marketing/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore

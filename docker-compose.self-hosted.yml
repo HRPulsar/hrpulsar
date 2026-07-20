@@ -1,0 +1,180 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/selfhosted/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend:
+    build:
+      # Repo-root context so the image picks up version.py (app version
+      # source of truth); APP_VERSION stays as an optional override.
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-}
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://hrpulsar:${POSTGRES_PASSWORD:-hrpulsar}@postgres:5432/hrpulsar
+      - REDIS_URL=redis://redis:6379
+      - DB_HOST=postgres
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
+      - S3_BUCKET=hrpulsar
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      # The frontend image needs repo-root files at build time (README,
+      # CHANGELOG-public.md, docs/) — the context must be the repo root.
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-}
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000/api
+      # HRP-390: runtime deployment mode for the frontend — switches
+      # /register to the self-serve form and redirects / to /login.
+      - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-onprem}
+      # HRP-393: white-label branding — injected into rendered HTML by
+      # <RuntimeEnvScript/> at SSR (window.__ENV__), so changing them in
+      # .env only needs a container restart, not an image rebuild.
+      - NEXT_PUBLIC_BRAND_NAME=${NEXT_PUBLIC_BRAND_NAME:-}
+      - NEXT_PUBLIC_LOGO_URL=${NEXT_PUBLIC_LOGO_URL:-}
+      - NEXT_PUBLIC_LOGO_DARK_URL=${NEXT_PUBLIC_LOGO_DARK_URL:-}
+      - NEXT_PUBLIC_BRAND_ACCENT_COLOR=${NEXT_PUBLIC_BRAND_ACCENT_COLOR:-}
+      - NEXT_PUBLIC_FAVICON_URL=${NEXT_PUBLIC_FAVICON_URL:-}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      # 127.0.0.1, not localhost: busybox wget resolves localhost to ::1
+      # while the Next.js standalone server listens on IPv4 only.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["worker"]
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://hrpulsar:${POSTGRES_PASSWORD:-hrpulsar}@postgres:5432/hrpulsar
+      - REDIS_URL=redis://redis:6379
+      - DB_HOST=postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      # CMD-SHELL so $HOSTNAME expands to the worker's default node name
+      test: ["CMD-SHELL", "celery -A app.core.celery_app:celery inspect ping -d celery@$$HOSTNAME --timeout 10"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["beat"]
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://hrpulsar:${POSTGRES_PASSWORD:-hrpulsar}@postgres:5432/hrpulsar
+      - REDIS_URL=redis://redis:6379
+      - DB_HOST=postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: hrpulsar
+      POSTGRES_USER: hrpulsar
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hrpulsar}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -U hrpulsar
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # One-shot: creates the file-storage bucket on first boot. Without it the
+  # backend /health stays "degraded" (S3 HeadBucket 404) and never turns
+  # healthy, which blocks caddy/frontend startup.
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY:-minioadmin} ${S3_SECRET_KEY:-minioadmin} &&
+      mc mb -p local/hrpulsar"
+
+volumes:
+  pgdata:
+  miniodata:
+  caddy_data:
+  caddy_config:

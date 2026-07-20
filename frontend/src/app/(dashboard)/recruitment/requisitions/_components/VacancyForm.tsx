@@ -1,0 +1,596 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { MultiSelectFilter } from "@/components/multi-select-filter";
+import { HiringManagerSelect } from "@/components/recruitment/hiring-manager-select";
+import { api } from "@/lib/api";
+
+// HRP-320: vacancy create form is anchored on the company library.
+//   Position (single, optional)  → constrains Specializations
+//   Specializations (multi, opt) → constrains Grades
+//   Grades (multi, optional)     → seeds the competence matrix on save
+//   Division (single, optional)  → from Company → Divisions
+//
+// The freeform Specialization / Grade / Division text inputs and the
+// legacy "Library refs (optional)" block were superseded by these fields
+// and have been retired.
+export type VacancyFormValues = {
+  title: string;
+  position_id: string | null;
+  specialization_ids: string[];
+  grade_ids: string[];
+  division_id: string | null;
+  // HRP-360
+  hiring_manager_id: string | null;
+  location: string;
+  employment_type: string;
+  description: string;
+  tasks_main: string;
+  tasks_additional: string;
+  tasks_kpi: string;
+  // HRP-135 — manual textual inputs fed into the AI prompt.
+  requirements: string;
+  responsibilities: string;
+  conditions: string;
+};
+
+export const emptyVacancyForm: VacancyFormValues = {
+  title: "",
+  position_id: null,
+  specialization_ids: [],
+  grade_ids: [],
+  division_id: null,
+  hiring_manager_id: null,
+  location: "",
+  employment_type: "",
+  description: "",
+  tasks_main: "",
+  tasks_additional: "",
+  tasks_kpi: "",
+  requirements: "",
+  responsibilities: "",
+  conditions: "",
+};
+
+const employmentTypes = [
+  { value: "full_time", label: "Full-time" },
+  { value: "part_time", label: "Part-time" },
+  { value: "contract", label: "Contract" },
+  { value: "internship", label: "Internship" },
+  { value: "temporary", label: "Temporary" },
+  { value: "remote", label: "Remote" },
+];
+
+type Props = {
+  values: VacancyFormValues;
+  onChange: (next: VacancyFormValues) => void;
+  disabled?: boolean;
+  testId?: string;
+  footer: React.ReactNode;
+  heading?: React.ReactNode;
+};
+
+interface PositionOption {
+  id: string;
+  title?: string;
+  lifecycle_status?: string;
+  is_active?: boolean;
+  division_id?: string | null;
+  specializations?: { id: string; title?: string | null }[];
+  grades?: { id: string; title?: string | null }[];
+}
+
+interface DivisionOption {
+  id: string;
+  name?: string;
+}
+
+export function VacancyForm({
+  values,
+  onChange,
+  disabled,
+  testId = "recruitment-vacancy-create-form",
+  footer,
+  heading,
+}: Props) {
+  function updateField<K extends keyof VacancyFormValues>(
+    field: K,
+    value: VacancyFormValues[K],
+  ) {
+    onChange({ ...values, [field]: value });
+  }
+
+  const [positions, setPositions] = useState<PositionOption[]>([]);
+  const [divisions, setDivisions] = useState<DivisionOption[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.get<{ items?: PositionOption[] } | PositionOption[]>(
+          "/positions?limit=500",
+        );
+        if (cancelled) return;
+        const items = Array.isArray(data) ? data : (data.items ?? []);
+        setPositions(items);
+      } catch {
+        // ignore — selector stays empty, the form still saves without it
+      }
+    })();
+    (async () => {
+      try {
+        const flatten = (list: unknown[]): DivisionOption[] => {
+          const out: DivisionOption[] = [];
+          for (const node of list) {
+            if (!node || typeof node !== "object") continue;
+            const n = node as { id?: string; name?: string; children?: unknown[] };
+            if (n.id) out.push({ id: n.id, name: n.name });
+            if (n.children && Array.isArray(n.children)) {
+              out.push(...flatten(n.children));
+            }
+          }
+          return out;
+        };
+        const data = await api.get<unknown[]>("/divisions");
+        if (cancelled) return;
+        setDivisions(flatten(Array.isArray(data) ? data : []));
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // HRP-320: only Active positions land in the picker per spec.
+  const activePositions = useMemo(
+    () =>
+      positions.filter(
+        (p) =>
+          (p.lifecycle_status ? p.lifecycle_status === "active" : true) &&
+          (typeof p.is_active === "boolean" ? p.is_active : true),
+      ),
+    [positions],
+  );
+
+  const selectedPosition = useMemo(
+    () =>
+      values.position_id
+        ? activePositions.find((p) => p.id === values.position_id) ??
+          positions.find((p) => p.id === values.position_id) ??
+          null
+        : null,
+    [activePositions, positions, values.position_id],
+  );
+
+  const specializationOptions = useMemo(
+    () =>
+      (selectedPosition?.specializations ?? []).map((s) => ({
+        value: s.id,
+        label: s.title || s.id,
+      })),
+    [selectedPosition],
+  );
+  const gradeOptions = useMemo(
+    () =>
+      (selectedPosition?.grades ?? []).map((g) => ({
+        value: g.id,
+        label: g.title || g.id,
+      })),
+    [selectedPosition],
+  );
+
+  const positionOptions = activePositions.map((p) => ({
+    value: p.id,
+    label: p.title || p.id,
+  }));
+  const divisionOptions = divisions.map((d) => ({
+    value: d.id,
+    label: d.name || d.id,
+  }));
+
+  function handlePositionChange(nextRaw: string) {
+    const next = nextRaw || null;
+    if (next === values.position_id) return;
+    const target = next
+      ? activePositions.find((p) => p.id === next) ?? null
+      : null;
+    onChange({
+      ...values,
+      position_id: next,
+      // Spec / grade picks belong to the previous Position — drop them.
+      specialization_ids: [],
+      grade_ids: [],
+      // Position carries a default Division; keep an explicit pick over it.
+      division_id: values.division_id ?? target?.division_id ?? null,
+    });
+  }
+
+  function handleSpecializationsChange(nextIds: string[]) {
+    // Grades are constrained by the chosen Specializations; dropping a
+    // Specialization invalidates grades that only existed for it. Since
+    // PositionRead currently exposes grades as a flat list (not per-spec),
+    // we conservatively wipe the selection whenever specs shrink — once
+    // PositionRead grows per-spec grade pools we can prune surgically.
+    onChange({
+      ...values,
+      specialization_ids: nextIds,
+      grade_ids: nextIds.length === 0 ? [] : values.grade_ids,
+    });
+  }
+
+  const specsDisabled = !values.position_id;
+  const specsPlaceholder = specsDisabled ? "Select position first" : "Select";
+  const gradesDisabled =
+    !values.position_id || values.specialization_ids.length === 0;
+  const gradesPlaceholder = !values.position_id
+    ? "Select position first"
+    : values.specialization_ids.length === 0
+      ? "Select specializations first"
+      : "Select";
+
+  return (
+    <div data-testid={testId} className="space-y-6">
+      {heading}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-5 lg:col-span-2">
+          <div className="space-y-2">
+            <Label htmlFor="title">Title *</Label>
+            <Input
+              id="title"
+              data-testid="recruitment-vacancy-input-title"
+              placeholder="e.g. Senior Backend Developer"
+              value={values.title}
+              disabled={disabled}
+              onChange={(e) => updateField("title", e.target.value)}
+            />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="position">Position</Label>
+              <Select
+                value={values.position_id ?? ""}
+                onValueChange={handlePositionChange}
+                disabled={disabled}
+              >
+                <SelectTrigger
+                  id="position"
+                  data-testid="recruitment-vacancy-select-position"
+                >
+                  <SelectValue placeholder="Select">
+                    {selectedPosition?.title ?? "Select"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {positionOptions.length === 0 ? (
+                    <div className="px-2 py-1 text-xs text-muted-foreground">
+                      No active positions
+                    </div>
+                  ) : (
+                    positionOptions.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="division">Division</Label>
+              <Select
+                value={values.division_id ?? ""}
+                onValueChange={(val: string) =>
+                  updateField("division_id", val || null)
+                }
+                disabled={disabled}
+              >
+                <SelectTrigger
+                  id="division"
+                  data-testid="recruitment-vacancy-select-division"
+                >
+                  <SelectValue placeholder="Select">
+                    {divisions.find((d) => d.id === values.division_id)?.name ??
+                      "Select"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {divisionOptions.length === 0 ? (
+                    <div className="px-2 py-1 text-xs text-muted-foreground">
+                      No divisions
+                    </div>
+                  ) : (
+                    divisionOptions.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="hiring_manager">Hiring manager</Label>
+              <HiringManagerSelect
+                id="hiring_manager"
+                testId="recruitment-vacancy-select-hiring-manager"
+                value={values.hiring_manager_id}
+                onChange={(next) => updateField("hiring_manager_id", next)}
+                disabled={disabled}
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Specializations</Label>
+              <MultiSelectFilter
+                options={specializationOptions}
+                value={values.specialization_ids}
+                onChange={handleSpecializationsChange}
+                placeholder={specsPlaceholder}
+                disabled={disabled || specsDisabled}
+                data-testid="recruitment-vacancy-select-specializations"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Grades</Label>
+              <MultiSelectFilter
+                options={gradeOptions}
+                value={values.grade_ids}
+                onChange={(next) => updateField("grade_ids", next)}
+                placeholder={gradesPlaceholder}
+                disabled={disabled || gradesDisabled}
+                data-testid="recruitment-vacancy-select-grades"
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="location">Location</Label>
+              <Input
+                id="location"
+                data-testid="recruitment-vacancy-input-location"
+                placeholder="e.g. Remote, New York"
+                value={values.location}
+                disabled={disabled}
+                onChange={(e) => updateField("location", e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="employment_type">Employment type</Label>
+              <Select
+                value={values.employment_type}
+                onValueChange={(val: string) =>
+                  updateField("employment_type", val)
+                }
+                disabled={disabled}
+              >
+                <SelectTrigger
+                  id="employment_type"
+                  data-testid="recruitment-vacancy-select-employment"
+                >
+                  <SelectValue placeholder="Select type">
+                    {employmentTypes.find(
+                      (t) => t.value === values.employment_type,
+                    )?.label ?? "Select type"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {employmentTypes.map((t) => (
+                    <SelectItem key={t.value} value={t.value}>
+                      {t.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="description">Description</Label>
+            <Textarea
+              id="description"
+              data-testid="recruitment-vacancy-input-description"
+              placeholder="Describe the role, team, and what you're looking for..."
+              value={values.description}
+              disabled={disabled}
+              onChange={(e) => updateField("description", e.target.value)}
+              rows={5}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="requirements">Requirements</Label>
+            <Textarea
+              id="requirements"
+              data-testid="recruitment-vacancy-input-requirements"
+              placeholder="Must-have skills, experience, certifications..."
+              value={values.requirements}
+              disabled={disabled}
+              onChange={(e) => updateField("requirements", e.target.value)}
+              rows={4}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="responsibilities">Responsibilities</Label>
+            <Textarea
+              id="responsibilities"
+              data-testid="recruitment-vacancy-input-responsibilities"
+              placeholder="Day-to-day work, ownership areas..."
+              value={values.responsibilities}
+              disabled={disabled}
+              onChange={(e) => updateField("responsibilities", e.target.value)}
+              rows={4}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="conditions">Conditions</Label>
+            <Textarea
+              id="conditions"
+              data-testid="recruitment-vacancy-input-conditions"
+              placeholder="Schedule, benefits, package..."
+              value={values.conditions}
+              disabled={disabled}
+              onChange={(e) => updateField("conditions", e.target.value)}
+              rows={3}
+            />
+          </div>
+        </div>
+
+        <div className="space-y-4 rounded-lg bg-muted/50 p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Tasks &amp; Expectations
+          </h2>
+
+          <div className="space-y-2">
+            <Label htmlFor="tasks_main">Main tasks</Label>
+            <Textarea
+              id="tasks_main"
+              data-testid="recruitment-vacancy-input-tasks-main"
+              placeholder="Key responsibilities for this role..."
+              value={values.tasks_main}
+              disabled={disabled}
+              onChange={(e) => updateField("tasks_main", e.target.value)}
+              rows={4}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="tasks_additional">Additional tasks</Label>
+            <Textarea
+              id="tasks_additional"
+              data-testid="recruitment-vacancy-input-tasks-additional"
+              placeholder="Nice-to-have or secondary responsibilities..."
+              value={values.tasks_additional}
+              disabled={disabled}
+              onChange={(e) => updateField("tasks_additional", e.target.value)}
+              rows={4}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="tasks_kpi">KPIs &amp; Success criteria</Label>
+            <Textarea
+              id="tasks_kpi"
+              data-testid="recruitment-vacancy-input-tasks-kpi"
+              placeholder="Measurable goals and expectations..."
+              value={values.tasks_kpi}
+              disabled={disabled}
+              onChange={(e) => updateField("tasks_kpi", e.target.value)}
+              rows={4}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-end gap-3 border-t pt-4">
+        {footer}
+      </div>
+    </div>
+  );
+}
+
+export function vacancyFormToPayload(
+  values: VacancyFormValues,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    title: values.title.trim(),
+    description: values.description.trim() || null,
+    location: values.location.trim() || null,
+    employment_type: values.employment_type || null,
+    tasks_main: values.tasks_main.trim() ? { text: values.tasks_main.trim() } : null,
+    tasks_additional: values.tasks_additional.trim()
+      ? { text: values.tasks_additional.trim() }
+      : null,
+    tasks_kpi: values.tasks_kpi.trim() ? { text: values.tasks_kpi.trim() } : null,
+    requirements: values.requirements.trim() || null,
+    responsibilities: values.responsibilities.trim() || null,
+    conditions: values.conditions.trim() || null,
+    position_id: values.position_id,
+    specialization_ids: values.specialization_ids,
+    grade_ids: values.grade_ids,
+    division_id: values.division_id,
+    hiring_manager_id: values.hiring_manager_id,
+  };
+  // HRP-320 Task 2: forward Specializations × Grades so the backend can
+  // seed Competences & indicators from the matching matrices. The new form
+  // intentionally maps every chosen Specialization against every chosen
+  // Grade — the spec calls out a target where each Specialization carries
+  // its own Grade subset, but PositionRead does not yet expose that pool,
+  // so cartesian wiring matches what the user actually selected.
+  if (values.specialization_ids.length || values.position_id) {
+    payload.library_refs = {
+      position_ids: values.position_id ? [values.position_id] : [],
+      specialization_grade_pairs: values.specialization_ids.map((specId) => ({
+        specialization_id: specId,
+        grade_ids: values.grade_ids,
+      })),
+      division_ids: values.division_id ? [values.division_id] : [],
+    };
+  }
+  return payload;
+}
+
+export function vacancyToFormValues(
+  vacancy: Record<string, unknown>,
+): VacancyFormValues {
+  const taskText = (key: string) => {
+    const value = vacancy[key];
+    if (
+      value &&
+      typeof value === "object" &&
+      "text" in value &&
+      typeof (value as { text: unknown }).text === "string"
+    ) {
+      return (value as { text: string }).text;
+    }
+    return "";
+  };
+  const specs = Array.isArray(vacancy.specializations)
+    ? (vacancy.specializations as { id?: string }[])
+    : [];
+  const grades = Array.isArray(vacancy.grades)
+    ? (vacancy.grades as { id?: string }[])
+    : [];
+  return {
+    title: (vacancy.title as string | undefined) ?? "",
+    position_id: (vacancy.position_id as string | undefined) ?? null,
+    specialization_ids: specs
+      .map((s) => s.id)
+      .filter((id): id is string => typeof id === "string"),
+    grade_ids: grades
+      .map((g) => g.id)
+      .filter((id): id is string => typeof id === "string"),
+    division_id: (vacancy.division_id as string | undefined) ?? null,
+    hiring_manager_id:
+      (vacancy.hiring_manager_id as string | undefined) ?? null,
+    location: (vacancy.location as string | undefined) ?? "",
+    employment_type: (vacancy.employment_type as string | undefined) ?? "",
+    description: (vacancy.description as string | undefined) ?? "",
+    tasks_main: taskText("tasks_main"),
+    tasks_additional: taskText("tasks_additional"),
+    tasks_kpi: taskText("tasks_kpi"),
+    requirements: (vacancy.requirements as string | undefined) ?? "",
+    responsibilities: (vacancy.responsibilities as string | undefined) ?? "",
+    conditions: (vacancy.conditions as string | undefined) ?? "",
+  };
+}
