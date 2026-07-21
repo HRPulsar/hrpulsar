@@ -39,7 +39,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 @pytest_asyncio.fixture
 async def vacancy_with_profile(db: AsyncSession, tenant, user):
     v = await service.create_vacancy(
-        db, tenant.id, user.id, VacancyCreate(title=f"Senior Backend {uuid.uuid4().hex[:4]}")
+        db,
+        tenant.id,
+        user.id,
+        VacancyCreate(title=f"Senior Backend {uuid.uuid4().hex[:4]}"),
     )
     profile = VacancyProfile(
         tenant_id=tenant.id,
@@ -137,36 +140,36 @@ def _stub_celery(monkeypatch):
 
 class TestResumeOnlyVerdictGuard:
     def test_recommended_rewritten_to_needs_check(self):
-        verdict, overridden = (
-            resume_analysis_service.apply_resume_only_verdict_guard("recommended")
+        verdict, overridden = resume_analysis_service.apply_resume_only_verdict_guard(
+            "recommended"
         )
         assert verdict == "needs_check"
         assert overridden is True
 
     def test_needs_check_left_alone(self):
-        verdict, overridden = (
-            resume_analysis_service.apply_resume_only_verdict_guard("needs_check")
+        verdict, overridden = resume_analysis_service.apply_resume_only_verdict_guard(
+            "needs_check"
         )
         assert verdict == "needs_check"
         assert overridden is False
 
     def test_not_recommended_left_alone(self):
-        verdict, overridden = (
-            resume_analysis_service.apply_resume_only_verdict_guard("not_recommended")
+        verdict, overridden = resume_analysis_service.apply_resume_only_verdict_guard(
+            "not_recommended"
         )
         assert verdict == "not_recommended"
         assert overridden is False
 
     def test_unknown_defaults_to_needs_check_overridden(self):
-        verdict, overridden = (
-            resume_analysis_service.apply_resume_only_verdict_guard("weird")
+        verdict, overridden = resume_analysis_service.apply_resume_only_verdict_guard(
+            "weird"
         )
         assert verdict == "needs_check"
         assert overridden is True
 
     def test_none_default_is_needs_check_not_overridden(self):
-        verdict, overridden = (
-            resume_analysis_service.apply_resume_only_verdict_guard(None)
+        verdict, overridden = resume_analysis_service.apply_resume_only_verdict_guard(
+            None
         )
         assert verdict == "needs_check"
         assert overridden is False
@@ -264,6 +267,26 @@ class TestEnqueueResumeOnly:
 async def _make_completed_resume_only_run(
     db: AsyncSession, tenant, user, cv_pair, age_days: int = 1
 ) -> AIAnalysisRun:
+    # HRP-423: ``uq_ai_analysis_runs_active_per_cv`` allows at most one
+    # completed-active row per pair — archive any prior one first, the
+    # same way the worker does.
+    prior_active = (
+        (
+            await db.execute(
+                select(AIAnalysisRun).where(
+                    AIAnalysisRun.candidate_vacancy_id == cv_pair["cv_id"],
+                    AIAnalysisRun.archived_at.is_(None),
+                    AIAnalysisRun.status == "completed",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for p in prior_active:
+        p.archived_at = datetime.now(UTC)
+    await db.flush()
+
     run = AIAnalysisRun(
         tenant_id=tenant.id,
         candidate_vacancy_id=cv_pair["cv_id"],
@@ -408,9 +431,7 @@ class TestTopupEligibility:
         assert result["transcribed_interview_id"] is None
 
     async def test_too_old(self, db: AsyncSession, tenant, user, cv_pair):
-        await _make_completed_resume_only_run(
-            db, tenant, user, cv_pair, age_days=45
-        )
+        await _make_completed_resume_only_run(db, tenant, user, cv_pair, age_days=45)
         db.add(
             Interview(
                 tenant_id=tenant.id,
@@ -429,9 +450,7 @@ class TestTopupEligibility:
         assert result["reason"] == "resume_only_too_old"
         assert result["age_days"] >= 30
 
-    async def test_profile_changed(
-        self, db: AsyncSession, tenant, user, cv_pair
-    ):
+    async def test_profile_changed(self, db: AsyncSession, tenant, user, cv_pair):
         await _make_completed_resume_only_run(db, tenant, user, cv_pair)
         db.add(
             Interview(
@@ -492,9 +511,7 @@ class TestEnqueueTopup:
         cv_row = await db.get(CandidateVacancy, cv_pair["cv_id"])
         assert cv_row.ai_readiness == "resume_and_transcript"
 
-    async def test_409_when_ineligible(
-        self, db: AsyncSession, tenant, user, cv_pair
-    ):
+    async def test_409_when_ineligible(self, db: AsyncSession, tenant, user, cv_pair):
         with pytest.raises(HTTPException) as exc:
             await resume_analysis_service.enqueue_topup_to_full(
                 db, tenant.id, cv_pair["cv_id"], user.id
@@ -575,9 +592,7 @@ class TestBulkResumeOnly:
             db,
             tenant.id,
             user.id,
-            CandidateVacancyCreate(
-                candidate_id=cand2["id"], vacancy_id=v_other["id"]
-            ),
+            CandidateVacancyCreate(candidate_id=cand2["id"], vacancy_id=v_other["id"]),
         )
         v_row = (
             await db.execute(
@@ -746,9 +761,7 @@ class TestEnqueueLeavesNoStalePendingMirror:
     async def test_topup_does_not_set_cv_ai_verdict_pending(
         self, db: AsyncSession, tenant, user, cv_pair
     ):
-        await _make_completed_resume_only_run(
-            db, tenant, user, cv_pair, age_days=1
-        )
+        await _make_completed_resume_only_run(db, tenant, user, cv_pair, age_days=1)
         cv = await db.get(CandidateVacancy, cv_pair["cv_id"])
         cv.ai_verdict = "needs_check"
         await db.commit()
@@ -791,10 +804,8 @@ class TestResumeOnlySchemaAcceptsRecommended:
         )
         assert result.verdict == "recommended"
         # Guard rewrites it.
-        final, overridden = (
-            resume_analysis_service.apply_resume_only_verdict_guard(
-                result.verdict
-            )
+        final, overridden = resume_analysis_service.apply_resume_only_verdict_guard(
+            result.verdict
         )
         assert final == "needs_check"
         assert overridden is True
@@ -853,9 +864,7 @@ class TestResumeSnapshotHashAndOutdatedDetection:
         cf = cv_pair["resume"]
         await db.refresh(cf)
         run.resume_snapshot_hash = (
-            resume_analysis_service._compute_resume_snapshot_hash(
-                cf.parsed_data
-            )
+            resume_analysis_service._compute_resume_snapshot_hash(cf.parsed_data)
         )
         await db.commit()
         await db.refresh(run)
@@ -866,11 +875,7 @@ class TestResumeSnapshotHashAndOutdatedDetection:
             original_filename="cv_v2.pdf",
             mime_type="application/pdf",
             file_size=23456,
-            parsed_data={
-                "experience": [
-                    {"company": "Globex", "position": "Lead"}
-                ]
-            },
+            parsed_data={"experience": [{"company": "Globex", "position": "Lead"}]},
             raw_text="Updated text",
             parse_status="completed",
         )
@@ -881,9 +886,7 @@ class TestResumeSnapshotHashAndOutdatedDetection:
         )
         assert current is not None
         assert current != run.resume_snapshot_hash
-        serialized = resume_analysis_service.serialize_run_for_read(
-            run, current
-        )
+        serialized = resume_analysis_service.serialize_run_for_read(run, current)
         assert serialized.resume_outdated is True
 
     async def test_serialize_not_outdated_when_hash_matches(
@@ -893,18 +896,14 @@ class TestResumeSnapshotHashAndOutdatedDetection:
         cf = cv_pair["resume"]
         await db.refresh(cf)
         run.resume_snapshot_hash = (
-            resume_analysis_service._compute_resume_snapshot_hash(
-                cf.parsed_data
-            )
+            resume_analysis_service._compute_resume_snapshot_hash(cf.parsed_data)
         )
         await db.commit()
         await db.refresh(run)
         current = await resume_analysis_service.current_resume_hash_for_cv(
             db, tenant.id, cv_pair["cv_id"]
         )
-        serialized = resume_analysis_service.serialize_run_for_read(
-            run, current
-        )
+        serialized = resume_analysis_service.serialize_run_for_read(run, current)
         assert serialized.resume_outdated is False
 
     async def test_serialize_not_outdated_for_legacy_run_without_hash(
@@ -917,9 +916,7 @@ class TestResumeSnapshotHashAndOutdatedDetection:
         current = await resume_analysis_service.current_resume_hash_for_cv(
             db, tenant.id, cv_pair["cv_id"]
         )
-        serialized = resume_analysis_service.serialize_run_for_read(
-            run, current
-        )
+        serialized = resume_analysis_service.serialize_run_for_read(run, current)
         assert serialized.resume_outdated is False
 
     async def test_serialize_not_outdated_for_full_mode_run(
@@ -934,9 +931,7 @@ class TestResumeSnapshotHashAndOutdatedDetection:
         run.resume_snapshot_hash = "deadbeef" * 8
         await db.commit()
         await db.refresh(run)
-        serialized = resume_analysis_service.serialize_run_for_read(
-            run, "f" * 64
-        )
+        serialized = resume_analysis_service.serialize_run_for_read(run, "f" * 64)
         assert serialized.resume_outdated is False
 
 
@@ -1046,3 +1041,91 @@ class TestResumeOnlyFinalizerWritesNormalizedScore:
         assert cv.ai_score == pytest.approx(0.9)
         assert cv.ai_score_normalized == pytest.approx(0.9)
         assert cv.ai_verdict == "needs_check"
+
+
+# ---------------------------------------------------------------------------
+# HRP-423: re-analysis archives the prior active run BEFORE completing
+# ---------------------------------------------------------------------------
+
+
+class TestReRunArchivesPriorActiveRun:
+    """``uq_ai_analysis_runs_active_per_cv`` is a non-deferrable partial
+    unique index checked per statement. The worker used to flip the new
+    run to ``completed`` (via autoflush on the archive lookup) before the
+    prior active run's archive UPDATE reached the DB — every resume-only
+    re-analysis over an existing completed run died with a
+    UniqueViolation on production. The full-mode twin lives in
+    ``test_recruitment_rerun_archival.py``."""
+
+    async def test_second_resume_only_run_archives_first(
+        self, db: AsyncSession, tenant, user, cv_pair, monkeypatch
+    ):
+        import asyncio
+
+        import app.modules.ai.llm_client as llm_client
+        from app.config import settings as app_settings
+        from app.modules.recruitment.prompts_interview import (
+            ResumeOnlyAnalysisResult,
+            ResumeOnlyCompetenceAssessment,
+        )
+        from app.modules.recruitment.tasks import analyze_resume_only_task
+
+        prior = await _make_completed_resume_only_run(db, tenant, user, cv_pair)
+
+        res = await resume_analysis_service.enqueue_resume_only_analysis(
+            db, tenant.id, cv_pair["cv_id"], user.id
+        )
+        run_id = res["run_id"]
+        await db.commit()
+
+        result = ResumeOnlyAnalysisResult(
+            data_completeness="partial",
+            competence_assessments=[
+                ResumeOnlyCompetenceAssessment(
+                    competence_id="python", score=0.8, status="assessed"
+                ),
+            ],
+            verdict="needs_check",
+            verdict_summary="Second pass.",
+        )
+
+        async def _fake_generate_json(*args, **kwargs):
+            return result
+
+        monkeypatch.setattr(llm_client, "generate_json", _fake_generate_json)
+        test_db_url = app_settings.database_url.rsplit("/", 1)[0] + "/hrpulsar_test"
+        monkeypatch.setattr(app_settings, "database_url", test_db_url)
+
+        outcome = await asyncio.to_thread(
+            analyze_resume_only_task.apply,
+            args=(run_id, str(tenant.id)),
+        )
+        assert outcome.get()["status"] == "completed"
+
+        active = (
+            (
+                await db.execute(
+                    select(AIAnalysisRun)
+                    .where(
+                        AIAnalysisRun.candidate_vacancy_id == cv_pair["cv_id"],
+                        AIAnalysisRun.archived_at.is_(None),
+                        AIAnalysisRun.status == "completed",
+                    )
+                    .execution_options(populate_existing=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(active) == 1
+        assert str(active[0].id) == run_id
+
+        archived = (
+            await db.execute(
+                select(AIAnalysisRun)
+                .where(AIAnalysisRun.id == prior.id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        assert archived.archived_at is not None
+        assert str(archived.replaced_by_id) == run_id

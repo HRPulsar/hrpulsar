@@ -254,7 +254,7 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 }
 
             result = asyncio.run(
-                provider.transcribe(audio_url, language="ru", diarization=True)
+                provider.transcribe(audio_url, language="en", diarization=True)
             )
 
             db.execute(
@@ -442,16 +442,12 @@ def _finalize_full_analysis_run(
     now = datetime.now(UTC)
 
     if pending is not None:
-        # Top-up path — complete the existing row.
-        pending.status = "completed"
-        pending.data_completeness = analysis.data_completeness
-        pending.verdict = analysis.verdict
-        pending.verdict_summary = analysis.verdict_summary
-        pending.key_strength = analysis.key_strength
-        pending.key_risk = analysis.key_risk
-        pending.risk_mitigation = analysis.risk_mitigation
-        pending.ai_score = ai_score
-        pending.analysis_data = payload
+        # Top-up path — complete the existing row. Prior active runs
+        # are archived and flushed BEFORE the pending row turns
+        # ``completed``: ``uq_ai_analysis_runs_active_per_cv`` is a
+        # non-deferrable partial unique index (``archived_at IS NULL
+        # AND status='completed'``) checked per statement, and the
+        # UPDATE order inside a single flush is not guaranteed.
         run = pending
         # Archive the supersedes target.
         if run.supersedes_id is not None:
@@ -479,9 +475,37 @@ def _finalize_full_analysis_run(
         for p in prior_active:
             p.archived_at = now
             p.replaced_by_id = run.id
+        db.flush()
+
+        pending.status = "completed"
+        pending.data_completeness = analysis.data_completeness
+        pending.verdict = analysis.verdict
+        pending.verdict_summary = analysis.verdict_summary
+        pending.key_strength = analysis.key_strength
+        pending.key_risk = analysis.key_risk
+        pending.risk_mitigation = analysis.risk_mitigation
+        pending.ai_score = ai_score
+        pending.analysis_data = payload
     else:
-        # Plain analyze path — create a fresh full run, archive any other
-        # active runs for the pair.
+        # Plain analyze path — archive any other active runs for the
+        # pair, flush the archive UPDATE (see the index note above),
+        # then create a fresh ``completed`` full run.
+        prior_active = (
+            db.execute(
+                select(AIAnalysisRun).where(
+                    AIAnalysisRun.tenant_id == tenant_id,
+                    AIAnalysisRun.candidate_vacancy_id == cv.id,
+                    AIAnalysisRun.archived_at.is_(None),
+                    AIAnalysisRun.status == "completed",
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for p in prior_active:
+            p.archived_at = now
+        db.flush()
+
         run = AIAnalysisRun(
             tenant_id=tenant_id,
             candidate_vacancy_id=cv.id,
@@ -501,22 +525,7 @@ def _finalize_full_analysis_run(
         )
         db.add(run)
         db.flush()
-
-        prior_active = (
-            db.execute(
-                select(AIAnalysisRun).where(
-                    AIAnalysisRun.tenant_id == tenant_id,
-                    AIAnalysisRun.candidate_vacancy_id == cv.id,
-                    AIAnalysisRun.id != run.id,
-                    AIAnalysisRun.archived_at.is_(None),
-                    AIAnalysisRun.status == "completed",
-                )
-            )
-            .scalars()
-            .all()
-        )
         for p in prior_active:
-            p.archived_at = now
             p.replaced_by_id = run.id
 
     # Mirror onto candidate_vacancies for cheap list reads. HRP-274:
@@ -652,6 +661,32 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 # AIAnalysisRun. Without finalising the run row here
                 # the InFlightCard polls forever for a demo top-up.
                 if pending_run is not None:
+                    # HRP-423: archive prior active runs and flush
+                    # before this row turns ``completed`` — the
+                    # partial unique index
+                    # ``uq_ai_analysis_runs_active_per_cv`` is checked
+                    # per statement.
+                    from datetime import UTC
+
+                    prior_active = (
+                        db.execute(
+                            select(AIAnalysisRun).where(
+                                AIAnalysisRun.tenant_id == uuid.UUID(tenant_id),
+                                AIAnalysisRun.candidate_vacancy_id
+                                == pending_run.candidate_vacancy_id,
+                                AIAnalysisRun.id != pending_run.id,
+                                AIAnalysisRun.archived_at.is_(None),
+                                AIAnalysisRun.status == "completed",
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    now = datetime.now(UTC)
+                    for p in prior_active:
+                        p.archived_at = now
+                        p.replaced_by_id = pending_run.id
+                    db.flush()
                     pending_run.status = "completed"
                     pending_run.current_stage = None
                     db.commit()
@@ -723,7 +758,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
 
             prompt = build_interview_analysis_prompt(
                 vacancy_title=(vacancy.title if vacancy else ""),
-                vacancy_language=(vacancy.language if vacancy else "ru"),
+                vacancy_language=(vacancy.language if vacancy else "en"),
                 profile_competences=profile_competences,
                 transcript=interview.transcript or "",
                 segments=segments_payload,
@@ -1070,7 +1105,7 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
 
             prompt = build_resume_only_analysis_prompt(
                 vacancy_title=(vacancy.title if vacancy else ""),
-                vacancy_language=(vacancy.language if vacancy else "ru"),
+                vacancy_language=(vacancy.language if vacancy else "en"),
                 profile_competences=profile_competences,
                 parsed_resume=resume.parsed_data or {},
                 resume_raw_text=resume.raw_text,
@@ -1134,6 +1169,34 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
             ]
             ai_score = clamp_unit_score(sum(scores) / len(scores)) if scores else None
 
+            # Archive any prior active run for the same pair so the
+            # candidate list never reads two active rows. This must
+            # happen — and flush — BEFORE this run turns ``completed``:
+            # ``uq_ai_analysis_runs_active_per_cv`` is a non-deferrable
+            # partial unique index (``archived_at IS NULL AND
+            # status='completed'``) checked per statement, and the
+            # UPDATE order inside a single flush is not guaranteed.
+            from sqlalchemy import select
+
+            prior = (
+                db.execute(
+                    select(AIAnalysisRun).where(
+                        AIAnalysisRun.tenant_id == uuid.UUID(tenant_id),
+                        AIAnalysisRun.candidate_vacancy_id == run.candidate_vacancy_id,
+                        AIAnalysisRun.id != run.id,
+                        AIAnalysisRun.archived_at.is_(None),
+                        AIAnalysisRun.status == "completed",
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            now = datetime.now(UTC)
+            for p in prior:
+                p.archived_at = now
+                p.replaced_by_id = run.id
+            db.flush()
+
             run.data_completeness = analysis.data_completeness
             run.verdict = final_verdict
             run.verdict_summary = analysis.verdict_summary
@@ -1160,28 +1223,6 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                 "recommendation_for_next_step": (analysis.recommendation_for_next_step),
                 "validator_overrode_recommended": overridden,
             }
-
-            # Archive any prior active run for the same pair so the
-            # candidate list never reads two active rows.
-            from sqlalchemy import select
-
-            prior = (
-                db.execute(
-                    select(AIAnalysisRun).where(
-                        AIAnalysisRun.tenant_id == uuid.UUID(tenant_id),
-                        AIAnalysisRun.candidate_vacancy_id == run.candidate_vacancy_id,
-                        AIAnalysisRun.id != run.id,
-                        AIAnalysisRun.archived_at.is_(None),
-                        AIAnalysisRun.status == "completed",
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            now = datetime.now(UTC)
-            for p in prior:
-                p.archived_at = now
-                p.replaced_by_id = run.id
 
             # HRP-274: surface the raw 0..1 mean alongside its rebase
             # onto the tenant's active scale (identity fallback when no

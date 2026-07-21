@@ -94,7 +94,7 @@ def generate_questions_task(
                     resume_data=resume.parsed_data,
                     profile_data=profile.profile_data,
                     vacancy_title=vacancy.title,
-                    language=vacancy.language or "ru",
+                    language=vacancy.language or "en",
                 )
             )
 
@@ -211,7 +211,7 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
                     else ""
                 ),
                 "tasks_kpi": json.dumps(vacancy.tasks_kpi) if vacancy.tasks_kpi else "",
-                "language": vacancy.language or "ru",
+                "language": vacancy.language or "en",
             }
 
             from app.modules.recruitment.ai_service import generate_vacancy_profile
@@ -247,7 +247,7 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
                     tenant_id=vacancy.tenant_id,
                     profile_data=profile_data,
                     version=1,
-                    language=vacancy.language or "ru",
+                    language=vacancy.language or "en",
                     coverage_note=profile_data.get("coverage_note"),
                     generated_by="ai",
                 )

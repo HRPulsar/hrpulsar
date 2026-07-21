@@ -299,7 +299,7 @@ async def get_consent_by_token(
         "candidate_name": candidate_name,
         "template_name": template.name if template else "",
         "template_body": template.body if template else "",
-        "template_language": template.language if template else "ru",
+        "template_language": template.language if template else "en",
         "status": request.status,
         "expires_at": request.expires_at,
         "signed_at": request.signed_at,

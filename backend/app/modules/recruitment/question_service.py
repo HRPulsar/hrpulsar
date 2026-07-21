@@ -447,7 +447,7 @@ async def _call_llm(
 ) -> GeneratedQuestionSet:
     prompt = build_question_set_prompt(
         vacancy_title=vacancy.title,
-        language=vacancy.language or "ru",
+        language=vacancy.language or "en",
         profile_competences=profile_competences,
         resume_data=resume_data,
         previous_questions=previous_questions,

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.15.2] - 2026-07-21
+
+### Fixed
+- Re-running AI candidate analysis (resume-only and full) no longer fails with a unique-constraint violation when a completed run already exists — prior runs are now archived before the new one completes (HRP-423)
+- Recruitment AI generations (interview questions, vacancy profiles, reports, transcription) no longer default to Russian — all language defaults are English now (HRP-421)
+
+### Changed
+- Marketing site SEO: canonical links on all pages, Organization/SoftwareApplication JSON-LD on the landing page, deduplicated page titles, sitemap now covers methodology, personal-brand, security and all docs pages
+
 ## [1.15.1] - 2026-07-21
 
 ### Fixed

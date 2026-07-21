@@ -33,7 +33,7 @@ def _segments_with_injection() -> list[dict]:
 def test_prompt_escapes_close_tag_inside_segment_text():
     prompt = build_interview_analysis_prompt(
         vacancy_title="Senior Backend",
-        vacancy_language="ru",
+        vacancy_language="fr",
         profile_competences=[],
         transcript="full transcript here",
         segments=_segments_with_injection(),
@@ -52,7 +52,7 @@ def test_prompt_escapes_close_tag_inside_segment_text():
 def test_prompt_includes_user_input_wrapper_around_transcript():
     prompt = build_interview_analysis_prompt(
         vacancy_title="t",
-        vacancy_language="ru",
+        vacancy_language="fr",
         profile_competences=[],
         transcript="hello world",
         segments=[],
@@ -70,7 +70,7 @@ def test_prompt_renders_competences_outside_user_input():
     competences = [{"id": "c1", "name": "Python"}, {"id": "c2", "name": "SQL"}]
     prompt = build_interview_analysis_prompt(
         vacancy_title="t",
-        vacancy_language="ru",
+        vacancy_language="fr",
         profile_competences=competences,
         transcript="",
         segments=[],
@@ -85,7 +85,7 @@ def test_prompt_renders_competences_outside_user_input():
 def test_prompt_handles_none_segments():
     prompt = build_interview_analysis_prompt(
         vacancy_title="t",
-        vacancy_language="ru",
+        vacancy_language="fr",
         profile_competences=[],
         transcript=None,
         segments=None,

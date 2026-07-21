@@ -259,14 +259,14 @@ class TestConsentFlow:
             db,
             tenant.id,
             ConsentTemplateCreate(
-                name="A", body="body A", is_active=True, language="ru"
+                name="A", body="body A", is_active=True, language="fr"
             ),
         )
         second = await service.create_consent_template(
             db,
             tenant.id,
             ConsentTemplateCreate(
-                name="B", body="body B", is_active=True, language="ru"
+                name="B", body="body B", is_active=True, language="fr"
             ),
         )
         templates = {
@@ -288,7 +288,7 @@ class TestConsentFlow:
             ConsentTemplateCreate(
                 name="Default",
                 body="By signing, you agree to recording.",
-                language="ru",
+                language="fr",
                 is_active=True,
             ),
         )
@@ -360,14 +360,14 @@ class TestConsentFlow:
             db,
             tenant.id,
             ConsentTemplateCreate(
-                name="A", body="body A", language="ru", is_active=True
+                name="A", body="body A", language="fr", is_active=True
             ),
         )
         second = await service.create_consent_template(
             db,
             tenant.id,
             ConsentTemplateCreate(
-                name="B", body="body B", language="ru", is_active=True
+                name="B", body="body B", language="fr", is_active=True
             ),
         )
         templates = {t["id"]: t for t in await service.list_consent_templates(db, tenant.id)}
@@ -381,7 +381,7 @@ class TestConsentFlow:
             db,
             tenant.id,
             ConsentTemplateCreate(
-                name="N", body="old body", language="ru", is_active=True
+                name="N", body="old body", language="fr", is_active=True
             ),
         )
         assert created["version"] == 1
@@ -410,7 +410,7 @@ class TestConsentFlow:
             db,
             tenant.id,
             ConsentTemplateCreate(
-                name="Default", body="t", language="ru", is_active=True
+                name="Default", body="t", language="fr", is_active=True
             ),
         )
         await service.send_consent_request(

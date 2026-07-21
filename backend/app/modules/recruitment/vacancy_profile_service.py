@@ -288,7 +288,7 @@ async def generate_profile_now(
         "conditions": (vacancy.conditions or "").strip() or "Not specified",
         "attachments_text": attachments_text,
         "clarification": (clarification or "").strip(),
-        "language": vacancy.language or "ru",
+        "language": vacancy.language or "en",
     }
 
     async def _mark_session_failed(error: str) -> None:
@@ -612,7 +612,7 @@ async def apply_profile_session(
             vacancy_id=vacancy_id,
             profile_data=data.profile_data,
             version=1,
-            language=vacancy.language or "ru",
+            language=vacancy.language or "en",
             coverage_note=coverage_note,
             generated_by="ai",
         )

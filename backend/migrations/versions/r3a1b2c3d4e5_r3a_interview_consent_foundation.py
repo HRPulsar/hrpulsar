@@ -50,7 +50,7 @@ def upgrade() -> None:
             "language",
             sa.String(10),
             nullable=False,
-            server_default="ru",
+            server_default="en",
         ),
         sa.Column(
             "is_active",

@@ -274,7 +274,7 @@ class TestRouterPatch:
     ) -> None:
         resp = await auth_client.patch(
             "/api/admin/ai-settings",
-            json={"content_language": "ru"},
+            json={"content_language": "fr"},
         )
         assert resp.status_code == 422
 

@@ -68,7 +68,7 @@ class TranscriptionProvider(ABC):
         self,
         audio_url: str,
         *,
-        language: str = "ru",
+        language: str = "en",
         diarization: bool = True,
     ) -> TranscriptionResult:
         """Transcribe audio referenced by ``audio_url``.
@@ -101,7 +101,7 @@ class OpenAIWhisperProvider(TranscriptionProvider):
         self,
         audio_url: str,
         *,
-        language: str = "ru",
+        language: str = "en",
         diarization: bool = True,
     ) -> TranscriptionResult:
         # The Whisper REST endpoint expects a multipart upload with the
@@ -207,7 +207,7 @@ class DeepgramProvider(TranscriptionProvider):
         self,
         audio_url: str,
         *,
-        language: str = "ru",
+        language: str = "en",
         diarization: bool = True,
     ) -> TranscriptionResult:
         params: dict[str, Any] = {
@@ -297,7 +297,7 @@ class AssemblyAIProvider(TranscriptionProvider):
         self,
         audio_url: str,
         *,
-        language: str = "ru",
+        language: str = "en",
         diarization: bool = True,
     ) -> TranscriptionResult:
         raise NotImplementedError(
@@ -317,7 +317,7 @@ class FasterWhisperProvider(TranscriptionProvider):
         self,
         audio_url: str,
         *,
-        language: str = "ru",
+        language: str = "en",
         diarization: bool = True,
     ) -> TranscriptionResult:
         raise NotImplementedError(

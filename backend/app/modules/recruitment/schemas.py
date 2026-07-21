@@ -69,7 +69,7 @@ class VacancyCreate(BaseModel):
     salary_min: float | None = None
     salary_max: float | None = None
     salary_currency: str | None = Field(default=None, max_length=10)
-    language: str = Field(default="ru", max_length=10)
+    language: str = Field(default="en", max_length=10)
     # HRP-135
     requirements: str | None = None
     responsibilities: str | None = None
@@ -997,7 +997,7 @@ class InterviewArchiveRequest(BaseModel):
 class ConsentTemplateCreate(BaseModel):
     name: str = Field(max_length=100)
     body: str
-    language: str = Field(default="ru", max_length=10)
+    language: str = Field(default="en", max_length=10)
     is_active: bool = True
 
 

@@ -151,7 +151,6 @@ export default function ConsentTemplatesPage() {
                 className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
               >
                 <option value="en">English</option>
-                <option value="ru">Russian</option>
               </select>
             </div>
           </div>

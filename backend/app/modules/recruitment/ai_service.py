@@ -200,7 +200,7 @@ async def generate_vacancy_profile(vacancy_data: dict) -> dict:
         clarification_section=clarification_section,
         industry_context=industry_context,
         vacancy_id=vacancy_data.get("vacancy_id", ""),
-        language=vacancy_data.get("language", "ru"),
+        language=vacancy_data.get("language", "en"),
     )
     try:
         result = await generate_json(
@@ -236,7 +236,7 @@ async def generate_individual_questions(
     resume_data: dict,
     profile_data: dict,
     vacancy_title: str,
-    language: str = "ru",
+    language: str = "en",
 ) -> list[dict]:
     """Generate individual interview questions for a candidate.
 

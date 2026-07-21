@@ -275,3 +275,52 @@ jobs:
           path: marketing/playwright-report/
           retention-days: 14
           if-no-files-found: ignore
+
+  # Public repo only: tag release commits and publish a GitHub Release.
+  # Fires on the synced `release: vX.Y.Z` commits and on the `init: … vX.Y.Z`
+  # commit a history restart produces, after the test jobs are green.
+  release-tag:
+    if: >-
+      github.repository == 'hrpulsar/hrpulsar' &&
+      github.event_name == 'push' &&
+      (startsWith(github.event.head_commit.message, 'release: v') ||
+       startsWith(github.event.head_commit.message, 'init: '))
+    needs: [backend, frontend, e2e]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Passed via env on purpose: interpolating the commit message
+          # straight into the script would be a shell-injection vector.
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          version=$(printf '%s\n' "$HEAD_MESSAGE" | head -1 \
+            | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+          if [ -z "$version" ]; then
+            echo "No vX.Y.Z in the head commit message — nothing to tag."
+            exit 0
+          fi
+          if gh release view "$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $version already exists — skipping."
+            exit 0
+          fi
+          # Release notes: this version's section from CHANGELOG.md.
+          awk -v ver="${version#v}" '
+            $0 ~ "^## \\[" ver "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > /tmp/notes.md || true
+          if ! [ -s /tmp/notes.md ]; then
+            echo "See CHANGELOG.md for details." > /tmp/notes.md
+          fi
+          gh release create "$version" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$version" \
+            --notes-file /tmp/notes.md

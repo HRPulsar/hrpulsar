@@ -114,7 +114,7 @@ def upgrade() -> None:
         sa.Column("salary_max", sa.Numeric(), nullable=True),
         sa.Column("salary_currency", sa.String(length=10), nullable=True),
         sa.Column(
-            "language", sa.String(length=10), server_default="ru", nullable=False
+            "language", sa.String(length=10), server_default="en", nullable=False
         ),
         sa.Column("close_resolution", sa.String(length=50), nullable=True),
         sa.Column("close_reason", sa.Text(), nullable=True),
@@ -161,7 +161,7 @@ def upgrade() -> None:
         ),
         sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.Column(
-            "language", sa.String(length=10), server_default="ru", nullable=False
+            "language", sa.String(length=10), server_default="en", nullable=False
         ),
         sa.Column("coverage_note", sa.Text(), nullable=True),
         sa.Column("generated_by", sa.String(length=50), nullable=True),

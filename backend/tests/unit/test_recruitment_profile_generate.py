@@ -24,7 +24,7 @@ def _vacancy_data(title: str = "Backend Engineer") -> VacancyCreate:
 def _profile_payload(vacancy_id: str) -> dict:
     return {
         "vacancy_id": vacancy_id,
-        "language": "ru",
+        "language": "fr",
         "competences": [
             {
                 "id": "senior-python-skills",

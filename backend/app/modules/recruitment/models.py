@@ -129,7 +129,7 @@ class Vacancy(BaseModel, TenantMixin):
     salary_max: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     salary_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
     language: Mapped[str] = mapped_column(
-        String(10), nullable=False, default="ru", server_default="ru"
+        String(10), nullable=False, default="en", server_default="en"
     )
     close_resolution: Mapped[str | None] = mapped_column(String(50), nullable=True)
     close_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -226,7 +226,7 @@ class VacancyProfile(BaseModel, TenantMixin):
     profile_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     language: Mapped[str] = mapped_column(
-        String(10), nullable=False, default="ru", server_default="ru"
+        String(10), nullable=False, default="en", server_default="en"
     )
     coverage_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     generated_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -956,6 +956,20 @@ class AIAnalysisRun(BaseModel, TenantMixin):
     """
 
     __tablename__ = "ai_analysis_runs"
+    __table_args__ = (
+        # HRP-423: mirror of the migration-defined partial unique index
+        # (hrp204). The "active" run per pair = ``archived_at IS NULL``;
+        # a successful run must archive older active rows BEFORE its own
+        # row turns ``completed`` (the index is non-deferrable). Declared
+        # on the model too so metadata-created schemas (unit-test DB)
+        # enforce the same invariant as production.
+        Index(
+            "uq_ai_analysis_runs_active_per_cv",
+            "candidate_vacancy_id",
+            unique=True,
+            postgresql_where=text("archived_at IS NULL AND status = 'completed'"),
+        ),
+    )
 
     candidate_vacancy_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -1271,7 +1285,7 @@ class ConsentTemplate(BaseModel, TenantMixin):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     language: Mapped[str] = mapped_column(
-        String(10), nullable=False, default="ru", server_default="ru"
+        String(10), nullable=False, default="en", server_default="en"
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
