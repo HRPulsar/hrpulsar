@@ -213,7 +213,19 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 db.commit()
                 return {"status": "failed", "error": "File record missing"}
 
-            audio_url = get_presigned_url(file_record.path, expires_in=3600)
+            provider = get_transcription_provider_sync(db, uuid.UUID(tenant_id))
+
+            from app.modules.recruitment.transcription_service import (
+                OpenAIWhisperProvider,
+            )
+
+            # Whisper downloads the media itself from inside the worker, so
+            # its URL must be signed for the internal endpoint; Deepgram
+            # fetches from its own cloud and needs the public one.
+            is_whisper = isinstance(provider, OpenAIWhisperProvider)
+            audio_url = get_presigned_url(
+                file_record.path, expires_in=3600, internal=is_whisper
+            )
             if not audio_url:
                 interview.transcription_status = "failed"
                 interview.transcription_error = "Object storage unavailable"
@@ -223,17 +235,11 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                     "error": "Object storage unavailable",
                 }
 
-            provider = get_transcription_provider_sync(db, uuid.UUID(tenant_id))
-
             # Pre-flight Whisper's 25 MB size cap so we never even start
             # the download for an oversized recording — the client should
             # have used Deepgram instead.
-            from app.modules.recruitment.transcription_service import (
-                OpenAIWhisperProvider,
-            )
-
             if (
-                isinstance(provider, OpenAIWhisperProvider)
+                is_whisper
                 and (file_record.size or 0) > OpenAIWhisperProvider.WHISPER_MAX_BYTES
             ):
                 interview.transcription_status = "failed"

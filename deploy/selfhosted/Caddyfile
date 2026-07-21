@@ -10,6 +10,15 @@
 		reverse_proxy backend:8000
 	}
 
+	# Browser-facing presigned file URLs (S3_PUBLIC_ENDPOINT in .env).
+	# The path prefix is the bucket name — keep in sync with S3_BUCKET.
+	# The Host header must reach MinIO unchanged (Caddy's default): SigV4
+	# signatures are bound to the host the backend signed the URL for.
+	@storage path /hrpulsar/*
+	handle @storage {
+		reverse_proxy minio:9000
+	}
+
 	handle {
 		reverse_proxy frontend:3000
 	}

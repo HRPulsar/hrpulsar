@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.15.1] - 2026-07-21
+
+### Fixed
+- Self-hosted compose now passes the white-label branding env vars to the frontend container, so UI branding from `.env` actually applies (HRP-393)
+- Uploaded file links (company logo, interview media) now load on self-hosted installs: new `S3_PUBLIC_ENDPOINT` setting signs presigned URLs against the public host and the bundled Caddyfile proxies them to MinIO; logo upload UI no longer advertises unsupported SVG (HRP-412)
+- Self-hosted Celery worker now receives the bundled MinIO connection env, fixing resume parsing and other storage-reading background tasks (HRP-412)
+
+### Changed
+- Self-Hosted guide: upgrading section now covers backup-first, downtime expectations and keeping local changes in a compose override file
+
 ## [1.15.0] - 2026-07-20
 
 ### Added

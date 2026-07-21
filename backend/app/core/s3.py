@@ -11,19 +11,45 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _make_client(endpoint: str):
+    # signature_version="s3v4": AWS regions created after 2014 and MinIO reject
+    # presigned URLs signed with the legacy SigV2 algorithm.
+    # addressing_style="path": the self-hosted proxy route matches the bucket
+    # as a path prefix (deploy/selfhosted/Caddyfile), so URLs must stay
+    # path-style rather than depend on botocore's endpoint-specific default.
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=settings.s3_access_key,
+        aws_secret_access_key=settings.s3_secret_key,
+        config=Config(
+            signature_version="s3v4", s3={"addressing_style": "path"}
+        ),
+    )
+
+
 def get_s3_client():
     if not settings.s3_endpoint:
         return None
+    return _make_client(settings.s3_endpoint)
 
-    # signature_version="s3v4": AWS regions created after 2014 and MinIO reject
-    # presigned URLs signed with the legacy SigV2 algorithm.
-    return boto3.client(
-        "s3",
-        endpoint_url=settings.s3_endpoint,
-        aws_access_key_id=settings.s3_access_key,
-        aws_secret_access_key=settings.s3_secret_key,
-        config=Config(signature_version="s3v4"),
-    )
+
+def get_s3_presign_client():
+    """Client for generating browser-facing presigned URLs.
+
+    SigV4 signatures are bound to the host they were signed for, so when
+    ``s3_endpoint`` is an internal-only address (self-hosted MinIO at
+    ``http://minio:9000``) URLs must be signed against the public endpoint
+    the browser will actually hit (``S3_PUBLIC_ENDPOINT``, proxied back to
+    MinIO with the Host header preserved).
+    """
+    if not settings.s3_public_endpoint:
+        # Delegate instead of building directly: get_s3_client owns the
+        # "storage disabled" check and is the client seam tests patch.
+        return get_s3_client()
+    if not settings.s3_endpoint:
+        return None
+    return _make_client(settings.s3_public_endpoint)
 
 
 def upload_file(data: bytes, path: str, content_type: str) -> str | None:
@@ -63,8 +89,16 @@ def get_presigned_url(
     expires_in: int = 3600,
     *,
     content_disposition: str | None = None,
+    internal: bool = False,
 ) -> str | None:
-    client = get_s3_client()
+    """Presigned GET URL for ``path``.
+
+    ``internal=True`` signs against ``s3_endpoint`` for consumers that fetch
+    the URL from inside the deployment network (e.g. a Celery worker
+    downloading media for transcription) — the public endpoint may not be
+    reachable from there. Default is the browser-facing public endpoint.
+    """
+    client = get_s3_client() if internal else get_s3_presign_client()
     if not client:
         return None
 
@@ -115,7 +149,9 @@ def get_part_presigned_url(
     part_number: int,
     expires_in: int = 3600,
 ) -> str | None:
-    client = get_s3_client()
+    # Part uploads go directly from the browser to storage — sign against
+    # the public endpoint, same as download links.
+    client = get_s3_presign_client()
     if not client:
         return None
 

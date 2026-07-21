@@ -211,6 +211,13 @@ class Settings(BaseSettings):
     s3_access_key: str = ""
     s3_secret_key: str = ""
     s3_bucket: str = "hrpulsar"
+    # Public base URL for browser-facing presigned links, for deployments
+    # where ``s3_endpoint`` is an internal-only address (self-hosted MinIO
+    # behind the reverse proxy). SigV4 signatures are host-bound, so the
+    # URLs must be signed against the public host up front — they cannot be
+    # rewritten after signing. Empty = ``s3_endpoint`` is already publicly
+    # reachable (e.g. Cloudflare R2).
+    s3_public_endpoint: str = ""
     # Hard cap on any single generic upload routed through the storage
     # service (``POST /files/upload``, ``POST /auth/avatar``). Guards
     # against trivial OOM/DoS from an unbounded ``await file.read()``.

@@ -256,7 +256,7 @@ export default function CompanyProfilePage() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                  accept="image/png,image/jpeg,image/webp"
                   className="hidden"
                   onChange={handleLogoUpload}
                   data-testid="company-profile-input-logo"
@@ -286,7 +286,7 @@ export default function CompanyProfilePage() {
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  PNG, JPEG, SVG, WebP — up to 5 MB. Drag &amp; drop or paste a URL below.
+                  PNG, JPEG, WebP — up to 5 MB. Drag &amp; drop or paste a URL below.
                 </p>
               </div>
             </div>

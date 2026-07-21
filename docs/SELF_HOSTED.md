@@ -87,7 +87,10 @@ To enable automatic HTTPS:
 3. Restart Caddy: `docker compose -f docker-compose.self-hosted.yml restart caddy`
 
 Caddy will automatically obtain a Let's Encrypt certificate. Remember to
-update `FRONTEND_URL` in `.env` to the new domain.
+update `FRONTEND_URL` in `.env` to the new domain, and set
+`S3_PUBLIC_ENDPOINT=https://your-domain` so uploaded files (logos, media)
+are served through the proxy — without it, file links point at the
+internal MinIO address and won't load in the browser.
 
 ## Running Without Docker Compose
 
@@ -119,6 +122,7 @@ the hosted-product entry surface.
 | `S3_ACCESS_KEY` | No | — | S3 access key |
 | `S3_SECRET_KEY` | No | — | S3 secret key |
 | `S3_BUCKET` | No | `hrpulsar` | S3 bucket name |
+| `S3_PUBLIC_ENDPOINT` | No | — | Public base URL for file links when `S3_ENDPOINT` is internal-only (bundled MinIO). Set to your site origin, e.g. `https://hr.yourcompany.com` |
 | `BRAND_NAME` | No | `HRPulsar` | Installation name in outgoing emails and the API title |
 | `BRAND_LOGO_URL` | No | Stock logo | Absolute URL of the email-header logo |
 | `BRAND_ACCENT_COLOR` | No | `#0066FF` | Accent color for email buttons and links |
@@ -183,6 +187,8 @@ fully branded install surface (PWA icons, home-screen name).
 
 ## Upgrading
 
+Back up the database first (see below), then:
+
 ```bash
 cd hrpulsar
 git pull
@@ -190,7 +196,20 @@ docker compose -f docker-compose.self-hosted.yml build
 docker compose -f docker-compose.self-hosted.yml up -d
 ```
 
-Migrations run automatically on backend startup.
+Migrations run automatically on backend startup. Building happens while
+the old version keeps serving; expect well under a minute of downtime
+during the final `up -d` switchover.
+
+Local changes and upgrades:
+
+- Keep your customizations out of `docker-compose.self-hosted.yml` —
+  put them in a separate override file and pass both files on every
+  command, e.g.
+  `docker compose -f docker-compose.self-hosted.yml -f docker-compose.local.yml up -d`.
+  An edited compose file will conflict on `git pull`.
+- The one file you are expected to edit in place is
+  `deploy/selfhosted/Caddyfile` (your domain). If an upgrade touches it,
+  `git pull` will ask you to merge — re-apply your domain line.
 
 ## Backup & Restore
 

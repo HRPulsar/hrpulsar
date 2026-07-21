@@ -234,6 +234,9 @@ class TestS3PresignedUrl:
             patch("app.core.s3.settings") as mock_settings,
         ):
             mock_settings.s3_bucket = "hrpulsar"
+            # Empty public endpoint keeps the presign path on the patched
+            # get_s3_client seam (HRP-412).
+            mock_settings.s3_public_endpoint = ""
             result = get_presigned_url("tenant/file.pdf", expires_in=600)
 
         assert result == "https://signed-url"
@@ -256,6 +259,9 @@ class TestS3PresignedUrl:
             caplog.at_level(logging.CRITICAL, logger="app.core.s3"),
         ):
             mock_settings.s3_bucket = "hrpulsar"
+            # Empty public endpoint keeps the presign path on the patched
+            # get_s3_client seam (HRP-412).
+            mock_settings.s3_public_endpoint = ""
             assert get_presigned_url("path.txt") is None
 
 

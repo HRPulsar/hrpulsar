@@ -7,6 +7,9 @@ from app.core import s3 as s3_module
 
 def _patch_client(monkeypatch, fake_client):
     monkeypatch.setattr(s3_module, "get_s3_client", lambda: fake_client)
+    # Browser-facing part-upload URLs are signed by the presign client
+    # (HRP-412); in these tests both resolve to the same fake.
+    monkeypatch.setattr(s3_module, "get_s3_presign_client", lambda: fake_client)
 
 
 def test_init_multipart_upload_returns_upload_id(monkeypatch):
