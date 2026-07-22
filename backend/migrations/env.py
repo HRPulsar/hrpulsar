@@ -17,6 +17,7 @@ import_all_models()
 try:  # noqa: SIM105
     from ee.models import (  # noqa: F401
         AuditLog,
+        BlogPost,
         CreditTransaction,
         QuizCompletionEvent,
         TenantCredits,

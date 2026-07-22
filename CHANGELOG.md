@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.15.3] - 2026-07-22
+
+### Changed
+- Marketing site now builds from its own `marketing/content/` directory (release metadata, public changelog, docs) instead of reading monorepo-root files, in preparation for its extraction into a standalone repository (HRP-428)
+
 ## [1.15.2] - 2026-07-21
 
 ### Fixed
