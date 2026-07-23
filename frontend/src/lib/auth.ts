@@ -28,12 +28,18 @@ function saveTokens(tokens: TokenResponse) {
   localStorage.setItem("refresh_token", tokens.refresh_token);
   // Set cookie so proxy middleware knows user is authenticated
   document.cookie = "has_token=1; path=/; SameSite=Lax";
+  // A real sign-in supersedes any demo sandbox — drop the marker so auth
+  // pages regain their signed-in → /dashboard redirect (see proxy.ts).
+  document.cookie =
+    "demo_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
 }
 
 function clearTokens() {
   localStorage.removeItem("access_token");
   localStorage.removeItem("refresh_token");
   document.cookie = "has_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  document.cookie =
+    "demo_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
 }
 
 export async function login(

@@ -67,9 +67,14 @@ export interface TurnstileGate {
 
 /**
  * Hook wrapping the Cloudflare Turnstile widget for our demo-start +
- * signup-request flows. The widget is rendered in ``invisible`` size so
- * it doesn't visually take space; CF still escalates to a visible
- * challenge if the user looks too bot-ish.
+ * signup-request flows. The widget uses the ``interaction-only``
+ * appearance: it takes no visual space while Cloudflare verifies
+ * silently, but materializes in place when Cloudflare escalates to an
+ * interactive challenge. Do NOT switch this to ``size: "invisible"`` —
+ * a 0x0 hidden container leaves an escalated challenge nowhere to
+ * render, so every visitor Cloudflare chooses to challenge dead-ends in
+ * the watchdog timeout (2026-07-23 prod incident: demo/signup blocked
+ * for everyone while CF was in an escalating mood).
  *
  * Usage:
  *
@@ -89,10 +94,12 @@ export function useTurnstileGate(): TurnstileGate {
   const instanceRef = useRef<TurnstileInstance | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [interactive, setInteractive] = useState(false);
 
   const reset = useCallback(() => {
     setToken(null);
     setFailed(false);
+    setInteractive(false);
     instanceRef.current?.reset();
   }, []);
 
@@ -100,12 +107,14 @@ export function useTurnstileGate(): TurnstileGate {
 
   // Watchdog: if the widget neither succeeds nor errors within the
   // timeout (script blocked before it could even report an error), flip
-  // to failed so the UI stops showing an eternal "Verifying...".
+  // to failed so the UI stops showing an eternal "Verifying...". Paused
+  // while an interactive challenge is on screen — solving it may
+  // legitimately take longer than the timeout.
   useEffect(() => {
-    if (!siteKey || token !== null || failed) return;
+    if (!siteKey || token !== null || failed || interactive) return;
     const id = window.setTimeout(() => setFailed(true), VERIFY_TIMEOUT_MS);
     return () => window.clearTimeout(id);
-  }, [siteKey, token, failed]);
+  }, [siteKey, token, failed, interactive]);
 
   if (!siteKey) {
     return { widget: null, token: null, isReady: true, failed: false, reset };
@@ -115,10 +124,12 @@ export function useTurnstileGate(): TurnstileGate {
     <Turnstile
       ref={instanceRef}
       siteKey={siteKey}
-      options={{ size: "invisible" }}
+      options={{ appearance: "interaction-only" }}
+      onBeforeInteractive={() => setInteractive(true)}
       onSuccess={(value) => {
         setToken(value);
         setFailed(false);
+        setInteractive(false);
       }}
       onError={() => {
         setToken(null);

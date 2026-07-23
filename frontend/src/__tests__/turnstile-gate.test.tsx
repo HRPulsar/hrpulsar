@@ -96,6 +96,24 @@ describe("useTurnstileGate", () => {
     expect(gate().failed).toBe(true);
   });
 
+  it("renders escalated challenges instead of hiding them (interaction-only)", () => {
+    render();
+    const options = (widgetProps() as unknown as { options: { appearance?: string; size?: string } })
+      .options;
+    expect(options.appearance).toBe("interaction-only");
+    expect(options.size).toBeUndefined();
+  });
+
+  it("pauses the watchdog while an interactive challenge is on screen", () => {
+    render();
+    act(() => widgetProps().onBeforeInteractive());
+    act(() => void vi.advanceTimersByTime(60_000));
+    expect(gate().failed).toBe(false);
+
+    act(() => widgetProps().onSuccess("tok-3"));
+    expect(gate().isReady).toBe(true);
+  });
+
   it("does not fail after the timeout once a token was issued", () => {
     render();
     act(() => widgetProps().onSuccess("tok-1"));

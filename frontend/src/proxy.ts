@@ -152,6 +152,11 @@ export function proxy(request: NextRequest) {
   // invariant note in backend/app/main.py). Do not start authenticating off
   // this cookie without adding CSRF defense first.
   const hasToken = request.cookies.get("has_token")?.value === "1";
+  // Set by persistDemoSession (lib/demo.ts) alongside has_token: marks the
+  // live session as a demo sandbox. A real login/logout clears it
+  // (lib/auth.ts). Like has_token it is a render hint only — never grants
+  // anything.
+  const demoSession = request.cookies.get("demo_session")?.value === "1";
 
   // Next.js RSC prefetch / segment requests can fire without forwarding
   // the SameSite=Lax has_token cookie. Letting them through prevents a
@@ -199,8 +204,12 @@ export function proxy(request: NextRequest) {
 
   // Auth paths
   if (isAuthPath(pathname)) {
-    // /accept-invite carries its own invitation token — always serve the form
-    if (hasToken && !pathname.startsWith("/accept-invite")) {
+    // /accept-invite carries its own invitation token — always serve the form.
+    // A demo sandbox session must not hijack the auth pages either: its
+    // handoff sets has_token so the sandbox itself renders, but "Create
+    // account" / "Sign in" from the landing must still reach the real forms
+    // (2026-07-23 bug: register bounced into the demo session).
+    if (hasToken && !demoSession && !pathname.startsWith("/accept-invite")) {
       return safeRedirect(new URL("/dashboard", request.url));
     }
     return NextResponse.next();

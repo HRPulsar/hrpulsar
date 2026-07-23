@@ -32,7 +32,10 @@ vi.mock("next/server", () => ({
   },
 }));
 
-function makeRequest(path: string, opts: { host?: string; hasToken?: boolean } = {}) {
+function makeRequest(
+  path: string,
+  opts: { host?: string; hasToken?: boolean; demoSession?: boolean } = {},
+) {
   const host = opts.host || "app.hrpulsar.com";
   const url = `https://${host}${path}`;
   return {
@@ -43,6 +46,7 @@ function makeRequest(path: string, opts: { host?: string; hasToken?: boolean } =
     cookies: {
       get(name: string) {
         if (name === "has_token" && opts.hasToken) return { value: "1" };
+        if (name === "demo_session" && opts.demoSession) return { value: "1" };
         return undefined;
       },
     },
@@ -163,6 +167,25 @@ describe("app domain (app.hrpulsar.com)", () => {
   it("serves /accept-invite even when authenticated", () => {
     const result = proxy(makeRequest("/accept-invite?token=abc123", { host, hasToken: true }));
     expect(result.type).toBe("next");
+  });
+
+  it("serves /register during a demo session instead of bouncing into the sandbox", () => {
+    const result = proxy(
+      makeRequest("/register", { host, hasToken: true, demoSession: true }),
+    );
+    expect(result.type).toBe("next");
+  });
+
+  it("serves /login during a demo session", () => {
+    const result = proxy(
+      makeRequest("/login", { host, hasToken: true, demoSession: true }),
+    );
+    expect(result.type).toBe("next");
+  });
+
+  it("still redirects / to /dashboard during a demo session", () => {
+    proxy(makeRequest("/", { host, hasToken: true, demoSession: true }));
+    expect(redirectTarget.toString()).toContain("/dashboard");
   });
 
   it("serves /recruitment/invite/<token> without auth (token-gated public)", () => {

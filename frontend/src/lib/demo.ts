@@ -44,6 +44,11 @@ export function persistDemoSession(accessToken: string): void {
   // of minting a fresh credit grant.
   localStorage.setItem(DEMO_RESUME_TOKEN_KEY, accessToken);
   document.cookie = "has_token=1; path=/; SameSite=Lax";
+  // Marks the session as a demo sandbox for the proxy middleware: with it
+  // set, /register and /login keep serving the real forms instead of
+  // bouncing to /dashboard (i.e. into the sandbox). Cleared by a real
+  // login/logout in lib/auth.ts.
+  document.cookie = "demo_session=1; path=/; SameSite=Lax";
 }
 
 /** Capture a demo visitor's email as a moderated signup request. */
