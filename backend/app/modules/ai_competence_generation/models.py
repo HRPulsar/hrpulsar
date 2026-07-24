@@ -34,6 +34,10 @@ ERROR_CODES = (
     # HRP-163: set by the reap-stuck-sessions beat job when a worker
     # exited without updating its row (OOM / SIGKILL / host reboot).
     "reaped_stuck",
+    # HRP-432: the model hit the per-model output-token ceiling even at
+    # the maximum budget — retrying is pointless, the user must narrow
+    # the generation scope instead.
+    "output_truncated",
 )
 
 

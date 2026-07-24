@@ -59,3 +59,12 @@ OPENAI_OUTPUT_CAPS: dict[str, int] = {
     "gpt-4o": 16384,
 }
 OPENAI_DEFAULT_OUTPUT_CAP = 16384
+
+# HRP-432: Gemini output ceilings, keyed by model-name prefix like the
+# maps above. The 2.5 family accepts 65536 output tokens; older or
+# unknown Gemini models fall back to a conservative 8192 so an over-cap
+# request surfaces as an honest truncation instead of an HTTP 400.
+GEMINI_OUTPUT_CAPS: dict[str, int] = {
+    "gemini-2.5": 65536,
+}
+GEMINI_DEFAULT_OUTPUT_CAP = 8192

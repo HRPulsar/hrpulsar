@@ -20,6 +20,10 @@ const MESSAGES: Record<string, { title: string; body: string }> = {
     title: "AI service overloaded",
     body: "Too many concurrent requests. Wait a minute and try again.",
   },
+  output_truncated: {
+    title: "Result too large for one run",
+    body: "The generated tree hit the model's output limit. Narrow the scope — generate one group at a time, or reduce the number of specializations.",
+  },
 };
 
 export interface ErrorScreenProps {
@@ -40,6 +44,9 @@ export function ErrorScreen({
     body: errorMessage || "Something went wrong. Please try again later.",
   };
   const m = (errorCode && MESSAGES[errorCode]) || fallback;
+  // Retrying a truncated generation re-runs the same over-budget request;
+  // the remedy is a narrower scope, so the retry button is hidden.
+  const retryable = errorCode !== "output_truncated";
   return (
     <div
       data-testid="compgen-error-screen"
@@ -50,7 +57,7 @@ export function ErrorScreen({
         <p className="text-base font-medium text-foreground">{m.title}</p>
         <p className="text-sm text-muted-foreground">{m.body}</p>
       </div>
-      {onRetry && (
+      {onRetry && retryable && (
         <Button
           data-testid="compgen-error-btn-retry"
           onClick={onRetry}

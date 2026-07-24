@@ -27,6 +27,7 @@ from app.core import billing_hooks
 from app.core.celery_app import celery
 from app.core.llm_sanitize import sanitize_user_refinement
 from app.database import make_async_engine
+from app.modules.ai import model_registry
 
 if TYPE_CHECKING:
     from app.modules.ai_competence_generation.models import (
@@ -405,6 +406,12 @@ async def _generate_with_retries(
             result = await llm_client.generate_json(user_prompt, **generate_kwargs)
             assert isinstance(result, BaseModel)
             return result, None
+        except llm_client.LLMOutputTruncatedError as exc:
+            # Truncation is deterministic for a given prompt+budget, and the
+            # budget is already at the per-model ceiling — retrying can only
+            # burn the same tokens again. Fail fast with a dedicated code so
+            # the UI can suggest narrowing the scope instead of "try later".
+            raise RuntimeError("output_truncated") from exc
         except (ValidationError, ValueError) as exc:
             last_exc = exc
             last_code = "parse_error"
@@ -431,13 +438,19 @@ async def _generate_with_retries(
 # HRP-122: output-token budget per scope. The SDK default 8192 truncates
 # whole_base / group / matrix tree responses mid-JSON, surfacing as
 # ``parse_error`` even when the model is producing valid content. Tree
-# scopes get 16384 (≈4× headroom over the largest observed valid payload);
-# competence_indicators stays at the default — its output is bounded by
-# the number of skill levels × 3-5 indicators each, well under 8192.
+# scopes ask for the sonnet-class ceiling (a live Cyrillic whole-base tree
+# overflowed the previous 16384 budget) and rely on llm_client's per-model
+# clamps (Haiku 8192, Opus 32000, gpt-4o 16384, non-2.5 Gemini 8192) to
+# keep the request valid for cheaper presets. competence_indicators stays
+# at the default — its output is bounded by the number of skill levels ×
+# 3-5 indicators each, well under 8192.
+_TREE_SCOPE_MAX_TOKENS = model_registry.ANTHROPIC_OUTPUT_CAPS[
+    model_registry.ANTHROPIC_BALANCED
+]
 _MAX_TOKENS_BY_SCOPE: dict[str, int] = {
-    "whole_base": 16384,
-    "group": 16384,
-    "specialization_matrix": 16384,
+    "whole_base": _TREE_SCOPE_MAX_TOKENS,
+    "group": _TREE_SCOPE_MAX_TOKENS,
+    "specialization_matrix": _TREE_SCOPE_MAX_TOKENS,
     "competence_indicators": 8192,
 }
 
@@ -1493,6 +1506,15 @@ async def _execute_session_body(
             )
             return {"status": "cancelled", "session_id": str(sess.id)}
 
+        # HRP-432: end the read transaction before the LLM phase. The
+        # engine-wide idle_in_transaction_session_timeout (5min,
+        # app/database.py) kills connections that sit in an open
+        # transaction across a many-minute generation — the post-LLM
+        # refresh/_terminate would then crash with "connection is closed"
+        # and mask the real error. Committing releases the connection;
+        # the next statement checks out a fresh one (pool_pre_ping).
+        await db.commit()
+
         # --- Call LLM with retries ----------------------------------
         max_attempts = max(
             5, ai_settings_service.get_effective_max_retries(tenant_settings)
@@ -1518,11 +1540,17 @@ async def _execute_session_body(
             if underlying is not None:
                 detail_text = str(underlying)[:200]
                 detail = f" ({type(underlying).__name__}: {detail_text})"
+            if code == "output_truncated":
+                # Fail-fast path — "after N attempts" would be a lie, and
+                # the remedy is narrowing the scope, not retrying.
+                message = f"Model output exceeded the output-token budget{detail}"
+            else:
+                message = f"LLM generation failed after {max_attempts} attempts{detail}"
             return await _terminate(
                 db,
                 sess,
                 error_code=code,
-                message=f"LLM generation failed after {max_attempts} attempts{detail}",
+                message=message,
                 notification_service=notification_service,
             )
 

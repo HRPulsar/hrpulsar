@@ -78,7 +78,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.npm
-          key: npm-${{ hashFiles('frontend/package-lock.json', 'marketing/package-lock.json') }}
+          key: npm-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: npm-
 
       - name: Install dependencies
@@ -92,20 +92,6 @@ jobs:
 
       - name: Build
         run: cd frontend && npm run build
-
-      # marketing/ only exists in the monorepo / enterprise repo — the
-      # public repo ships the product without the marketing site (HRP-389).
-      - name: Marketing lint + test + build
-        run: |
-          if [ -d marketing ]; then
-            cd marketing
-            npm ci
-            npm run lint
-            npm test
-            npm run build
-          else
-            echo "marketing/ not present (community build) — skipping"
-          fi
 
   e2e:
     runs-on: ubuntu-latest
@@ -146,7 +132,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.npm
-          key: npm-${{ hashFiles('frontend/package-lock.json', 'marketing/package-lock.json') }}
+          key: npm-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: npm-
 
       - name: Install backend dependencies
@@ -184,16 +170,6 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8100/api
 
-      - name: Build marketing
-        run: |
-          if [ -d marketing ]; then
-            cd marketing && npm ci && npm run build
-          else
-            echo "marketing/ not present (community build) — skipping"
-          fi
-        env:
-          NEXT_PUBLIC_API_URL: http://localhost:8100/api
-
       - name: Start backend
         run: cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8100 &
         env:
@@ -217,17 +193,6 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8100/api
 
-      - name: Start marketing
-        # NEXT_PUBLIC_APP_DOMAIN mirrors the SaaS domain split: the demo CTA
-        # hands the session off cross-origin to the product app on 3100.
-        run: |
-          if [ -d marketing ]; then
-            cd marketing && npm start -- --port 3300 &
-          fi
-        env:
-          NEXT_PUBLIC_API_URL: http://localhost:8100/api
-          NEXT_PUBLIC_APP_DOMAIN: localhost:3100
-
       - name: Wait for services
         run: |
           echo "Waiting for backend..."
@@ -235,27 +200,9 @@ jobs:
           timeout 90 bash -c 'until curl -sf http://localhost:8100/health; do sleep 1; done'
           echo "Waiting for frontend..."
           timeout 60 bash -c 'until curl -sf http://localhost:3100; do sleep 1; done'
-          if [ -d marketing ]; then
-            echo "Waiting for marketing..."
-            timeout 60 bash -c 'until curl -sf http://localhost:3300; do sleep 1; done'
-          fi
 
       - name: Run E2E tests
         run: cd frontend && npx playwright test
-        env:
-          CI: "true"
-
-      - name: Run marketing E2E tests
-        # marketing/ resolves its own @playwright/test from its own lockfile —
-        # install its matching browser build instead of assuming frontend's.
-        run: |
-          if [ -d marketing ]; then
-            cd marketing
-            npx playwright install chromium
-            npx playwright test
-          else
-            echo "marketing/ not present (community build) — skipping"
-          fi
         env:
           CI: "true"
 
@@ -266,15 +213,6 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 14
-
-      - name: Upload marketing test report
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: marketing-playwright-report
-          path: marketing/playwright-report/
-          retention-days: 14
-          if-no-files-found: ignore
 
   # Public repo only: tag release commits and publish a GitHub Release.
   # Fires on the synced `release: vX.Y.Z` commits and on the `init: … vX.Y.Z`

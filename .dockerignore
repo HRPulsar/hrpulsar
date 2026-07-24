@@ -21,9 +21,6 @@ backend/celerybeat-schedule*
 frontend/.next
 frontend/test-results
 frontend/playwright-report
-marketing/.next
-marketing/test-results
-marketing/playwright-report
 enterprise
 devtools
 status

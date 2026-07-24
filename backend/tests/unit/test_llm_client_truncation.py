@@ -25,14 +25,40 @@ pytestmark = pytest.mark.asyncio
 # ---------------------------------------------------------------------------
 
 
-def _anthropic_client(stop_reason: str) -> SimpleNamespace:
+def _anthropic_client(
+    stop_reason: str, captured: dict | None = None
+) -> SimpleNamespace:
+    # HRP-432: budgets above the non-streaming threshold go through the
+    # stream() helper, smaller ones through create() — the mock exposes
+    # both surfaces and counts which one was used.
     response = SimpleNamespace(
         stop_reason=stop_reason,
         content=[SimpleNamespace(text='{"ok": true}')],
     )
-    return SimpleNamespace(
-        messages=SimpleNamespace(create=AsyncMock(return_value=response))
-    )
+    calls = {"create": 0, "stream": 0}
+
+    async def _create(**kwargs: object) -> SimpleNamespace:
+        calls["create"] += 1
+        if captured is not None:
+            captured.update(kwargs)
+        return response
+
+    class _StreamManager:
+        async def __aenter__(self) -> SimpleNamespace:
+            return SimpleNamespace(get_final_message=AsyncMock(return_value=response))
+
+        async def __aexit__(self, *exc_info: object) -> bool:
+            return False
+
+    def _stream(**kwargs: object) -> _StreamManager:
+        calls["stream"] += 1
+        if captured is not None:
+            captured.update(kwargs)
+        return _StreamManager()
+
+    client = SimpleNamespace(messages=SimpleNamespace(create=_create, stream=_stream))
+    client.calls = calls
+    return client
 
 
 class TestAnthropicTruncation:
@@ -53,6 +79,54 @@ class TestAnthropicTruncation:
                 "p", None, "claude-sonnet-4-6", 0.3, 8192
             )
         assert result == '{"ok": true}'
+
+    async def test_sonnet_64k_budget_streams(self) -> None:
+        captured: dict = {}
+        client = _anthropic_client("end_turn", captured)
+        with patch.object(llm_client, "_get_anthropic", return_value=client):
+            await llm_client._generate_anthropic(
+                "p", None, "claude-sonnet-4-6", 0.3, 64000
+            )
+        assert captured["max_tokens"] == 64000
+        assert client.calls == {"create": 0, "stream": 1}
+
+    async def test_small_budget_uses_create(self) -> None:
+        # Sub-threshold budgets keep the non-streaming call so the SDK's
+        # transparent retry of mid-response transport failures still
+        # applies to every existing caller.
+        client = _anthropic_client("end_turn")
+        with patch.object(llm_client, "_get_anthropic", return_value=client):
+            await llm_client._generate_anthropic(
+                "p", None, "claude-sonnet-4-6", 0.3, 8192
+            )
+        assert client.calls == {"create": 1, "stream": 0}
+
+    async def test_haiku_clamped_to_8k_and_uses_create(self) -> None:
+        captured: dict = {}
+        client = _anthropic_client("end_turn", captured)
+        with patch.object(llm_client, "_get_anthropic", return_value=client):
+            await llm_client._generate_anthropic(
+                "p", None, "claude-haiku-4-5-20251001", 0.3, 64000
+            )
+        assert captured["max_tokens"] == 8192
+        assert client.calls == {"create": 1, "stream": 0}
+
+    async def test_empty_content_raises_value_error(self) -> None:
+        client = _anthropic_client("end_turn")
+        # Simulate a final message with no content blocks.
+        empty = SimpleNamespace(stop_reason="end_turn", content=[])
+
+        async def _create(**kwargs: object) -> SimpleNamespace:
+            return empty
+
+        client.messages.create = _create
+        with (
+            patch.object(llm_client, "_get_anthropic", return_value=client),
+            pytest.raises(ValueError, match="no content blocks"),
+        ):
+            await llm_client._generate_anthropic(
+                "p", None, "claude-sonnet-4-6", 0.3, 8192
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +229,20 @@ class TestGeminiTruncation:
                 "p", None, "gemini-2.5-pro", 0.3, 8192
             )
         assert result == '{"ok": true}'
+
+    async def test_gemini_25_keeps_64k_budget(self) -> None:
+        client = _gemini_client("FinishReason.STOP")
+        with patch.object(llm_client, "_get_gemini", return_value=client):
+            await llm_client._generate_gemini("p", None, "gemini-2.5-pro", 0.3, 64000)
+        sent = client.aio.models.generate_content.call_args.kwargs
+        assert sent["config"]["max_output_tokens"] == 64000
+
+    async def test_unknown_gemini_model_clamped_to_default_cap(self) -> None:
+        client = _gemini_client("FinishReason.STOP")
+        with patch.object(llm_client, "_get_gemini", return_value=client):
+            await llm_client._generate_gemini("p", None, "gemini-1.5-flash", 0.3, 64000)
+        sent = client.aio.models.generate_content.call_args.kwargs
+        assert sent["config"]["max_output_tokens"] == 8192
 
 
 # ---------------------------------------------------------------------------

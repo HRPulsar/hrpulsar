@@ -691,6 +691,7 @@ class TestLLMClientGenerate:
         from app.modules.ai import llm_client
 
         mock_response = MagicMock()
+        mock_response.stop_reason = "end_turn"
         mock_response.content = [MagicMock(text="Hello from Claude")]
 
         mock_anthropic = AsyncMock()

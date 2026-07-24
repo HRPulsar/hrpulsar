@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -255,10 +256,39 @@ async def _generate_anthropic(
     if system:
         kwargs["system"] = system
 
-    response = await client.messages.create(**kwargs)
+    if kwargs["max_tokens"] > _ANTHROPIC_STREAM_THRESHOLD_TOKENS:
+        # HRP-432: budgets above the proven non-streaming ceiling (tree
+        # scopes at the 64k sonnet cap) exceed the SDK's non-streaming
+        # request-time limits, so they stream; the outer bound replaces
+        # the whole-response read timeout that streaming turns into a
+        # per-chunk one. Smaller budgets keep the plain create() call —
+        # there the SDK auto-retries mid-response transport failures,
+        # which streaming only does for the initial connection.
+        async with asyncio.timeout(_ANTHROPIC_STREAM_TIMEOUT_S):
+            async with client.messages.stream(**kwargs) as stream:
+                response = await stream.get_final_message()
+    else:
+        response = await client.messages.create(**kwargs)
     if response.stop_reason == "max_tokens":
         raise LLMOutputTruncatedError(model, kwargs["max_tokens"])
-    return response.content[0].text
+    if not response.content:
+        raise ValueError(
+            f"Anthropic returned no content blocks (stop_reason={response.stop_reason})"
+        )
+    block = response.content[0]
+    text = getattr(block, "text", None)
+    if text is None:
+        raise ValueError(
+            f"Anthropic first content block has no text ({type(block).__name__})"
+        )
+    return text
+
+
+# HRP-432: 32768 is the largest budget proven to work through the
+# non-streaming API in production (recruitment vacancy profiles); anything
+# above it streams.
+_ANTHROPIC_STREAM_THRESHOLD_TOKENS = 32768
+_ANTHROPIC_STREAM_TIMEOUT_S = 1800
 
 
 def _clamp_anthropic_max_tokens(model: str, requested: int) -> int:
@@ -273,6 +303,7 @@ async def _generate_gemini(
 ) -> str:
     client = _get_gemini()
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
+    max_tokens = _clamp_gemini_max_tokens(model, max_tokens)
 
     response = await client.aio.models.generate_content(
         model=model,
@@ -289,6 +320,13 @@ async def _generate_gemini(
     if finish_reason is not None and "MAX_TOKENS" in str(finish_reason):
         raise LLMOutputTruncatedError(model, max_tokens)
     return response.text or ""
+
+
+def _clamp_gemini_max_tokens(model: str, requested: int) -> int:
+    for prefix, cap in model_registry.GEMINI_OUTPUT_CAPS.items():
+        if model.startswith(prefix):
+            return min(requested, cap)
+    return min(requested, model_registry.GEMINI_DEFAULT_OUTPUT_CAP)
 
 
 def _resolve_provider(model: str | None) -> str:
