@@ -16,6 +16,8 @@ export type SpecializationGrade = {
   id: string;
   grade_id: string;
   grade_title: string;
+  // HRP-479: origin grades localize via reference.dictionary.grade.*.
+  grade_i18n_key?: string | null;
   description: string | null;
   requirements: string | null;
   salary_min: number | null;
@@ -82,6 +84,7 @@ export type IndicatorByLevel = {
   weight: number;
   skill_level_id: string;
   skill_level_title: string;
+  skill_level_i18n_key: string | null;
   skill_level_sort_index: number;
 };
 

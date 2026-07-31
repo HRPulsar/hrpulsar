@@ -36,9 +36,12 @@ describe("Change status modal — Manual forbidden hint (HRP-192 REDO)", () => {
   });
 
   it("uses the shared tooltip copy and stops propagation to the SelectItem", () => {
+    // HRP-476: the copy is resolved through the `assessments` namespace from
+    // the shared key, then rendered in both the aria-label and the tooltip.
     expect(SOURCE).toMatch(
-      /TooltipContent>\{ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP\}<\/TooltipContent/,
+      /const tooltip = t\(ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP_KEY\);/,
     );
+    expect(SOURCE).toMatch(/TooltipContent>\{tooltip\}<\/TooltipContent/);
     expect(SOURCE).toMatch(/onPointerDown=\{\(e\) => e\.stopPropagation\(\)\}/);
     expect(SOURCE).toMatch(/onClick=\{\(e\) => e\.stopPropagation\(\)\}/);
   });

@@ -60,14 +60,22 @@ export function sortExamsForList<T extends MassExam>(exams: readonly T[]): T[] {
 // ``Cancelled`` for ``cancelled``. Returns null when the underlying date is
 // missing (terminal status with no ``finished_at`` should not happen in
 // practice but we degrade gracefully).
-export function examListTimestamp(
-  exam: MassExam,
-): { label: "Created" | "Completed" | "Cancelled"; iso: string } | null {
+//
+// HRP-476: ``labelKey`` points at the `exams` i18n namespace — callers
+// render it through their translator.
+export function examListTimestamp(exam: MassExam): {
+  labelKey: "dateCreated" | "dateCompleted" | "dateCancelled";
+  iso: string;
+} | null {
   if (exam.status === "done") {
-    return exam.finished_at ? { label: "Completed", iso: exam.finished_at } : null;
+    return exam.finished_at
+      ? { labelKey: "dateCompleted", iso: exam.finished_at }
+      : null;
   }
   if (exam.status === "cancelled") {
-    return exam.finished_at ? { label: "Cancelled", iso: exam.finished_at } : null;
+    return exam.finished_at
+      ? { labelKey: "dateCancelled", iso: exam.finished_at }
+      : null;
   }
-  return { label: "Created", iso: exam.created_at };
+  return { labelKey: "dateCreated", iso: exam.created_at };
 }

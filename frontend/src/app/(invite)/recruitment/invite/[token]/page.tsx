@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { AssessmentInvite, CandidateQuestion } from "@/lib/types";
 import { CanvasGrid } from "@/components/recruitment/canvas";
@@ -27,6 +28,7 @@ interface InviteContextResponse {
 }
 
 export default function InvitedEvaluatorPage() {
+  const t = useTranslations("auth");
   const { token } = useParams<{ token: string }>();
   const [context, setContext] = useState<InviteContextResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,11 +43,11 @@ export default function InvitedEvaluatorPage() {
       );
       setContext(data);
     } catch {
-      setError("The link has expired or is invalid.");
+      setError(t("linkExpiredOrInvalid"));
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, t]);
 
   useEffect(() => {
     load();
@@ -55,7 +57,7 @@ export default function InvitedEvaluatorPage() {
     return (
       <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" />
-        Loading…
+        {t("loadingEllipsis")}
       </div>
     );
   }
@@ -63,10 +65,8 @@ export default function InvitedEvaluatorPage() {
   if (error || !context) {
     return (
       <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
-        <p className="text-base font-medium">Link unavailable</p>
-        <p className="mt-2">
-          {error ?? "The link has expired or is invalid."}
-        </p>
+        <p className="text-base font-medium">{t("linkUnavailable")}</p>
+        <p className="mt-2">{error ?? t("linkExpiredOrInvalid")}</p>
       </div>
     );
   }
@@ -75,25 +75,27 @@ export default function InvitedEvaluatorPage() {
     <div data-testid="invited-evaluator-page" className="space-y-6">
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Candidate evaluation: {context.candidate_name}
+          {t("candidateEvaluation", {
+            name: context.candidate_name || t("unnamedCandidate"),
+          })}
         </h1>
         {context.vacancy_title && (
           <p className="text-sm text-muted-foreground">
-            Vacancy: {context.vacancy_title}
+            {t("vacancyLabel", { title: context.vacancy_title })}
           </p>
         )}
       </header>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Resume</CardTitle>
+          <CardTitle className="text-base">{t("resume")}</CardTitle>
         </CardHeader>
         <CardContent>
           {context.resume_url ? (
             context.resume_mime_type === "application/pdf" ? (
               <iframe
                 src={context.resume_url}
-                title={context.resume_filename || "resume"}
+                title={context.resume_filename || t("resumeFallbackTitle")}
                 className="h-[600px] w-full rounded-md border"
               />
             ) : (
@@ -103,22 +105,22 @@ export default function InvitedEvaluatorPage() {
                 rel="noreferrer"
                 className="text-sm text-accent underline"
               >
-                Open {context.resume_filename}
+                {t("openFile", { filename: context.resume_filename ?? "" })}
               </a>
             )
           ) : (
             <p className="text-sm text-muted-foreground">
-              Resume not attached.
+              {t("resumeNotAttached")}
             </p>
           )}
         </CardContent>
       </Card>
 
       <section className="space-y-3">
-        <h2 className="text-base font-semibold">Interview questions</h2>
+        <h2 className="text-base font-semibold">{t("interviewQuestions")}</h2>
         {context.questions.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No questions have been prepared yet.
+            {t("noQuestionsPrepared")}
           </p>
         ) : (
           <div className="space-y-2">
@@ -130,7 +132,7 @@ export default function InvitedEvaluatorPage() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-base font-semibold">Evaluation form</h2>
+        <h2 className="text-base font-semibold">{t("evaluationForm")}</h2>
         <CanvasGrid
           vacancyId={context.vacancy_id}
           candidateVacancyId={context.invite.candidate_vacancy_id}

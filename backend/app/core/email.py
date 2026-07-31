@@ -141,49 +141,59 @@ def _send_via_smtp(to: str, subject: str, html_body: str) -> tuple[bool, str | N
 
 
 # --- Convenience email senders using branded templates ---
+#
+# i18n F4: every sender takes a keyword-only ``locale`` resolved by the
+# caller from the *recipient's* context (User.language > Tenant.default_locale
+# > Accept-Language > deployment default, see ``app.core.i18n``). The
+# default stays ``"en"`` so a caller that has no recipient context keeps
+# the pre-F4 output byte-for-byte.
 
 
-def send_verification_email(to: str, token: str) -> bool:
+def send_verification_email(to: str, token: str, *, locale: str = "en") -> bool:
     """Send email verification link."""
     from app.core.email_templates import render_verification_email
 
-    subject, html = render_verification_email(token)
+    subject, html = render_verification_email(token, locale=locale)
     ok, _ = send_email(to, subject, html)
     return ok
 
 
-def send_signup_verify_email(to: str, token: str) -> bool:
+def send_signup_verify_email(to: str, token: str, *, locale: str = "en") -> bool:
     """Send the M-wave signup verification link."""
     from app.core.email_templates import render_signup_verify_email
 
-    subject, html = render_signup_verify_email(token)
+    subject, html = render_signup_verify_email(token, locale=locale)
     ok, _ = send_email(to, subject, html)
     return ok
 
 
-def send_signup_rejected_email(to: str, reason: str | None) -> bool:
+def send_signup_rejected_email(
+    to: str, reason: str | None, *, locale: str = "en"
+) -> bool:
     """Notify the visitor that their signup request was rejected."""
     from app.core.email_templates import render_signup_rejected_email
 
-    subject, html = render_signup_rejected_email(reason)
+    subject, html = render_signup_rejected_email(reason, locale=locale)
     ok, _ = send_email(to, subject, html)
     return ok
 
 
-def send_magic_login_email(to: str, token: str, company_name: str | None) -> bool:
+def send_magic_login_email(
+    to: str, token: str, company_name: str | None, *, locale: str = "en"
+) -> bool:
     """Send the one-time magic-login link issued by Slack approval."""
     from app.core.email_templates import render_magic_login_email
 
-    subject, html = render_magic_login_email(token, company_name)
+    subject, html = render_magic_login_email(token, company_name, locale=locale)
     ok, _ = send_email(to, subject, html)
     return ok
 
 
-def send_password_reset_email(to: str, token: str) -> bool:
+def send_password_reset_email(to: str, token: str, *, locale: str = "en") -> bool:
     """Send password reset link."""
     from app.core.email_templates import render_password_reset_email
 
-    subject, html = render_password_reset_email(token)
+    subject, html = render_password_reset_email(token, locale=locale)
     ok, _ = send_email(to, subject, html)
     return ok
 
@@ -195,6 +205,7 @@ def send_invitation_email(
     expire_days: int = 7,
     *,
     tenant_id: uuid.UUID | str | None = None,
+    locale: str = "en",
 ) -> bool:
     """Send user invitation.
 
@@ -207,7 +218,7 @@ def send_invitation_email(
     """
     from app.core.email_templates import render_invitation_email
 
-    subject, html = render_invitation_email(name, token, expire_days)
+    subject, html = render_invitation_email(name, token, expire_days, locale=locale)
     ok, _ = send_email(to, subject, html)
     return ok
 
@@ -219,11 +230,14 @@ def send_invitation_reminder_email(
     expire_days: int = 7,
     *,
     tenant_id: uuid.UUID | str | None = None,
+    locale: str = "en",
 ) -> bool:
     """Send invitation reminder. See ``send_invitation_email`` for the
     HRP-301 carve-out from the D5 demo email gate."""
     from app.core.email_templates import render_invitation_reminder_email
 
-    subject, html = render_invitation_reminder_email(name, token, expire_days)
+    subject, html = render_invitation_reminder_email(
+        name, token, expire_days, locale=locale
+    )
     ok, _ = send_email(to, subject, html)
     return ok

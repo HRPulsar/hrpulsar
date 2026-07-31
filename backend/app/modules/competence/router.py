@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
@@ -336,7 +337,6 @@ async def create_skill_level(
         current_user.tenant_id,
         title=data.title,
         sort_index=data.sort_index,
-        i18n_key=data.i18n_key,
         actor_id=current_user.id,
     )
 
@@ -354,7 +354,6 @@ async def update_skill_level(
         skill_level_id,
         title=data.title,
         sort_index=data.sort_index,
-        i18n_key=data.i18n_key,
         is_active=data.is_active,
         actor_id=current_user.id,
     )
@@ -477,9 +476,7 @@ async def get_indicator_usage(
 
     ind = await db.get(Indicator, indicator_id)
     if ind is None:
-        from fastapi import HTTPException, status
-
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Indicator not found")
+        raise AppError("indicator_not_found", status.HTTP_404_NOT_FOUND)
     usage = await check_indicator_usage(db, ind)
     return {
         "assessment": usage.assessment,

@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import {
+  dictionaryItemDescription,
+  dictionaryItemLabel,
+} from "@/lib/reference-labels";
 import type { DictionaryItem } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,18 +49,32 @@ import {
 import { toast } from "sonner";
 import { MoreHorizontal, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 
+// HRP-476: dictionary type → keys in the `dictionaries` i18n namespace. The
+// tab label and the type-specific empty state travel together so the pair
+// stays consistent per type.
 const DICT_TYPES = [
-  { key: "grade", label: "Grades" },
-  { key: "specialization", label: "Specializations" },
-  { key: "competence_type", label: "Competence Types" },
-  { key: "role", label: "Roles" },
-  { key: "goal", label: "Goals" },
-  { key: "project", label: "Projects" },
+  { key: "grade", labelKey: "typeGrades", emptyKey: "emptyGrades" },
+  {
+    key: "specialization",
+    labelKey: "typeSpecializations",
+    emptyKey: "emptySpecializations",
+  },
+  {
+    key: "competence_type",
+    labelKey: "typeCompetenceTypes",
+    emptyKey: "emptyCompetenceTypes",
+  },
+  { key: "role", labelKey: "typeRoles", emptyKey: "emptyRoles" },
+  { key: "goal", labelKey: "typeGoals", emptyKey: "emptyGoals" },
+  { key: "project", labelKey: "typeProjects", emptyKey: "emptyProjects" },
 ];
 
 const emptyForm = { title: "", description: "", sort_index: 0, is_active: true };
 
 export default function DictionariesPage() {
+  const t = useTranslations("dictionaries");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [activeType, setActiveType] = useState("grade");
   const [items, setItems] = useState<DictionaryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -127,7 +146,7 @@ export default function DictionariesPage() {
     try {
       if (dialogMode === "create") {
         await api.post(`/dictionaries/${activeType}`, form);
-        toast.success("Item created");
+        toast.success(t("toastItemCreated"));
       } else {
         // HRP-285: System items only ship ``is_active`` to the API —
         // every other field is frozen for tenants.
@@ -135,12 +154,12 @@ export default function DictionariesPage() {
           ? { is_active: form.is_active }
           : form;
         await api.put(`/dictionaries/items/${editingId}`, payload);
-        toast.success("Item updated");
+        toast.success(t("toastItemUpdated"));
       }
       setDialogOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("errorSave"));
     } finally {
       setSaving(false);
     }
@@ -156,11 +175,11 @@ export default function DictionariesPage() {
     setSaving(true);
     try {
       await api.delete(`/dictionaries/items/${deletingItem.id}`);
-      toast.success("Item deleted");
+      toast.success(t("toastItemDeleted"));
       setDeleteOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(err instanceof Error ? err.message : t("errorDelete"));
     } finally {
       setSaving(false);
     }
@@ -171,18 +190,21 @@ export default function DictionariesPage() {
   const filteredItems = useMemo(
     () =>
       items.filter((i) => {
-        if (
-          searchQuery &&
-          !i.title.toLowerCase().includes(searchQuery.toLowerCase())
-        )
-          return false;
+        // HRP-479: match both the stored title and the localized label —
+        // the table shows the latter, so the visible string must hit.
+        if (searchQuery) {
+          const q = searchQuery.toLowerCase();
+          const raw = i.title.toLowerCase();
+          const localized = dictionaryItemLabel(tRef, i).toLowerCase();
+          if (!raw.includes(q) && !localized.includes(q)) return false;
+        }
         if (sourceFilter === "system" && i.tenant_id) return false;
         if (sourceFilter === "custom" && !i.tenant_id) return false;
         if (statusFilter === "active" && !i.is_active) return false;
         if (statusFilter === "inactive" && i.is_active) return false;
         return true;
       }),
-    [items, searchQuery, sourceFilter, statusFilter],
+    [items, searchQuery, sourceFilter, statusFilter, tRef],
   );
   const filteredCount = filteredItems.length;
 
@@ -192,31 +214,29 @@ export default function DictionariesPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">
-            Dictionaries
+            {t("title")}
           </h1>
-          <p className="text-sm text-muted-foreground">
-            System and custom lookup data
-          </p>
+          <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
         <Button size="sm" onClick={openCreate} data-testid="dictionaries-btn-add" className="sm:self-auto self-start">
           <Plus className="mr-1 h-4 w-4" />
-          Add item
+          {t("addItem")}
         </Button>
       </div>
 
       {/* Type tabs — horizontal scroll on narrow viewports so labels don't collide */}
       <div className="-mx-1 flex gap-1 overflow-x-auto rounded-lg border bg-muted p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {DICT_TYPES.map((t) => (
+        {DICT_TYPES.map((dt) => (
           <button
-            key={t.key}
-            onClick={() => setActiveType(t.key)}
+            key={dt.key}
+            onClick={() => setActiveType(dt.key)}
             className={`shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              activeType === t.key
+              activeType === dt.key
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {t.label}
+            {t(dt.labelKey)}
           </button>
         ))}
       </div>
@@ -226,7 +246,7 @@ export default function DictionariesPage() {
         data-testid="dictionaries-count"
         className="text-sm text-muted-foreground"
       >
-        {filteredCount} item{filteredCount === 1 ? "" : "s"}
+        {t("itemCount", { count: filteredCount })}
       </p>
 
       {/* Search + filters (HRP-283) */}
@@ -234,7 +254,7 @@ export default function DictionariesPage() {
         <div className="relative max-w-sm flex-1 min-w-48">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search by title..."
+            placeholder={t("searchPlaceholder")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8"
@@ -248,11 +268,11 @@ export default function DictionariesPage() {
           }
         >
           <SelectTrigger className="w-40" data-testid="dictionaries-filter-source">
-            <SelectValue placeholder="All sources" />
+            <SelectValue placeholder={t("filterAllSources")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="system">System</SelectItem>
-            <SelectItem value="custom">Custom</SelectItem>
+            <SelectItem value="system">{t("sourceSystem")}</SelectItem>
+            <SelectItem value="custom">{t("sourceCustom")}</SelectItem>
           </SelectContent>
         </Select>
         <Select
@@ -262,11 +282,11 @@ export default function DictionariesPage() {
           }
         >
           <SelectTrigger className="w-40" data-testid="dictionaries-filter-status">
-            <SelectValue placeholder="All statuses" />
+            <SelectValue placeholder={t("filterAllStatuses")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="inactive">Inactive</SelectItem>
+            <SelectItem value="active">{t("statusActive")}</SelectItem>
+            <SelectItem value="inactive">{t("statusInactive")}</SelectItem>
           </SelectContent>
         </Select>
         {(searchQuery || sourceFilter || statusFilter) && (
@@ -281,7 +301,7 @@ export default function DictionariesPage() {
             data-testid="dictionaries-btn-clear-filters"
           >
             <X className="mr-1 h-3 w-3" />
-            Clear
+            {t("clear")}
           </Button>
         )}
       </div>
@@ -290,24 +310,27 @@ export default function DictionariesPage() {
         const filtered = filteredItems;
         return loading ? (
         <div className="py-12 text-center text-muted-foreground">
-          Loading...
+          {tc("loading")}
         </div>
       ) : filtered.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="dictionaries-empty">
           {items.length === 0
-            ? `No ${DICT_TYPES.find((t) => t.key === activeType)?.label.toLowerCase()} yet`
-            : "No items match the filters"}
+            ? t(
+                DICT_TYPES.find((dt) => dt.key === activeType)?.emptyKey ??
+                  "emptyFiltered",
+              )
+            : t("emptyFiltered")}
         </div>
       ) : (
         <div className="rounded-lg border" data-testid="dictionaries-list">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Sort index</TableHead>
-                <TableHead>Source</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>{t("columnTitle")}</TableHead>
+                <TableHead>{t("columnDescription")}</TableHead>
+                <TableHead>{t("columnSortIndex")}</TableHead>
+                <TableHead>{t("columnSource")}</TableHead>
+                <TableHead>{t("columnStatus")}</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
@@ -321,14 +344,14 @@ export default function DictionariesPage() {
                         className="text-primary hover:underline"
                         data-testid={`dictionaries-item-${item.id}-link`}
                       >
-                        {item.title}
+                        {dictionaryItemLabel(tRef, item)}
                       </Link>
                     ) : (
-                      item.title
+                      dictionaryItemLabel(tRef, item)
                     )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {item.description || "—"}
+                    {dictionaryItemDescription(tRef, item) || "—"}
                   </TableCell>
                   <TableCell
                     className="text-muted-foreground tabular-nums"
@@ -341,7 +364,7 @@ export default function DictionariesPage() {
                       variant="secondary"
                       className={item.tenant_id ? BADGE_COLOR.blue : BADGE_COLOR.neutral}
                     >
-                      {item.tenant_id ? "Custom" : "System"}
+                      {item.tenant_id ? t("sourceCustom") : t("sourceSystem")}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -349,7 +372,7 @@ export default function DictionariesPage() {
                       variant="secondary"
                       className={item.is_active ? BADGE_COLOR.green : BADGE_COLOR.neutral}
                     >
-                      {item.is_active ? "Active" : "Inactive"}
+                      {item.is_active ? t("statusActive") : t("statusInactive")}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -360,7 +383,7 @@ export default function DictionariesPage() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => openEdit(item)} data-testid={`dictionaries-item-${item.id}-btn-edit`}>
                           <Pencil className="mr-2 h-4 w-4" />
-                          Edit
+                          {t("edit")}
                         </DropdownMenuItem>
                         {/* HRP-286: Delete is hidden for Source=System rows —
                             origin items can never be deleted by a tenant. */}
@@ -371,7 +394,7 @@ export default function DictionariesPage() {
                             data-testid={`dictionaries-item-${item.id}-btn-delete`}
                           >
                             <Trash2 className="mr-2 h-4 w-4" />
-                            Delete
+                            {tc("delete")}
                           </DropdownMenuItem>
                         )}
                       </DropdownMenuContent>
@@ -390,14 +413,14 @@ export default function DictionariesPage() {
         <DialogContent data-testid="dictionaries-modal-form">
           <DialogHeader>
             <DialogTitle>
-              {dialogMode === "create" ? "Add item" : "Edit item"}
+              {dialogMode === "create" ? t("addItem") : t("editItem")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             {/* HRP-285: System items expose only the Active checkbox; the
                 other fields stay frozen for tenants. */}
             <div className="space-y-2">
-              <Label>Title</Label>
+              <Label>{t("fieldTitle")}</Label>
               <Input
                 value={form.title}
                 onChange={(e) => setForm({ ...form, title: e.target.value })}
@@ -406,7 +429,7 @@ export default function DictionariesPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Description</Label>
+              <Label>{t("fieldDescription")}</Label>
               <Textarea
                 value={form.description}
                 onChange={(e) =>
@@ -418,7 +441,7 @@ export default function DictionariesPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Sort index</Label>
+              <Label>{t("fieldSortIndex")}</Label>
               <Input
                 type="number"
                 value={form.sort_index}
@@ -436,7 +459,7 @@ export default function DictionariesPage() {
                     setForm({ ...form, is_active: !!checked })
                   }
                 />
-                <Label>Active</Label>
+                <Label>{t("fieldActive")}</Label>
               </div>
             )}
           </div>
@@ -446,14 +469,14 @@ export default function DictionariesPage() {
               onClick={() => setDialogOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button onClick={handleSave} disabled={saving}>
               {saving
-                ? "Saving..."
+                ? t("saving")
                 : dialogMode === "create"
-                  ? "Create"
-                  : "Save"}
+                  ? t("create")
+                  : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -463,8 +486,10 @@ export default function DictionariesPage() {
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title="Delete item"
-        description={`Are you sure you want to delete "${deletingItem?.title}"? This action cannot be undone.`}
+        title={t("deleteItemTitle")}
+        description={t("deleteItemDescription", {
+          title: deletingItem?.title ?? "",
+        })}
         onConfirm={confirmDelete}
         loading={saving}
       />

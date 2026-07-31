@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,30 +19,38 @@ type Retention = {
   reports_days: number;
 };
 
-const FIELDS: { key: keyof Retention; label: string; description: string }[] = [
+// HRP-476: the field copy lives in the `recruitment` i18n namespace — the
+// static list only owns the payload key → key relation.
+const FIELDS: {
+  key: keyof Retention;
+  labelKey: string;
+  descriptionKey: string;
+}[] = [
   {
     key: "interviews_days",
-    label: "Interview recordings (days)",
-    description: "Audio, video, transcripts, AI analysis",
+    labelKey: "retentionFieldInterviews",
+    descriptionKey: "retentionFieldInterviewsDesc",
   },
   {
     key: "resumes_days",
-    label: "Resumes (days)",
-    description: "PDF/DOCX files and parsed structure",
+    labelKey: "retentionFieldResumes",
+    descriptionKey: "retentionFieldResumesDesc",
   },
   {
     key: "consents_days",
-    label: "Consents (days)",
-    description: "ConsentRequest and candidate signatures",
+    labelKey: "retentionFieldConsents",
+    descriptionKey: "retentionFieldConsentsDesc",
   },
   {
     key: "reports_days",
-    label: "XLSX reports (days)",
-    description: "Generated vacancy summary reports",
+    labelKey: "retentionFieldReports",
+    descriptionKey: "retentionFieldReportsDesc",
   },
 ];
 
 export default function RetentionPage() {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [data, setData] = useState<Retention | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -75,10 +84,10 @@ export default function RetentionPage() {
     setSaving(true);
     try {
       await api.put<Retention>("/recruitment/settings/retention", draft);
-      toast.success("Retention periods updated");
+      toast.success(t("retentionToastSaved"));
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
+      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setSaving(false);
     }
@@ -92,38 +101,39 @@ export default function RetentionPage() {
     <div className="space-y-5" data-testid="recruitment-retention-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Settings", href: "/recruitment/settings" },
-          { label: "Data retention" },
+          { label: tc("settings"), href: "/recruitment/settings" },
+          { label: t("retentionBreadcrumb") },
         ]}
       />
       <header>
         <h1 className="text-xl font-semibold tracking-tight">
-          Data retention periods
+          {t("retentionTitle")}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          After the retention period expires, data is automatically anonymized
-          (soft-erase). Changes take effect after the next cleanup cycle.
+          {t("retentionDescription")}
         </p>
       </header>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Policy</CardTitle>
+          <CardTitle className="text-base">{t("retentionPolicyCardTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {loading ? (
             <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
               <Loader2 className="mr-2 size-4 animate-spin" />
-              Loading…
+              {t("loading")}
             </div>
           ) : (
             <>
               {FIELDS.map((f) => (
                 <div className="grid gap-2 sm:grid-cols-[1fr_8rem]" key={f.key}>
                   <div className="space-y-0.5">
-                    <Label htmlFor={`retention-${f.key}`}>{f.label}</Label>
+                    <Label htmlFor={`retention-${f.key}`}>
+                      {t(f.labelKey)}
+                    </Label>
                     <p className="text-xs text-muted-foreground">
-                      {f.description}
+                      {t(f.descriptionKey)}
                     </p>
                   </div>
                   <Input
@@ -145,8 +155,7 @@ export default function RetentionPage() {
               {hasShortRetention && (
                 <div className={`flex gap-2 rounded-md border p-2 text-xs ${ALERT_TONE.amber}`}>
                   <AlertTriangle className="size-4 shrink-0" />
-                  Retention is less than 30 days. Make sure you have a legal
-                  basis (for example, explicit candidate consent).
+                  {t("retentionShortWarning")}
                 </div>
               )}
               <div className="flex justify-end">
@@ -160,7 +169,7 @@ export default function RetentionPage() {
                   ) : (
                     <Save className="size-4" />
                   )}
-                  Save
+                  {t("save")}
                 </Button>
               </div>
             </>
@@ -169,9 +178,12 @@ export default function RetentionPage() {
       </Card>
       {data && (
         <p className="text-xs text-muted-foreground">
-          Current policy: interviews {data.interviews_days} d · resumes{" "}
-          {data.resumes_days} d · consents {data.consents_days} d · reports{" "}
-          {data.reports_days} d.
+          {t("retentionCurrentPolicy", {
+            interviews: String(data.interviews_days),
+            resumes: String(data.resumes_days),
+            consents: String(data.consents_days),
+            reports: String(data.reports_days),
+          })}
         </p>
       )}
     </div>

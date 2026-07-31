@@ -18,12 +18,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
+from app.core.errors import AppError
 from app.core.s3 import delete_file as s3_delete_file
 from app.core.s3 import get_presigned_url, upload_file
 from app.models import Person
@@ -324,7 +325,7 @@ async def gdpr_export(
         email=data.email,
     )
     if candidate is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Subject not found")
+        raise AppError("gdpr_subject_not_found", status.HTTP_404_NOT_FOUND)
 
     request_row = GDPRExportRequest(
         tenant_id=tenant_id,
@@ -434,7 +435,7 @@ async def gdpr_erase(
 
     candidate = await db.get(Candidate, candidate_id)
     if candidate is None or candidate.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate not found")
+        raise AppError("candidate_not_found", status.HTTP_404_NOT_FOUND)
 
     person = await db.get(Person, candidate.person_id) if candidate.person_id else None
     affected: dict[str, int] = {}

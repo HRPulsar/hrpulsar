@@ -47,6 +47,9 @@ class DictionaryItemRead(BaseModel):
     type: str
     title: str
     description: str | None
+    # HRP-479: set on origin rows only (seed migrations); NULL for
+    # tenant-created items. Read-only — create/update never accept it.
+    i18n_key: str | None = None
     is_active: bool
     sort_index: int
     tenant_id: uuid.UUID | None

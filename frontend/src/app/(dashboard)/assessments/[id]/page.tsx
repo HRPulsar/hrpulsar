@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { api, ApiError } from "@/lib/api";
@@ -10,7 +11,16 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useCompetenceTree } from "@/hooks/use-competence-tree";
 import { inlineEditKeys, useInlineEdit } from "@/hooks/use-inline-edit";
 import type { AnswerScaleDeleteResult, AnswerScaleDetail, AssessmentDetail, Competence, CompetenceDetail, CompetenceGroupTree, CPAComparisonResult, Employee, EmployeeList } from "@/lib/types";
-import { scaleLevelLabel } from "@/lib/scale-levels-i18n";
+import {
+  answerScaleDescription,
+  answerScaleLabel,
+  assessmentStatusTitle,
+  assessmentTypeTitle,
+  scaleLevelLabel,
+  scaleOptionDescription,
+  scaleOptionLabel,
+  skillLevelLabel,
+} from "@/lib/reference-labels";
 import { scaleOptionSuffix } from "@/lib/scale-option-label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -88,6 +98,16 @@ const roleColors: Record<string, string> = {
   subordinate: BADGE_COLOR.orange,
 };
 
+// HRP-190 / HRP-192: the Details action buttons read as verbs ("send",
+// "cancel"); keys live in the `assessments` namespace, unknown codes fall
+// back to the raw code with underscores turned into spaces.
+const STATUS_ACTION_KEYS: Record<string, string> = {
+  sent: "actionSend",
+  cancelled: "actionCancel",
+  on_review: "actionOnReview",
+  done: "actionDone",
+};
+
 function flattenCompetences(groups: CompetenceGroupTree[]): Competence[] {
   const result: Competence[] = [];
   for (const g of groups) {
@@ -99,6 +119,9 @@ function flattenCompetences(groups: CompetenceGroupTree[]): Competence[] {
 
 export default function AssessmentDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const t = useTranslations("assessments");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const { user: currentUser } = useAuth();
   const { canManage, roles } = usePermissions();
   // HRP-154: Platform admin sits outside `canManage` (which only covers
@@ -175,7 +198,13 @@ export default function AssessmentDetailPage() {
   const [perLevelOpen, setPerLevelOpen] = useState(false);
   const [perLevelTitle, setPerLevelTitle] = useState<string>("");
   const [perLevelRows, setPerLevelRows] = useState<
-    { skill_level_id: string; skill_level_title: string | null; sort_index: number; percent: number | null }[]
+    {
+      skill_level_id: string;
+      skill_level_title: string | null;
+      skill_level_i18n_key?: string | null;
+      sort_index: number;
+      percent: number | null;
+    }[]
   >([]);
 
   // Rating scale picker
@@ -216,12 +245,12 @@ export default function AssessmentDetailPage() {
       // HRP-40: 404 is the normal not-visible-to-caller case (Draft for employee,
       // out-of-scope detail) — render the placeholder, don't surface a toast.
       if (!(err instanceof ApiError && err.status === 404)) {
-        toast.error("Failed to load assessment");
+        toast.error(t("errorLoadAssessment"));
       }
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     load();
@@ -232,21 +261,21 @@ export default function AssessmentDetailPage() {
     // instead of a 400 round-trip. Backend enforces the same rule.
     if (status === "sent" && assessment) {
       if (!assessment.criteria_type) {
-        toast.error("Evaluation criteria are not selected");
+        toast.error(t("errorCriteriaNotSelected"));
         return;
       }
       if (!assessment.scale_id) {
-        toast.error("Evaluation scale is not selected");
+        toast.error(t("errorScaleNotSelected"));
         return;
       }
     }
     setSaving(true);
     try {
       await api.post(`/assessments/${id}/status`, { status_code: status });
-      toast.success(`Status changed to ${status}`);
+      toast.success(t("toastStatusChanged", { status }));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to change status");
+      toast.error(err instanceof Error ? err.message : t("errorStatusChangeFailed"));
     } finally {
       setSaving(false);
     }
@@ -255,7 +284,7 @@ export default function AssessmentDetailPage() {
   async function saveTitle() {
     const next = titleEdit.draft.trim();
     if (!next) {
-      toast.error("Title cannot be empty");
+      toast.error(t("errorTitleEmpty"));
       return;
     }
     setSaving(true);
@@ -264,7 +293,7 @@ export default function AssessmentDetailPage() {
       titleEdit.close();
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update title");
+      toast.error(err instanceof Error ? err.message : t("errorTitleUpdateFailed"));
     } finally {
       setSaving(false);
     }
@@ -280,7 +309,7 @@ export default function AssessmentDetailPage() {
       return;
     }
     if (isPastDeadline(deadlineEdit.draft)) {
-      toast.error("Deadline cannot be in the past");
+      toast.error(t("errorDeadlineInPast"));
       return;
     }
     setSaving(true);
@@ -297,7 +326,7 @@ export default function AssessmentDetailPage() {
       deadlineEdit.close();
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update deadline");
+      toast.error(err instanceof Error ? err.message : t("errorDeadlineUpdateFailed"));
     } finally {
       setSaving(false);
     }
@@ -307,11 +336,11 @@ export default function AssessmentDetailPage() {
     setSaving(true);
     try {
       await api.post(`/assessments/${id}/participants`, partForm);
-      toast.success("Participant added");
+      toast.success(t("toastParticipantAdded"));
       setPartOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add participant");
+      toast.error(err instanceof Error ? err.message : t("errorParticipantAddFailed"));
     } finally {
       setSaving(false);
     }
@@ -319,7 +348,7 @@ export default function AssessmentDetailPage() {
 
   async function saveCriteria(payload: import("@/lib/types").CriteriaUpdate) {
     await api.put(`/assessments/${id}/criteria`, payload);
-    toast.success("Evaluation criteria saved");
+    toast.success(t("toastCriteriaSaved"));
     await load();
   }
 
@@ -386,7 +415,7 @@ export default function AssessmentDetailPage() {
       }
       setEvalAnswers(baseAnswers);
     } catch {
-      toast.error("Failed to load indicators");
+      toast.error(t("errorLoadIndicators"));
       setEvalOpen(false);
     } finally {
       setEvalLoading(false);
@@ -489,7 +518,7 @@ export default function AssessmentDetailPage() {
       .map((ind) => ind.id);
     if (missing.length > 0) {
       setEvalMissing(new Set(missing));
-      toast.error("Answer every question before submitting");
+      toast.error(t("errorAnswerAll"));
       return;
     }
     setEvalMissing(new Set());
@@ -509,11 +538,11 @@ export default function AssessmentDetailPage() {
           comment: answer.comment || null,
         });
       }
-      toast.success("Answers submitted");
+      toast.success(t("toastAnswersSubmitted"));
       setEvalOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to submit");
+      toast.error(err instanceof Error ? err.message : t("errorSubmitFailed"));
     } finally {
       setSaving(false);
     }
@@ -558,7 +587,7 @@ export default function AssessmentDetailPage() {
       }
       setPreviewGroups(groups);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load preview");
+      toast.error(err instanceof Error ? err.message : t("errorLoadPreview"));
       setPreviewOpen(false);
     } finally {
       setPreviewLoading(false);
@@ -583,11 +612,11 @@ export default function AssessmentDetailPage() {
       await api.put(`/assessments/${id}/scale`, {
         scale_id: scalePick || null,
       });
-      toast.success("Rating scale updated");
+      toast.success(t("toastRatingScaleUpdated"));
       setScaleOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save scale");
+      toast.error(err instanceof Error ? err.message : t("errorScaleSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -642,8 +671,10 @@ export default function AssessmentDetailPage() {
       );
       toast.success(
         result.reassigned_drafts > 0
-          ? `Scale deleted. Drafts reassigned: ${result.reassigned_drafts}`
-          : "Scale deleted",
+          ? t("toastScaleDeletedReassigned", {
+              count: result.reassigned_drafts,
+            })
+          : t("toastScaleDeleted"),
       );
       const fresh = await reloadScales();
       if (assessment?.scale_id === scaleDeleteId) {
@@ -654,7 +685,7 @@ export default function AssessmentDetailPage() {
       }
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to delete scale",
+        err instanceof Error ? err.message : t("errorScaleDeleteFailed"),
       );
     } finally {
       setScaleDeleteId(null);
@@ -670,7 +701,7 @@ export default function AssessmentDetailPage() {
       );
       setCpaComparison(result);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load comparison");
+      toast.error(err instanceof Error ? err.message : t("errorLoadComparison"));
     } finally {
       setCpaCompLoading(false);
     }
@@ -678,7 +709,9 @@ export default function AssessmentDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12 text-muted-foreground">Loading...</div>
+      <div className="flex items-center justify-center py-12 text-muted-foreground">
+        {tc("loading")}
+      </div>
     );
   }
 
@@ -687,9 +720,11 @@ export default function AssessmentDetailPage() {
       <div className="space-y-4">
         <Button variant="ghost" size="sm" render={<Link href="/assessments" />}>
           <ArrowLeft className="mr-1 h-4 w-4" />
-          Back to assessments
+          {t("backToAssessments")}
         </Button>
-        <div className="py-12 text-center text-muted-foreground">Assessment not found</div>
+        <div className="py-12 text-center text-muted-foreground">
+          {t("assessmentNotFound")}
+        </div>
       </div>
     );
   }
@@ -801,7 +836,7 @@ export default function AssessmentDetailPage() {
             </div>
           ) : (
             <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-              <span>{assessment.title || "Assessment"}</span>
+              <span>{assessment.title || tc("assessment")}</span>
               {canManage && !isTerminal && !assessment.group_id && (
                 <Button
                   size="icon-sm"
@@ -815,23 +850,23 @@ export default function AssessmentDetailPage() {
             </h1>
           )}
           <p className="text-sm text-muted-foreground">
-            {assessment.type_title}
+            {assessmentTypeTitle(tRef, assessment)}
           </p>
         </div>
         <Badge variant="secondary" className={statusColors[assessment.status_code] || ""}>
-          {assessment.status_title}
+          {assessmentStatusTitle(tRef, assessment)}
         </Badge>
       </div>
 
       {/* Info card */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Details</CardTitle>
+          <CardTitle className="text-base">{t("details")}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
             <div>
-              <p className="text-muted-foreground">Employee</p>
+              <p className="text-muted-foreground">{tc("employee")}</p>
               {employee ? (
                 <>
                   <Link href={`/employees/${employee.id}`} className="font-medium text-primary hover:underline">
@@ -854,17 +889,17 @@ export default function AssessmentDetailPage() {
               )}
             </div>
             <div>
-              <p className="text-muted-foreground">Type</p>
-              <p className="font-medium">{assessment.type_title}</p>
+              <p className="text-muted-foreground">{t("fieldType")}</p>
+              <p className="font-medium">{assessmentTypeTitle(tRef, assessment)}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Status</p>
+              <p className="text-muted-foreground">{t("status")}</p>
               <Badge variant="secondary" className={statusColors[assessment.status_code] || ""}>
-                {assessment.status_title}
+                {assessmentStatusTitle(tRef, assessment)}
               </Badge>
             </div>
             <div>
-              <p className="text-muted-foreground">Created</p>
+              <p className="text-muted-foreground">{t("dateCreated")}</p>
               <p className="font-medium">{formatDate(assessment.created_at)}</p>
             </div>
             <div>
@@ -875,10 +910,10 @@ export default function AssessmentDetailPage() {
                   passed. */}
               <p className="text-muted-foreground">
                 {assessment.status_code === "done"
-                  ? "Completed"
+                  ? t("dateCompleted")
                   : assessment.status_code === "cancelled"
-                    ? "Cancelled"
-                    : "Deadline"}
+                    ? t("dateCancelled")
+                    : t("deadline")}
               </p>
               {isTerminal ? (
                 <p
@@ -973,11 +1008,9 @@ export default function AssessmentDetailPage() {
                       HRP-192: `cancel` on the cancelled action so the
                       button reads as a verb when In progress is gone
                       from Sent's nextStatuses. */}
-                  {s === "sent"
-                    ? "send"
-                    : s === "cancelled"
-                      ? "cancel"
-                      : s.replace("_", " ")}
+                  {STATUS_ACTION_KEYS[s]
+                    ? t(STATUS_ACTION_KEYS[s])
+                    : s.replace("_", " ")}
                 </Button>
               ))}
             </div>
@@ -990,7 +1023,7 @@ export default function AssessmentDetailPage() {
                 onClick={() => openEvaluation(myFirstPending.id)}
               >
                 <Pencil className="mr-1 h-4 w-4" />
-                Take this assessment
+                {t("takeAssessment")}
                 {myPendingParticipants.length > 1 && ` (${myPendingParticipants.length})`}
               </Button>
             </div>
@@ -1002,7 +1035,7 @@ export default function AssessmentDetailPage() {
                 data-testid="assessment-btn-preview-questions"
                 onClick={openPreview}
               >
-                Preview questions
+                {t("previewQuestions")}
               </Button>
             </div>
           )}
@@ -1012,7 +1045,7 @@ export default function AssessmentDetailPage() {
       {/* Evaluation criteria */}
       <Card data-testid="assessment-criteria-card">
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Evaluation criteria</CardTitle>
+          <CardTitle className="text-base">{t("evaluationCriteria")}</CardTitle>
           {canManage && isDraft && !isGroupChild && (
             <Button
               data-testid="assessment-criteria-btn-add"
@@ -1021,7 +1054,7 @@ export default function AssessmentDetailPage() {
               onClick={() => setCriteriaOpen(true)}
             >
               <Pencil className="mr-1 h-4 w-4" />
-              {assessment.criteria_type ? "Change" : "Select"}
+              {assessment.criteria_type ? t("change") : t("select")}
             </Button>
           )}
         </CardHeader>
@@ -1030,6 +1063,8 @@ export default function AssessmentDetailPage() {
             criteriaType={assessment.criteria_type}
             specializationTitle={assessment.specialization_title}
             gradeTitle={assessment.grade_title}
+            specializationI18nKey={assessment.specialization_i18n_key}
+            gradeI18nKey={assessment.grade_i18n_key}
             gradeId={assessment.grade_id}
             competences={assessment.competences ?? []}
           />
@@ -1039,7 +1074,7 @@ export default function AssessmentDetailPage() {
       {/* Rating scale */}
       <Card data-testid="assessment-scale-card">
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Rating scale</CardTitle>
+          <CardTitle className="text-base">{t("ratingScale")}</CardTitle>
           {canManage && isDraft && !isGroupChild && scale && (
             <Button
               data-testid="assessment-scale-btn-change"
@@ -1048,25 +1083,34 @@ export default function AssessmentDetailPage() {
               onClick={openScalePicker}
             >
               <Pencil className="mr-1 h-4 w-4" />
-              Change
+              {t("change")}
             </Button>
           )}
         </CardHeader>
         <CardContent>
           {scale ? (
             <div className="space-y-2">
-              <p className="text-sm font-medium">{scale.title}</p>
-              {scale.description && (
-                <p className="text-xs text-muted-foreground">{scale.description}</p>
-              )}
+              <p className="text-sm font-medium">{answerScaleLabel(tRef, scale)}</p>
+              {(() => {
+                const description = answerScaleDescription(tRef, scale);
+                return description ? (
+                  <p className="text-xs text-muted-foreground">{description}</p>
+                ) : null;
+              })()}
               <div className="flex flex-wrap gap-2 pt-1">
                 {[...scale.options]
                   .sort((a, b) => a.sort_index - b.sort_index)
                   .map((opt) => {
-                    const suffix = scaleOptionSuffix(opt, { showScore: canManage });
+                    const suffix = scaleOptionSuffix(t, opt, {
+                      showScore: canManage,
+                    });
                     return (
-                      <Badge key={opt.id} variant="outline" title={opt.description ?? undefined}>
-                        {opt.title}
+                      <Badge
+                        key={opt.id}
+                        variant="outline"
+                        title={scaleOptionDescription(tRef, opt) ?? undefined}
+                      >
+                        {scaleOptionLabel(tRef, opt)}
                         {suffix && (
                           <span className="ml-1 text-muted-foreground">{suffix}</span>
                         )}
@@ -1078,7 +1122,7 @@ export default function AssessmentDetailPage() {
           ) : (
             <div className="flex flex-col items-center gap-3 py-4 text-center">
               <p className="text-sm text-muted-foreground">
-                No rating scale assigned to this assessment.
+                {t("noScaleAssessment")}
               </p>
               {canManage && isDraft && !isGroupChild && (
                 <Button
@@ -1087,7 +1131,7 @@ export default function AssessmentDetailPage() {
                   onClick={openScalePicker}
                 >
                   <Plus className="mr-1 h-4 w-4" />
-                  Add scale
+                  {t("addScale")}
                 </Button>
               )}
             </div>
@@ -1098,7 +1142,7 @@ export default function AssessmentDetailPage() {
       {/* Participants */}
       <Card>
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Participants</CardTitle>
+          <CardTitle className="text-base">{t("participants")}</CardTitle>
           {canAddParticipant && (
             <Button data-testid="assessment-participants-btn-add" size="sm" variant="outline" onClick={async () => {
               try {
@@ -1109,21 +1153,23 @@ export default function AssessmentDetailPage() {
               setPartOpen(true);
             }}>
               <Plus className="mr-1 h-4 w-4" />
-              Add
+              {t("add")}
             </Button>
           )}
         </CardHeader>
         <CardContent>
           {assessment.participants.length === 0 ? (
-            <p className="py-4 text-center text-sm text-muted-foreground">No participants</p>
+            <p className="py-4 text-center text-sm text-muted-foreground">
+              {t("noParticipants")}
+            </p>
           ) : (
             <div className="rounded-lg border">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Participant</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead>Completed</TableHead>
+                    <TableHead>{t("colParticipant")}</TableHead>
+                    <TableHead>{t("colRole")}</TableHead>
+                    <TableHead>{t("colCompleted")}</TableHead>
                     <TableHead className="w-20" />
                   </TableRow>
                 </TableHeader>
@@ -1154,7 +1200,7 @@ export default function AssessmentDetailPage() {
                             {isEvaluatee && (
                               <Badge variant="outline" className="border-amber-300 text-amber-700" data-testid={`assessment-participant-${p.id}-evaluatee`}>
                                 <Star className="mr-1 h-3 w-3" />
-                                Evaluatee
+                                {t("evaluatee")}
                               </Badge>
                             )}
                           </div>
@@ -1177,14 +1223,14 @@ export default function AssessmentDetailPage() {
                       </TableCell>
                       <TableCell>
                         <Badge variant={p.is_completed ? "default" : "outline"}>
-                          {p.is_completed ? "Yes" : "No"}
+                          {p.is_completed ? t("yes") : t("no")}
                         </Badge>
                       </TableCell>
                       <TableCell>
                         {showEvaluate && (
                           <Button size="xs" variant="ghost" data-testid={`assessment-participant-${p.id}-evaluate`} onClick={() => openEvaluation(p.id)}>
                             <Pencil className="mr-1 h-3 w-3" />
-                            Evaluate
+                            {t("evaluate")}
                           </Button>
                         )}
                       </TableCell>
@@ -1210,7 +1256,7 @@ export default function AssessmentDetailPage() {
         <Card>
           <CardHeader className="flex-row items-center justify-between">
             <div className="flex items-baseline gap-3">
-              <CardTitle className="text-base">Results</CardTitle>
+              <CardTitle className="text-base">{t("results")}</CardTitle>
               {assessment.overall_percent !== null && (
                 <span
                   className="text-lg font-semibold text-primary"
@@ -1228,15 +1274,15 @@ export default function AssessmentDetailPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Competence</TableHead>
+                    <TableHead>{t("colCompetence")}</TableHead>
                     {/* HRP-185 REDO: a single Avg Score column that
                         reflects the calibrated value when present and
                         falls back to the raw average otherwise — the
                         previous split (Avg Score + Calibrated) duplicated
                         the same number once calibration ran. */}
-                    <TableHead>Avg Score</TableHead>
-                    <TableHead>Percent</TableHead>
-                    <TableHead>Level</TableHead>
+                    <TableHead>{t("colAvgScore")}</TableHead>
+                    <TableHead>{t("colPercent")}</TableHead>
+                    <TableHead>{t("colLevel")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1245,7 +1291,12 @@ export default function AssessmentDetailPage() {
                     const assessmentComp = assessment.competences.find(
                       (c) => c.competence_id === r.competence_id,
                     );
-                    const requiredLevelTitle = assessmentComp?.skill_level_title ?? null;
+                    const requiredLevelTitle = assessmentComp?.skill_level_title
+                      ? skillLevelLabel(tRef, {
+                          title: assessmentComp.skill_level_title,
+                          i18n_key: assessmentComp.skill_level_i18n_key,
+                        })
+                      : null;
                     const perLevelRowsForComp = r.per_level_results ?? [];
                     const compTitle = comp?.title || r.competence_id.slice(0, 8);
                     return (
@@ -1271,7 +1322,7 @@ export default function AssessmentDetailPage() {
                                   setPerLevelOpen(true);
                                 }}
                                 className="text-muted-foreground hover:text-foreground"
-                                aria-label="Results by level"
+                                aria-label={t("resultsByLevel")}
                                 data-testid={`assessment-results-row-${r.competence_id}-per-level-btn`}
                               >
                                 <Info className="h-4 w-4" />
@@ -1288,7 +1339,7 @@ export default function AssessmentDetailPage() {
                         <TableCell data-testid={`assessment-results-row-${r.competence_id}-level`}>
                           {r.level ? (
                             <Badge variant="secondary" title={r.level.description ?? undefined}>
-                              {scaleLevelLabel(r.level)}
+                              {scaleLevelLabel(tRef, r.level)}
                             </Badge>
                           ) : (
                             ""
@@ -1323,7 +1374,7 @@ export default function AssessmentDetailPage() {
       {assessment.cpa_id && (
         <Card>
           <CardHeader className="flex-row items-center justify-between">
-            <CardTitle className="text-base">Compare CPA Rounds</CardTitle>
+            <CardTitle className="text-base">{t("compareCpaRounds")}</CardTitle>
             <Button
               size="sm"
               variant="outline"
@@ -1334,7 +1385,7 @@ export default function AssessmentDetailPage() {
               }}
             >
               <ArrowRightLeft className="mr-1 h-4 w-4" />
-              Compare with another CPA
+              {t("compareWithAnotherCpa")}
             </Button>
           </CardHeader>
           <CardContent>
@@ -1342,25 +1393,27 @@ export default function AssessmentDetailPage() {
               <div className="space-y-3">
                 <div className="flex gap-4 text-sm">
                   <div>
-                    <span className="text-muted-foreground">Round 1: </span>
+                    <span className="text-muted-foreground">{t("round1Label")} </span>
                     <span className="font-medium">{cpaComparison.round_1.title || cpaComparison.round_1.id.slice(0, 8)}</span>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">Round 2: </span>
+                    <span className="text-muted-foreground">{t("round2Label")} </span>
                     <span className="font-medium">{cpaComparison.round_2.title || cpaComparison.round_2.id.slice(0, 8)}</span>
                   </div>
                 </div>
                 {cpaComparison.comparisons.length === 0 ? (
-                  <p className="py-4 text-center text-sm text-muted-foreground">No overlapping employees found</p>
+                  <p className="py-4 text-center text-sm text-muted-foreground">
+                    {t("noOverlappingEmployees")}
+                  </p>
                 ) : (
                   <div className="rounded-lg border">
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Employee</TableHead>
-                          <TableHead>Round 1 Score</TableHead>
-                          <TableHead>Round 2 Score</TableHead>
-                          <TableHead>Delta</TableHead>
+                          <TableHead>{tc("employee")}</TableHead>
+                          <TableHead>{t("colRound1Score")}</TableHead>
+                          <TableHead>{t("colRound2Score")}</TableHead>
+                          <TableHead>{t("colDelta")}</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -1383,7 +1436,7 @@ export default function AssessmentDetailPage() {
               </div>
             ) : (
               <p className="py-4 text-center text-sm text-muted-foreground">
-                Select another CPA round to compare scores across employees
+                {t("cpaCompareHint")}
               </p>
             )}
           </CardContent>
@@ -1394,17 +1447,17 @@ export default function AssessmentDetailPage() {
       <Dialog open={cpaCompOpen} onOpenChange={setCpaCompOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Compare CPA Rounds</DialogTitle>
+            <DialogTitle>{t("compareCpaRounds")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Current CPA</Label>
+              <Label>{t("currentCpa")}</Label>
               <Input value={assessment.cpa_id || ""} disabled className="text-muted-foreground" />
             </div>
             <div className="space-y-2">
-              <Label>Compare with CPA ID</Label>
+              <Label>{t("compareWithCpaId")}</Label>
               <Input
-                placeholder="Enter CPA UUID to compare"
+                placeholder={t("cpaIdPlaceholder")}
                 value={cpaCompId2}
                 onChange={(e) => setCpaCompId2(e.target.value)}
               />
@@ -1412,7 +1465,7 @@ export default function AssessmentDetailPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCpaCompOpen(false)} disabled={cpaCompLoading}>
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={async () => {
@@ -1421,7 +1474,7 @@ export default function AssessmentDetailPage() {
               }}
               disabled={cpaCompLoading || !cpaCompId2.trim()}
             >
-              {cpaCompLoading ? "Loading..." : "Compare"}
+              {cpaCompLoading ? tc("loading") : t("compare")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1431,14 +1484,14 @@ export default function AssessmentDetailPage() {
       <Dialog open={partOpen} onOpenChange={setPartOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add participant</DialogTitle>
+            <DialogTitle>{t("addParticipant")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Employee</Label>
+              <Label>{tc("employee")}</Label>
               <Select value={partForm.employee_id} onValueChange={(val) => setPartForm({ ...partForm, employee_id: val })}>
                 <SelectTrigger className="w-full" data-testid="assessment-participant-select-employee">
-                  <SelectValue placeholder="Select employee">
+                  <SelectValue placeholder={t("selectEmployee")}>
                     {(() => {
                       if (!partForm.employee_id) return undefined;
                       const emp = employees.find((e) => e.id === partForm.employee_id);
@@ -1463,7 +1516,7 @@ export default function AssessmentDetailPage() {
                           className="px-2 py-1.5 text-sm text-muted-foreground"
                           data-testid="assessment-participant-select-empty"
                         >
-                          Everyone is already a participant
+                          {t("everyoneParticipant")}
                         </div>
                       );
                     }
@@ -1477,7 +1530,7 @@ export default function AssessmentDetailPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Role</Label>
+              <Label>{t("colRole")}</Label>
               <Select value={partForm.role} onValueChange={(val) => setPartForm({ ...partForm, role: val })}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
@@ -1491,9 +1544,9 @@ export default function AssessmentDetailPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPartOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setPartOpen(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button onClick={addParticipant} disabled={saving || !partForm.employee_id}>
-              {saving ? "Adding..." : "Add"}
+              {saving ? t("adding") : t("add")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1536,11 +1589,11 @@ export default function AssessmentDetailPage() {
           data-testid="assessment-eval-sheet"
         >
           <SheetHeader>
-            <SheetTitle>Take this assessment</SheetTitle>
+            <SheetTitle>{t("takeAssessment")}</SheetTitle>
           </SheetHeader>
           {evalLoading ? (
             <div className="flex-1 py-8 text-center text-sm text-muted-foreground">
-              Loading indicators...
+              {t("loadingIndicators")}
             </div>
           ) : (
             <div className="flex-1 space-y-5 overflow-y-auto pr-1">
@@ -1572,7 +1625,9 @@ export default function AssessmentDetailPage() {
                                 onValueChange={(value) =>
                                   selectAnswerOption(ind.id, value as string)
                                 }
-                                aria-label={`Answer for ${ind.title}`}
+                                aria-label={t("answerForIndicator", {
+                                  title: ind.title,
+                                })}
                               >
                                 {scale.options
                                   .slice()
@@ -1590,10 +1645,10 @@ export default function AssessmentDetailPage() {
                                         data-testid={`assessment-eval-option-${ind.id}-${opt.id}`}
                                       />
                                       <span className="leading-snug">
-                                        {opt.title}
-                                        {opt.description && (
+                                        {scaleOptionLabel(tRef, opt)}
+                                        {scaleOptionDescription(tRef, opt) && (
                                           <span className="ml-1 text-muted-foreground">
-                                            — {opt.description}
+                                            — {scaleOptionDescription(tRef, opt)}
                                           </span>
                                         )}
                                       </span>
@@ -1603,7 +1658,7 @@ export default function AssessmentDetailPage() {
                             ) : (
                               <Input
                                 type="number"
-                                placeholder="Score"
+                                placeholder={t("scorePlaceholder")}
                                 className="w-24"
                                 value={answer?.answer_option_id ?? ""}
                                 onChange={(e) =>
@@ -1613,7 +1668,7 @@ export default function AssessmentDetailPage() {
                             )}
                             <div className="mt-3">
                               <Textarea
-                                placeholder="Comment (optional)"
+                                placeholder={t("commentPlaceholder")}
                                 value={answer?.comment ?? ""}
                                 onChange={(e) =>
                                   updateAnswerComment(ind.id, e.target.value)
@@ -1638,10 +1693,10 @@ export default function AssessmentDetailPage() {
               onClick={() => setEvalOpen(false)}
               disabled={saving}
             >
-              Close
+              {t("close")}
             </Button>
             <Button onClick={submitEvaluation} disabled={saving || evalLoading}>
-              {saving ? "Submitting..." : "Submit answers"}
+              {saving ? t("submitting") : t("submitAnswers")}
             </Button>
           </SheetFooter>
         </SheetContent>
@@ -1656,11 +1711,11 @@ export default function AssessmentDetailPage() {
           data-testid="question-preview-sheet"
         >
           <SheetHeader>
-            <SheetTitle>Question preview</SheetTitle>
+            <SheetTitle>{t("questionPreview")}</SheetTitle>
           </SheetHeader>
           {previewLoading ? (
             <div className="flex-1 py-8 text-center text-sm text-muted-foreground">
-              Loading questions…
+              {t("loadingQuestions")}
             </div>
           ) : (
             // HRP-165 REDO: preview mirrors the take-assessment sheet, so
@@ -1671,7 +1726,7 @@ export default function AssessmentDetailPage() {
             <div className="flex-1 space-y-5 overflow-y-auto pr-1">
               {previewGroups.length === 0 ? (
                 <p className="rounded-md border border-dashed py-6 text-center text-sm text-muted-foreground">
-                  No questions yet — set up evaluation criteria first.
+                  {t("noQuestionsYet")}
                 </p>
               ) : (
                 previewGroups.map((g) => (
@@ -1686,7 +1741,7 @@ export default function AssessmentDetailPage() {
                     <p className="text-sm font-semibold">{g.competence_title}</p>
                     {g.indicators.length === 0 ? (
                       <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                        No indicators configured for this skill level.
+                        {t("noIndicatorsForLevel")}
                       </p>
                     ) : (
                       <div className="space-y-3">
@@ -1702,7 +1757,9 @@ export default function AssessmentDetailPage() {
                             {scale?.options && scale.options.length > 0 && (
                               <RadioGroup
                                 value=""
-                                aria-label={`Preview answers for ${ind.title}`}
+                                aria-label={t("previewAnswersFor", {
+                                  title: ind.title,
+                                })}
                               >
                                 {scale.options
                                   .slice()
@@ -1718,10 +1775,10 @@ export default function AssessmentDetailPage() {
                                         className="mt-0.5"
                                       />
                                       <span className="leading-snug">
-                                        {opt.title}
-                                        {opt.description && (
+                                        {scaleOptionLabel(tRef, opt)}
+                                        {scaleOptionDescription(tRef, opt) && (
                                           <span className="ml-1 text-muted-foreground">
-                                            — {opt.description}
+                                            — {scaleOptionDescription(tRef, opt)}
                                           </span>
                                         )}
                                       </span>
@@ -1744,7 +1801,7 @@ export default function AssessmentDetailPage() {
               data-testid="question-preview-close"
               onClick={() => setPreviewOpen(false)}
             >
-              Close
+              {t("close")}
             </Button>
           </SheetFooter>
         </SheetContent>
@@ -1754,11 +1811,11 @@ export default function AssessmentDetailPage() {
       <Dialog open={scaleOpen} onOpenChange={setScaleOpen}>
         <DialogContent data-testid="assessment-scale-modal" className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>Rating scale</DialogTitle>
+            <DialogTitle>{t("ratingScale")}</DialogTitle>
           </DialogHeader>
           {answerScales.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              No scales available
+              {t("noScalesAvailable")}
             </p>
           ) : (
             <RadioGroup
@@ -1769,6 +1826,10 @@ export default function AssessmentDetailPage() {
               {[...answerScales]
                 .sort((a, b) => {
                   if (a.is_default !== b.is_default) return a.is_default ? -1 : 1;
+                  // Raw-title sort is safe: these lists exclude snapshots
+                  // and tenant scales always have i18n_key NULL, so only
+                  // the default scale localizes — and it sorts first via
+                  // is_default above (HRP-479).
                   return a.title.localeCompare(b.title);
                 })
                 .map((s) => (
@@ -1782,26 +1843,29 @@ export default function AssessmentDetailPage() {
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">
-                            {s.is_default ? "Default answer scale" : s.title}
+                            {s.is_default ? t("defaultAnswerScale") : s.title}
                           </span>
                           {s.is_default && (
                             <Badge variant="outline" className="border-primary/40 text-primary">
                               <Sparkles className="mr-1 h-3 w-3" />
-                              System
+                              {t("systemBadge")}
                             </Badge>
                           )}
                         </div>
-                        {s.description && (
-                          <p className="mt-0.5 text-xs text-muted-foreground">
-                            {s.description}
-                          </p>
-                        )}
+                        {(() => {
+                          const description = answerScaleDescription(tRef, s);
+                          return description ? (
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {description}
+                            </p>
+                          ) : null;
+                        })()}
                         <div className="mt-1.5 flex flex-wrap gap-1">
                           {[...s.options]
                             .sort((a, b) => a.sort_index - b.sort_index)
                             .map((opt) => (
                               <Badge key={opt.id} variant="secondary" className="text-xs">
-                                {opt.title}
+                                {scaleOptionLabel(tRef, opt)}
                                 {!opt.is_neutral && opt.weight !== null && (
                                   <span className="ml-1 text-muted-foreground">
                                     ({opt.weight})
@@ -1829,7 +1893,7 @@ export default function AssessmentDetailPage() {
                           onClick={() => openScalePreview(s.id)}
                           data-testid={`assessment-scale-modal-item-${s.id}-menu-preview`}
                         >
-                          Preview
+                          {t("preview")}
                         </DropdownMenuItem>
                         {!s.is_default && (
                           <>
@@ -1838,7 +1902,7 @@ export default function AssessmentDetailPage() {
                                 onClick={() => openScaleEditor(s)}
                                 data-testid={`assessment-scale-modal-item-${s.id}-menu-edit`}
                               >
-                                Edit
+                                {t("edit")}
                               </DropdownMenuItem>
                             )}
                             {canManage && (
@@ -1847,7 +1911,7 @@ export default function AssessmentDetailPage() {
                                 onClick={() => requestScaleDelete(s.id)}
                                 data-testid={`assessment-scale-modal-item-${s.id}-menu-delete`}
                               >
-                                Delete
+                                {tc("delete")}
                               </DropdownMenuItem>
                             )}
                           </>
@@ -1866,7 +1930,7 @@ export default function AssessmentDetailPage() {
               data-testid="assessment-scale-modal-btn-create"
             >
               <Plus className="mr-1 h-4 w-4" />
-              Create scale
+              {t("createScale")}
             </Button>
           )}
           <DialogFooter>
@@ -1875,14 +1939,14 @@ export default function AssessmentDetailPage() {
               onClick={() => setScaleOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               data-testid="assessment-scale-modal-btn-save"
               onClick={saveScale}
               disabled={saving || !scalePick || scalePick === (assessment.scale_id ?? "")}
             >
-              {saving ? "Saving…" : "Save"}
+              {saving ? t("savingEllipsis") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1895,20 +1959,29 @@ export default function AssessmentDetailPage() {
       <Dialog open={perLevelOpen} onOpenChange={setPerLevelOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Results by level — {perLevelTitle}</DialogTitle>
+            <DialogTitle>
+              {t("resultsByLevelTitle", { title: perLevelTitle })}
+            </DialogTitle>
           </DialogHeader>
           <div className="rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Skill level</TableHead>
-                  <TableHead>Percent</TableHead>
+                  <TableHead>{t("skillLevel")}</TableHead>
+                  <TableHead>{t("colPercent")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {perLevelRows.map((row) => (
                   <TableRow key={row.skill_level_id} data-testid={`per-level-row-${row.skill_level_id}`}>
-                    <TableCell>{row.skill_level_title ?? "—"}</TableCell>
+                    <TableCell>
+                      {row.skill_level_title
+                        ? skillLevelLabel(tRef, {
+                            title: row.skill_level_title,
+                            i18n_key: row.skill_level_i18n_key,
+                          })
+                        : "—"}
+                    </TableCell>
                     <TableCell>{row.percent === null ? "—" : `${row.percent}%`}</TableCell>
                   </TableRow>
                 ))}
@@ -1917,7 +1990,7 @@ export default function AssessmentDetailPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPerLevelOpen(false)}>
-              Close
+              {t("close")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1945,9 +2018,9 @@ export default function AssessmentDetailPage() {
       <ConfirmDialog
         open={scaleDeleteOpen}
         onOpenChange={setScaleDeleteOpen}
-        title="Delete scale?"
-        description="This scale will be removed from every draft assessment that uses it."
-        confirmLabel="Delete"
+        title={t("deleteScaleConfirmTitle")}
+        description={t("deleteScaleConfirmDescription")}
+        confirmLabel={tc("delete")}
         destructive
         onConfirm={confirmScaleDelete}
         testId="scale-confirm-delete"

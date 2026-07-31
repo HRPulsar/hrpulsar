@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
-  REPORT_SECTION_LABELS,
+  reportSectionLabel,
   type ReportExport,
   type ReportExportList,
   type ReportSectionCode,
@@ -37,6 +38,8 @@ const STATUS_COLORS: Record<ReportStatus, string> = {
 };
 
 export default function ReportsListPage() {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [items, setItems] = useState<ReportExport[]>([]);
   const [vacancies, setVacancies] = useState<Vacancy[]>([]);
   const [loading, setLoading] = useState(true);
@@ -57,12 +60,12 @@ export default function ReportsListPage() {
       setItems(res.items);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to load reports",
+        err instanceof Error ? err.message : t("reportsLoadFailed"),
       );
     } finally {
       setLoading(false);
     }
-  }, [vacancyFilter, statusFilter]);
+  }, [vacancyFilter, statusFilter, t]);
 
   useEffect(() => {
     void refresh();
@@ -91,11 +94,11 @@ export default function ReportsListPage() {
       if (fresh.download_url) {
         window.open(fresh.download_url, "_blank", "noopener");
       } else {
-        toast.error("File is not ready yet");
+        toast.error(t("reportsFileNotReady"));
       }
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to get the link",
+        err instanceof Error ? err.message : t("reportsLinkFailed"),
       );
     }
   }
@@ -103,11 +106,11 @@ export default function ReportsListPage() {
   async function handleDelete(exportId: string) {
     try {
       await api.delete(`/recruitment/reports/${exportId}`);
-      toast.success("Report deleted");
+      toast.success(t("reportsToastDeleted"));
       void refresh();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to delete report",
+        err instanceof Error ? err.message : t("reportsDeleteFailed"),
       );
     }
   }
@@ -116,17 +119,17 @@ export default function ReportsListPage() {
     <div className="space-y-6" data-testid="recruitment-reports-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Reports" },
+          { label: t("breadcrumbReports") },
         ]}
       />
       <RecruitmentTabs />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
-            Vacancy reports
+            {t("reportsTitle")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            All XLSX exports across all vacancies in the tenant.
+            {t("reportsDescription")}
           </p>
         </div>
         <Button
@@ -135,7 +138,7 @@ export default function ReportsListPage() {
           onClick={() => void refresh()}
           data-testid="recruitment-reports-page-btn-refresh"
         >
-          <RefreshCw className="size-4" /> Refresh
+          <RefreshCw className="size-4" /> {t("actionRefresh")}
         </Button>
       </div>
 
@@ -146,7 +149,7 @@ export default function ReportsListPage() {
           onChange={(e) => setVacancyFilter(e.target.value)}
           data-testid="recruitment-reports-filter-vacancy"
         >
-          <option value="">All vacancies</option>
+          <option value="">{t("reportsFilterAllVacancies")}</option>
           {vacancies.map((v) => (
             <option key={v.id} value={v.id}>
               {v.title}
@@ -159,24 +162,24 @@ export default function ReportsListPage() {
           onChange={(e) => setStatusFilter(e.target.value)}
           data-testid="recruitment-reports-filter-status"
         >
-          <option value="">All statuses</option>
-          <option value="pending">pending</option>
-          <option value="processing">processing</option>
-          <option value="completed">completed</option>
-          <option value="failed">failed</option>
+          <option value="">{t("filterAllStatuses")}</option>
+          <option value="pending">{t("reportsFilterStatusPending")}</option>
+          <option value="processing">{t("reportsFilterStatusProcessing")}</option>
+          <option value="completed">{t("reportsFilterStatusCompleted")}</option>
+          <option value="failed">{t("reportsFilterStatusFailed")}</option>
         </select>
       </div>
 
       {loading ? (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
-          <span className="ml-2">Loading…</span>
+          <span className="ml-2">{t("loading")}</span>
         </div>
       ) : items.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center">
           <FileSpreadsheet className="mx-auto mb-3 h-10 w-10 text-muted-foreground opacity-40" />
           <p className="text-sm font-medium text-muted-foreground">
-            No reports yet
+            {t("reportsEmpty")}
           </p>
         </div>
       ) : (
@@ -184,13 +187,13 @@ export default function ReportsListPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Vacancy</TableHead>
-                <TableHead>Requested</TableHead>
-                <TableHead>Template</TableHead>
-                <TableHead>Sections</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>{tc("vacancy")}</TableHead>
+                <TableHead>{t("reportsColRequested")}</TableHead>
+                <TableHead>{t("reportsColTemplate")}</TableHead>
+                <TableHead>{t("reportsColSections")}</TableHead>
+                <TableHead>{t("columnStatus")}</TableHead>
                 <TableHead className="w-[140px] text-right">
-                  Actions
+                  {t("columnActions")}
                 </TableHead>
               </TableRow>
             </TableHeader>
@@ -210,7 +213,7 @@ export default function ReportsListPage() {
                         href={`/recruitment/reports/${row.id}`}
                         data-testid={`recruitment-reports-open-${row.id}`}
                       >
-                        Open preview
+                        {t("reportsOpenPreview")}
                       </Link>
                     </div>
                   </TableCell>
@@ -225,13 +228,13 @@ export default function ReportsListPage() {
                     )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {row.template_name || "Custom"}
+                    {row.template_name || t("reportsTemplateCustom")}
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
                       {row.sections.map((s: ReportSectionCode) => (
                         <Badge key={s} variant="secondary" className="text-xs">
-                          {REPORT_SECTION_LABELS[s] || s}
+                          {reportSectionLabel(t, s)}
                         </Badge>
                       ))}
                     </div>

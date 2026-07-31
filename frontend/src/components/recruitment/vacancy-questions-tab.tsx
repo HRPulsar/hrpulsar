@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import type {
@@ -36,6 +37,8 @@ export function VacancyQuestionsTab({
   vacancyId,
   candidates,
 }: VacancyQuestionsTabProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const router = useRouter();
   const [perCandidate, setPerCandidate] = useState<
     Map<string, CandidateQuestion[]>
@@ -141,7 +144,9 @@ export function VacancyQuestionsTab({
 
   if (loading) {
     return (
-      <p className="text-sm text-muted-foreground">Loading question bank…</p>
+      <p className="text-sm text-muted-foreground">
+        {t("vacancyQuestionsTabLoading")}
+      </p>
     );
   }
 
@@ -149,10 +154,8 @@ export function VacancyQuestionsTab({
     return (
       <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
         <FileQuestion className="mx-auto mb-3 size-10 opacity-40" />
-        <p className="text-sm font-medium">No candidates yet</p>
-        <p className="mt-1 text-xs">
-          Add candidates to start building the question bank.
-        </p>
+        <p className="text-sm font-medium">{t("candidatesEmpty")}</p>
+        <p className="mt-1 text-xs">{t("vacancyQuestionsTabEmptyHint")}</p>
       </div>
     );
   }
@@ -165,14 +168,16 @@ export function VacancyQuestionsTab({
           onValueChange={(v) => setFilterCandidate(v === "__all__" ? "" : v)}
         >
           <SelectTrigger className="w-56" data-testid="vacancy-questions-filter-candidate">
-            <SelectValue placeholder="All candidates">
+            <SelectValue placeholder={t("vacancyQuestionsTabAllCandidates")}>
               {filterCandidate
-                ? candidateLookup.get(filterCandidate) || "Candidate"
-                : "All candidates"}
+                ? candidateLookup.get(filterCandidate) || tc("candidate")
+                : t("vacancyQuestionsTabAllCandidates")}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">All candidates</SelectItem>
+            <SelectItem value="__all__">
+              {t("vacancyQuestionsTabAllCandidates")}
+            </SelectItem>
             {candidates.map((cv) => (
               <SelectItem key={cv.candidate_id} value={cv.candidate_id}>
                 {cv.candidate_name || cv.candidate_id}
@@ -185,17 +190,22 @@ export function VacancyQuestionsTab({
           onValueChange={(v) => setFilterCompetence(v === "__all__" ? "" : v)}
         >
           <SelectTrigger className="w-56" data-testid="vacancy-questions-filter-competence">
-            <SelectValue placeholder="All competencies">
+            <SelectValue placeholder={t("vacancyQuestionsTabAllCompetencies")}>
               {filterCompetence === "__none__"
-                ? "Without competency"
+                ? t("vacancyQuestionsTabWithoutCompetency")
                 : filterCompetence
-                  ? competenceLookup.get(filterCompetence) || "Competency"
-                  : "All competencies"}
+                  ? competenceLookup.get(filterCompetence) ||
+                    t("vacancyQuestionsTabCompetencyFallback")
+                  : t("vacancyQuestionsTabAllCompetencies")}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">All competencies</SelectItem>
-            <SelectItem value="__none__">Without competency</SelectItem>
+            <SelectItem value="__all__">
+              {t("vacancyQuestionsTabAllCompetencies")}
+            </SelectItem>
+            <SelectItem value="__none__">
+              {t("vacancyQuestionsTabWithoutCompetency")}
+            </SelectItem>
             {competences.map((c) => (
               <SelectItem key={c.id} value={c.id}>
                 {c.name}
@@ -204,13 +214,13 @@ export function VacancyQuestionsTab({
           </SelectContent>
         </Select>
         <span className="text-xs text-muted-foreground">
-          {filtered.length} question{filtered.length === 1 ? "" : "s"}
+          {t("vacancyQuestionsTabCount", { count: filtered.length })}
         </span>
       </div>
 
       {filtered.length === 0 ? (
         <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-          No questions match the filters.
+          {t("vacancyQuestionsTabNoMatch")}
         </div>
       ) : (
         <div className="space-y-2">
@@ -218,7 +228,7 @@ export function VacancyQuestionsTab({
             <div key={q.id} className="space-y-1">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">
-                  {candidateLookup.get(q.candidate_id) || "Candidate"}
+                  {candidateLookup.get(q.candidate_id) || tc("candidate")}
                 </span>
                 <Button
                   variant="ghost"
@@ -231,7 +241,7 @@ export function VacancyQuestionsTab({
                   className="h-auto px-1 text-xs"
                   data-testid={`vacancy-questions-go-${q.id}`}
                 >
-                  Open candidate →
+                  {t("vacancyQuestionsTabOpenCandidate")}
                 </Button>
               </div>
               <QuestionCard

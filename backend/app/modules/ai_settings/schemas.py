@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ContentLanguage = Literal["en"]
+ContentLanguage = Literal["en", "de"]
 EffortLevel = Literal["fast", "balanced", "thorough", "custom"]
 LLMProvider = Literal["anthropic", "openai", "gemini"]
 
@@ -25,7 +25,8 @@ class AISettingsRead(BaseModel):
     company_context: str | None
 
     effective_model: str
-    effective_provider: LLMProvider
+    # Plain str: discovered/local providers (HRP-465) are not a closed set.
+    effective_provider: str
     effective_temperature: float
     effective_max_retries: int
     effective_credit_multiplier: float
@@ -58,7 +59,18 @@ class EffortPresetRead(BaseModel):
 class AllowedModelRead(BaseModel):
     """One whitelist row for the GET /models endpoint."""
 
-    provider: LLMProvider
+    # Plain str: discovered/local providers (HRP-465) are not a closed set.
+    provider: str
     model: str
     label: str
     credit_multiplier: float
+
+
+class ProviderStatusRead(BaseModel):
+    """One provider row for the GET /providers endpoint (HRP-465)."""
+
+    provider: str
+    label: str
+    configured: bool
+    source: Literal["global", "byok", "local"] | None
+    supports_local: bool

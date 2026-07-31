@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { AlertCircle, CheckCircle2, Loader2, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -74,11 +75,14 @@ const READY_POLL_INTERVAL_MS = 15000;
 // Steps the prompt actually drives (see GENERATE_PROFILE template) —
 // surfacing them in the banner answers the user's "what is it doing right
 // now?" question without needing real server-side progress signals.
-const GENERATION_STEPS = [
-  "Competence groups",
-  "Competences in each group",
-  "Indicators per competence (≥ 3 per level)",
-  "Interview questions (≥ 3 per competence)",
+// Module scope cannot call `useTranslations`, so the list holds i18n keys
+// in the `recruitment` namespace and the banner resolves them with its
+// own `t` (see employee-status.ts for the same pattern).
+const GENERATION_STEP_KEYS = [
+  "profileGenStatusStepGroups",
+  "profileGenStatusStepCompetences",
+  "profileGenStatusStepIndicators",
+  "profileGenStatusStepQuestions",
 ];
 
 export function ProfileGenerationStatus({
@@ -87,6 +91,8 @@ export function ProfileGenerationStatus({
   onReview,
   refreshKey = 0,
 }: ProfileGenerationStatusProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [session, setSession] = useState<ProfileSessionPayload | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [tick, setTick] = useState(0);
@@ -174,18 +180,18 @@ export function ProfileGenerationStatus({
         `/recruitment/vacancies/${vacancyId}/profile/sessions/cancel`,
         sessionId ? { session_id: sessionId } : {},
       );
-      toast.info("Profile generation dismissed");
+      toast.info(t("profileGenStatusToastDismissed"));
       lastKeyRef.current = "none";
       setSession(null);
       onSessionChange?.(null);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to cancel generation",
+        err instanceof Error ? err.message : t("profileGenStatusCancelFailed"),
       );
     } finally {
       setCancelling(false);
     }
-  }, [vacancyId, sessionId, onSessionChange]);
+  }, [vacancyId, sessionId, onSessionChange, t]);
 
   if (!session) return null;
 
@@ -201,11 +207,10 @@ export function ProfileGenerationStatus({
             <AlertCircle className="mt-0.5 size-5 text-destructive" />
             <div className="space-y-1">
               <p className="text-sm font-medium text-destructive">
-                Profile generation failed
+                {t("profileGenStatusFailedTitle")}
               </p>
               <p className="text-xs text-muted-foreground">
-                {session.error_message ||
-                  "The AI did not return a valid profile. Try again or open the matrix dialog to provide a clarification."}
+                {session.error_message || t("profileGenStatusFailedFallback")}
               </p>
             </div>
           </div>
@@ -215,7 +220,7 @@ export function ProfileGenerationStatus({
             onClick={dismissFailure}
             data-testid="vacancy-profile-generation-failed-dismiss-btn"
           >
-            Dismiss
+            {tc("dismiss")}
           </Button>
         </div>
       </div>
@@ -241,11 +246,10 @@ export function ProfileGenerationStatus({
             <div className="space-y-1">
               <p className="flex items-center gap-2 text-sm font-medium">
                 <Sparkles className="size-4 text-accent" />
-                Competence profile generated
+                {t("profileGenStatusReadyTitle")}
               </p>
               <p className="text-xs text-muted-foreground">
-                Nothing is saved yet — review the results to keep, edit or
-                discard them.
+                {t("profileGenStatusReadyBody")}
               </p>
             </div>
           </div>
@@ -254,7 +258,7 @@ export function ProfileGenerationStatus({
             onClick={onReview}
             data-testid="vacancy-profile-generation-review-btn"
           >
-            Review for save
+            {t("profileGenStatusReviewButton")}
           </Button>
         </div>
       </div>
@@ -279,20 +283,21 @@ export function ProfileGenerationStatus({
           <div className="space-y-1">
             <p className="flex items-center gap-2 text-sm font-medium">
               <Sparkles className="size-4 text-accent" />
-              Generating competence profile
+              {t("profileGenStatusRunningTitle")}
               <span className="text-xs font-normal text-muted-foreground">
-                (~{remaining > 0 ? `${remaining}s remaining` : "wrapping up"})
+                {remaining > 0
+                  ? t("profileGenStatusEtaRemaining", { seconds: remaining })
+                  : t("profileGenStatusEtaWrappingUp")}
               </span>
             </p>
             <p className="text-xs text-muted-foreground">
-              You can leave this page — the session keeps running and the
-              banner reappears when you return.
+              {t("profileGenStatusRunningHint")}
             </p>
             <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-              {GENERATION_STEPS.map((step) => (
-                <li key={step} className="flex items-center gap-1.5">
+              {GENERATION_STEP_KEYS.map((stepKey) => (
+                <li key={stepKey} className="flex items-center gap-1.5">
                   <span className="size-1.5 rounded-full bg-accent/70" />
-                  {step}
+                  {t(stepKey)}
                 </li>
               ))}
             </ul>
@@ -306,12 +311,14 @@ export function ProfileGenerationStatus({
           data-testid="vacancy-profile-generation-cancel-btn"
         >
           <X className="mr-1 size-4" />
-          Cancel
+          {tc("cancel")}
         </Button>
       </div>
       {/* tick keeps the countdown live without needing a separate timer */}
       <span className="sr-only" aria-hidden>
+        {/* eslint-disable react/jsx-no-literals -- sr-only aria-hidden re-render helper, never shown */}
         tick {tick}
+        {/* eslint-enable react/jsx-no-literals */}
       </span>
     </div>
   );

@@ -234,6 +234,25 @@ class TestSendEmailReturnTuple:
         assert "/accept-invite?token=inv-tok" in mock.call_args[0][2]
         assert "Hi Anna" in mock.call_args[0][2]
 
+    # --- i18n F4: recipient locale reaches the renderer ---
+
+    def test_sender_forwards_locale_to_template(self):
+        """A resolved recipient locale selects the catalog + html lang."""
+        from app.core.email import send_verification_email
+
+        with patch("app.core.email.send_email", return_value=(True, "msg-4")) as mock:
+            assert send_verification_email("user@test.com", "tok", locale="de") is True
+        assert '<html lang="de">' in mock.call_args[0][2]
+
+    def test_sender_defaults_to_english(self):
+        """No locale argument keeps the pre-F4 English output."""
+        from app.core.email import send_invitation_email
+
+        with patch("app.core.email.send_email", return_value=(True, "msg-5")) as mock:
+            assert send_invitation_email("user@test.com", "Anna", "inv-tok") is True
+        assert '<html lang="en">' in mock.call_args[0][2]
+        assert "Hi Anna" in mock.call_args[0][2]
+
 
 # ---------------------------------------------------------------------------
 # I3: EmailLog model and delivery tracking

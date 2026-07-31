@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,6 +21,8 @@ type Branding = {
 };
 
 export default function BrandingPage() {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [branding, setBranding] = useState<Branding | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -58,10 +61,10 @@ export default function BrandingPage() {
         secondary_color: draft.secondary_color || null,
         watermark_text: draft.watermark_text || null,
       });
-      toast.success("Branding saved");
+      toast.success(t("brandingToastSaved"));
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
+      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setSaving(false);
     }
@@ -71,35 +74,34 @@ export default function BrandingPage() {
     <div className="space-y-5" data-testid="recruitment-branding-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Settings", href: "/recruitment/settings" },
-          { label: "Branding" },
+          { label: tc("settings"), href: "/recruitment/settings" },
+          { label: t("brandingBreadcrumb") },
         ]}
       />
       <header>
         <h1 className="text-xl font-semibold tracking-tight">
-          Report and UI branding
+          {t("brandingTitle")}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Colors and watermark are applied to vacancy XLSX reports and the
-          canvas. The company logo is configured in the general company profile.
+          {t("brandingDescription")}
         </p>
       </header>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Settings</CardTitle>
+          <CardTitle className="text-base">{tc("settings")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {loading ? (
             <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
               <Loader2 className="mr-2 size-4 animate-spin" />
-              Loading…
+              {t("loading")}
             </div>
           ) : (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
-                  <Label htmlFor="brand-accent">Accent color</Label>
+                  <Label htmlFor="brand-accent">{t("brandingAccentColor")}</Label>
                   <div className="flex items-center gap-2">
                     <Input
                       id="brand-accent"
@@ -128,7 +130,7 @@ export default function BrandingPage() {
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="brand-secondary">Secondary color</Label>
+                  <Label htmlFor="brand-secondary">{t("brandingSecondaryColor")}</Label>
                   <div className="flex items-center gap-2">
                     <Input
                       id="brand-secondary"
@@ -157,7 +159,7 @@ export default function BrandingPage() {
                 </div>
               </div>
               <div className="space-y-1">
-                <Label htmlFor="brand-watermark">Report watermark</Label>
+                <Label htmlFor="brand-watermark">{t("brandingWatermark")}</Label>
                 <Input
                   id="brand-watermark"
                   value={draft.watermark_text}
@@ -167,7 +169,7 @@ export default function BrandingPage() {
                       watermark_text: e.target.value,
                     }))
                   }
-                  placeholder="HRPulsar — confidential"
+                  placeholder={t("brandingWatermarkPlaceholder")}
                   data-testid="brand-input-watermark"
                 />
               </div>
@@ -182,7 +184,7 @@ export default function BrandingPage() {
                   ) : (
                     <Save className="size-4" />
                   )}
-                  Save
+                  {t("save")}
                 </Button>
               </div>
             </>
@@ -193,7 +195,7 @@ export default function BrandingPage() {
       {branding && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Report preview</CardTitle>
+            <CardTitle className="text-base">{t("brandingPreviewTitle")}</CardTitle>
           </CardHeader>
           <CardContent>
             <div
@@ -204,7 +206,9 @@ export default function BrandingPage() {
               }}
             >
               <div>
-                <div className="text-sm font-semibold">Vacancy report</div>
+                <div className="text-sm font-semibold">
+                  {t("brandingPreviewReportLabel")}
+                </div>
                 <div className="text-xs opacity-80">
                   {draft.watermark_text || "—"}
                 </div>

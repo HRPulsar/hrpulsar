@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.assessment import pdp_service, service
 from app.modules.assessment.schemas import (
@@ -799,7 +800,6 @@ async def change_pdp_status(
         r.code in (ADMIN_ROLE_CODES | MANAGER_ROLE_CODES) for r in current_user.roles
     )
     if not privileged:
-        from fastapi import HTTPException
         from fastapi import status as http_status
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
@@ -815,7 +815,9 @@ async def change_pdp_status(
             and data.status_code == "review"
         )
         if not owner_allowed:
-            raise HTTPException(http_status.HTTP_403_FORBIDDEN, "Forbidden")
+            raise AppError(
+                "pdp_status_change_forbidden", http_status.HTTP_403_FORBIDDEN
+            )
         # HRP-19 case 2: the owner can only submit for review once every item
         # is marked passed. UI keeps the button disabled until then but we
         # block bypass at the API too.
@@ -825,9 +827,9 @@ async def change_pdp_status(
         pdp_with_items = items_result.scalar_one()
         items: list[PDPItem] = list(pdp_with_items.items)
         if not items or any(not it.is_passed for it in items):
-            raise HTTPException(
+            raise AppError(
+                "pdp_mark_all_items_before_review",
                 http_status.HTTP_409_CONFLICT,
-                "Mark every item as passed before submitting for review",
             )
         # HRP-19 case 3: the strict transition map only allows admins to
         # bounce a returned plan back to sent/cancelled, but the owner can

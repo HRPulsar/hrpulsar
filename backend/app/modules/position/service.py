@@ -1,11 +1,12 @@
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import func, select, tuple_
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.employee.alerts import (
     ALERT_LABELS,
     AlertCode,
@@ -111,16 +112,20 @@ async def _get_position_profile_extras_bulk(
         return {p.id: {} for p in positions}
 
     gs_rows = (
-        await db.execute(
-            select(GradeSpecialization).where(
-                GradeSpecialization.tenant_id == tenant_id,
-                tuple_(
-                    GradeSpecialization.specialization_id,
-                    GradeSpecialization.grade_id,
-                ).in_(list(pairs)),
+        (
+            await db.execute(
+                select(GradeSpecialization).where(
+                    GradeSpecialization.tenant_id == tenant_id,
+                    tuple_(
+                        GradeSpecialization.specialization_id,
+                        GradeSpecialization.grade_id,
+                    ).in_(list(pairs)),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     gs_by_pair: dict[tuple[uuid.UUID, uuid.UUID], GradeSpecialization] = {
         (gs.specialization_id, gs.grade_id): gs for gs in gs_rows
     }
@@ -205,23 +210,19 @@ async def _validate_fk_refs(db: AsyncSession, tenant_id: uuid.UUID, data: dict) 
     if data.get("specialization_id"):
         item = await db.get(DictionaryItem, data["specialization_id"])
         if not item or item.type != "specialization":
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, "Invalid specialization_id"
-            )
+            raise AppError("invalid_specialization_id", status.HTTP_400_BAD_REQUEST)
         if item.tenant_id is not None and item.tenant_id != tenant_id:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, "Invalid specialization_id"
-            )
+            raise AppError("invalid_specialization_id", status.HTTP_400_BAD_REQUEST)
     if data.get("grade_id"):
         item = await db.get(DictionaryItem, data["grade_id"])
         if not item or item.type != "grade":
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid grade_id")
+            raise AppError("invalid_grade_id", status.HTTP_400_BAD_REQUEST)
         if item.tenant_id is not None and item.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid grade_id")
+            raise AppError("invalid_grade_id", status.HTTP_400_BAD_REQUEST)
     if data.get("division_id"):
         div = await db.get(Division, data["division_id"])
         if not div or div.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid division_id")
+            raise AppError("invalid_division_id", status.HTTP_400_BAD_REQUEST)
 
 
 async def create_position(
@@ -235,9 +236,7 @@ async def create_position(
         )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Position with this title already exists"
-        )
+        raise AppError("position_title_exists", status.HTTP_409_CONFLICT)
 
     await _validate_fk_refs(db, tenant_id, data.model_dump())
     pos = Position(tenant_id=tenant_id, **data.model_dump())
@@ -290,9 +289,10 @@ async def list_positions(
     # for backwards-compat (= `lifecycle_status == 'active'`).
     if lifecycle_status:
         if lifecycle_status not in LIFECYCLE_STATUSES:
-            raise HTTPException(
+            raise AppError(
+                "invalid_lifecycle_status",
                 status.HTTP_400_BAD_REQUEST,
-                f"Invalid lifecycle_status; expected one of {list(LIFECYCLE_STATUSES)}",
+                allowed=list(LIFECYCLE_STATUSES),
             )
         query = query.where(Position.lifecycle_status == lifecycle_status)
         count_query = count_query.where(Position.lifecycle_status == lifecycle_status)
@@ -370,7 +370,7 @@ async def get_position(
 ) -> dict:
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Position not found")
+        raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
     count = await _get_employee_count(db, tenant_id, pos.id)
     extras = await _get_position_extras(db, tenant_id, pos)
     return _position_to_read(pos, count, extras)
@@ -392,17 +392,14 @@ async def update_position(
 ) -> dict:
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Position not found")
+        raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
 
     updates = data.model_dump(exclude_unset=True)
 
     # POS6: Closed positions are read-only; only lifecycle_status/is_active
     # may change (so HR can re-open a closed record).
     if pos.lifecycle_status == "closed" and not _is_lifecycle_only_update(updates):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Position is closed; reopen it before editing other fields",
-        )
+        raise AppError("position_closed_read_only", status.HTTP_409_CONFLICT)
 
     await _validate_fk_refs(db, tenant_id, updates)
 
@@ -416,9 +413,7 @@ async def update_position(
             )
         )
         if existing.scalar_one_or_none():
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, "Position with this title already exists"
-            )
+            raise AppError("position_title_exists", status.HTTP_409_CONFLICT)
 
     title_changed = "title" in updates and updates["title"] != pos.title
 
@@ -458,14 +453,14 @@ async def delete_position(
 ) -> None:
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Position not found")
+        raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
 
     count = await _get_employee_count(db, tenant_id, position_id)
     if count > 0:
-        raise HTTPException(
+        raise AppError(
+            "position_delete_has_employees",
             status.HTTP_409_CONFLICT,
-            f"Cannot delete position with {count} assigned employee(s). "
-            "Reassign them first.",
+            count=count,
         )
 
     await db.delete(pos)
@@ -486,7 +481,7 @@ async def deactivate_position(
     """
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Position not found")
+        raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
 
     pos.is_active = False
     pos.lifecycle_status = "frozen"
@@ -515,14 +510,15 @@ async def set_position_status(
     can render the closed state as read-only.
     """
     if new_status not in LIFECYCLE_STATUSES:
-        raise HTTPException(
+        raise AppError(
+            "invalid_lifecycle_status",
             status.HTTP_400_BAD_REQUEST,
-            f"Invalid lifecycle_status; expected one of {list(LIFECYCLE_STATUSES)}",
+            allowed=list(LIFECYCLE_STATUSES),
         )
 
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Position not found")
+        raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
 
     pos.lifecycle_status = new_status
     pos.is_active = new_status == "active"
@@ -540,7 +536,7 @@ async def get_position_occupancy(
     """Return occupancy stats for a position: ``{assigned, headcount, vacant}``."""
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Position not found")
+        raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
 
     assigned = await _get_employee_count(db, tenant_id, pos.id)
     headcount = pos.headcount
@@ -572,7 +568,7 @@ async def get_matrix_status(
 
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Position not found")
+        raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
 
     if pos.specialization_id is None or pos.grade_id is None:
         return {
@@ -635,7 +631,7 @@ async def list_position_employees(
     """
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Position not found")
+        raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
 
     from app.modules.employee.service import _resolve_emp_avatars_bulk
 
@@ -683,9 +679,7 @@ async def list_position_employees(
                 # HRP-175: division_id surfaces so the unified
                 # EmployeeList can deep-link the Division cell.
                 "division_id": emp.division_id,
-                "division_name": (
-                    emp.division.name if emp.division else None
-                ),
+                "division_name": (emp.division.name if emp.division else None),
                 "hire_date": emp.hire_date,
                 "status": emp.status,
                 "avatar_url": avatar_url,
@@ -712,7 +706,7 @@ async def get_position_competence_matrix(
 
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Position not found")
+        raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
 
     if pos.specialization_id is None or pos.grade_id is None:
         return {
@@ -743,9 +737,7 @@ async def get_position_competence_matrix(
     links_result = await db.execute(
         select(GradeCompetenceLink)
         .options(
-            selectinload(GradeCompetenceLink.competence).selectinload(
-                Competence.group
-            ),
+            selectinload(GradeCompetenceLink.competence).selectinload(Competence.group),
             selectinload(GradeCompetenceLink.skill_level),
         )
         .where(GradeCompetenceLink.grade_specialization_id == gs.id)
@@ -782,7 +774,11 @@ async def get_position_competence_matrix(
 
     competences: list[dict] = []
     for link in sorted(
-        links, key=lambda x: (x.competence.group.sort_index if x.competence and x.competence.group else 0, x.competence.title if x.competence else "")
+        links,
+        key=lambda x: (
+            x.competence.group.sort_index if x.competence and x.competence.group else 0,
+            x.competence.title if x.competence else "",
+        ),
     ):
         comp = link.competence
         if comp is None:
@@ -799,6 +795,9 @@ async def get_position_competence_matrix(
                 "skill_level_title": (
                     link.skill_level.title if link.skill_level else None
                 ),
+                "skill_level_i18n_key": (
+                    link.skill_level.i18n_key if link.skill_level else None
+                ),
                 "indicators": [
                     {
                         "id": ind.id,
@@ -808,6 +807,9 @@ async def get_position_competence_matrix(
                         "skill_level_id": ind.skill_level_id,
                         "skill_level_title": (
                             link.skill_level.title if link.skill_level else None
+                        ),
+                        "skill_level_i18n_key": (
+                            link.skill_level.i18n_key if link.skill_level else None
                         ),
                     }
                     for ind in sorted(pair_indicators, key=lambda i: i.sort_index)
@@ -837,9 +839,7 @@ async def bulk_action_positions(
     positions = result.scalars().all()
 
     if not positions:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "No matching AI draft positions found"
-        )
+        raise AppError("no_ai_draft_positions_found", status.HTTP_404_NOT_FOUND)
 
     if data.action == "approve":
         for pos in positions:

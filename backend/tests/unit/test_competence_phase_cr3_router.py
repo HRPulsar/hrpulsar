@@ -326,6 +326,10 @@ class TestSkillLevelEndpoints:
         body = resp.json()
         assert body["title"] == "Master"
         assert body["tenant_id"] is not None
+        # HRP-479: i18n_key is system-owned — a client-supplied value is
+        # ignored, otherwise a tenant admin could stamp a catalog key
+        # onto a custom level and have the translation shadow its title.
+        assert body["i18n_key"] is None
 
     async def test_update_custom_level(
         self,

@@ -27,6 +27,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
+from app.core.errors import AppError
 from app.core.security import hash_password
 from app.modules.auth.models import User
 from app.modules.recruitment import gdpr_service, service
@@ -136,7 +137,7 @@ class TestArchivedCandidateLink:
             user.id,
             VacancyCreate(title="V-Other"),
         )
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(AppError) as exc:
             await service.add_candidate_to_vacancy_manual(
                 db,
                 tenant.id,
@@ -149,8 +150,10 @@ class TestArchivedCandidateLink:
                 ),
             )
         assert exc.value.status_code == 409
-        assert isinstance(exc.value.detail, dict)
-        assert exc.value.detail["code"] == "candidate_archived"
+        # i18n F3: the object-shaped detail is rendered by the handler from
+        # ``code`` + ``detail_extra``; the wire shape is unchanged.
+        assert exc.value.code == "candidate_archived"
+        assert "existing_candidate_id" in exc.value.detail_extra
 
 
 # ---------------------------------------------------------------------------

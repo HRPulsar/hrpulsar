@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { useTranslations } from "next-intl";
 
 import { persistDemoSession } from "@/lib/demo";
 
@@ -30,8 +31,9 @@ function parseHandoffFragment(hash: string): {
 // the client and we render directly into the final state — no setState
 // inside useEffect, no hydration mismatch.
 export default function DemoHandoffClient() {
+  const t = useTranslations("auth");
   const { token, next } = parseHandoffFragment(window.location.hash);
-  const error = token ? null : "Demo handoff link is missing or invalid.";
+  const error = token ? null : t("demoHandoffInvalid");
 
   useEffect(() => {
     if (!token) return;
@@ -44,7 +46,7 @@ export default function DemoHandoffClient() {
   return (
     <div className="flex flex-col items-center gap-6 text-center">
       <h1 className="text-2xl font-semibold text-white">
-        {error ? "Could not start the demo" : "Loading your demo..."}
+        {error ? t("demoStartFailed") : t("loadingDemo")}
       </h1>
       {error ? (
         <>
@@ -55,13 +57,13 @@ export default function DemoHandoffClient() {
             {error}
           </p>
           <a href="/demo" className="text-sm text-brand hover:underline">
-            Start a new demo
+            {t("startNewDemo")}
           </a>
         </>
       ) : (
         <div className="flex flex-col items-center gap-3">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-brand" />
-          <p className="text-sm text-white/60">Signing you in...</p>
+          <p className="text-sm text-white/60">{t("signingYouIn")}</p>
         </div>
       )}
     </div>

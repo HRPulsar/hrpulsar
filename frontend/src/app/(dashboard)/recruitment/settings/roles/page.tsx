@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +16,8 @@ type Role = {
 };
 
 export default function RolesPage() {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [roles, setRoles] = useState<Role[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -38,29 +41,28 @@ export default function RolesPage() {
     <div className="space-y-5" data-testid="recruitment-roles-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Settings", href: "/recruitment/settings" },
-          { label: "Roles" },
+          { label: tc("settings"), href: "/recruitment/settings" },
+          { label: t("rolesBreadcrumb") },
         ]}
       />
       <header className="flex items-start justify-between gap-2">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">
-            Recruitment roles
+            {t("rolesTitle")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Read-only view of each role&apos;s permissions. Permission editing
-            is part of global RBAC and will ship as a separate feature.
+            {t("rolesDescription")}
           </p>
         </div>
         <Badge variant="outline" className="gap-1">
-          <Lock className="size-3" /> Read-only
+          <Lock className="size-3" /> {t("rolesReadOnlyBadge")}
         </Badge>
       </header>
 
       {loading ? (
         <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
           <Loader2 className="mr-2 size-4 animate-spin" />
-          Loading…
+          {t("loading")}
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">

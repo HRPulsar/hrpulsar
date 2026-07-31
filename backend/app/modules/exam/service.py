@@ -2,13 +2,14 @@ import uuid
 from datetime import datetime, timezone
 from io import BytesIO
 
-from fastapi import HTTPException, status
+from fastapi import status
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.core.s3 import get_presigned_url
 from app.modules.employee.models import Employee
 from app.modules.exam.models import (
@@ -64,7 +65,7 @@ async def get_mass_exam_detail(
     )
     me = result.scalar_one_or_none()
     if not me:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
 
     data = _me_to_read(me)
     questions = []
@@ -115,13 +116,10 @@ async def update_mass_exam(
 ) -> dict:
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
 
     if me.status in TERMINAL_STATUSES:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Cannot edit a finalized exam",
-        )
+        raise AppError("exam_cannot_edit_finalized", status.HTTP_400_BAD_REQUEST)
 
     payload = data.model_dump(exclude_unset=True)
     if "title" in payload and payload["title"] is not None:
@@ -154,16 +152,16 @@ async def change_mass_exam_status(
         )
     ).scalar_one_or_none()
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
 
     allowed = ALLOWED_STATUS_TRANSITIONS.get(me.status, set())
     if new_status not in allowed:
-        raise HTTPException(
+        raise AppError(
+            "exam_invalid_transition",
             status.HTTP_400_BAD_REQUEST,
-            (
-                f"Cannot transition from '{me.status}' to '{new_status}'. "
-                f"Allowed: {sorted(allowed) if allowed else 'none'}"
-            ),
+            from_status=me.status,
+            to_status=new_status,
+            allowed=sorted(allowed) if allowed else "none",
         )
 
     if me.status == "draft" and new_status == "sent":
@@ -223,9 +221,7 @@ async def _assert_send_prerequisites(db: AsyncSession, me: MassExam) -> None:
             else ended.replace(tzinfo=timezone.utc).date()
         )
         if ended_date < cutoff:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, "Deadline in the past"
-            )
+            raise AppError("exam_deadline_in_past", status.HTTP_400_BAD_REQUEST)
 
     q_count = await db.scalar(
         select(func.count(ExamQuestion.id)).where(
@@ -233,17 +229,13 @@ async def _assert_send_prerequisites(db: AsyncSession, me: MassExam) -> None:
         )
     )
     if not q_count:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Add at least one question before sending"
-        )
+        raise AppError("exam_no_questions_to_send", status.HTTP_400_BAD_REQUEST)
 
     e_count = await db.scalar(
         select(func.count(Exam.id)).where(Exam.mass_exam_id == me.id)
     )
     if not e_count:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Assign at least one employee before sending"
-        )
+        raise AppError("exam_no_employees_to_send", status.HTTP_400_BAD_REQUEST)
 
 
 def _me_to_read(me: MassExam) -> dict:
@@ -278,7 +270,7 @@ async def add_question(
 ) -> dict:
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
 
     q = ExamQuestion(
         mass_exam_id=mass_exam_id,
@@ -349,11 +341,10 @@ async def update_question(
     """
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
     if me.status != "draft":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Questions can only be edited while the exam is in draft",
+        raise AppError(
+            "exam_questions_editable_in_draft_only", status.HTTP_400_BAD_REQUEST
         )
 
     q_result = await db.execute(
@@ -366,7 +357,7 @@ async def update_question(
     )
     q = q_result.scalar_one_or_none()
     if q is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
+        raise AppError("question_not_found", status.HTTP_404_NOT_FOUND)
 
     payload = data.model_dump(exclude_unset=True)
     if "title" in payload and payload["title"] is not None:
@@ -388,20 +379,18 @@ async def update_question(
         if effective_type != "essay":
             non_empty = [o for o in new_options if o.title.strip()]
             if len(non_empty) < 2:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    "Choice questions require at least 2 options",
+                raise AppError(
+                    "exam_choice_min_two_options", status.HTTP_400_BAD_REQUEST
                 )
             correct = [o for o in non_empty if o.is_correct]
             if not correct:
-                raise HTTPException(
+                raise AppError(
+                    "exam_choice_requires_correct_option",
                     status.HTTP_400_BAD_REQUEST,
-                    "Choice questions require at least one correct option",
                 )
             if effective_type == "single_choice" and len(correct) > 1:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    "Single choice questions allow only one correct option",
+                raise AppError(
+                    "exam_single_choice_one_correct", status.HTTP_400_BAD_REQUEST
                 )
         # Use the collection so the ``cascade="all, delete-orphan"`` rule
         # cleans up unlinked options without an extra SQL DELETE.
@@ -457,15 +446,14 @@ async def delete_question(
     """
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
     if me.status != "draft":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Questions can only be deleted while the exam is in draft",
+        raise AppError(
+            "exam_questions_deletable_in_draft_only", status.HTTP_400_BAD_REQUEST
         )
     q = await db.get(ExamQuestion, question_id)
     if not q or q.mass_exam_id != mass_exam_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
+        raise AppError("question_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(q)
     await db.commit()
 
@@ -477,9 +465,8 @@ def _assert_pass_mark_editable(me: MassExam) -> None:
     # HRP-226 redo: Pass Mark CRUD is available on any active exam
     # (draft / sent / in_progress); only terminal statuses freeze it.
     if me.status in TERMINAL_STATUSES:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Pass marks cannot be edited on a finalized exam",
+        raise AppError(
+            "exam_pass_marks_finalized_read_only", status.HTTP_400_BAD_REQUEST
         )
 
 
@@ -502,11 +489,11 @@ async def _get_editable_pass_mark(
     """Shared update/delete preamble: exam lookup, terminal gate, row lookup."""
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
     _assert_pass_mark_editable(me)
     pm = await db.get(ExamPassMark, pass_mark_id)
     if not pm or pm.mass_exam_id != mass_exam_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Pass mark not found")
+        raise AppError("exam_pass_mark_not_found", status.HTTP_404_NOT_FOUND)
     return pm
 
 
@@ -530,8 +517,10 @@ async def _validate_pass_mark_refs(
             or item.type != expected_type
             or (item.tenant_id is not None and item.tenant_id != tenant_id)
         ):
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND, f"Dictionary item for {field} not found"
+            raise AppError(
+                "exam_dictionary_item_not_found",
+                status.HTTP_404_NOT_FOUND,
+                field=field,
             )
 
 
@@ -540,7 +529,7 @@ async def add_pass_mark(
 ) -> dict:
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
     _assert_pass_mark_editable(me)
 
     existing = await db.scalar(
@@ -549,13 +538,10 @@ async def add_pass_mark(
         )
     )
     if existing:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Pass mark already exists for this exam"
-        )
+        raise AppError("exam_pass_mark_already_exists", status.HTTP_400_BAD_REQUEST)
     if data.min_score_percent is None and data.min_score_points is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Pass mark requires a minimum score (percent or points)",
+        raise AppError(
+            "exam_pass_mark_min_score_required", status.HTTP_400_BAD_REQUEST
         )
     await _validate_pass_mark_refs(
         db,
@@ -590,9 +576,8 @@ async def update_pass_mark(
     for field, value in payload.items():
         setattr(pm, field, value)
     if pm.min_score_percent is None and pm.min_score_points is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Pass mark requires a minimum score (percent or points)",
+        raise AppError(
+            "exam_pass_mark_min_score_required", status.HTTP_400_BAD_REQUEST
         )
     await db.commit()
     await db.refresh(pm)
@@ -621,7 +606,7 @@ async def assign_employees(
 ) -> list[dict]:
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
 
     # Calculate max score
     q_result = await db.execute(
@@ -737,7 +722,7 @@ async def list_mass_exam_results(
 ) -> list[dict]:
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
 
     result = await db.execute(
         select(Exam)
@@ -849,8 +834,8 @@ def _assert_exam_owner(
     resolves and passes the caller's employee id.
     """
     if acting_employee_id is not None and exam.employee_id != acting_employee_id:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "This exam belongs to another employee"
+        raise AppError(
+            "exam_belongs_to_another_employee", status.HTTP_403_FORBIDDEN
         )
 
 
@@ -869,14 +854,14 @@ async def get_exam_questions(
     """
     exam = await db.get(Exam, exam_id)
     if not exam or exam.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Exam not found")
+        raise AppError("exam_not_found", status.HTTP_404_NOT_FOUND)
     _assert_exam_owner(exam, acting_employee_id)
 
     mass_exam = await db.get(MassExam, exam.mass_exam_id)
     if mass_exam is None or mass_exam.status == "draft":
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Exam not found")
+        raise AppError("exam_not_found", status.HTTP_404_NOT_FOUND)
     if mass_exam.status == "cancelled" or exam.status == "cancelled":
-        raise HTTPException(status.HTTP_409_CONFLICT, "Exam was cancelled")
+        raise AppError("exam_cancelled", status.HTTP_409_CONFLICT)
 
     q_result = await db.execute(
         select(ExamQuestion)
@@ -944,7 +929,7 @@ async def get_exam_review(
     """
     exam = await db.get(Exam, exam_id)
     if not exam or exam.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Exam not found")
+        raise AppError("exam_not_found", status.HTTP_404_NOT_FOUND)
     is_owner = (
         acting_employee_id is not None and exam.employee_id == acting_employee_id
     )
@@ -952,8 +937,8 @@ async def get_exam_review(
         visible_employee_ids is None or exam.employee_id in visible_employee_ids
     )
     if not is_owner and not in_scope:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "This exam belongs to another employee"
+        raise AppError(
+            "exam_belongs_to_another_employee", status.HTTP_403_FORBIDDEN
         )
     # HRP-236: cancelling the whole procedure voids the survey status but
     # keeps submitted results reviewable — gate on the submission itself.
@@ -961,14 +946,10 @@ async def get_exam_review(
         if exam.status == "cancelled":
             # "available after completion" would be a lie — a voided
             # survey with no submission never gets results.
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "The exam was cancelled before results were submitted",
+            raise AppError(
+                "exam_cancelled_before_submission", status.HTTP_409_CONFLICT
             )
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Results are available after the exam is completed",
-        )
+        raise AppError("exam_results_after_completion", status.HTTP_409_CONFLICT)
 
     mass_exam = await db.get(MassExam, exam.mass_exam_id)
     q_result = await db.execute(
@@ -1042,26 +1023,22 @@ async def submit_answer(
 
     exam = await db.get(Exam, exam_id)
     if not exam or exam.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Exam not found")
+        raise AppError("exam_not_found", status.HTTP_404_NOT_FOUND)
     _assert_exam_owner(exam, acting_employee_id)
 
     # HRP-328: no answers on finished exams, none before the send, and none
     # after the manager closed or cancelled the whole exam.
     if exam.status == "done":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Exam is already completed"
-        )
+        raise AppError("exam_already_completed", status.HTTP_409_CONFLICT)
     if exam.status == "cancelled":
-        raise HTTPException(status.HTTP_409_CONFLICT, "Exam was cancelled")
+        raise AppError("exam_cancelled", status.HTTP_409_CONFLICT)
     mass_exam = await db.get(MassExam, exam.mass_exam_id)
     if mass_exam is not None and mass_exam.status in {
         "draft",
         "done",
         "cancelled",
     }:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Exam is not open for answers"
-        )
+        raise AppError("exam_not_open_for_answers", status.HTTP_409_CONFLICT)
 
     if exam.status == "assigned":
         exam.status = "in_progress"
@@ -1085,7 +1062,7 @@ async def submit_answer(
     # HRP-328: the question must belong to THIS exam's test — otherwise an
     # answer could be injected from a foreign mass exam.
     if not question or question.mass_exam_id != exam.mass_exam_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
+        raise AppError("question_not_found", status.HTTP_404_NOT_FOUND)
 
     is_correct = None
     score = 0
@@ -1150,7 +1127,7 @@ async def import_questions_from_excel(
     """
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
 
     wb = load_workbook(BytesIO(file_data), read_only=True)
     ws = wb.active
@@ -1359,14 +1336,12 @@ async def finish_exam(
 ) -> dict:
     exam = await db.get(Exam, exam_id)
     if not exam or exam.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Exam not found")
+        raise AppError("exam_not_found", status.HTTP_404_NOT_FOUND)
     _assert_exam_owner(exam, acting_employee_id)
     if exam.status == "done":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Exam is already completed"
-        )
+        raise AppError("exam_already_completed", status.HTTP_409_CONFLICT)
     if exam.status == "cancelled":
-        raise HTTPException(status.HTTP_409_CONFLICT, "Exam was cancelled")
+        raise AppError("exam_cancelled", status.HTTP_409_CONFLICT)
 
     # HRP-328: results can only be submitted once every active question has
     # an answer (an essay counts when its text is non-empty).
@@ -1386,9 +1361,10 @@ async def finish_exam(
     }
     unanswered = [q for q in active_questions if q.id not in answered_ids]
     if unanswered:
-        raise HTTPException(
+        raise AppError(
+            "exam_answer_all_questions",
             status.HTTP_400_BAD_REQUEST,
-            f"Answer all questions before submitting ({len(unanswered)} left)",
+            count=len(unanswered),
         )
 
     # Calculate total score
@@ -1416,7 +1392,7 @@ async def finish_exam(
     # while this submission was in flight, the cascade already voided this
     # survey — committing "done" here would overwrite that cancel.
     if mass_exam is not None and mass_exam.status in {"done", "cancelled"}:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Exam was cancelled")
+        raise AppError("exam_cancelled", status.HTTP_409_CONFLICT)
     if mass_exam is not None and mass_exam.status in {"sent", "in_progress"}:
         remaining = await db.scalar(
             select(func.count(Exam.id)).where(

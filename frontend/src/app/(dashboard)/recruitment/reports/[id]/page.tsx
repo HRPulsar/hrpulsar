@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { use } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
-  REPORT_SECTION_LABELS,
+  reportSectionLabel,
   type ReportExport,
   type ReportPreview,
   type ReportSectionCode,
@@ -46,6 +47,7 @@ export default function ReportDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const t = useTranslations("recruitment");
   const [report, setReport] = useState<ReportExport | null>(null);
   const [preview, setPreview] = useState<ReportPreview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,18 +74,18 @@ export default function ReportDetailPage({
         } catch (err) {
           setPreview(null);
           setPreviewError(
-            err instanceof Error ? err.message : "Failed to load preview",
+            err instanceof Error ? err.message : t("reportPreviewLoadFailed"),
           );
         }
       }
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to load report",
+        err instanceof Error ? err.message : t("reportLoadFailed"),
       );
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     void refresh();
@@ -98,11 +100,11 @@ export default function ReportDetailPage({
       if (fresh.download_url) {
         window.open(fresh.download_url, "_blank", "noopener");
       } else {
-        toast.error("File is not ready yet");
+        toast.error(t("reportsFileNotReady"));
       }
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to get the link",
+        err instanceof Error ? err.message : t("reportsLinkFailed"),
       );
     }
   }
@@ -113,20 +115,24 @@ export default function ReportDetailPage({
     <div className="space-y-6" data-testid="recruitment-report-detail-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Reports", href: "/recruitment/reports" },
-          { label: report ? report.template_name || "Report" : "Loading…" },
+          { label: t("breadcrumbReports"), href: "/recruitment/reports" },
+          {
+            label: report
+              ? report.template_name || t("reportBreadcrumbFallback")
+              : t("loading"),
+          },
         ]}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
-            {report?.template_name || "Vacancy report"}
+            {report?.template_name || t("reportDetailTitleFallback")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {report ? (
               <>
-                Vacancy:{" "}
+                {t("reportDetailVacancyLabel")}{" "}
                 <Link
                   className="hover:underline"
                   href={`/recruitment/requisitions/${report.vacancy_id}`}
@@ -135,7 +141,7 @@ export default function ReportDetailPage({
                 </Link>
               </>
             ) : (
-              "Loading details…"
+              t("reportDetailLoadingDetails")
             )}
           </p>
         </div>
@@ -155,7 +161,7 @@ export default function ReportDetailPage({
             onClick={() => void refresh()}
             data-testid="recruitment-report-detail-btn-refresh"
           >
-            <RefreshCw className="size-4" /> Refresh
+            <RefreshCw className="size-4" /> {t("actionRefresh")}
           </Button>
           <Button
             variant="default"
@@ -164,7 +170,7 @@ export default function ReportDetailPage({
             onClick={() => void handleDownload()}
             data-testid="recruitment-report-detail-btn-download"
           >
-            <Download className="size-4" /> Download XLSX
+            <Download className="size-4" /> {t("reportDownloadXlsx")}
           </Button>
         </div>
       </div>
@@ -173,7 +179,7 @@ export default function ReportDetailPage({
         <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
           {report.sections.map((s: ReportSectionCode) => (
             <Badge key={s} variant="secondary">
-              {REPORT_SECTION_LABELS[s] || s}
+              {reportSectionLabel(t, s)}
             </Badge>
           ))}
         </div>
@@ -182,13 +188,13 @@ export default function ReportDetailPage({
       {loading ? (
         <div className="flex items-center justify-center py-16 text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
-          <span className="ml-2">Loading…</span>
+          <span className="ml-2">{t("loading")}</span>
         </div>
       ) : !report ? (
         <div className="rounded-lg border border-dashed p-12 text-center">
           <FileSpreadsheet className="mx-auto mb-3 h-10 w-10 text-muted-foreground opacity-40" />
           <p className="text-sm font-medium text-muted-foreground">
-            Report not found
+            {t("reportNotFound")}
           </p>
         </div>
       ) : report.status !== "completed" ? (
@@ -196,23 +202,25 @@ export default function ReportDetailPage({
           <Loader2 className="mx-auto mb-3 h-10 w-10 animate-spin text-muted-foreground opacity-60" />
           <p className="text-sm font-medium text-muted-foreground">
             {report.status === "failed"
-              ? `Build failed: ${report.error || "unknown"}`
-              : "Report is still being generated. Refresh the page in a minute."}
+              ? t("reportBuildFailed", {
+                  error: report.error || t("reportErrorUnknown"),
+                })
+              : t("reportStillGenerating")}
           </p>
         </div>
       ) : previewError ? (
         <div className="rounded-lg border border-dashed p-8 text-center">
           <p className="text-sm font-medium text-muted-foreground">
-            Failed to show preview: {previewError}
+            {t("reportPreviewFailed", { error: previewError })}
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
-            Download the file to open it locally.
+            {t("reportPreviewFailedHint")}
           </p>
         </div>
       ) : sheets.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center">
           <p className="text-sm font-medium text-muted-foreground">
-            The file contains no data
+            {t("reportNoData")}
           </p>
         </div>
       ) : (
@@ -222,8 +230,7 @@ export default function ReportDetailPage({
         >
           {preview?.truncated && (
             <p className="text-xs text-muted-foreground">
-              Preview is truncated to 200 rows × 50 columns — download the XLSX
-              for the full version.
+              {t("reportPreviewTruncated")}
             </p>
           )}
           <Tabs

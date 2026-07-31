@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
+import { useLocale, useTranslations } from "next-intl";
 import { useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useAuth } from "@/context/auth-context";
 import { useEENavItems } from "@/lib/ee-hooks";
-import { getBrandName, getLogoUrl } from "@/lib/brand";
+import { getBrandName, getLogoUrl, getSidebarLogoHeight } from "@/lib/brand";
 import { AppVersion } from "@/components/app-version";
 import { SidebarTenantSwitcher } from "@/components/tenant-switcher";
 
@@ -16,7 +17,10 @@ const emptySubscribe = () => () => {};
 
 interface NavItem {
   id: string;
-  name: string;
+  /** Key in the `sidebar` message namespace (core items). */
+  labelKey?: string;
+  /** Already-resolved label for items injected by the enterprise overlay. */
+  label?: string;
   href: string;
   icon: React.ReactNode;
   badge?: string;
@@ -25,14 +29,14 @@ interface NavItem {
 }
 
 interface NavSection {
-  label: string;
+  labelKey: string;
   items: string[];
 }
 
 const navigation: NavItem[] = [
   {
     id: "dashboard",
-    name: "Dashboard",
+    labelKey: "dashboard",
     href: "/dashboard",
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
@@ -42,7 +46,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "employees",
-    name: "Employees",
+    labelKey: "employees",
     href: "/employees",
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
@@ -52,7 +56,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "company",
-    name: "Company",
+    labelKey: "company",
     href: "/company",
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
@@ -62,7 +66,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "assessments",
-    name: "Assessments",
+    labelKey: "assessments",
     href: "/assessments",
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
@@ -72,7 +76,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "development",
-    name: "Development",
+    labelKey: "development",
     href: "/development",
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
@@ -82,7 +86,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "exams",
-    name: "Exams",
+    labelKey: "exams",
     href: "/exams",
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
@@ -92,7 +96,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "competences",
-    name: "Competences",
+    labelKey: "competences",
     href: "/competences",
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
@@ -102,7 +106,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "talent-market",
-    name: "Talent Market",
+    labelKey: "talentMarket",
     href: "/talent-market",
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
@@ -112,7 +116,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "recruitment",
-    name: "Recruitment",
+    labelKey: "recruitment",
     href: "/recruitment",
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
@@ -122,7 +126,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "analytics",
-    name: "Analytics",
+    labelKey: "analytics",
     href: "/analytics",
     requireManage: true,
     icon: (
@@ -133,7 +137,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "dictionaries",
-    name: "Dictionaries",
+    labelKey: "dictionaries",
     href: "/dictionaries",
     requireManage: true,
     icon: (
@@ -144,7 +148,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "import",
-    name: "Data Import",
+    labelKey: "dataImport",
     href: "/settings/import",
     requireAdmin: true,
     icon: (
@@ -155,7 +159,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "invitations",
-    name: "Invitations",
+    labelKey: "invitations",
     href: "/settings/invitations",
     requireManage: true,
     icon: (
@@ -166,7 +170,7 @@ const navigation: NavItem[] = [
   },
   {
     id: "ai-settings",
-    name: "AI settings",
+    labelKey: "aiSettings",
     href: "/settings/ai",
     requireAdmin: true,
     icon: (
@@ -178,21 +182,34 @@ const navigation: NavItem[] = [
   },
 ];
 
+const SYSTEM_ROLE_KEYS: Record<string, string> = {
+  admin: "roleAdmin",
+  hr: "roleHr",
+  manager: "roleManager",
+  employee: "roleEmployee",
+};
+
 const sections: NavSection[] = [
-  { label: "Workspace", items: ["dashboard", "employees", "company"] },
-  { label: "Talent", items: ["assessments", "development", "exams", "competences"] },
-  { label: "Discover", items: ["talent-market", "recruitment", "analytics"] },
-  { label: "Admin", items: ["dictionaries", "import", "invitations", "ai-settings", "billing"] },
+  { labelKey: "sectionWorkspace", items: ["dashboard", "employees", "company"] },
+  { labelKey: "sectionTalent", items: ["assessments", "development", "exams", "competences"] },
+  { labelKey: "sectionDiscover", items: ["talent-market", "recruitment", "analytics"] },
+  { labelKey: "sectionAdmin", items: ["dictionaries", "import", "invitations", "ai-settings", "billing"] },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const t = useTranslations("sidebar");
+  const locale = useLocale();
+  const tPlatform = useTranslations("platform");
   const { resolvedTheme } = useTheme();
   const { canManage, isAdmin } = usePermissions();
   const { user } = useAuth();
   const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
 
   const logoSrc = getLogoUrl(mounted && resolvedTheme === "dark" ? "dark" : "light");
+  // White-label logos vary in aspect ratio — an env override replaces the
+  // stock h-7 (28px) with an exact height (validated px/rem only).
+  const logoHeight = getSidebarLogoHeight();
 
   const { items: eeNavItems, credits } = useEENavItems(isAdmin);
 
@@ -201,7 +218,7 @@ export function Sidebar() {
     if (item.href === "/settings/billing") id = "billing";
     return {
       id,
-      name: item.name,
+      label: item.name,
       href: item.href,
       icon: item.icon,
       requireAdmin: item.requireAdmin,
@@ -217,8 +234,11 @@ export function Sidebar() {
     ? `${user.first_name[0] ?? ""}${user.last_name[0] ?? ""}`.toUpperCase()
     : "?";
   const userName = user ? `${user.first_name} ${user.last_name}`.trim() : "";
-  const userRole =
-    user && user.roles.length > 0 ? user.roles[0].replace(/_/g, " ") : "";
+  // System RBAC codes localize via the catalog; tenant-created custom
+  // roles have no stable key and render their code prettified verbatim.
+  const roleCode = user && user.roles.length > 0 ? user.roles[0] : "";
+  const roleKey = SYSTEM_ROLE_KEYS[roleCode];
+  const userRole = roleKey ? t(roleKey) : roleCode.replace(/_/g, " ");
 
   return (
     <aside className="flex h-full w-[232px] flex-col border-r border-sidebar-border bg-sidebar">
@@ -227,7 +247,12 @@ export function Sidebar() {
         className="flex h-14 items-center justify-between border-b border-sidebar-border px-4"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={logoSrc} alt={getBrandName()} className="h-5" />
+        <img
+          src={logoSrc}
+          alt={getBrandName()}
+          className={logoHeight ? undefined : "h-7"}
+          style={logoHeight ? { height: logoHeight } : undefined}
+        />
         <AppVersion className="rounded border border-sidebar-border px-1.5 py-px font-mono text-[10px] text-muted-foreground" />
       </Link>
 
@@ -250,15 +275,17 @@ export function Sidebar() {
             });
           if (visible.length === 0) return null;
           return (
-            <div key={sec.label} className="flex flex-col gap-px">
+            <div key={sec.labelKey} className="flex flex-col gap-px">
               <div className="px-2.5 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {sec.label}
+                {t(sec.labelKey)}
               </div>
               {visible.map((item) => {
                 const isActive =
                   pathname === item.href ||
                   pathname.startsWith(item.href + "/");
-                const slug = item.id || item.name.toLowerCase().replace(/\s+/g, "-");
+                const label = item.labelKey ? t(item.labelKey) : (item.label ?? "");
+                const slug =
+                  item.id || (item.label ?? "").toLowerCase().replace(/\s+/g, "-");
                 return (
                   <Link
                     key={item.href}
@@ -275,7 +302,7 @@ export function Sidebar() {
                       <span className="absolute -left-2.5 top-2 bottom-2 w-0.5 rounded-full bg-accent" />
                     )}
                     {item.icon}
-                    <span className="flex-1">{item.name}</span>
+                    <span className="flex-1">{label}</span>
                     {item.badge && (
                       <span
                         className={cn(
@@ -306,7 +333,7 @@ export function Sidebar() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
           </svg>
-          Platform Admin
+          {tPlatform("title")}
         </Link>
       )}
 
@@ -319,14 +346,14 @@ export function Sidebar() {
           <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
           </svg>
-          <span className="flex-1 truncate text-muted-foreground">Credits</span>
+          <span className="flex-1 truncate text-muted-foreground">{t("credits")}</span>
           <span
             className={cn(
               "font-semibold tabular-nums",
               isLowCredits ? "text-red-600" : "text-foreground",
             )}
           >
-            {credits.total.toLocaleString()}
+            {credits.total.toLocaleString(locale)}
           </span>
         </Link>
       )}

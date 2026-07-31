@@ -42,6 +42,7 @@ async def create(
         db,
         payload,
         remote_ip=_client_ip(request),
+        accept_language=request.headers.get("accept-language"),
     )
     return SignupRequestRead.model_validate(row, from_attributes=True)
 

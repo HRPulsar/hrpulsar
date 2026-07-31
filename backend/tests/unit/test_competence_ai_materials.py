@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from app.modules.ai_settings import service as ai_settings_service
+from app.modules.ai_settings.schemas import AISettingsUpdate
 from app.modules.company.models import Division
 from app.modules.competence import ai_materials
 from app.modules.competence.ai_materials import (
@@ -157,9 +159,7 @@ async def tenant_competence(db: AsyncSession, tenant) -> Competence:
 
 @pytest_asyncio.fixture
 async def basic_level(db: AsyncSession) -> SkillLevel:
-    level = SkillLevel(
-        title="Basic", sort_index=0, i18n_key="basic", tenant_id=None
-    )
+    level = SkillLevel(title="Basic", sort_index=0, i18n_key="basic", tenant_id=None)
     db.add(level)
     await db.commit()
     await db.refresh(level)
@@ -814,6 +814,74 @@ class TestGenerateMaterialsExtendedContext:
         assert isinstance(prompt, str)
         assert "Platform" in prompt
         assert "Pair programming" in prompt
+
+    async def test_language_directive_appended_to_system_prompt(
+        self,
+        monkeypatch,
+        db: AsyncSession,
+        tenant,
+        tenant_competence,
+        basic_level,
+    ) -> None:
+        """HRP-480: content_language reaches the materials generator too."""
+        await ai_settings_service.update(
+            db, tenant.id, AISettingsUpdate(content_language="de")
+        )
+
+        captured: dict[str, object] = {}
+
+        async def fake_generate_json(*args, **kwargs):
+            captured["system"] = kwargs.get("system")
+            return {"materials": []}
+
+        monkeypatch.setattr(
+            ai_materials.llm_client, "generate_json", fake_generate_json
+        )
+
+        await ai_materials.generate_materials(
+            db,
+            tenant_id=tenant.id,
+            competence_id=tenant_competence.id,
+            skill_level_ids=[basic_level.id],
+            specialization_ids=[],
+            refinement=None,
+        )
+        system = captured["system"]
+        assert isinstance(system, str)
+        assert "Generate ALL content in German." in system
+        assert "in English" not in system
+
+    async def test_english_directive_by_default(
+        self,
+        monkeypatch,
+        db: AsyncSession,
+        tenant,
+        tenant_competence,
+        basic_level,
+    ) -> None:
+        """Default settings must still carry an explicit English directive —
+        the hardcoded prompt bullet it replaced is gone (HRP-480)."""
+        captured: dict[str, object] = {}
+
+        async def fake_generate_json(*args, **kwargs):
+            captured["system"] = kwargs.get("system")
+            return {"materials": []}
+
+        monkeypatch.setattr(
+            ai_materials.llm_client, "generate_json", fake_generate_json
+        )
+
+        await ai_materials.generate_materials(
+            db,
+            tenant_id=tenant.id,
+            competence_id=tenant_competence.id,
+            skill_level_ids=[basic_level.id],
+            specialization_ids=[],
+            refinement=None,
+        )
+        system = captured["system"]
+        assert isinstance(system, str)
+        assert "Generate ALL content in English." in system
 
 
 class TestMaterialsContextOptionsEndpoint:

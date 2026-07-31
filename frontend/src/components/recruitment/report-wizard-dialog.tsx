@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,7 @@ import { Loader2, FileSpreadsheet } from "lucide-react";
 import { api } from "@/lib/api";
 import {
   REPORT_SECTION_CODES,
-  REPORT_SECTION_LABELS,
+  reportSectionLabel,
   type ReportExport,
   type ReportGenerateRequest,
   type ReportGenerateResponse,
@@ -50,6 +51,8 @@ export function ReportWizardDialog({
   vacancyId,
   onCreated,
 }: ReportWizardDialogProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [step, setStep] = useState<WizardStep>("configure");
   const [templates, setTemplates] = useState<ReportTemplate[]>([]);
   const [templateId, setTemplateId] = useState<string>("");
@@ -99,7 +102,7 @@ export function ReportWizardDialog({
   }, [open]);
 
   const selectedTemplate = useMemo(
-    () => templates.find((t) => t.id === templateId) || null,
+    () => templates.find((tpl) => tpl.id === templateId) || null,
     [templates, templateId],
   );
 
@@ -111,7 +114,7 @@ export function ReportWizardDialog({
 
   async function handleGenerate() {
     if (sections.length === 0) {
-      toast.error("Select at least one section");
+      toast.error(t("reportTemplateSectionRequired"));
       return;
     }
     setStep("submitting");
@@ -136,7 +139,7 @@ export function ReportWizardDialog({
       onCreated?.(exportRow);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to start report",
+        err instanceof Error ? err.message : t("reportWizardStartFailed"),
       );
       setStep("configure");
     }
@@ -156,9 +159,7 @@ export function ReportWizardDialog({
     // Soft timeout: hand back whatever the latest snapshot is and let
     // the result step explain the state. Reports list keeps polling.
     if (last) return last;
-    throw new Error(
-      "Report is not ready yet. Check status in the Reports tab.",
-    );
+    throw new Error(t("reportWizardNotReady"));
   }
 
   return (
@@ -168,17 +169,14 @@ export function ReportWizardDialog({
         data-testid="recruitment-report-wizard"
       >
         <DialogHeader>
-          <DialogTitle>Generate report</DialogTitle>
-          <DialogDescription>
-            XLSX with aggregated vacancy data. Pick a template or check the
-            sections you need manually.
-          </DialogDescription>
+          <DialogTitle>{t("reportWizardTitle")}</DialogTitle>
+          <DialogDescription>{t("reportWizardDescription")}</DialogDescription>
         </DialogHeader>
 
         {step !== "result" && (
           <div className="space-y-4">
             <div className="space-y-1">
-              <Label htmlFor="rep-tpl">Template</Label>
+              <Label htmlFor="rep-tpl">{t("reportsColTemplate")}</Label>
               <select
                 id="rep-tpl"
                 className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
@@ -187,29 +185,34 @@ export function ReportWizardDialog({
                 onChange={(e) => {
                   const id = e.target.value;
                   setTemplateId(id);
-                  const tpl = templates.find((t) => t.id === id);
+                  const tpl = templates.find((row) => row.id === id);
                   if (tpl && tpl.sections.length > 0) {
                     setSections(tpl.sections);
                   }
                 }}
               >
-                <option value="">No template (custom)</option>
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                    {t.is_default ? " — default" : ""}
+                <option value="">{t("reportWizardNoTemplate")}</option>
+                {templates.map((tpl) => (
+                  <option key={tpl.id} value={tpl.id}>
+                    {tpl.is_default
+                      ? t("reportWizardTemplateOptionDefault", {
+                          name: tpl.name,
+                        })
+                      : tpl.name}
                   </option>
                 ))}
               </select>
               {selectedTemplate && (
                 <p className="text-xs text-muted-foreground">
-                  Template contains {selectedTemplate.sections.length} sections.
+                  {t("reportWizardTemplateSections", {
+                    count: String(selectedTemplate.sections.length),
+                  })}
                 </p>
               )}
             </div>
 
             <div className="space-y-2">
-              <Label>Sections</Label>
+              <Label>{t("reportTemplateSectionsLabel")}</Label>
               <div
                 className="grid grid-cols-1 gap-2 sm:grid-cols-2"
                 data-testid="recruitment-report-sections"
@@ -226,7 +229,7 @@ export function ReportWizardDialog({
                         onCheckedChange={() => toggleSection(code)}
                         data-testid={`recruitment-report-section-${code}`}
                       />
-                      <span>{REPORT_SECTION_LABELS[code]}</span>
+                      <span>{reportSectionLabel(t, code)}</span>
                     </label>
                   );
                 })}
@@ -234,7 +237,7 @@ export function ReportWizardDialog({
             </div>
 
             <div className="space-y-2">
-              <Label>Audience</Label>
+              <Label>{t("reportWizardAudienceLabel")}</Label>
               <div
                 className="grid grid-cols-1 gap-2 sm:grid-cols-2"
                 data-testid="recruitment-report-audience"
@@ -248,10 +251,7 @@ export function ReportWizardDialog({
                     onChange={() => setAudience("recruiter")}
                     data-testid="recruitment-report-audience-recruiter"
                   />
-                  <span>
-                    Recruiter / HR — full process findings on the Detail
-                    sheet.
-                  </span>
+                  <span>{t("reportWizardAudienceRecruiter")}</span>
                 </label>
                 <label className="flex items-start gap-2 rounded-md border border-border bg-card p-2 text-sm">
                   <input
@@ -262,10 +262,7 @@ export function ReportWizardDialog({
                     onChange={() => setAudience("hiring_manager")}
                     data-testid="recruitment-report-audience-hiring-manager"
                   />
-                  <span>
-                    Hiring Manager — process findings are replaced by a
-                    positive reframe for the next interview.
-                  </span>
+                  <span>{t("reportWizardAudienceHiringManager")}</span>
                 </label>
               </div>
             </div>
@@ -275,7 +272,7 @@ export function ReportWizardDialog({
         {step === "submitting" && (
           <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            Generating XLSX, usually 5–15 seconds…
+            {t("reportWizardGeneratingXlsx")}
           </div>
         )}
 
@@ -289,8 +286,10 @@ export function ReportWizardDialog({
               </Badge>
               <span className="text-sm text-muted-foreground">
                 {latest.completed_at
-                  ? `Ready ${formatDateTime(latest.completed_at)}`
-                  : "In progress"}
+                  ? t("reportWizardReadyAt", {
+                      date: formatDateTime(latest.completed_at),
+                    })
+                  : t("reportWizardInProgress")}
               </span>
             </div>
             {latest.status === "completed" && latest.download_url && (
@@ -302,21 +301,21 @@ export function ReportWizardDialog({
                     target="_blank"
                     rel="noreferrer"
                   >
-                    <FileSpreadsheet className="size-4" /> Download XLSX
+                    <FileSpreadsheet className="size-4" />{" "}
+                    {t("reportDownloadXlsx")}
                   </a>
                 }
               />
             )}
             {latest.status === "failed" && (
               <p className="text-sm text-red-600">
-                {latest.error || "Generation failed — please try again."}
+                {latest.error || t("reportWizardGenerationFailed")}
               </p>
             )}
             {(latest.status === "pending" ||
               latest.status === "processing") && (
               <p className="text-sm text-muted-foreground">
-                Generation is still in progress. Close this dialog and follow
-                the status in the Reports tab.
+                {t("reportWizardStillInProgress")}
               </p>
             )}
           </div>
@@ -329,25 +328,25 @@ export function ReportWizardDialog({
                 variant="outline"
                 onClick={() => handleOpenChange(false)}
               >
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button
                 onClick={handleGenerate}
                 data-testid="recruitment-report-btn-submit"
               >
-                Generate
+                {t("vacancyCompetencesGenerate")}
               </Button>
             </>
           )}
           {step === "submitting" && (
             <Button disabled>
               <Loader2 className="size-4 animate-spin" />
-              Generating…
+              {t("reportWizardGenerating")}
             </Button>
           )}
           {step === "result" && (
             <Button onClick={() => handleOpenChange(false)}>
-              Close
+              {t("reportWizardClose")}
             </Button>
           )}
         </DialogFooter>

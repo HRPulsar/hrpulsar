@@ -14,6 +14,7 @@ from fastapi import (
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
@@ -540,12 +541,7 @@ async def enqueue_ai_analysis(
     # mode='full' — must come with an interview_id; reuses the
     # legacy interview-analyze entry point (still billable at 40 cr).
     if data.interview_id is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400,
-            detail="interview_id is required for mode='full'",
-        )
+        raise AppError("interview_id_required_for_full_mode", 400)
     # HRP-269: verify the interview is scoped to the URL's
     # candidate-vacancy. ``enqueue_analyze_or_cached`` enforces
     # tenant_id only, so without this check a recruiter could POST a
@@ -562,16 +558,9 @@ async def enqueue_ai_analysis(
         )
     )
     if interview_row is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Interview not found")
+        raise AppError("interview_not_found", 404)
     if interview_row.candidate_vacancy_id != candidate_vacancy_id:
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400,
-            detail="interview_id does not belong to this candidate-vacancy",
-        )
+        raise AppError("interview_id_not_in_candidate_vacancy", 400)
     res = await service.enqueue_analyze_or_cached(
         db, current_user.tenant_id, data.interview_id
     )

@@ -45,8 +45,8 @@ _SYSTEM_PROMPT = (
     "`material_type` (one of: course, book, article, video, podcast, "
     "documentation, practice), and a `skill_level` (one of the input "
     "skill levels — case-insensitive match to the user-supplied list).\n"
-    "- `format` is a short freeform tag (e.g. \"Online course\", "
-    "\"PDF book\", \"YouTube series\").\n"
+    '- `format` is a short freeform tag (e.g. "Online course", '
+    '"PDF book", "YouTube series").\n'
     "- `link` is the URL when you are confident the resource exists at a "
     "stable URL; otherwise leave it null.\n"
     "- `study_time` is the expected study time IN HOURS, integer.\n"
@@ -54,8 +54,7 @@ _SYSTEM_PROMPT = (
     "competence's behavioural indicators or the listed specializations.\n"
     "- Calibrate difficulty per level: basic = fundamentals; "
     "intermediate = applied / project-based; advanced = "
-    "depth / synthesis / coaching others.\n"
-    "- Generate ALL textual content in English."
+    "depth / synthesis / coaching others."
 )
 
 
@@ -255,8 +254,7 @@ async def list_materials_context_options(
     """
     competence = await db.get(Competence, competence_id)
     if competence is None or (
-        competence.tenant_id is not None
-        and competence.tenant_id != tenant_id
+        competence.tenant_id is not None and competence.tenant_id != tenant_id
     ):
         raise ValueError("Competence not found")
 
@@ -340,8 +338,7 @@ async def list_materials_context_options(
                 Competence.group_id == competence.group_id,
                 Competence.id != competence_id,
                 Competence.is_active.is_(True),
-                (Competence.tenant_id == tenant_id)
-                | Competence.tenant_id.is_(None),
+                (Competence.tenant_id == tenant_id) | Competence.tenant_id.is_(None),
             )
             .order_by(Competence.title)
         )
@@ -360,9 +357,7 @@ async def list_materials_context_options(
             description=competence.description,
             type=competence_type_title,
             group=(
-                MaterialsContextGroup(id=group.id, title=group.title)
-                if group
-                else None
+                MaterialsContextGroup(id=group.id, title=group.title) if group else None
             ),
         ),
         indicators=indicators,
@@ -398,8 +393,7 @@ async def generate_materials(
     """
     competence = await db.get(Competence, competence_id)
     if competence is None or (
-        competence.tenant_id is not None
-        and competence.tenant_id != tenant_id
+        competence.tenant_id is not None and competence.tenant_id != tenant_id
     ):
         raise ValueError("Competence not found")
 
@@ -435,9 +429,7 @@ async def generate_materials(
         )
     )
     indicators_by_level: dict[str, list[str]] = {lvl.title: [] for lvl in levels}
-    indicator_filter = (
-        set(indicator_ids) if indicator_ids is not None else None
-    )
+    indicator_filter = set(indicator_ids) if indicator_ids is not None else None
     for ind, level_title in ind_q.all():
         if level_title not in indicators_by_level:
             continue
@@ -506,8 +498,7 @@ async def generate_materials(
                 # shape doesn't let the operator hand-pick across groups.
                 Competence.group_id == competence.group_id,
                 Competence.is_active.is_(True),
-                (Competence.tenant_id == tenant_id)
-                | Competence.tenant_id.is_(None),
+                (Competence.tenant_id == tenant_id) | Competence.tenant_id.is_(None),
             )
             .order_by(Competence.title)
         )
@@ -544,6 +535,11 @@ async def generate_materials(
     )
 
     tenant_settings = await ai_settings_service.get_or_default(db, tenant_id)
+    # HRP-480: generated content follows the tenant's content_language;
+    # the prompt template itself stays English.
+    system = "\n\n".join(
+        [system, ai_settings_service.build_language_directive(tenant_settings)]
+    )
     # The bundle schema is strict — a single drifted ``material_type`` from
     # the LLM would fail the whole batch. Use ``generate_json`` without a
     # schema and validate items one-by-one so the worker tolerates partial
@@ -553,6 +549,7 @@ async def generate_materials(
         system=system,
         tenant_settings=tenant_settings,
         max_tokens=4096,
+        db=db,
     )
 
     raw_items: list[Any] = []

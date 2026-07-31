@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Layers, MoreHorizontal, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -42,6 +43,8 @@ import { findMatrixSessionForSpec } from "@/lib/active-ai-session-match";
 import { activeSessionRoute } from "@/lib/active-ai-session-route";
 
 export default function SpecializationsPage() {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   const [items, setItems] = useState<SpecializationListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -75,12 +78,12 @@ export default function SpecializationsPage() {
       setItems(data);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to load specializations",
+        err instanceof Error ? err.message : t("toastSpecsLoadFailed"),
       );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -90,7 +93,7 @@ export default function SpecializationsPage() {
         if (!cancelled) setItems(data);
       } catch (err) {
         toast.error(
-          err instanceof Error ? err.message : "Failed to load specializations",
+          err instanceof Error ? err.message : t("toastSpecsLoadFailed"),
         );
       } finally {
         if (!cancelled) setLoading(false);
@@ -99,19 +102,19 @@ export default function SpecializationsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   async function confirmDelete() {
     if (!deleting) return;
     setDeleteBusy(true);
     try {
       await api.delete(`/dictionaries/items/${deleting.id}`);
-      toast.success(`"${deleting.title}" deleted`);
+      toast.success(t("toastSpecDeleted", { title: deleting.title }));
       setDeleting(null);
       setDeleteUsage(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(err instanceof Error ? err.message : t("toastDeleteFailed"));
     } finally {
       setDeleteBusy(false);
     }
@@ -169,7 +172,7 @@ export default function SpecializationsPage() {
       setManagingGradesMeta(grades);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to load grades",
+        err instanceof Error ? err.message : t("toastGradesLoadFailed"),
       );
       setManagingGrades(null);
     }
@@ -189,8 +192,8 @@ export default function SpecializationsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Company</h1>
-        <p className="text-sm text-muted-foreground">Organization structure</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
       </div>
 
       <CompanyTabs />
@@ -198,28 +201,32 @@ export default function SpecializationsPage() {
       <div className="flex items-center justify-between">
         <Input
           data-testid="specializations-search"
-          placeholder="Search specializations..."
+          placeholder={t("searchSpecializationsPlaceholder")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-xs"
         />
         <p className="text-xs text-muted-foreground">
-          Add or rename entries in Settings → Dictionaries → Specializations
+          {t("specializationsDictionaryHint")}
         </p>
       </div>
 
       {loading ? (
         <div className="py-12 text-center text-sm text-muted-foreground">
-          Loading...
+          {tc("loading")}
         </div>
       ) : (
         <Table data-testid="specializations-table">
           <TableHeader>
             <TableRow>
-              <TableHead>Specialization</TableHead>
-              <TableHead className="w-24 text-right">Grades</TableHead>
-              <TableHead className="w-28 text-right">Positions</TableHead>
-              <TableHead className="w-32 text-right">Assigned / plan</TableHead>
+              <TableHead>{t("specialization")}</TableHead>
+              <TableHead className="w-24 text-right">{t("grades")}</TableHead>
+              <TableHead className="w-28 text-right">
+                {t("positions")}
+              </TableHead>
+              <TableHead className="w-32 text-right">
+                {t("colAssignedPlan")}
+              </TableHead>
               {canManage && <TableHead className="w-12" />}
             </TableRow>
           </TableHeader>
@@ -294,7 +301,7 @@ export default function SpecializationsPage() {
                           data-testid={`specializations-row-${spec.id}-btn-manage-grades`}
                         >
                           <Layers className="mr-2 h-4 w-4" />
-                          Manage grades
+                          {t("manageGrades")}
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           variant="destructive"
@@ -302,7 +309,7 @@ export default function SpecializationsPage() {
                           data-testid={`specializations-row-${spec.id}-btn-delete`}
                         >
                           <Trash2 className="mr-2 h-4 w-4" />
-                          Delete
+                          {tc("delete")}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -318,8 +325,8 @@ export default function SpecializationsPage() {
                   className="py-8 text-center text-muted-foreground"
                 >
                   {search
-                    ? "No specializations match your search."
-                    : "No specializations yet. Add them in Settings → Dictionaries → Specializations."}
+                    ? t("specializationsNoMatches")
+                    : t("specializationsEmpty")}
                 </TableCell>
               </TableRow>
             )}
@@ -332,12 +339,12 @@ export default function SpecializationsPage() {
         onOpenChange={(open) => {
           if (!open) setDeleting(null);
         }}
-        title="Delete specialization"
+        title={t("deleteSpecialization")}
         description={
           deleting
             ? deleteHasReferences
-              ? `"${deleting.title}" is still referenced. Detach the items below before deleting.`
-              : `Delete "${deleting.title}"? This cannot be undone.`
+              ? t("deleteSpecReferenced", { title: deleting.title })
+              : t("deleteSpecConfirm", { title: deleting.title })
             : ""
         }
         onConfirm={confirmDelete}

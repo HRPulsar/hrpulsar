@@ -333,14 +333,26 @@ export const AI_ANALYSIS_STAGES: readonly AiAnalysisStage[] = [
   "verdict",
 ] as const;
 
-export const AI_ANALYSIS_STAGE_LABELS: Record<AiAnalysisStage, string> = {
-  pre_check: "Pre-check",
-  competences: "Competences",
-  blind_spots: "Blind spots",
-  process_findings: "Process analysis",
-  citations: "Citations",
-  verdict: "Verdict",
+// HRP-476 (i18n F2): the stage wording lives in the `recruitment` i18n
+// namespace — this map only owns the stage → key relation, the in-flight
+// card resolves it with its own `t` (same shape as `lib/assessment-status.ts`).
+export const AI_ANALYSIS_STAGE_LABEL_KEYS: Record<AiAnalysisStage, string> = {
+  pre_check: "aiStagePreCheck",
+  competences: "aiStageCompetences",
+  blind_spots: "aiStageBlindSpots",
+  process_findings: "aiStageProcessFindings",
+  citations: "aiStageCitations",
+  verdict: "aiStageVerdict",
 };
+
+/** Translated pipeline-stage label with a raw-code fallback. */
+export function aiAnalysisStageLabel(
+  t: (key: string) => string,
+  stage: string,
+): string {
+  const key = AI_ANALYSIS_STAGE_LABEL_KEYS[stage as AiAnalysisStage];
+  return key ? t(key) : stage;
+}
 
 // HRP-271: verbatim resume quote anchored to a parsed-resume section.
 // Mirrors backend ``ResumeExcerptRead`` (schemas.py) — keep the section

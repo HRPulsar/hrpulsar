@@ -36,7 +36,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from app.core.i18n import resolve_locale
 from app.modules.auth.models import Role, User, user_roles
+from app.modules.company.models import Tenant
 from app.modules.notification.models import (
     Notification,
     NotificationPreference,
@@ -154,16 +156,50 @@ async def _async_user_pref_enabled(
     return pref.enabled
 
 
-async def _async_get_template(
-    db: AsyncSession, template_code: str
+def _recipient_locales(
+    recipients: list[User], tenant_default: str | None
+) -> dict[uuid.UUID, str]:
+    """Per-recipient interface locale (i18n F4).
+
+    ``User.language > Tenant.default_locale > deployment default`` —
+    the *recipient's* chain, never the acting user's request locale.
+    """
+    return {
+        user.id: resolve_locale(
+            user_language=user.language, tenant_default=tenant_default
+        )
+        for user in recipients
+    }
+
+
+def _pick_template(
+    by_locale: dict[str, NotificationTemplate], locale: str
 ) -> NotificationTemplate | None:
-    return (
-        await db.execute(
-            select(NotificationTemplate).where(
-                NotificationTemplate.code == template_code
+    """Recipient's locale row, falling back to the en row."""
+    return by_locale.get(locale) or by_locale.get("en")
+
+
+async def _async_get_templates(
+    db: AsyncSession, template_code: str, locales: set[str]
+) -> dict[str, NotificationTemplate]:
+    """Template rows for a code keyed by locale, en always included.
+
+    One query per dispatch: recipients of the same event may resolve to
+    different locales, and each gets the row of its own locale.
+    """
+    rows = (
+        (
+            await db.execute(
+                select(NotificationTemplate).where(
+                    NotificationTemplate.code == template_code,
+                    NotificationTemplate.locale.in_(locales | {"en"}),
+                )
             )
         )
-    ).scalar_one_or_none()
+        .scalars()
+        .all()
+    )
+    return {row.locale: row for row in rows}
 
 
 async def _async_dispatch(
@@ -182,8 +218,10 @@ async def _async_dispatch(
     """
     if not recipients:
         return 0
-    template = await _async_get_template(db, template_code)
-    if template is None:
+    tenant = await db.get(Tenant, tenant_id)
+    locales = _recipient_locales(recipients, tenant.default_locale if tenant else None)
+    by_locale = await _async_get_templates(db, template_code, set(locales.values()))
+    if not by_locale:
         log.warning("notification template not found: %s", template_code)
         return 0
 
@@ -191,6 +229,14 @@ async def _async_dispatch(
 
     written = 0
     for user in recipients:
+        template = _pick_template(by_locale, locales[user.id])
+        if template is None:
+            log.warning(
+                "notification template not found: %s (locale %s)",
+                template_code,
+                locales[user.id],
+            )
+            continue
         try:
             ctx = dict(context)
             ctx.setdefault(
@@ -576,17 +622,6 @@ def notify_sync(
         log.warning("notify_sync: no template mapping for %s", event)
         return 0
 
-    template = (
-        db.execute(
-            select(NotificationTemplate).where(
-                NotificationTemplate.code == template_code
-            )
-        )
-    ).scalar_one_or_none()
-    if template is None:
-        log.warning("notify_sync: template missing: %s", template_code)
-        return 0
-
     ids = _dedupe(recipient_ids or [])
     recipients = _sync_resolve_users(db, tenant_id, ids)
     if not recipients and fallback_admins:
@@ -595,10 +630,37 @@ def notify_sync(
     if not recipients:
         return 0
 
+    # Recipients are resolved before the template lookup: the set of
+    # locales in play decides which template rows to fetch (i18n F4).
+    tenant = db.get(Tenant, tenant_id)
+    locales = _recipient_locales(recipients, tenant.default_locale if tenant else None)
+    rows = (
+        db.execute(
+            select(NotificationTemplate).where(
+                NotificationTemplate.code == template_code,
+                NotificationTemplate.locale.in_(set(locales.values()) | {"en"}),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_locale = {row.locale: row for row in rows}
+    if not by_locale:
+        log.warning("notify_sync: template missing: %s", template_code)
+        return 0
+
     from app.core.email import enqueue_email
 
     written = 0
     for user in recipients:
+        template = _pick_template(by_locale, locales[user.id])
+        if template is None:
+            log.warning(
+                "notify_sync: template missing: %s (locale %s)",
+                template_code,
+                locales[user.id],
+            )
+            continue
         try:
             ctx = dict(context)
             ctx.setdefault(

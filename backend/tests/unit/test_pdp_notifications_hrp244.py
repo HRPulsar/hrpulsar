@@ -165,7 +165,7 @@ def capture_emails(monkeypatch):
     calls: list[dict] = []
 
     def fake_enqueue(to, subject, body, **kwargs):
-        calls.append({"to": to, "subject": subject, "kwargs": kwargs})
+        calls.append({"to": to, "subject": subject, "body": body, "kwargs": kwargs})
 
     monkeypatch.setattr("app.core.email.enqueue_email", fake_enqueue)
     return calls
@@ -229,6 +229,41 @@ class TestHRP244ServiceHooks:
         assert set(templates) == {"pdp.done.employee", "pdp.done.reviewer"}
         assert templates["pdp.done.employee"]["to"] == user.email
         assert templates["pdp.done.reviewer"]["to"] == reviewer.email
+
+    async def test_done_emails_render_in_each_recipient_locale(
+        self, db: AsyncSession, tenant, user, employee, capture_emails, monkeypatch
+    ):
+        # i18n F4 (HRP-478): a two-address event resolves the locale per
+        # recipient. The owner states English explicitly; the reviewer has
+        # no preference and inherits the German tenant default.
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "available_locales", "de,en")
+        monkeypatch.setattr(settings, "default_locale", "en")
+
+        pdp, reviewer = await _pdp_with_reviewer(db, tenant, user, employee)
+        tenant.default_locale = "de"
+        user.language = "en"
+        await db.commit()
+
+        await _drive_to_review(db, tenant, pdp["id"])
+        capture_emails.clear()
+
+        await pdp_service.change_pdp_status(db, tenant.id, pdp["id"], "done")
+
+        by_recipient = {
+            c["to"]: c["body"]
+            for c in capture_emails
+            if c["kwargs"].get("template_code", "").startswith("pdp.done")
+        }
+        assert '<html lang="en">' in by_recipient[user.email], (
+            "User.language must beat the tenant default for the plan "
+            "owner's own email"
+        )
+        assert '<html lang="de">' in by_recipient[reviewer.email], (
+            "A reviewer without a language preference falls back to the "
+            "tenant default"
+        )
 
     async def test_post_launch_cancel_notifies_owner_and_reviewer(
         self, db: AsyncSession, tenant, user, employee, capture_emails

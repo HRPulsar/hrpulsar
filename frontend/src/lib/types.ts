@@ -14,6 +14,10 @@ export interface User {
   tenant_is_demo?: boolean;
   /** ISO timestamp at which the demo tenant + its data are purged. */
   tenant_expires_at?: string | null;
+  /** i18n (F0): personal interface locale; null → tenant/deployment default. */
+  language?: string | null;
+  /** Tenant-default interface locale, echoed by /auth/me. */
+  tenant_default_locale?: string | null;
 }
 
 export interface TokenResponse {
@@ -376,6 +380,9 @@ export interface DictionaryItem {
   type: string;
   title: string;
   description: string | null;
+  // HRP-479: set on origin rows only; render via reference.dictionary.*
+  // with the stored title as fallback (see lib/reference-labels.ts).
+  i18n_key: string | null;
   is_active: boolean;
   sort_index: number;
   tenant_id: string | null;
@@ -531,6 +538,8 @@ export interface AssessmentCompetence {
   competence_title: string;
   skill_level_id: string | null;
   skill_level_title: string | null;
+  // HRP-479: origin levels localize via reference.skillLevel.*.
+  skill_level_i18n_key?: string | null;
 }
 
 export type CriteriaType = "current_positions" | "target_position" | "competences";
@@ -543,14 +552,19 @@ export interface CriteriaUpdate {
   passing_score?: number | null;
 }
 
+// HRP-479: options are dictionary rows; origin ones carry i18n_key and
+// localize via reference.dictionary.* (dictionaryItemLabel).
 export interface SpecializationOption {
   id: string;
   title: string;
+  // Optional: legacy saved values are injected client-side without it.
+  i18n_key?: string | null;
 }
 
 export interface GradeOption {
   id: string;
   title: string;
+  i18n_key?: string | null;
 }
 
 export interface SkillLevel {
@@ -567,8 +581,10 @@ export interface AssessmentGroupDetail extends AssessmentGroup {
   criteria_type: CriteriaType | null;
   specialization_id: string | null;
   specialization_title: string | null;
+  specialization_i18n_key?: string | null;
   grade_id: string | null;
   grade_title: string | null;
+  grade_i18n_key?: string | null;
   passing_score: number | null;
   competences: AssessmentCompetence[];
   scale_id: string | null;
@@ -714,6 +730,9 @@ export interface AnswerScale {
   id: string;
   title: string;
   description: string | null;
+  // HRP-479: 'standard_5point' on the seeded default scale and its
+  // snapshots; null on tenant scales.
+  i18n_key: string | null;
   tenant_id: string | null;
   is_default: boolean;
   options: AnswerOption[];
@@ -790,6 +809,8 @@ export interface AssessmentParticipant {
 export interface PerLevelResult {
   skill_level_id: string;
   skill_level_title: string | null;
+  // HRP-479: origin levels localize via reference.skillLevel.*.
+  skill_level_i18n_key?: string | null;
   sort_index: number;
   percent: number | null;
 }
@@ -805,9 +826,13 @@ export interface AssessmentResult {
 
 // HRP-154: per-competence/skill-level/indicator breakdown returned by
 // GET /assessments/{id}/detailed-results.
+// HRP-479: answer_code / overall_answer_code carry the stable option
+// code next to the denormalized titles so seeded-scale answers localize
+// via reference.scaleOption.* (tenant codes fall back to the title).
 export interface DetailedRoleAnswer {
   role: string;
   answer_title: string | null;
+  answer_code: string | null;
   answer_weight: number | null;
   is_neutral: boolean;
   answers_count: number;
@@ -828,6 +853,7 @@ export interface DetailedQuestion {
   overall_avg_weight: number | null;
   overall_percent: number | null;
   overall_answer_title: string | null;
+  overall_answer_code: string | null;
   // HRP-185 REDO: id of the auto-computed Total's answer option so the
   // calibration Select can pre-fill with what's currently shown.
   overall_answer_option_id: string | null;
@@ -840,6 +866,8 @@ export interface DetailedQuestion {
 export interface DetailedSkillLevel {
   skill_level_id: string | null;
   skill_level_title: string | null;
+  // HRP-479: origin levels localize via reference.skillLevel.*.
+  skill_level_i18n_key?: string | null;
   sort_index: number;
   percent_for_skill_level: number | null;
   all_dont_know: boolean;
@@ -851,11 +879,16 @@ export interface DetailedCompetenceResult {
   competence_title: string;
   competence_type_id: string | null;
   competence_type_title: string | null;
+  // HRP-479: stable keys next to the denormalized titles.
+  competence_type_i18n_key?: string | null;
   required_skill_level_id: string | null;
   required_skill_level_title: string | null;
+  required_skill_level_i18n_key?: string | null;
   percent: number | null;
   level_id: string | null;
   level_title: string | null;
+  // Origin scale levels have system_title NULL — the code labels them.
+  level_code?: string | null;
   all_dont_know: boolean;
   skill_levels: DetailedSkillLevel[];
 }
@@ -879,6 +912,9 @@ export interface AssessmentDetail extends Assessment {
   criteria_type: CriteriaType | null;
   specialization_title: string | null;
   grade_title: string | null;
+  // HRP-479: reference.dictionary.* keys for the criteria header.
+  specialization_i18n_key?: string | null;
+  grade_i18n_key?: string | null;
   recommendation: AssessmentRecommendation | null;
   results: AssessmentResult[];
   overall_percent: number | null;
@@ -1123,6 +1159,44 @@ export interface CreditBalance {
   billing_status: string;
   credits_reset_day: number;
   credit_warning_threshold: number;
+}
+
+// Per-site billing profile (HRP-451) — GET /billing/profile
+
+export interface BillingPackage {
+  id: string;
+  credits: number;
+  label: string;
+  badge?: string | null;
+  price: number;
+}
+
+export interface BillingLegalEntity {
+  name?: string;
+  inn?: string;
+  bank_details?: string;
+  vat_mode?: string;
+  vat_rate?: number;
+}
+
+export interface BillingProfile {
+  currency: string;
+  locale: string;
+  payment_provider: "manual_invoice" | "stripe" | "yookassa" | "none";
+  legal_entity: BillingLegalEntity | null;
+  packages: BillingPackage[];
+}
+
+export interface PurchaseCheckoutResult {
+  provider: string;
+  intent_id?: string;
+  status?: string;
+  package_id?: string;
+  credits?: number;
+  amount?: number;
+  currency?: string;
+  legal_entity?: BillingLegalEntity | null;
+  checkout_url?: string;
 }
 
 export interface CreditTransaction {
@@ -1855,17 +1929,37 @@ export const REPORT_SECTION_CODES: ReportSectionCode[] = [
   "verdict",
 ];
 
-export const REPORT_SECTION_LABELS: Record<ReportSectionCode, string> = {
-  vacancy_summary: "Vacancy summary",
-  competence_profile: "Competence profile",
-  candidates_summary: "Candidates",
-  comparison_grid: "Comparison grid",
-  interview_analysis: "Interview analyses",
-  human_assessments: "Human assessments",
-  process_findings: "Process findings",
-  red_flags: "Red flags",
-  verdict: "Verdict",
+// HRP-476 (i18n F2): the section wording lives in the `recruitment` i18n
+// namespace — this map only owns the code → key relation (same shape as
+// `lib/assessment-status.ts`). Consumers: the reports list, the report
+// detail page, the report-templates settings page, the report wizard and
+// the vacancy Reports tab.
+export const REPORT_SECTION_LABEL_KEYS: Record<ReportSectionCode, string> = {
+  vacancy_summary: "reportSectionVacancySummary",
+  competence_profile: "reportSectionCompetenceProfile",
+  candidates_summary: "reportSectionCandidatesSummary",
+  comparison_grid: "reportSectionComparisonGrid",
+  interview_analysis: "reportSectionInterviewAnalysis",
+  human_assessments: "reportSectionHumanAssessments",
+  process_findings: "reportSectionProcessFindings",
+  red_flags: "reportSectionRedFlags",
+  verdict: "reportSectionVerdict",
 };
+
+/** i18n key for a known report section code, or `null` for anything else. */
+export function reportSectionKey(section: string): string | null {
+  return REPORT_SECTION_LABEL_KEYS[section as ReportSectionCode] ?? null;
+}
+
+/** Translated section label; unknown codes fall back to the raw code, which
+ *  is what the pre-i18n `REPORT_SECTION_LABELS[s] || s` rendered. */
+export function reportSectionLabel(
+  t: (key: string) => string,
+  section: string,
+): string {
+  const key = reportSectionKey(section);
+  return key ? t(key) : section;
+}
 
 export type ReportStatus =
   | "pending"

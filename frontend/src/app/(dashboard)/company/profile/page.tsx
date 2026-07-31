@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,8 @@ interface CompanyProfile {
 }
 
 export default function CompanyProfilePage() {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   const { canAdminister } = usePermissions();
   const [profile, setProfile] = useState<CompanyProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -65,7 +68,7 @@ export default function CompanyProfilePage() {
     description: "",
   });
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const data = await api.get<CompanyProfile>("/settings/company-profile");
       setProfile(data);
@@ -76,15 +79,17 @@ export default function CompanyProfilePage() {
         description: data.description ?? "",
       });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load profile");
+      toast.error(
+        err instanceof Error ? err.message : t("toastProfileLoadFailed"),
+      );
     } finally {
       setLoading(false);
     }
-  }
+  }, [t]);
 
   useEffect(() => {
-    load();
-  }, []);
+    void load();
+  }, [load]);
 
   async function save() {
     setSaving(true);
@@ -100,9 +105,9 @@ export default function CompanyProfilePage() {
         payload,
       );
       setProfile(data);
-      toast.success("Company profile saved");
+      toast.success(t("toastProfileSaved"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("toastSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -110,11 +115,11 @@ export default function CompanyProfilePage() {
 
   async function uploadLogoFile(file: File) {
     if (!file.type.startsWith("image/")) {
-      toast.error("Please select an image file");
+      toast.error(t("errorNotAnImage"));
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      toast.error("Image must be under 5 MB");
+      toast.error(t("errorImageTooLarge"));
       return;
     }
     setLogoBusy(true);
@@ -124,9 +129,9 @@ export default function CompanyProfilePage() {
         file,
       );
       setProfile(data);
-      toast.success("Logo updated");
+      toast.success(t("toastLogoUpdated"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to upload logo");
+      toast.error(err instanceof Error ? err.message : t("toastLogoUploadFailed"));
     } finally {
       setLogoBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -142,7 +147,7 @@ export default function CompanyProfilePage() {
   async function handleLogoFromUrl() {
     const url = logoUrlInput.trim();
     if (!url) {
-      toast.error("Paste an image URL first");
+      toast.error(t("errorPasteImageUrl"));
       return;
     }
     setLogoBusy(true);
@@ -153,9 +158,9 @@ export default function CompanyProfilePage() {
       );
       setProfile(data);
       setLogoUrlInput("");
-      toast.success("Logo updated");
+      toast.success(t("toastLogoUpdated"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to fetch logo");
+      toast.error(err instanceof Error ? err.message : t("toastLogoFetchFailed"));
     } finally {
       setLogoBusy(false);
     }
@@ -187,9 +192,9 @@ export default function CompanyProfilePage() {
         "/settings/company-profile/logo",
       );
       setProfile(data);
-      toast.success("Logo removed");
+      toast.success(t("toastLogoRemoved"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to remove logo");
+      toast.error(err instanceof Error ? err.message : t("toastLogoRemoveFailed"));
     } finally {
       setLogoBusy(false);
     }
@@ -199,11 +204,15 @@ export default function CompanyProfilePage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Company</h1>
-          <p className="text-sm text-muted-foreground">Organization structure</p>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("title")}
+          </h1>
+          <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
         <CompanyTabs />
-        <p className="py-8 text-center text-sm text-muted-foreground">Loading...</p>
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          {tc("loading")}
+        </p>
       </div>
     );
   }
@@ -213,8 +222,8 @@ export default function CompanyProfilePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Company</h1>
-        <p className="text-sm text-muted-foreground">Organization structure</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
       </div>
 
       <CompanyTabs />
@@ -222,10 +231,8 @@ export default function CompanyProfilePage() {
       <div className="mx-auto max-w-2xl space-y-6">
         <Card data-testid="company-profile-card-logo">
           <CardHeader>
-            <CardTitle className="text-base">Logo</CardTitle>
-            <CardDescription>
-              Shown on the public company page and in invitations.
-            </CardDescription>
+            <CardTitle className="text-base">{t("logo")}</CardTitle>
+            <CardDescription>{t("logoDescription")}</CardDescription>
           </CardHeader>
           <CardContent>
             <div
@@ -244,12 +251,14 @@ export default function CompanyProfilePage() {
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={profile.logo_url}
-                    alt="Company logo"
+                    alt={t("companyLogoAlt")}
                     className="h-full w-full object-contain"
                     data-testid="company-profile-logo-preview"
                   />
                 ) : (
-                  <span className="text-xs text-muted-foreground">No logo</span>
+                  <span className="text-xs text-muted-foreground">
+                    {t("noLogo")}
+                  </span>
                 )}
               </div>
               <div className="flex flex-col gap-2">
@@ -270,7 +279,11 @@ export default function CompanyProfilePage() {
                     data-testid="company-profile-btn-upload-logo"
                     onClick={() => fileInputRef.current?.click()}
                   >
-                    {logoBusy ? "Working..." : profile?.logo_url ? "Replace" : "Upload"}
+                    {logoBusy
+                      ? t("working")
+                      : profile?.logo_url
+                        ? t("replace")
+                        : t("upload")}
                   </Button>
                   {profile?.logo_url && (
                     <Button
@@ -281,13 +294,11 @@ export default function CompanyProfilePage() {
                       data-testid="company-profile-btn-remove-logo"
                       onClick={handleLogoRemove}
                     >
-                      Remove
+                      {t("remove")}
                     </Button>
                   )}
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  PNG, JPEG, WebP — up to 5 MB. Drag &amp; drop or paste a URL below.
-                </p>
+                <p className="text-xs text-muted-foreground">{t("logoHint")}</p>
               </div>
             </div>
             <div className="mt-4 flex gap-2">
@@ -307,7 +318,7 @@ export default function CompanyProfilePage() {
                 onClick={handleLogoFromUrl}
                 data-testid="company-profile-btn-logo-from-url"
               >
-                Import URL
+                {t("importUrl")}
               </Button>
             </div>
           </CardContent>
@@ -315,18 +326,18 @@ export default function CompanyProfilePage() {
 
         <Card data-testid="company-profile-card-fields">
           <CardHeader>
-            <CardTitle className="text-base">Profile</CardTitle>
-            <CardDescription>
-              Used by AI generation, the public company page, and team invitations.
-            </CardDescription>
+            <CardTitle className="text-base">{t("profile")}</CardTitle>
+            <CardDescription>{t("profileDescription")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="company-profile-description">Description</Label>
+              <Label htmlFor="company-profile-description">
+                {t("description")}
+              </Label>
               <Textarea
                 id="company-profile-description"
                 rows={4}
-                placeholder="What does your company do? (helps AI pick relevant competences)"
+                placeholder={t("companyDescriptionPlaceholder")}
                 value={form.description}
                 disabled={readOnly}
                 onChange={(e) =>
@@ -338,10 +349,12 @@ export default function CompanyProfilePage() {
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="company-profile-industry">Industry</Label>
+                <Label htmlFor="company-profile-industry">
+                  {t("industry")}
+                </Label>
                 <Input
                   id="company-profile-industry"
-                  placeholder="e.g. Software, Manufacturing"
+                  placeholder={t("industryPlaceholder")}
                   value={form.industry}
                   disabled={readOnly}
                   onChange={(e) => setForm({ ...form, industry: e.target.value })}
@@ -349,7 +362,7 @@ export default function CompanyProfilePage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="company-profile-size">Company size</Label>
+                <Label htmlFor="company-profile-size">{t("companySize")}</Label>
                 <Select
                   value={form.company_size || NO_SIZE}
                   onValueChange={(v) =>
@@ -362,13 +375,15 @@ export default function CompanyProfilePage() {
                     className="w-full"
                     data-testid="company-profile-input-size"
                   >
-                    <SelectValue placeholder="Select size" />
+                    <SelectValue placeholder={t("selectSize")} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={NO_SIZE}>Not specified</SelectItem>
-                    {COMPANY_SIZES.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {s} employees
+                    <SelectItem value={NO_SIZE}>
+                      {t("notSpecified")}
+                    </SelectItem>
+                    {COMPANY_SIZES.map((size) => (
+                      <SelectItem key={size} value={size}>
+                        {t("sizeEmployees", { size })}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -377,7 +392,7 @@ export default function CompanyProfilePage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="company-profile-website">Website</Label>
+              <Label htmlFor="company-profile-website">{t("website")}</Label>
               <Input
                 id="company-profile-website"
                 type="url"
@@ -397,13 +412,13 @@ export default function CompanyProfilePage() {
                   disabled={saving}
                   data-testid="company-profile-btn-save"
                 >
-                  {saving ? "Saving..." : "Save changes"}
+                  {saving ? t("saving") : t("saveChanges")}
                 </Button>
               </div>
             )}
             {readOnly && (
               <p className="text-xs text-muted-foreground">
-                Only admins can edit the company profile.
+                {t("profileAdminOnly")}
               </p>
             )}
           </CardContent>

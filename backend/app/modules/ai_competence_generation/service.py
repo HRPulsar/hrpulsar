@@ -11,11 +11,12 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.ai_competence_generation.models import (
     ACTIVE_STATUSES,
     CompetenceGenerationSession,
@@ -68,15 +69,12 @@ async def _ensure_specializations_exist(db: AsyncSession, tenant_id: uuid.UUID) 
         .limit(1)
     )
     if result.scalar_one_or_none() is None:
-        raise HTTPException(
+        raise AppError(
+            "insufficient_data_no_specializations",
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "error_code": "insufficient_data",
-                "message": (
-                    "At least one active specialization is required before "
-                    "running whole-base generation."
-                ),
-            },
+            detail_extra={},
+            detail_code_key="error_code",
+            detail_code="insufficient_data",
         )
 
 
@@ -85,9 +83,9 @@ async def _ensure_group_accessible(
 ) -> CompetenceGroup:
     group = await db.get(CompetenceGroup, group_id)
     if group is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found")
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
     if group.tenant_id is not None and group.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Group not accessible")
+        raise AppError("compgen_group_not_accessible", status.HTTP_403_FORBIDDEN)
     return group
 
 
@@ -100,7 +98,7 @@ async def _ensure_specialization_visible(
         or spec.type != "specialization"
         or (spec.tenant_id is not None and spec.tenant_id != tenant_id)
     ):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Specialization not found")
+        raise AppError("specialization_not_found", status.HTTP_404_NOT_FOUND)
     return spec
 
 
@@ -117,15 +115,12 @@ async def _ensure_specialization_accessible(
         .limit(1)
     )
     if pairs_q.scalar_one_or_none() is None:
-        raise HTTPException(
+        raise AppError(
+            "insufficient_data_no_grades",
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "error_code": "insufficient_data",
-                "message": (
-                    "Specialization has no grades configured. "
-                    "Add grades before running matrix generation."
-                ),
-            },
+            detail_extra={},
+            detail_code_key="error_code",
+            detail_code="insufficient_data",
         )
     return spec
 
@@ -135,9 +130,9 @@ async def _ensure_competence_accessible(
 ) -> Competence:
     comp = await db.get(Competence, comp_id)
     if comp is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
     if comp.tenant_id is not None and comp.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Competence not accessible")
+        raise AppError("compgen_competence_not_accessible", status.HTTP_403_FORBIDDEN)
     return comp
 
 
@@ -1075,9 +1070,9 @@ async def get_session(
 ) -> CompetenceGenerationSession:
     sess = await db.get(CompetenceGenerationSession, session_id)
     if sess is None or sess.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
+        raise AppError("compgen_session_not_found", status.HTTP_404_NOT_FOUND)
     if sess.user_id != user_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your session")
+        raise AppError("compgen_session_not_yours", status.HTTP_403_FORBIDDEN)
     return sess
 
 
@@ -1096,7 +1091,7 @@ async def get_session_for_view(
     """
     sess = await db.get(CompetenceGenerationSession, session_id)
     if sess is None or sess.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
+        raise AppError("compgen_session_not_found", status.HTTP_404_NOT_FOUND)
     return sess
 
 
@@ -1119,68 +1114,62 @@ async def create_session(
     if payload.scope == "whole_base":
         await _ensure_specializations_exist(db, tenant_id)
         if payload.target_id is not None:
-            raise HTTPException(
+            raise AppError(
+                "compgen_whole_base_no_target_id",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "whole_base does not accept target_id",
             )
         snapshot = await _snapshot_tree(db, tenant_id)
 
     elif payload.scope == "group":
         if payload.target_id is None:
-            raise HTTPException(
+            raise AppError(
+                "compgen_group_scope_requires_target_id",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "group scope requires target_id",
             )
         group = await _ensure_group_accessible(db, tenant_id, payload.target_id)
         snapshot = await _snapshot_group(db, group, tenant_id)
 
     elif payload.scope == "specialization_matrix":
         if payload.target_id is None:
-            raise HTTPException(
+            raise AppError(
+                "compgen_matrix_scope_requires_target_id",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "specialization_matrix scope requires target_id",
             )
         await _ensure_specialization_accessible(db, tenant_id, payload.target_id)
         levels = await _active_skill_levels(db, tenant_id)
         if not levels:
-            raise HTTPException(
+            raise AppError(
+                "insufficient_data_no_skill_levels_matrix",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail={
-                    "error_code": "insufficient_data",
-                    "message": (
-                        "At least one active skill level is required to "
-                        "generate a specialization matrix."
-                    ),
-                },
+                detail_extra={},
+                detail_code_key="error_code",
+                detail_code="insufficient_data",
             )
         snapshot = await _snapshot_specialization(db, tenant_id, payload.target_id)
 
     elif payload.scope == "competence_indicators":
         if payload.target_id is None:
-            raise HTTPException(
+            raise AppError(
+                "compgen_indicators_scope_requires_target_id",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "competence_indicators scope requires target_id",
             )
         comp = await _ensure_competence_accessible(db, tenant_id, payload.target_id)
         if not comp.title:
-            raise HTTPException(
+            raise AppError(
+                "insufficient_data_no_competence_title",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail={
-                    "error_code": "insufficient_data",
-                    "message": "Target competence has no title.",
-                },
+                detail_extra={},
+                detail_code_key="error_code",
+                detail_code="insufficient_data",
             )
         levels = await _active_skill_levels(db, tenant_id)
         if not levels:
-            raise HTTPException(
+            raise AppError(
+                "insufficient_data_no_skill_levels_indicators",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail={
-                    "error_code": "insufficient_data",
-                    "message": (
-                        "At least one active skill level is required to "
-                        "generate indicators."
-                    ),
-                },
+                detail_extra={},
+                detail_code_key="error_code",
+                detail_code="insufficient_data",
             )
         # HRP-102: optional matrix context. We validate visibility up-front
         # so a missing/foreign spec id surfaces as a clean 404 instead of
@@ -1197,7 +1186,7 @@ async def create_session(
         )
 
     else:  # pragma: no cover — Pydantic validates the literal
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unknown scope")
+        raise AppError("compgen_unknown_scope", status.HTTP_422_UNPROCESSABLE_CONTENT)
 
     params_dict = payload.params.model_dump(mode="json")
     if extra_params:
@@ -1230,13 +1219,10 @@ async def create_session(
         # the conflict in a generic "session exists" toast that leaves them
         # stranded with no way to discover where the session actually lives.
         existing = await get_active_session(db, user_id)
-        detail: dict[str, Any] = {
-            "error_code": "active_session_exists",
-            "message": "An active generation session already exists for this user.",
-        }
+        detail_extra: dict[str, Any] = {}
         if existing is not None:
             position_id = (existing.params or {}).get("position_id")
-            detail["session"] = {
+            detail_extra["session"] = {
                 "id": str(existing.id),
                 "scope": existing.scope,
                 "target_id": (
@@ -1245,7 +1231,13 @@ async def create_session(
                 "status": existing.status,
                 "position_id": position_id,
             }
-        raise HTTPException(status.HTTP_409_CONFLICT, detail) from e
+        raise AppError(
+            "compgen_active_session_exists",
+            status.HTTP_409_CONFLICT,
+            detail_extra=detail_extra,
+            detail_code_key="error_code",
+            detail_code="active_session_exists",
+        ) from e
     await db.refresh(sess)
     return sess
 
@@ -1344,9 +1336,10 @@ async def update_selection(
 ) -> CompetenceGenerationSession:
     sess = await get_session(db, session_id, user_id=user_id, tenant_id=tenant_id)
     if sess.status != "ready":
-        raise HTTPException(
+        raise AppError(
+            "compgen_cannot_edit_selection_in_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot edit selection on session in status '{sess.status}'.",
+            state=sess.status,
         )
     # Cascade only over the boolean half of selection_state. _edits is a
     # sidecar dict that lives under `EDITS_KEY` and must round-trip
@@ -1416,9 +1409,10 @@ async def replace_selection(
     """
     sess = await get_session(db, session_id, user_id=user_id, tenant_id=tenant_id)
     if sess.status != "ready":
-        raise HTTPException(
+        raise AppError(
+            "compgen_cannot_edit_selection_in_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot edit selection on session in status '{sess.status}'.",
+            state=sess.status,
         )
 
     parent_of, _ = _walk_payload(sess.payload)
@@ -1539,15 +1533,16 @@ async def refine_session(
     """Spawn a child session whose params include the refinement text."""
     parent = await get_session(db, session_id, user_id=user_id, tenant_id=tenant_id)
     if parent.status != "ready":
-        raise HTTPException(
+        raise AppError(
+            "compgen_cannot_refine_in_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot refine a session in status '{parent.status}'.",
+            state=parent.status,
         )
     refinement_text = _compose_refinement(refine)
     if not refinement_text:
-        raise HTTPException(
+        raise AppError(
+            "compgen_refinement_field_required",
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "At least one refinement field must be provided.",
         )
 
     # Mark parent as applied-by-refinement so the partial unique index
@@ -1602,9 +1597,9 @@ async def refine_session(
         # ux_compgen_one_active_per_user — another active session beat us
         # in (double-click race, or stray active session in a different
         # scope).
-        raise HTTPException(
+        raise AppError(
+            "compgen_active_session_exists",
             status.HTTP_409_CONFLICT,
-            "An active generation session already exists for this user.",
         ) from e
     await db.refresh(child)
     return child
@@ -1627,9 +1622,10 @@ async def regenerate_session(
     """
     parent = await get_session(db, session_id, user_id=user_id, tenant_id=tenant_id)
     if parent.status in ("pending", "running"):
-        raise HTTPException(
+        raise AppError(
+            "compgen_cannot_regenerate_in_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot regenerate a session in status '{parent.status}'.",
+            state=parent.status,
         )
     if parent.status == "ready":
         parent.status = "cancelled"
@@ -1666,9 +1662,9 @@ async def regenerate_session(
         # ux_compgen_one_active_per_user — another active session beat us
         # in (double-click race, or stray active session in a different
         # scope).
-        raise HTTPException(
+        raise AppError(
+            "compgen_active_session_exists",
             status.HTTP_409_CONFLICT,
-            "An active generation session already exists for this user.",
         ) from e
     await db.refresh(child)
     return child
@@ -1741,15 +1737,16 @@ async def apply_session(
     if sess.status == "applied":
         if sess.applied_idempotency_key == idempotency_key and sess.applied_result:
             return sess.applied_result
-        raise HTTPException(
+        raise AppError(
+            "compgen_already_applied_different_key",
             status.HTTP_409_CONFLICT,
-            "Session already applied with a different idempotency_key.",
         )
 
     if sess.status != "ready":
-        raise HTTPException(
+        raise AppError(
+            "compgen_cannot_apply_in_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot apply a session in status '{sess.status}'.",
+            state=sess.status,
         )
 
     payload = sess.payload or {}
@@ -1762,9 +1759,9 @@ async def apply_session(
 
     if sess.scope == "competence_indicators":
         if sess.target_id is None:
-            raise HTTPException(
+            raise AppError(
+                "compgen_indicator_session_no_target",
                 status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "Indicator-scope session has no target competence.",
             )
         await _apply_indicators_only(
             db,
@@ -1778,9 +1775,9 @@ async def apply_session(
         )
     elif sess.scope == "specialization_matrix":
         if sess.target_id is None:
-            raise HTTPException(
+            raise AppError(
+                "compgen_matrix_session_no_target",
                 status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "Matrix session has no target specialization.",
             )
         # HRP-33: when launched from a Position, fold all generated competences
         # under one group named after the position so /competences shows them

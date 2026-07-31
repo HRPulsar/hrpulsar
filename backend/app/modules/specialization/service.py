@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.competence.models import Competence, Indicator, SkillLevel
 from app.modules.dictionary.models import DictionaryItem
 from app.modules.dictionary.service import origin_active_overrides
@@ -43,7 +44,7 @@ async def _get_specialization(
         or item.type != "specialization"
         or (item.tenant_id is not None and item.tenant_id != tenant_id)
     ):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Specialization not found")
+        raise AppError("specialization_not_found", status.HTTP_404_NOT_FOUND)
     return item
 
 
@@ -62,10 +63,7 @@ async def _get_grade_spec_pair(
     )
     pair = result.scalar_one_or_none()
     if pair is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            "Spec×Grade pair not found — create the chain first",
-        )
+        raise AppError("spec_grade_pair_not_found", status.HTTP_404_NOT_FOUND)
     return pair
 
 
@@ -237,6 +235,8 @@ async def get_grades_with_attrs(
             "id": gs.id,
             "grade_id": gs.grade_id,
             "grade_title": gs.grade.title if gs.grade else "",
+            # HRP-479: origin grades localize via reference.dictionary.grade.*.
+            "grade_i18n_key": gs.grade.i18n_key if gs.grade else None,
             "description": gs.description,
             "requirements": gs.requirements,
             "salary_min": gs.salary_min,
@@ -337,24 +337,28 @@ async def list_employees(
     await _get_specialization(db, tenant_id, spec_id)
 
     rows = (
-        await db.execute(
-            select(Employee)
-            .join(Position, Position.id == Employee.position_id)
-            .where(
-                Employee.tenant_id == tenant_id,
-                Position.specialization_id == spec_id,
+        (
+            await db.execute(
+                select(Employee)
+                .join(Position, Position.id == Employee.position_id)
+                .where(
+                    Employee.tenant_id == tenant_id,
+                    Position.specialization_id == spec_id,
+                )
+                .options(
+                    selectinload(Employee.user),
+                    selectinload(Employee.division),
+                    selectinload(Employee.position).options(
+                        selectinload(Position.specialization),
+                        selectinload(Position.grade),
+                    ),
+                )
+                .order_by(Employee.hire_date.desc())
             )
-            .options(
-                selectinload(Employee.user),
-                selectinload(Employee.division),
-                selectinload(Employee.position).options(
-                    selectinload(Position.specialization),
-                    selectinload(Position.grade),
-                ),
-            )
-            .order_by(Employee.hire_date.desc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     employees = list(rows)
 
     alerts_map: dict[uuid.UUID, AlertCode | None] = {}
@@ -373,16 +377,12 @@ async def list_employees(
                 "id": emp.id,
                 "user_id": emp.user_id,
                 "user_name": (
-                    f"{emp.user.first_name} {emp.user.last_name}"
-                    if emp.user
-                    else None
+                    f"{emp.user.first_name} {emp.user.last_name}" if emp.user else None
                 ),
                 "user_email": emp.user.email if emp.user else None,
                 "position_title": pos.title if pos else emp.position_title,
                 "specialization_title": (
-                    pos.specialization.title
-                    if pos and pos.specialization
-                    else None
+                    pos.specialization.title if pos and pos.specialization else None
                 ),
                 "grade_title": pos.grade.title if pos and pos.grade else None,
                 # HRP-175: division_id keeps the Division cell clickable in
@@ -508,9 +508,9 @@ async def _validate_visible_competences_levels(
         )
         valid = {row[0] for row in comps_q.all()}
         if len(valid) != len(competence_ids):
-            raise HTTPException(
+            raise AppError(
+                "spec_competences_not_visible",
                 status.HTTP_400_BAD_REQUEST,
-                "One or more competences are not visible to this tenant",
             )
     if level_ids:
         levels_q = await db.execute(
@@ -521,9 +521,9 @@ async def _validate_visible_competences_levels(
         )
         valid = {row[0] for row in levels_q.all()}
         if len(valid) != len(level_ids):
-            raise HTTPException(
+            raise AppError(
+                "spec_skill_levels_not_visible",
                 status.HTTP_400_BAD_REQUEST,
-                "One or more skill levels are not visible to this tenant",
             )
 
 
@@ -700,10 +700,7 @@ async def _upsert_matrix_pairs(
 
     unknown_grades = set(payload.keys()) - set(pairs_by_grade.keys())
     if unknown_grades:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            "Spec×Grade pair not found — create the chain first",
-        )
+        raise AppError("spec_grade_pair_not_found", status.HTTP_404_NOT_FOUND)
 
     competence_ids: set[uuid.UUID] = set()
     level_ids: set[uuid.UUID] = set()
@@ -757,7 +754,7 @@ async def _get_grade_item(
         or item.type != "grade"
         or (item.tenant_id is not None and item.tenant_id != tenant_id)
     ):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Grade not found")
+        raise AppError("specialization_grade_not_found", status.HTTP_404_NOT_FOUND)
     return item
 
 
@@ -851,10 +848,7 @@ async def reorder_grades(
         gid = entry["grade_id"]
         pair = by_grade.get(gid)
         if pair is None:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND,
-                "Spec×Grade pair not found — create the chain first",
-            )
+            raise AppError("spec_grade_pair_not_found", status.HTTP_404_NOT_FOUND)
         pair.sort_index = entry["sort_index"]
 
     if orders:
@@ -876,18 +870,12 @@ async def patch_grade(
     new_min = updates.get("salary_min", pair.salary_min)
     new_max = updates.get("salary_max", pair.salary_max)
     if new_min is not None and new_max is not None and new_min > new_max:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "salary_min must be less than or equal to salary_max",
-        )
+        raise AppError("salary_min_greater_than_max", status.HTTP_400_BAD_REQUEST)
 
     if "salary_currency" in updates and updates["salary_currency"] is None:
         # `salary_currency` is NOT NULL — refuse explicit clears rather
         # than silently keep the previous value (HRP-57 P2 review feedback).
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "salary_currency cannot be cleared",
-        )
+        raise AppError("salary_currency_not_clearable", status.HTTP_400_BAD_REQUEST)
     for field, value in updates.items():
         setattr(pair, field, value)
 
@@ -915,9 +903,10 @@ async def delete_grade(
     )
     in_use = int(pos_q.scalar_one() or 0)
     if in_use > 0:
-        raise HTTPException(
+        raise AppError(
+            "grade_in_use_by_positions",
             status.HTTP_409_CONFLICT,
-            f"Grade is used by {in_use} position(s). Reassign them first.",
+            count=in_use,
         )
 
     await db.delete(pair)
@@ -948,7 +937,7 @@ async def get_competence_indicators_by_level(
     )
     comp = comp_q.scalar_one_or_none()
     if comp is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
 
     rows_q = await db.execute(
         select(Indicator, SkillLevel)
@@ -969,6 +958,8 @@ async def get_competence_indicators_by_level(
             "weight": ind.weight,
             "skill_level_id": ind.skill_level_id,
             "skill_level_title": lvl.title,
+            # HRP-479: origin levels localize via reference.skillLevel.*.
+            "skill_level_i18n_key": lvl.i18n_key,
             "skill_level_sort_index": lvl.sort_index,
         }
         for ind, lvl in rows_q.all()

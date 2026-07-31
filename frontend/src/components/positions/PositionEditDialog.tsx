@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useLocale, useTranslations } from "next-intl";
 import { AlertTriangle, Check, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -12,6 +13,7 @@ import {
   type FormErrorState,
 } from "@/lib/form-errors";
 import { FieldError, FormErrorBanner } from "@/components/ui/form-error";
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type {
   DictionaryItem,
   Division,
@@ -19,7 +21,7 @@ import type {
   PositionLifecycleStatus,
 } from "@/lib/types";
 import { flattenTree } from "@/lib/utils";
-import { POSITION_LIFECYCLE_LABEL } from "@/components/positions/PositionStatusBadge";
+import { POSITION_LIFECYCLE_LABEL_KEY } from "@/components/positions/PositionStatusBadge";
 import {
   Dialog,
   DialogContent,
@@ -54,6 +56,8 @@ interface SpecializationGrade {
   id: string;
   grade_id: string;
   grade_title: string;
+  // HRP-479: origin grades localize via reference.dictionary.grade.*.
+  grade_i18n_key?: string | null;
   matrix_status: "empty" | "configured";
   competence_count: number;
   salary_min: number | null;
@@ -101,13 +105,25 @@ function toFormState(pos: Position): FormState {
   };
 }
 
-function formatSalary(grade: SpecializationGrade): string | null {
+function formatSalary(
+  grade: SpecializationGrade,
+  t: (key: string, values?: Record<string, string | number>) => string,
+  locale: string,
+): string | null {
   const { salary_min, salary_max, salary_currency } = grade;
-  const fmt = (n: number) => n.toLocaleString("en-US");
+  const fmt = (n: number) => n.toLocaleString(locale);
   if (salary_min != null && salary_max != null)
     return `${fmt(salary_min)} – ${fmt(salary_max)} ${salary_currency}`;
-  if (salary_min != null) return `from ${fmt(salary_min)} ${salary_currency}`;
-  if (salary_max != null) return `up to ${fmt(salary_max)} ${salary_currency}`;
+  if (salary_min != null)
+    return t("salaryFrom", {
+      amount: fmt(salary_min),
+      currency: salary_currency,
+    });
+  if (salary_max != null)
+    return t("salaryUpTo", {
+      amount: fmt(salary_max),
+      currency: salary_currency,
+    });
   return null;
 }
 
@@ -126,6 +142,10 @@ export function PositionEditDialog({
   position,
   onSaved,
 }: PositionEditDialogProps) {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
+  const locale = useLocale();
   const isCreate = !position;
   const [form, setForm] = useState<FormState>(() =>
     position ? toFormState(position) : EMPTY_FORM,
@@ -206,7 +226,7 @@ export function PositionEditDialog({
       } catch (err) {
         if (latestSpecRef.current !== requestedSpec) return;
         toast.error(
-          err instanceof Error ? err.message : "Failed to load grades",
+          err instanceof Error ? err.message : t("toastGradesLoadFailed"),
         );
         setGradesForSpec([]);
       } finally {
@@ -215,7 +235,7 @@ export function PositionEditDialog({
         }
       }
     })();
-  }, [open, form.specialization_id]);
+  }, [open, form.specialization_id, t]);
 
   const flatDivisions = useMemo(() => flattenTree(divisions), [divisions]);
 
@@ -251,7 +271,7 @@ export function PositionEditDialog({
   async function createSpecialization() {
     const title = specAddTitle.trim();
     if (!title) {
-      toast.error("Enter a specialization name");
+      toast.error(t("errorEnterSpecializationName"));
       return;
     }
     setSpecAddBusy(true);
@@ -264,10 +284,10 @@ export function PositionEditDialog({
       setSpecialization(created.id);
       setSpecAddOpen(false);
       setSpecAddTitle("");
-      toast.success("Specialization added");
+      toast.success(t("toastSpecializationAdded"));
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to add specialization",
+        err instanceof Error ? err.message : t("toastSpecializationAddFailed"),
       );
     } finally {
       setSpecAddBusy(false);
@@ -277,11 +297,11 @@ export function PositionEditDialog({
   async function createGrade() {
     const title = gradeAddTitle.trim();
     if (!title) {
-      toast.error("Enter a grade name");
+      toast.error(t("errorEnterGradeName"));
       return;
     }
     if (!form.specialization_id) {
-      toast.error("Pick a specialization first");
+      toast.error(t("pickSpecializationFirst"));
       return;
     }
     setGradeAddBusy(true);
@@ -312,9 +332,9 @@ export function PositionEditDialog({
       setForm((prev) => ({ ...prev, grade_id: gradeItem.id }));
       setGradeAddOpen(false);
       setGradeAddTitle("");
-      toast.success("Grade added");
+      toast.success(t("toastGradeAdded"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add grade");
+      toast.error(err instanceof Error ? err.message : t("toastGradeAddFailed"));
     } finally {
       setGradeAddBusy(false);
     }
@@ -342,12 +362,14 @@ export function PositionEditDialog({
       : null;
 
   const overLimit = form.description.length > DESCRIPTION_LIMIT;
-  const salaryPreview = selectedGradeRow ? formatSalary(selectedGradeRow) : null;
+  const salaryPreview = selectedGradeRow
+    ? formatSalary(selectedGradeRow, t, locale)
+    : null;
 
   async function handleSave() {
     if (!form.title.trim()) return;
     if (overLimit) {
-      toast.error(`Description must be ${DESCRIPTION_LIMIT} characters or less`);
+      toast.error(t("errorDescriptionTooLong", { limit: DESCRIPTION_LIMIT }));
       return;
     }
     setSaving(true);
@@ -364,10 +386,10 @@ export function PositionEditDialog({
       };
       if (position) {
         await api.put(`/positions/${position.id}`, payload);
-        toast.success("Position updated");
+        toast.success(t("toastPositionUpdated"));
       } else {
         await api.post("/positions", payload);
-        toast.success("Position created");
+        toast.success(t("toastPositionCreated"));
       }
       onOpenChange(false);
       onSaved();
@@ -379,8 +401,8 @@ export function PositionEditDialog({
   }
 
   const gradeDisabled = !form.specialization_id;
-  const dialogTitle = isCreate ? "New Position" : "Edit Position";
-  const saveLabel = isCreate ? "Create" : "Save";
+  const dialogTitle = isCreate ? t("newPosition") : t("editPosition");
+  const saveLabel = isCreate ? t("create") : t("save");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -400,7 +422,7 @@ export function PositionEditDialog({
 
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label>Specialization</Label>
+            <Label>{t("specialization")}</Label>
             <Select
               value={form.specialization_id}
               onValueChange={setSpecialization}
@@ -409,15 +431,15 @@ export function PositionEditDialog({
                 className="w-full"
                 data-testid="position-edit-select-specialization"
               >
-                <SelectValue placeholder="Pick a specialization">
-                  {selectedSpec ? selectedSpec.title : undefined}
+                <SelectValue placeholder={t("pickSpecialization")}>
+                  {selectedSpec ? dictionaryItemLabel(tRef, selectedSpec) : undefined}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value="">{t("none")}</SelectItem>
                 {specializations.map((s) => (
                   <SelectItem key={s.id} value={s.id}>
-                    {s.title}
+                    {dictionaryItemLabel(tRef, s)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -435,7 +457,7 @@ export function PositionEditDialog({
                       setSpecAddTitle("");
                     }
                   }}
-                  placeholder="New specialization title"
+                  placeholder={t("newSpecializationPlaceholder")}
                   disabled={specAddBusy}
                   data-testid="position-edit-input-new-specialization"
                 />
@@ -445,7 +467,7 @@ export function PositionEditDialog({
                   onClick={createSpecialization}
                   disabled={specAddBusy || !specAddTitle.trim()}
                   data-testid="position-edit-btn-save-new-specialization"
-                  aria-label="Save specialization"
+                  aria-label={t("saveSpecialization")}
                 >
                   <Check className="h-4 w-4" />
                 </Button>
@@ -458,7 +480,7 @@ export function PositionEditDialog({
                     setSpecAddTitle("");
                   }}
                   disabled={specAddBusy}
-                  aria-label="Cancel"
+                  aria-label={tc("cancel")}
                 >
                   <X className="h-4 w-4" />
                 </Button>
@@ -473,13 +495,13 @@ export function PositionEditDialog({
                 data-testid="position-edit-btn-add-specialization"
               >
                 <Plus className="mr-1 h-3.5 w-3.5" />
-                Add new specialization
+                {t("addNewSpecialization")}
               </Button>
             )}
           </div>
 
           <div className="space-y-2">
-            <Label>Grade</Label>
+            <Label>{t("grade")}</Label>
             <Select
               value={form.grade_id}
               onValueChange={(val) =>
@@ -494,23 +516,33 @@ export function PositionEditDialog({
                 <SelectValue
                   placeholder={
                     gradeDisabled
-                      ? "Pick a specialization first"
+                      ? t("pickSpecializationFirst")
                       : gradesLoading
-                        ? "Loading…"
+                        ? t("loadingEllipsis")
                         : gradesForSpec.length === 0
-                          ? "No grades configured"
-                          : "Pick a grade"
+                          ? t("noGradesConfigured")
+                          : t("pickGradePlaceholder")
                   }
                 >
-                  {selectedGradeRow ? selectedGradeRow.grade_title : undefined}
+                  {selectedGradeRow
+                    ? dictionaryItemLabel(tRef, {
+                        type: "grade",
+                        title: selectedGradeRow.grade_title,
+                        i18n_key: selectedGradeRow.grade_i18n_key,
+                      })
+                    : undefined}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value="">{t("none")}</SelectItem>
                 {gradesForSpec.map((g) => (
                   <SelectItem key={g.grade_id} value={g.grade_id}>
-                    {g.grade_title}
-                    {g.matrix_status === "empty" ? " · matrix empty" : ""}
+                    {dictionaryItemLabel(tRef, {
+                      type: "grade",
+                      title: g.grade_title,
+                      i18n_key: g.grade_i18n_key,
+                    })}
+                    {g.matrix_status === "empty" ? t("matrixEmptySuffix") : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -522,14 +554,16 @@ export function PositionEditDialog({
                 data-testid="position-edit-grades-empty"
                 className="text-xs text-muted-foreground"
               >
-                This specialization has no grades —{" "}
-                <Link
-                  href={`/company/specializations/${form.specialization_id}`}
-                  className="underline underline-offset-2"
-                >
-                  configure grades
-                </Link>
-                .
+                {t.rich("specHasNoGrades", {
+                  link: (chunks) => (
+                    <Link
+                      href={`/company/specializations/${form.specialization_id}`}
+                      className="underline underline-offset-2"
+                    >
+                      {chunks}
+                    </Link>
+                  ),
+                })}
               </p>
             ) : null}
             {gradeAddOpen ? (
@@ -545,7 +579,7 @@ export function PositionEditDialog({
                       setGradeAddTitle("");
                     }
                   }}
-                  placeholder="New grade title"
+                  placeholder={t("newGradePlaceholder")}
                   disabled={gradeAddBusy}
                   data-testid="position-edit-input-new-grade"
                 />
@@ -555,7 +589,7 @@ export function PositionEditDialog({
                   onClick={createGrade}
                   disabled={gradeAddBusy || !gradeAddTitle.trim()}
                   data-testid="position-edit-btn-save-new-grade"
-                  aria-label="Save grade"
+                  aria-label={t("saveGrade")}
                 >
                   <Check className="h-4 w-4" />
                 </Button>
@@ -568,7 +602,7 @@ export function PositionEditDialog({
                     setGradeAddTitle("");
                   }}
                   disabled={gradeAddBusy}
-                  aria-label="Cancel"
+                  aria-label={tc("cancel")}
                 >
                   <X className="h-4 w-4" />
                 </Button>
@@ -584,7 +618,7 @@ export function PositionEditDialog({
                   data-testid="position-edit-btn-add-grade"
                 >
                   <Plus className="mr-1 h-3.5 w-3.5" />
-                  Add new grade
+                  {t("addNewGrade")}
                 </Button>
               )
             )}
@@ -597,11 +631,12 @@ export function PositionEditDialog({
                 className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs dark:border-emerald-900 dark:bg-emerald-950"
               >
                 <span className="font-medium text-emerald-900 dark:text-emerald-200">
-                  ✓ Matrix configured
+                  {t("matrixConfiguredCheck")}
                 </span>{" "}
                 <span className="text-emerald-800 dark:text-emerald-300">
-                  · {selectedGradeRow.competence_count} competence
-                  {selectedGradeRow.competence_count === 1 ? "" : "s"}
+                  {t("matrixCompetenceCountSuffix", {
+                    count: selectedGradeRow.competence_count,
+                  })}
                 </span>
                 {salaryPreview ? (
                   <span className="text-emerald-800 dark:text-emerald-300">
@@ -616,10 +651,10 @@ export function PositionEditDialog({
                 className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs dark:border-amber-800 dark:bg-amber-950"
               >
                 <p className="font-medium text-amber-900 dark:text-amber-200">
-                  ⚠ Matrix not configured
+                  {t("matrixNotConfiguredWarn")}
                 </p>
                 <p className="mt-1 text-amber-800 dark:text-amber-300">
-                  Without a matrix, assessments and PDPs cannot run.
+                  {t("matrixMissingShortHint")}
                 </p>
                 {matrixDeepLink ? (
                   <Link
@@ -627,7 +662,7 @@ export function PositionEditDialog({
                     data-testid="position-edit-matrix-configure"
                     className="mt-1 inline-block font-medium text-amber-900 underline underline-offset-2 dark:text-amber-200"
                   >
-                    Configure matrix →
+                    {t("configureMatrixLink")}
                   </Link>
                 ) : null}
               </div>
@@ -641,19 +676,19 @@ export function PositionEditDialog({
               data-testid="position-edit-salary-preview"
               className="text-xs text-muted-foreground"
             >
-              Salary inherits from this profile: {salaryPreview}
+              {t("salaryInheritsPreview", { salary: salaryPreview })}
             </div>
           ) : null}
 
           <div className="space-y-2">
-            <Label>Title *</Label>
+            <Label>{t("titleRequired")}</Label>
             <Input
               data-testid="position-edit-input-title"
               value={form.title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder={
                 isCreate
-                  ? "Auto-filled from Specialization + Grade"
+                  ? t("titleAutoFilledPlaceholder")
                   : undefined
               }
             />
@@ -664,7 +699,7 @@ export function PositionEditDialog({
           </div>
 
           <div className="space-y-2">
-            <Label>Division</Label>
+            <Label>{t("division")}</Label>
             <Select
               value={form.division_id}
               onValueChange={(val) =>
@@ -675,7 +710,7 @@ export function PositionEditDialog({
                 className="w-full"
                 data-testid="position-edit-select-division"
               >
-                <SelectValue placeholder="None">
+                <SelectValue placeholder={t("none")}>
                   {(() => {
                     if (!form.division_id) return undefined;
                     const d = flatDivisions.find(
@@ -686,7 +721,7 @@ export function PositionEditDialog({
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value="">{t("none")}</SelectItem>
                 {flatDivisions.map((d) => (
                   <SelectItem key={d.id} value={d.id}>
                     {"—".repeat(d.depth)} {d.name}
@@ -697,7 +732,7 @@ export function PositionEditDialog({
           </div>
 
           <div className="space-y-2">
-            <Label>Headcount</Label>
+            <Label>{t("headcount")}</Label>
             <Input
               data-testid="position-edit-input-headcount"
               type="number"
@@ -706,7 +741,7 @@ export function PositionEditDialog({
               onChange={(e) =>
                 setForm((prev) => ({ ...prev, headcount: e.target.value }))
               }
-              placeholder="No limit"
+              placeholder={t("noLimit")}
             />
             <FieldError
               message={saveError.fields.headcount}
@@ -715,7 +750,7 @@ export function PositionEditDialog({
           </div>
 
           <div className="space-y-2">
-            <Label>Lifecycle status</Label>
+            <Label>{t("lifecycleStatus")}</Label>
             <Select
               value={form.lifecycle_status}
               onValueChange={(val) =>
@@ -730,13 +765,13 @@ export function PositionEditDialog({
                 data-testid="position-edit-select-status"
               >
                 <SelectValue>
-                  {POSITION_LIFECYCLE_LABEL[form.lifecycle_status]}
+                  {t(POSITION_LIFECYCLE_LABEL_KEY[form.lifecycle_status])}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {LIFECYCLE_OPTIONS.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {POSITION_LIFECYCLE_LABEL[s]}
+                {LIFECYCLE_OPTIONS.map((status) => (
+                  <SelectItem key={status} value={status}>
+                    {t(POSITION_LIFECYCLE_LABEL_KEY[status])}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -744,7 +779,7 @@ export function PositionEditDialog({
           </div>
 
           <div className="space-y-2">
-            <Label>Description override</Label>
+            <Label>{t("descriptionOverride")}</Label>
             <Textarea
               data-testid="position-edit-input-description"
               value={form.description}
@@ -752,7 +787,7 @@ export function PositionEditDialog({
                 setForm((prev) => ({ ...prev, description: e.target.value }))
               }
               rows={3}
-              placeholder="Free-text notes, does not affect the matrix"
+              placeholder={t("descriptionOverridePlaceholder")}
             />
             <p
               data-testid="position-edit-description-counter"
@@ -772,13 +807,12 @@ export function PositionEditDialog({
               <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-700 dark:text-amber-300" />
               <div className="text-amber-900 dark:text-amber-200">
                 <p className="font-medium">
-                  This position has {position.employee_count} employee
-                  {position.employee_count === 1 ? "" : "s"}.
+                  {t("employeeImpactCount", {
+                    count: position.employee_count,
+                  })}
                 </p>
                 <p className="mt-1 text-amber-800 dark:text-amber-300">
-                  Changing the profile updates their requirements. Existing
-                  PDPs and assessments keep the previous matrix; new ones use
-                  the new one.
+                  {t("employeeImpactHint")}
                 </p>
               </div>
             </div>
@@ -791,14 +825,14 @@ export function PositionEditDialog({
             onClick={() => onOpenChange(false)}
             disabled={saving}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             data-testid="position-edit-btn-save"
             onClick={handleSave}
             disabled={saving || !form.title.trim() || overLimit}
           >
-            {saving ? "Saving…" : saveLabel}
+            {saving ? t("savingEllipsis") : saveLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

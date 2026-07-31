@@ -26,10 +26,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.models import Person
 from app.modules.company.models import Tenant
 from app.modules.recruitment.models import (
@@ -82,7 +83,7 @@ async def _get_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> Tenant:
         await db.execute(select(Tenant).where(Tenant.id == tenant_id))
     ).scalar_one_or_none()
     if tenant is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found")
+        raise AppError("tenant_not_found", status.HTTP_404_NOT_FOUND)
     return tenant
 
 
@@ -200,10 +201,7 @@ async def seed_demo(
     """Insert demo fixtures so the dashboard has something to render."""
     tenant = await _get_tenant(db, tenant_id)
     if await _has_demo_data(db, tenant_id):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Demo data is already seeded for this tenant",
-        )
+        raise AppError("demo_data_already_seeded", status.HTTP_409_CONFLICT)
 
     now = datetime.now(timezone.utc)
     suffix = secrets.token_hex(3)

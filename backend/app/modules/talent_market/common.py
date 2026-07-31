@@ -9,11 +9,12 @@ canonical functions.
 import logging
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.auth.models import User
 from app.modules.employee.models import Employee
 from app.modules.talent_market.models import (
@@ -32,9 +33,10 @@ TERMINAL_STATUSES = frozenset({"completed", "cancelled", "closed"})
 def assert_card_not_terminal(card: TalentCard) -> None:
     """HRP-291: reject any mutation on a Completed / Cancelled card."""
     if card.status in TERMINAL_STATUSES:
-        raise HTTPException(
+        raise AppError(
+            "tm_card_terminal_no_changes",
             status.HTTP_409_CONFLICT,
-            f"Card is {card.status} — no further changes are allowed.",
+            state=card.status,
         )
 
 
@@ -91,10 +93,27 @@ async def _dispatch_lifecycle_emails(
         render_talent_market_not_matched_email,
         render_talent_market_removed_candidate_email,
     )
+    from app.core.i18n import resolve_locale
+    from app.modules.company.models import Tenant
 
     title = card.title
     card_id = str(card.id)
     tenant_id_str = str(card.tenant_id) if card.tenant_id else None
+
+    # i18n F4: every letter below is rendered in the locale of *its*
+    # recipient (User.language > Tenant.default_locale > deployment
+    # default). The tenant fallback is the same for the whole batch, so
+    # it is fetched once per dispatch instead of once per recipient.
+    tenant_default: str | None = None
+    if card.tenant_id is not None:
+        tenant = await db.get(Tenant, card.tenant_id)
+        tenant_default = tenant.default_locale if tenant is not None else None
+
+    def _locale_for(recipient: User | None) -> str:
+        return resolve_locale(
+            user_language=recipient.language if recipient is not None else None,
+            tenant_default=tenant_default,
+        )
 
     candidates = list(
         (
@@ -183,12 +202,16 @@ async def _dispatch_lifecycle_emails(
             if cand.status == "matched":
                 await _send(
                     usr.email,
-                    render_talent_market_matched_email(title, card_id),
+                    render_talent_market_matched_email(
+                        title, card_id, locale=_locale_for(usr)
+                    ),
                 )
             elif cand.status == "not_matched":
                 await _send(
                     usr.email,
-                    render_talent_market_not_matched_email(title, card_id),
+                    render_talent_market_not_matched_email(
+                        title, card_id, locale=_locale_for(usr)
+                    ),
                 )
 
     elif event == "appointed":
@@ -201,7 +224,9 @@ async def _dispatch_lifecycle_emails(
             if usr is not None:
                 await _send(
                     usr.email,
-                    render_talent_market_appointed_self_email(title, card_id),
+                    render_talent_market_appointed_self_email(
+                        title, card_id, locale=_locale_for(usr)
+                    ),
                 )
             mgr_user = await _resolve_manager_user(emp)
             # HRP-211 redo (2026-06-09): when the employee manages their
@@ -212,7 +237,7 @@ async def _dispatch_lifecycle_emails(
                 await _send(
                     mgr_user.email,
                     render_talent_market_appointed_manager_email(
-                        title, emp_name, card_id
+                        title, emp_name, card_id, locale=_locale_for(mgr_user)
                     ),
                 )
 
@@ -225,7 +250,9 @@ async def _dispatch_lifecycle_emails(
                 continue
             await _send(
                 usr.email,
-                render_talent_market_completed_email(title, card_id),
+                render_talent_market_completed_email(
+                    title, card_id, locale=_locale_for(usr)
+                ),
             )
 
     elif event == "cancelled_from_draft":
@@ -237,7 +264,9 @@ async def _dispatch_lifecycle_emails(
             if usr is not None:
                 await _send(
                     usr.email,
-                    render_talent_market_cancelled_self_email(title, card_id),
+                    render_talent_market_cancelled_self_email(
+                        title, card_id, locale=_locale_for(usr)
+                    ),
                 )
             mgr_user = await _resolve_manager_user(emp)
             # HRP-211 redo (2026-06-09): self-managed employees get only
@@ -248,7 +277,7 @@ async def _dispatch_lifecycle_emails(
                 await _send(
                     mgr_user.email,
                     render_talent_market_cancelled_manager_email(
-                        title, emp_name, card_id
+                        title, emp_name, card_id, locale=_locale_for(mgr_user)
                     ),
                 )
 
@@ -263,7 +292,9 @@ async def _dispatch_lifecycle_emails(
                 continue
             await _send(
                 usr.email,
-                render_talent_market_removed_candidate_email(title, card_id),
+                render_talent_market_removed_candidate_email(
+                    title, card_id, locale=_locale_for(usr)
+                ),
             )
 
     elif event == "cancelled_from_published":
@@ -279,7 +310,9 @@ async def _dispatch_lifecycle_emails(
             if usr is not None:
                 await _send(
                     usr.email,
-                    render_talent_market_cancelled_self_email(title, card_id),
+                    render_talent_market_cancelled_self_email(
+                        title, card_id, locale=_locale_for(usr)
+                    ),
                 )
             mgr_user = await _resolve_manager_user(emp)
             if mgr_user is None or mgr_user.id is None:
@@ -297,13 +330,14 @@ async def _dispatch_lifecycle_emails(
             mgr_user = await db.get(User, mgr_id)
             if mgr_user is None:
                 continue
+            mgr_locale = _locale_for(mgr_user)
             if len(names) == 1:
                 rendered = render_talent_market_cancelled_manager_email(
-                    title, names[0], card_id
+                    title, names[0], card_id, locale=mgr_locale
                 )
             else:
                 rendered = render_talent_market_cancelled_manager_plural_email(
-                    title, names, card_id
+                    title, names, card_id, locale=mgr_locale
                 )
             await _send(mgr_user.email, rendered)
         # Bucket B — matched / not_matched: a "Cancelled" notice.
@@ -315,7 +349,9 @@ async def _dispatch_lifecycle_emails(
                 continue
             await _send(
                 usr.email,
-                render_talent_market_cancelled_generic_email(title, card_id),
+                render_talent_market_cancelled_generic_email(
+                    title, card_id, locale=_locale_for(usr)
+                ),
             )
 
 

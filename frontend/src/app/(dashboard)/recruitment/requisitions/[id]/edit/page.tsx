@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Vacancy } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,8 @@ const SKELETON_MIN_MS = 600;
 
 export default function EditVacancyPage() {
   const { id } = useParams<{ id: string }>();
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const router = useRouter();
   const [form, setForm] = useState<VacancyFormValues>(emptyVacancyForm);
   const initialRef = useRef<VacancyFormValues>(emptyVacancyForm);
@@ -41,13 +44,13 @@ export default function EditVacancyPage() {
       initialRef.current = values;
       setForm(values);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load vacancy");
+      toast.error(err instanceof Error ? err.message : t("vacancyLoadFailed"));
     } finally {
       const elapsed = performance.now() - start;
       const remain = Math.max(0, SKELETON_MIN_MS - elapsed);
       window.setTimeout(() => setLoading(false), remain);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     void loadVacancy();
@@ -69,7 +72,7 @@ export default function EditVacancyPage() {
 
   async function handleSave() {
     if (!form.title.trim()) {
-      toast.error("Title is required");
+      toast.error(t("vacancyTitleRequired"));
       return;
     }
     setSaving(true);
@@ -80,14 +83,13 @@ export default function EditVacancyPage() {
       await api.patch<Vacancy>(`/recruitment/vacancies/${id}`, payload, {
         headers,
       });
-      toast.success("Vacancy updated");
+      toast.success(t("vacancyToastUpdated"));
       router.push(`/recruitment/requisitions/${id}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to update";
+      const message =
+        err instanceof Error ? err.message : t("vacancyUpdateFailed");
       if (err && typeof err === "object" && "status" in err && err.status === 412) {
-        toast.error(
-          "This vacancy was modified by someone else. Reload and try again.",
-        );
+        toast.error(t("vacancyConflictReload"));
       } else {
         toast.error(message);
       }
@@ -97,7 +99,7 @@ export default function EditVacancyPage() {
   }
 
   function handleCancel() {
-    if (isDirty && !window.confirm("You have unsaved changes. Leave anyway?")) {
+    if (isDirty && !window.confirm(t("vacancyLeaveUnsavedConfirm"))) {
       return;
     }
     router.push(`/recruitment/requisitions/${id}`);
@@ -106,7 +108,7 @@ export default function EditVacancyPage() {
   if (loading) {
     return (
       <div className="space-y-4 py-12 text-center text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -116,16 +118,16 @@ export default function EditVacancyPage() {
       <div className="space-y-6">
         <RecruitmentBreadcrumbs
           segments={[
-            { label: "Vacancies", href: "/recruitment/requisitions" },
+            { label: t("vacanciesTitle"), href: "/recruitment/requisitions" },
             { label: vacancy.title, href: `/recruitment/requisitions/${id}` },
-            { label: "Edit" },
+            { label: t("actionEdit") },
           ]}
         />
         <div
           data-testid="vacancy-archived-banner"
           className={`rounded-md border p-4 text-sm ${ALERT_TONE.yellow}`}
         >
-          This vacancy is archived. Restore to edit.
+          {t("vacancyArchivedBanner")}
         </div>
         <VacancyForm
           values={form}
@@ -134,7 +136,7 @@ export default function EditVacancyPage() {
           testId="vacancy-edit-form"
           footer={
             <Button variant="outline" onClick={handleCancel}>
-              Back
+              {t("actionBack")}
             </Button>
           }
         />
@@ -146,15 +148,20 @@ export default function EditVacancyPage() {
     <div className="space-y-6">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Vacancies", href: "/recruitment/requisitions" },
-          { label: vacancy?.title ?? "Edit", href: `/recruitment/requisitions/${id}` },
-          { label: "Edit" },
+          { label: t("vacanciesTitle"), href: "/recruitment/requisitions" },
+          {
+            label: vacancy?.title ?? t("actionEdit"),
+            href: `/recruitment/requisitions/${id}`,
+          },
+          { label: t("actionEdit") },
         ]}
       />
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Edit Vacancy</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {t("vacancyEditTitle")}
+        </h1>
         <p className="text-sm text-muted-foreground">
-          Update vacancy details. Profile generation lives on the Profile tab.
+          {t("vacancyEditDescription")}
         </p>
       </div>
 
@@ -171,14 +178,14 @@ export default function EditVacancyPage() {
               onClick={handleCancel}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               data-testid="vacancy-edit-form-save"
               onClick={handleSave}
               disabled={saving || !isDirty}
             >
-              {saving ? "Saving..." : "Save changes"}
+              {saving ? t("actionSaving") : t("actionSaveChanges")}
             </Button>
           </>
         }

@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { login, isTenantSelection, selectTenant, getLoginRedirect } from "@/lib/auth";
 import type { TenantInfo } from "@/lib/types";
@@ -32,6 +33,8 @@ export default function LoginPage() {
 }
 
 function LoginContent() {
+  const t = useTranslations("auth");
+  const tc = useTranslations("common");
   const router = useRouter();
   const search = useSearchParams();
   const nextParam = safeNextParam(search.get("next"));
@@ -54,7 +57,7 @@ function LoginContent() {
         router.push(nextParam ?? getLoginRedirect(result));
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : t("loginFailed"));
     } finally {
       setLoading(false);
     }
@@ -67,7 +70,9 @@ function LoginContent() {
       const result = await selectTenant(email, password, tenantId);
       router.push(nextParam ?? getLoginRedirect(result));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to select tenant");
+      setError(
+        err instanceof Error ? err.message : t("selectTenantFailed"),
+      );
     } finally {
       setLoading(false);
     }
@@ -79,7 +84,7 @@ function LoginContent() {
       <Card className="w-full max-w-sm border-white/10 bg-black/40 backdrop-blur-xl">
         <CardHeader className="text-center">
           <CardTitle className="text-xl text-white">
-            {tenants ? "Select organization" : "Sign in"}
+            {tenants ? t("selectOrganization") : tc("signIn")}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -91,7 +96,7 @@ function LoginContent() {
                 </div>
               )}
               <p className="text-sm text-white/60">
-                Your account belongs to multiple organizations. Choose one to continue:
+                {t("multipleOrganizations")}
               </p>
               <div className="space-y-2" data-testid="login-tenant-list">
                 {tenants.map((t) => (
@@ -121,7 +126,7 @@ function LoginContent() {
                 className="w-full text-center text-sm text-white/50 hover:text-white/70"
                 data-testid="login-btn-back"
               >
-                Back to login
+                {t("backToLogin")}
               </button>
             </div>
           ) : (
@@ -134,12 +139,12 @@ function LoginContent() {
                 )}
                 <div className="space-y-2">
                   <Label htmlFor="email" className="text-white/70">
-                    Email
+                    {t("email")}
                   </Label>
                   <Input
                     id="email"
                     type="email"
-                    placeholder="you@company.com"
+                    placeholder={t("emailPlaceholder")}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="border-white/10 bg-white/5 text-white placeholder:text-white/30"
@@ -149,7 +154,7 @@ function LoginContent() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="password" className="text-white/70">
-                    Password
+                    {t("password")}
                   </Label>
                   <Input
                     id="password"
@@ -162,19 +167,19 @@ function LoginContent() {
                   />
                 </div>
                 <Button type="submit" className="w-full" disabled={loading} data-testid="login-btn-submit">
-                  {loading ? "Signing in..." : "Sign in"}
+                  {loading ? t("signingIn") : tc("signIn")}
                 </Button>
               </form>
               <div className="mt-4 space-y-2 text-center text-sm text-white/50">
                 <p>
                   <a href="/forgot-password" className="text-white/60 hover:text-white/80 hover:underline" data-testid="login-link-forgot">
-                    Forgot your password?
+                    {t("forgotPassword")}
                   </a>
                 </p>
                 <p>
-                  Don&apos;t have an account?{" "}
+                  {t("noAccount")}{" "}
                   <a href="/register" className="text-brand hover:underline" data-testid="login-link-register">
-                    Sign up
+                    {t("signUp")}
                   </a>
                 </p>
               </div>

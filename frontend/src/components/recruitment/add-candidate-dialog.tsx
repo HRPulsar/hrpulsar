@@ -9,6 +9,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 import {
   Dialog,
   DialogContent,
@@ -90,6 +91,7 @@ export function AddCandidateDialog({
   onCandidatesChanged,
   onManualCreated,
 }: AddCandidateDialogProps) {
+  const t = useTranslations("recruitment");
   const [tab, setTab] = useState<"upload" | "manual">("upload");
 
   return (
@@ -99,11 +101,8 @@ export function AddCandidateDialog({
         data-testid="vacancy-candidates-add-modal"
       >
         <DialogHeader className="space-y-1 border-b px-6 py-4">
-          <DialogTitle>Add candidate</DialogTitle>
-          <DialogDescription>
-            Upload one or many resumes to auto-fill candidate fields, or enter
-            details manually.
-          </DialogDescription>
+          <DialogTitle>{t("candidateAddButton")}</DialogTitle>
+          <DialogDescription>{t("addCandidateDescription")}</DialogDescription>
         </DialogHeader>
 
         <Tabs
@@ -118,14 +117,14 @@ export function AddCandidateDialog({
               data-testid="vacancy-candidates-add-modal-tab-upload"
             >
               <Upload className="mr-2 size-4" />
-              Upload resume
+              {t("addCandidateTabUpload")}
             </TabsTrigger>
             <TabsTrigger
               value="manual"
               data-testid="vacancy-candidates-add-modal-tab-manual"
             >
               <UserPlus className="mr-2 size-4" />
-              Enter manually
+              {t("addCandidateTabManual")}
             </TabsTrigger>
           </TabsList>
 
@@ -169,6 +168,7 @@ interface UploadTabProps {
 }
 
 function UploadTab({ vacancyId, onDone, onCancel }: UploadTabProps) {
+  const t = useTranslations("recruitment");
   const [step, setStep] = useState<UploadStep>("select");
   const [picked, setPicked] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -204,7 +204,9 @@ function UploadTab({ vacancyId, onDone, onCancel }: UploadTabProps) {
       } catch (err) {
         if (cancelled) return;
         toast.error(
-          err instanceof Error ? err.message : "Failed to load parse status",
+          err instanceof Error
+            ? err.message
+            : t("addCandidateParseStatusFailed"),
         );
       }
     }
@@ -275,26 +277,29 @@ function UploadTab({ vacancyId, onDone, onCancel }: UploadTabProps) {
       setStep("summary");
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to load dedup preview",
+        err instanceof Error ? err.message : t("addCandidateDedupFailed"),
       );
       setStep("summary");
     }
-  }, [fileIds, vacancyId]);
+  }, [fileIds, vacancyId, t]);
 
-  const handlePick = useCallback((list: FileList | File[]) => {
-    const arr = Array.from(list);
-    setUploadError(null);
-    const err = validateBulkUploadSelection(arr);
-    if (err) {
-      setUploadError(err);
-      return;
-    }
-    setPicked(arr);
-  }, []);
+  const handlePick = useCallback(
+    (list: FileList | File[]) => {
+      const arr = Array.from(list);
+      setUploadError(null);
+      const err = validateBulkUploadSelection(t, arr);
+      if (err) {
+        setUploadError(err);
+        return;
+      }
+      setPicked(arr);
+    },
+    [t],
+  );
 
   const startParsing = useCallback(async () => {
     if (picked.length === 0) {
-      setUploadError("Pick at least one file.");
+      setUploadError(t("addCandidatePickAtLeastOne"));
       return;
     }
     const form = new FormData();
@@ -317,12 +322,13 @@ function UploadTab({ vacancyId, onDone, onCancel }: UploadTabProps) {
       );
       setStep("parsing");
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Upload failed";
+      const msg =
+        err instanceof Error ? err.message : t("addCandidateUploadFailed");
       setUploadError(msg);
     } finally {
       setUploading(false);
     }
-  }, [picked, vacancyId]);
+  }, [picked, vacancyId, t]);
 
   const updateRowAction = useCallback(
     (fileId: string, action: ImportRow["action"]) => {
@@ -355,17 +361,17 @@ function UploadTab({ vacancyId, onDone, onCancel }: UploadTabProps) {
       const linked = result.linked.length;
       const skipped = result.skipped.length;
       toast.success(
-        `Imported ${created} candidate${created === 1 ? "" : "s"}` +
-          (linked > 0 ? `, linked ${linked}` : "") +
-          (skipped > 0 ? `, skipped ${skipped}` : ""),
+        t("addCandidateImportToast", { count: created, linked, skipped }),
       );
       onDone();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Import failed");
+      toast.error(
+        err instanceof Error ? err.message : t("addCandidateImportFailed"),
+      );
     } finally {
       setImporting(false);
     }
-  }, [importRows, vacancyId, onDone]);
+  }, [importRows, vacancyId, onDone, t]);
 
   if (step === "select") {
     return (
@@ -422,6 +428,8 @@ function SelectStep({
   uploading,
   error,
 }: SelectStepProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -456,12 +464,12 @@ function SelectStep({
         data-testid="vacancy-candidates-add-dropzone"
       >
         <Upload className="size-7 text-muted-foreground" />
-        <p className="text-sm font-medium">
-          Drop files here or click to choose
-        </p>
+        <p className="text-sm font-medium">{t("addCandidateDropzone")}</p>
         <p className="text-xs text-muted-foreground">
-          PDF or DOCX · up to {BULK_UPLOAD_MAX_FILES} files ·{" "}
-          {maxFileBytesMb()} each
+          {t("addCandidateDropzoneHint", {
+            maxFiles: BULK_UPLOAD_MAX_FILES,
+            maxSize: maxFileBytesMb(),
+          })}
         </p>
       </div>
       <input
@@ -497,11 +505,11 @@ function SelectStep({
       )}
       <DialogFooter>
         <Button variant="ghost" onClick={onCancel} disabled={uploading}>
-          Cancel
+          {tc("cancel")}
         </Button>
         {picked.length > 0 && (
           <Button variant="ghost" onClick={onClear} disabled={uploading}>
-            Clear
+            {t("actionClear")}
           </Button>
         )}
         <Button
@@ -509,7 +517,9 @@ function SelectStep({
           disabled={uploading || picked.length === 0}
           data-testid="vacancy-candidates-add-submit-btn"
         >
-          {uploading ? "Uploading..." : `Start parsing (${picked.length})`}
+          {uploading
+            ? t("addCandidateUploading")
+            : t("addCandidateStartParsing", { count: picked.length })}
         </Button>
       </DialogFooter>
     </div>
@@ -523,13 +533,14 @@ interface ParsingStepProps {
 }
 
 function ParsingStep({ files, total, processed }: ParsingStepProps) {
+  const t = useTranslations("recruitment");
   const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
   return (
     <div className="space-y-3">
       <div className="space-y-1">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
-            {processed} of {total} resumes parsed
+            {t("addCandidateParsedProgress", { processed, total })}
           </span>
           <span>{percent}%</span>
         </div>
@@ -566,7 +577,7 @@ function ParsingStep({ files, total, processed }: ParsingStepProps) {
                 className="mt-1 text-xs text-destructive"
                 title={f.error ?? undefined}
               >
-                {f.error || "Failed to parse"}
+                {f.error || t("addCandidateParseFailed")}
               </p>
             )}
           </li>
@@ -577,13 +588,14 @@ function ParsingStep({ files, total, processed }: ParsingStepProps) {
 }
 
 function FileBadge({ status, testId }: { status: string; testId?: string }) {
+  const t = useTranslations("recruitment");
   if (status === "completed") {
     return (
       <span
         className="inline-flex items-center gap-1 text-xs text-emerald-700"
         data-testid={testId}
       >
-        <CheckCircle2 className="size-3.5" /> Parsed
+        <CheckCircle2 className="size-3.5" /> {t("addCandidateStatusParsed")}
       </span>
     );
   }
@@ -593,7 +605,7 @@ function FileBadge({ status, testId }: { status: string; testId?: string }) {
         className="inline-flex items-center gap-1 text-xs text-destructive"
         data-testid={testId}
       >
-        <AlertTriangle className="size-3.5" /> Failed
+        <AlertTriangle className="size-3.5" /> {t("addCandidateStatusFailed")}
       </span>
     );
   }
@@ -603,7 +615,9 @@ function FileBadge({ status, testId }: { status: string; testId?: string }) {
       data-testid={testId}
     >
       <Loader2 className="size-3.5 animate-spin" />{" "}
-      {status === "processing" ? "Parsing..." : "Queued"}
+      {status === "processing"
+        ? t("addCandidateStatusParsing")
+        : t("addCandidateStatusQueued")}
     </span>
   );
 }
@@ -623,15 +637,17 @@ function SummaryStep({
   onImport,
   onChangeAction,
 }: SummaryStepProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   if (rows.length === 0) {
     return (
       <div className="space-y-3 text-center">
         <p className="text-sm text-muted-foreground">
-          Nothing to import — all uploads failed parsing.
+          {t("addCandidateNothingToImport")}
         </p>
         <DialogFooter>
           <Button variant="ghost" onClick={onCancel}>
-            Close
+            {t("addCandidateClose")}
           </Button>
         </DialogFooter>
       </div>
@@ -641,8 +657,7 @@ function SummaryStep({
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Review each parsed candidate. Duplicates can be linked to an existing
-        record instead of being created anew.
+        {t("addCandidateReviewHint")}
       </p>
       <ul className="max-h-[360px] space-y-2 overflow-y-auto">
         {rows.map((r) => (
@@ -657,7 +672,7 @@ function SummaryStep({
                   {r.full_name || r.filename}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {r.email || "no email parsed"}
+                  {r.email || t("addCandidateNoEmailParsed")}
                 </p>
               </div>
               {r.existing_candidate_id && (
@@ -665,7 +680,7 @@ function SummaryStep({
                   className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800"
                   data-testid={`vacancy-candidate-duplicate-warning-${r.file_id}`}
                 >
-                  Duplicate
+                  {t("addCandidateDuplicate")}
                 </span>
               )}
             </div>
@@ -679,10 +694,14 @@ function SummaryStep({
                     onChange={() => onChangeAction(r.file_id, "link")}
                   />
                   <span>
-                    Link to{" "}
-                    <span className="font-medium">
-                      {r.existing_candidate_full_name || "existing candidate"}
-                    </span>
+                    {t.rich("addCandidateLinkTo", {
+                      name:
+                        r.existing_candidate_full_name ||
+                        t("addCandidateExistingCandidate"),
+                      strong: (chunks) => (
+                        <span className="font-medium">{chunks}</span>
+                      ),
+                    })}
                   </span>
                 </label>
                 <label className="flex items-center gap-2">
@@ -692,7 +711,7 @@ function SummaryStep({
                     checked={r.action === "create"}
                     onChange={() => onChangeAction(r.file_id, "create")}
                   />
-                  <span>Create new candidate</span>
+                  <span>{t("addCandidateCreateNew")}</span>
                 </label>
               </div>
             )}
@@ -701,7 +720,7 @@ function SummaryStep({
       </ul>
       <DialogFooter>
         <Button variant="ghost" onClick={onCancel} disabled={busy}>
-          Cancel
+          {tc("cancel")}
         </Button>
         <Button
           onClick={onImport}
@@ -709,8 +728,8 @@ function SummaryStep({
           data-testid="vacancy-candidates-add-submit-btn"
         >
           {busy
-            ? "Importing..."
-            : `Import ${rows.length} candidate${rows.length === 1 ? "" : "s"}`}
+            ? t("addCandidateImporting")
+            : t("addCandidateImportBtn", { count: rows.length })}
         </Button>
       </DialogFooter>
     </div>
@@ -752,6 +771,8 @@ const EMPTY_MANUAL: ManualForm = {
 };
 
 function ManualTab({ vacancyId, onCreated, onCancel }: ManualTabProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [form, setForm] = useState<ManualForm>(EMPTY_MANUAL);
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState<{
@@ -768,7 +789,7 @@ function ManualTab({ vacancyId, onCreated, onCancel }: ManualTabProps) {
 
   const submit = useCallback(
     async (linkCandidateId?: string) => {
-      const validationError = manualPayloadValidationError(form);
+      const validationError = manualPayloadValidationError(t, form);
       if (validationError) {
         toast.error(validationError);
         return;
@@ -780,7 +801,9 @@ function ManualTab({ vacancyId, onCreated, onCancel }: ManualTabProps) {
           `/recruitment/vacancies/${vacancyId}/candidates`,
           payload,
         );
-        toast.success(`Added ${result.full_name}`);
+        toast.success(
+          t("addCandidateToastAdded", { name: result.full_name }),
+        );
         setConflict(null);
         onCreated(result.id);
         setForm(EMPTY_MANUAL);
@@ -800,21 +823,19 @@ function ManualTab({ vacancyId, onCreated, onCancel }: ManualTabProps) {
           if (detail.existing_candidate_id) {
             setConflict({
               existing_candidate_id: detail.existing_candidate_id,
-              message:
-                detail.message ||
-                "An active candidate with this email already exists.",
+              message: detail.message || t("addCandidateEmailConflict"),
             });
             return;
           }
         }
         toast.error(
-          err instanceof Error ? err.message : "Failed to add candidate",
+          err instanceof Error ? err.message : t("addCandidateAddFailed"),
         );
       } finally {
         setSubmitting(false);
       }
     },
-    [form, onCreated, vacancyId],
+    [form, onCreated, vacancyId, t],
   );
 
   return (
@@ -828,44 +849,44 @@ function ManualTab({ vacancyId, onCreated, onCancel }: ManualTabProps) {
     >
       <div className="grid gap-3 sm:grid-cols-2">
         <Field
-          label="Full name *"
+          label={t("addCandidateFieldFullName")}
           name="full_name"
           value={form.full_name}
           onChange={update("full_name")}
         />
         <Field
-          label="Email"
+          label={t("columnEmail")}
           type="email"
           name="email"
           value={form.email}
           onChange={update("email")}
         />
         <Field
-          label="Phone"
+          label={t("candidateFieldPhone")}
           name="phone"
           value={form.phone}
           onChange={update("phone")}
         />
         <Field
-          label="LinkedIn URL"
+          label={t("candidateFieldLinkedinUrl")}
           name="linkedin_url"
           value={form.linkedin_url}
           onChange={update("linkedin_url")}
         />
         <Field
-          label="Location"
+          label={t("candidateFieldLocation")}
           name="location"
           value={form.location}
           onChange={update("location")}
         />
         <Field
-          label="Current position"
+          label={t("candidateFieldCurrentPosition")}
           name="current_position"
           value={form.current_position}
           onChange={update("current_position")}
         />
         <Field
-          label="Years of experience"
+          label={t("candidateFieldYearsExperience")}
           name="years_of_experience"
           type="number"
           inputMode="numeric"
@@ -875,16 +896,16 @@ function ManualTab({ vacancyId, onCreated, onCancel }: ManualTabProps) {
           onChange={update("years_of_experience")}
         />
         <Field
-          label="Source"
+          label={t("columnSource")}
           name="source"
           value={form.source}
           onChange={update("source")}
-          placeholder="LinkedIn, referral, ..."
+          placeholder={t("addCandidateSourcePlaceholder")}
         />
       </div>
       <div className="space-y-1">
         <Label className="text-xs" htmlFor="vacancy-candidates-add-manual-field-notes">
-          Notes
+          {t("candidateFieldNotes")}
         </Label>
         <Textarea
           id="vacancy-candidates-add-manual-field-notes"
@@ -899,7 +920,7 @@ function ManualTab({ vacancyId, onCreated, onCancel }: ManualTabProps) {
         <div className={`rounded-md border p-3 text-sm ${ALERT_TONE.amber}`}>
           <p className="font-medium">{conflict.message}</p>
           <p className="mt-1 text-xs opacity-80">
-            Link to the existing candidate instead of creating a duplicate?
+            {t("addCandidateLinkExistingPrompt")}
           </p>
           <div className="mt-2 flex gap-2">
             <Button
@@ -909,7 +930,7 @@ function ManualTab({ vacancyId, onCreated, onCancel }: ManualTabProps) {
               disabled={submitting}
               onClick={() => setConflict(null)}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               size="sm"
@@ -917,7 +938,7 @@ function ManualTab({ vacancyId, onCreated, onCancel }: ManualTabProps) {
               disabled={submitting}
               onClick={() => submit(conflict.existing_candidate_id)}
             >
-              Link to existing
+              {t("addCandidateLinkExisting")}
             </Button>
           </div>
         </div>
@@ -930,14 +951,14 @@ function ManualTab({ vacancyId, onCreated, onCancel }: ManualTabProps) {
           disabled={submitting}
           onClick={onCancel}
         >
-          Cancel
+          {tc("cancel")}
         </Button>
         <Button
           type="submit"
           disabled={submitting}
           data-testid="vacancy-candidates-add-submit-btn"
         >
-          {submitting ? "Adding..." : "Add candidate"}
+          {submitting ? t("addCandidateAdding") : t("candidateAddButton")}
         </Button>
       </DialogFooter>
     </form>

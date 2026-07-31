@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AI_ANALYSIS_STAGES,
-  AI_ANALYSIS_STAGE_LABELS,
+  AI_ANALYSIS_STAGE_LABEL_KEYS,
 } from "@/lib/recruitment-types";
 import type {
   AiAnalysisMode,
@@ -53,9 +53,11 @@ describe("InFlightCard stage taxonomy", () => {
     ]);
   });
 
-  it("ships a human label for every stage", () => {
+  // HRP-476: the wording moved into the `recruitment` i18n namespace —
+  // the map now owns the stage -> key relation, so pin the keys.
+  it("ships an i18n key for every stage", () => {
     for (const s of AI_ANALYSIS_STAGES) {
-      expect(AI_ANALYSIS_STAGE_LABELS[s]).toBeTruthy();
+      expect(AI_ANALYSIS_STAGE_LABEL_KEYS[s]).toBeTruthy();
     }
   });
 });

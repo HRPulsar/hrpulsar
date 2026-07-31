@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { Upload, FileText, CheckCircle, AlertCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ export function UploadZone({
   maxSize = DEFAULT_MAX_SIZE,
   multiple = true,
 }: UploadZoneProps) {
+  const t = useTranslations("recruitment");
   const [files, setFiles] = useState<QueuedFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -47,7 +49,7 @@ export function UploadZone({
           id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           status: oversized ? "error" : "queued",
           error: oversized
-            ? `File exceeds ${maxSize}MB limit`
+            ? t("uploadZoneFileTooLarge", { maxSize })
             : undefined,
         };
       });
@@ -77,7 +79,7 @@ export function UploadZone({
         }, 0);
       }
     },
-    [files, maxSize, multiple, onUpload],
+    [files, maxSize, multiple, onUpload, t],
   );
 
   const handleDrop = useCallback(
@@ -147,10 +149,10 @@ export function UploadZone({
         <Upload className="size-10 text-muted-foreground" />
         <div className="text-center">
           <p className="text-sm font-medium text-foreground">
-            Drop files here or click to browse
+            {t("uploadZoneDropHint")}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            PDF, DOCX, DOC, TXT, RTF up to {maxSize}MB
+            {t("uploadZoneAcceptHint", { maxSize })}
           </p>
         </div>
       </div>
@@ -172,7 +174,10 @@ export function UploadZone({
             <div className="space-y-1">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>
-                  {doneCount} of {totalCount} files processed
+                  {t("uploadZoneProgress", {
+                    done: doneCount,
+                    total: totalCount,
+                  })}
                 </span>
                 <span>{progressPercent}%</span>
               </div>
@@ -197,11 +202,13 @@ export function UploadZone({
                 <span className="shrink-0">
                   {qf.status === "queued" && (
                     <span className="text-xs text-muted-foreground">
-                      Queued
+                      {t("uploadZoneStatusQueued")}
                     </span>
                   )}
                   {qf.status === "uploading" && (
-                    <span className="text-xs text-accent">Uploading...</span>
+                    <span className="text-xs text-accent">
+                      {t("uploadZoneStatusUploading")}
+                    </span>
                   )}
                   {qf.status === "done" && (
                     <CheckCircle className="size-4 text-[var(--rec-data-full)]" />
@@ -212,7 +219,7 @@ export function UploadZone({
                       title={qf.error}
                     >
                       <AlertCircle className="size-4" />
-                      Error
+                      {t("uploadZoneStatusError")}
                     </span>
                   )}
                 </span>

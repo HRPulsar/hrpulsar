@@ -808,12 +808,12 @@ class TestClampAnthropicMaxTokens:
     def test_sonnet_allows_big_budgets(self):
         from app.modules.ai.llm_client import _clamp_anthropic_max_tokens
 
-        assert _clamp_anthropic_max_tokens("claude-sonnet-4-6", 16384) == 16384
+        assert _clamp_anthropic_max_tokens("claude-sonnet-5", 16384) == 16384
 
     def test_opus_clamped_at_32k(self):
         from app.modules.ai.llm_client import _clamp_anthropic_max_tokens
 
-        assert _clamp_anthropic_max_tokens("claude-opus-4-7", 64000) == 32000
+        assert _clamp_anthropic_max_tokens("claude-opus-4-8", 64000) == 32000
 
     def test_unknown_model_defaults_to_8k(self):
         from app.modules.ai.llm_client import _clamp_anthropic_max_tokens

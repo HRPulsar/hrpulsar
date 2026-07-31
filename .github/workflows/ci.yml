@@ -169,6 +169,11 @@ jobs:
         run: cd frontend && npm run build
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8100/api
+          # i18n F7 (HRP-481): e2e runs the multi-locale deployment shape.
+          # DEFAULT_LOCALE stays en so text matchers keep asserting the
+          # default-locale strings.
+          NEXT_PUBLIC_AVAILABLE_LOCALES: de,en
+          NEXT_PUBLIC_DEFAULT_LOCALE: en
 
       - name: Start backend
         run: cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8100 &
@@ -177,6 +182,8 @@ jobs:
           REDIS_URL: redis://localhost:6379
           JWT_SECRET: test-secret
           E2E_MODE: "true"
+          AVAILABLE_LOCALES: de,en
+          DEFAULT_LOCALE: en
 
       - name: Start celery worker + beat
         # -B runs the beat scheduler in-process, so the
@@ -187,11 +194,15 @@ jobs:
           REDIS_URL: redis://localhost:6379
           JWT_SECRET: test-secret
           E2E_MODE: "true"
+          AVAILABLE_LOCALES: de,en
+          DEFAULT_LOCALE: en
 
       - name: Start frontend
         run: cd frontend && npm start -- --port 3100 &
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8100/api
+          NEXT_PUBLIC_AVAILABLE_LOCALES: de,en
+          NEXT_PUBLIC_DEFAULT_LOCALE: en
 
       - name: Wait for services
         run: |
@@ -205,6 +216,9 @@ jobs:
         run: cd frontend && npx playwright test
         env:
           CI: "true"
+          # Same value as the servers — MULTI_LOCALE_E2E in helpers.ts
+          # gates the locale-select/switcher assertions on it.
+          AVAILABLE_LOCALES: de,en
 
       - name: Upload test report
         if: always()

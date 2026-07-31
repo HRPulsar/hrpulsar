@@ -21,14 +21,40 @@ describe("RecruitmentOnboardingBanner — step mapping", () => {
     expect(Object.keys(STEP_COPY)).not.toContain("done");
   });
 
-  it("provides title, hint, cta and href for every active step", () => {
+  // HRP-476: the wording moved into the `recruitment` i18n namespace —
+  // the map now carries keys, so pin the keys instead of the English copy.
+  it("provides title, hint, cta keys and href for every active step", () => {
     for (const step of STEP_ORDER) {
       const copy = STEP_COPY[step];
-      expect(copy.title, `${step}.title`).toMatch(/\S/);
-      expect(copy.hint, `${step}.hint`).toMatch(/\S/);
-      expect(copy.cta, `${step}.cta`).toMatch(/\S/);
+      expect(copy.titleKey, `${step}.titleKey`).toMatch(/\S/);
+      expect(copy.hintKey, `${step}.hintKey`).toMatch(/\S/);
+      expect(copy.ctaKey, `${step}.ctaKey`).toMatch(/\S/);
       expect(copy.href, `${step}.href`).toMatch(/^\/recruitment\//);
     }
+  });
+
+  it("maps every active step to its own i18n keys", () => {
+    expect(STEP_ORDER.map((step) => STEP_COPY[step].titleKey)).toEqual([
+      "onboardingWelcomeTitle",
+      "onboardingVacancyCreatedTitle",
+      "onboardingCandidateInvitedTitle",
+      "onboardingInterviewScheduledTitle",
+      "onboardingReportReviewedTitle",
+    ]);
+    expect(STEP_ORDER.map((step) => STEP_COPY[step].hintKey)).toEqual([
+      "onboardingWelcomeHint",
+      "onboardingVacancyCreatedHint",
+      "onboardingCandidateInvitedHint",
+      "onboardingInterviewScheduledHint",
+      "onboardingReportReviewedHint",
+    ]);
+    expect(STEP_ORDER.map((step) => STEP_COPY[step].ctaKey)).toEqual([
+      "onboardingWelcomeCta",
+      "onboardingVacancyCreatedCta",
+      "onboardingCandidateInvitedCta",
+      "onboardingInterviewScheduledCta",
+      "onboardingReportReviewedCta",
+    ]);
   });
 
   it("routes the welcome CTA to the new-vacancy wizard", () => {

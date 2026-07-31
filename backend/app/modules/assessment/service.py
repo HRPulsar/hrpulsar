@@ -6,12 +6,13 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import ColumnElement, and_, case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
 from app.core import billing_hooks
+from app.core.errors import AppError
 
 # Answer-scale utilities + CRUD and per-level breakdown math live in dedicated
 # leaf modules (split out of this god-service). Re-exported here so router and
@@ -65,7 +66,11 @@ async def _get_status_by_code(db: AsyncSession, code: str) -> AssessmentStatus:
     )
     s = result.scalar_one_or_none()
     if not s:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid status: {code}")
+        raise AppError(
+            "assessment_invalid_status_code",
+            status.HTTP_400_BAD_REQUEST,
+            value=code,
+        )
     return s
 
 
@@ -73,7 +78,11 @@ async def _get_type_by_code(db: AsyncSession, code: str) -> AssessmentType:
     result = await db.execute(select(AssessmentType).where(AssessmentType.code == code))
     t = result.scalar_one_or_none()
     if not t:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid type: {code}")
+        raise AppError(
+            "assessment_invalid_type_code",
+            status.HTTP_400_BAD_REQUEST,
+            value=code,
+        )
     return t
 
 
@@ -91,7 +100,11 @@ def _deadline_in_past(deadline: datetime | None) -> bool:
     """
     if deadline is None:
         return False
-    aware = deadline if deadline.tzinfo is not None else deadline.replace(tzinfo=timezone.utc)
+    aware = (
+        deadline
+        if deadline.tzinfo is not None
+        else deadline.replace(tzinfo=timezone.utc)
+    )
     return aware.date() < datetime.now(timezone.utc).date()
 
 
@@ -123,9 +136,10 @@ async def _assert_not_terminal(db: AsyncSession, assessment: Assessment) -> None
     else:
         code = assessment.status.code
     if code in TERMINAL_STATUSES:
-        raise HTTPException(
+        raise AppError(
+            "assessment_terminal_status",
             status.HTTP_400_BAD_REQUEST,
-            f"Assessment is in terminal status '{code}' and cannot be modified",
+            state=code,
         )
 
 
@@ -139,9 +153,10 @@ async def _assert_criteria_editable(db: AsyncSession, assessment: Assessment) ->
     else:
         code = assessment.status.code
     if code != "draft":
-        raise HTTPException(
+        raise AppError(
+            "assessment_criteria_locked",
             status.HTTP_400_BAD_REQUEST,
-            f"Cannot change criteria after assessment has started (status='{code}')",
+            state=code,
         )
 
 
@@ -161,23 +176,29 @@ async def _resolve_dict_titles(
     db: AsyncSession,
     specialization_id: uuid.UUID | None,
     grade_id: uuid.UUID | None,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, str | None]:
     """Look up dictionary titles for a specialization/grade pair.
 
-    Returns (specialization_title, grade_title). Each is None if the input id
-    is None or the row doesn't exist.
+    Returns (specialization_title, grade_title, specialization_i18n_key,
+    grade_i18n_key). Each is None if the input id is None or the row
+    doesn't exist. The keys (HRP-479) let the frontend localize origin
+    rows next to the denormalized titles.
     """
     from app.modules.dictionary.models import DictionaryItem
 
     spec_title: str | None = None
     grade_title: str | None = None
+    spec_key: str | None = None
+    grade_key: str | None = None
     if specialization_id is not None:
         item = await db.get(DictionaryItem, specialization_id)
         spec_title = item.title if item else None
+        spec_key = item.i18n_key if item else None
     if grade_id is not None:
         item = await db.get(DictionaryItem, grade_id)
         grade_title = item.title if item else None
-    return spec_title, grade_title
+        grade_key = item.i18n_key if item else None
+    return spec_title, grade_title, spec_key, grade_key
 
 
 # HRP-84: lifecycle email dispatch ------------------------------------------
@@ -191,13 +212,18 @@ async def _resolve_dict_titles(
 async def _participant_email_payloads(
     db: AsyncSession,
     assessment_id: uuid.UUID,
-) -> list[tuple["AssessmentParticipant", str | None, str | None]]:
-    """Return ``(participant, email, full_name)`` triples for every
-    participant in ``assessment_id`` who has a deliverable email address.
+) -> list[tuple["AssessmentParticipant", str | None, str | None, str | None]]:
+    """Return ``(participant, email, full_name, user_language)`` rows for
+    every participant in ``assessment_id`` who has a deliverable email
+    address.
 
     External reviewers carry the email on their own row; logged-in users
     pull it from ``users``. Participants with no email are dropped so
     downstream code can iterate without re-checking.
+
+    ``user_language`` is the recipient's own preference (i18n F4) and is
+    None for external reviewers, who have no account — they fall back to
+    the tenant default one level down the chain.
     """
     from app.modules.auth.models import User as AuthUser
 
@@ -210,9 +236,7 @@ async def _participant_email_payloads(
     user_ids = {p.user_id for p in participants if p.user_id}
     user_by_id: dict[uuid.UUID, AuthUser] = {}
     if user_ids:
-        u_rows = await db.execute(
-            select(AuthUser).where(AuthUser.id.in_(user_ids))
-        )
+        u_rows = await db.execute(select(AuthUser).where(AuthUser.id.in_(user_ids)))
         user_by_id = {u.id: u for u in u_rows.scalars().all()}
 
     ext_ids = {p.external_reviewer_id for p in participants if p.external_reviewer_id}
@@ -223,20 +247,22 @@ async def _participant_email_payloads(
         )
         ext_by_id = {e.id: e for e in e_rows.scalars().all()}
 
-    out: list[tuple[AssessmentParticipant, str | None, str | None]] = []
+    out: list[tuple[AssessmentParticipant, str | None, str | None, str | None]] = []
     for p in participants:
         email: str | None = None
         name: str | None = None
+        language: str | None = None
         if p.user_id and p.user_id in user_by_id:
             u = user_by_id[p.user_id]
             email = u.email
             name = _user_full_name(u)
+            language = u.language
         elif p.external_reviewer_id and p.external_reviewer_id in ext_by_id:
             er = ext_by_id[p.external_reviewer_id]
             email = er.email
             name = er.name
         if email:
-            out.append((p, email, name))
+            out.append((p, email, name, language))
     return out
 
 
@@ -252,6 +278,7 @@ async def _send_role_email(
     db: AsyncSession | None = None,
     recipient_user_id: uuid.UUID | None = None,
     assessment_id: uuid.UUID | None = None,
+    locale: str | None = None,
 ) -> None:
     """Render and enqueue the email matching ``(role, event)``.
 
@@ -263,6 +290,11 @@ async def _send_role_email(
     persists an in-app Notification row so the bell in the header reflects
     the same event. Missing template or DB write failures are swallowed —
     in-app delivery never blocks the email path.
+
+    i18n F4: ``locale`` is the *recipient's* resolved locale, computed by
+    the dispatcher (one tenant lookup per batch). Callers that have no
+    recipient context — and therefore no ``db`` to read the tenant from —
+    leave it unset and get the deployment default.
     """
     from app.core.email import enqueue_email
     from app.core.email_templates import (
@@ -275,37 +307,46 @@ async def _send_role_email(
         render_assessment_self_cancelled_email,
         render_assessment_self_evaluate_email,
     )
+    from app.core.i18n import resolve_locale
 
     subject: str | None = None
     body: str | None = None
     template_code: str | None = None
+    recipient_locale = locale or resolve_locale()
 
     asmt_id_str = str(assessment_id) if assessment_id else None
     if event == "evaluate":
         if role == "self":
             subject, body = render_assessment_self_evaluate_email(
-                title, deadline, assessment_id=asmt_id_str
+                title, deadline, assessment_id=asmt_id_str, locale=recipient_locale
             )
             template_code = "assessment.self_evaluate"
         elif role == "manager":
             subject, body = render_assessment_manager_evaluate_email(
-                title, employee_name, deadline, assessment_id=asmt_id_str
+                title,
+                employee_name,
+                deadline,
+                assessment_id=asmt_id_str,
+                locale=recipient_locale,
             )
             template_code = "assessment.manager_evaluate"
         elif role in ("peer", "subordinate", "external"):
             subject, body = render_assessment_assigned_email(
-                title, deadline, assessment_id=asmt_id_str
+                title, deadline, assessment_id=asmt_id_str, locale=recipient_locale
             )
             template_code = "assessment.evaluate_employee"
     elif event == "completed":
         if role == "self":
             subject, body = render_assessment_completed_email(
-                title, assessment_id=asmt_id_str
+                title, assessment_id=asmt_id_str, locale=recipient_locale
             )
             template_code = "assessment.self_completed"
         elif role == "manager":
             subject, body = render_assessment_manager_completed_email(
-                title, employee_name, assessment_id=asmt_id_str
+                title,
+                employee_name,
+                assessment_id=asmt_id_str,
+                locale=recipient_locale,
             )
             template_code = "assessment.manager_completed"
     elif event == "cancelled":
@@ -317,17 +358,23 @@ async def _send_role_email(
         # keep their bespoke copy.
         if role == "self":
             subject, body = render_assessment_self_cancelled_email(
-                title, assessment_id=asmt_id_str
+                title, assessment_id=asmt_id_str, locale=recipient_locale
             )
             template_code = "assessment.self_cancelled"
         elif role == "manager":
             subject, body = render_assessment_manager_cancelled_email(
-                title, employee_name, assessment_id=asmt_id_str
+                title,
+                employee_name,
+                assessment_id=asmt_id_str,
+                locale=recipient_locale,
             )
             template_code = "assessment.manager_cancelled"
         elif role in ("peer", "subordinate", "external"):
             subject, body = render_assessment_peer_cancelled_email(
-                title, employee_name, assessment_id=asmt_id_str
+                title,
+                employee_name,
+                assessment_id=asmt_id_str,
+                locale=recipient_locale,
             )
             template_code = "assessment.peer_cancelled"
 
@@ -353,18 +400,12 @@ async def _send_role_email(
     if db is None or recipient_user_id is None or template_code is None:
         return
     try:
-        from app.modules.notification.models import (
-            Notification,
-            NotificationTemplate,
-        )
+        from app.modules.notification.models import Notification
+        from app.modules.notification.service import get_template_for_locale
 
-        tmpl = (
-            await db.execute(
-                select(NotificationTemplate).where(
-                    NotificationTemplate.code == template_code
-                )
-            )
-        ).scalar_one_or_none()
+        # i18n F4: the bell text follows the recipient's locale too, with
+        # the en row as fallback when the locale has no translation yet.
+        tmpl = await get_template_for_locale(db, template_code, recipient_locale)
         if tmpl is None:
             return
         notif = Notification(
@@ -409,12 +450,20 @@ async def _dispatch_lifecycle_emails(
         emp = await db.get(Employee, assessment.employee_id)
         employee_name = _employee_name(emp) if emp else None
 
-    deadline_str = (
-        assessment.ended_at.strftime("%B %d, %Y") if assessment.ended_at else None
-    )
+    # i18n F4: one tenant lookup per batch — every recipient resolves its
+    # own locale on top of this default (User.language wins when set).
+    # i18n F7: the deadline is formatted per recipient inside the loop —
+    # month names follow each recipient's locale.
+    from app.core.i18n import format_date, resolve_locale
+    from app.modules.company.models import Tenant
 
-    triples = await _participant_email_payloads(db, assessment.id)
-    for participant, email, _ in triples:
+    tenant_default: str | None = None
+    if assessment.tenant_id is not None:
+        tenant = await db.get(Tenant, assessment.tenant_id)
+        tenant_default = tenant.default_locale if tenant else None
+
+    rows = await _participant_email_payloads(db, assessment.id)
+    for participant, email, _, user_language in rows:
         if only_participant_id is not None and participant.id != only_participant_id:
             continue
         # HRP-84 REDO: cancellation now includes peer / subordinate / external
@@ -427,17 +476,25 @@ async def _dispatch_lifecycle_emails(
             and participant.is_completed
         ):
             continue
+        locale = resolve_locale(
+            user_language=user_language, tenant_default=tenant_default
+        )
         await _send_role_email(
             role=participant.role,
             email=email,  # type: ignore[arg-type]
             title=title,
             employee_name=employee_name,
             event=event,
-            deadline=deadline_str,
+            deadline=(
+                format_date(assessment.ended_at, locale)
+                if assessment.ended_at
+                else None
+            ),
             tenant_id=assessment.tenant_id,
             db=db,
             recipient_user_id=participant.user_id,
             assessment_id=assessment.id,
+            locale=locale,
         )
 
 
@@ -556,11 +613,11 @@ async def create_assessment(
     )
     active_count = (await db.execute(active_count_q)).scalar() or 0
     if active_count >= MAX_ACTIVE_ASSESSMENTS_PER_EMPLOYEE:
-        raise HTTPException(
+        raise AppError(
+            "assessment_active_limit_reached",
             status.HTTP_409_CONFLICT,
-            f"Employee already has {active_count} active assessments "
-            f"(limit {MAX_ACTIVE_ASSESSMENTS_PER_EMPLOYEE}). "
-            "Finish or cancel an existing one before starting another.",
+            active_count=active_count,
+            limit=MAX_ACTIVE_ASSESSMENTS_PER_EMPLOYEE,
         )
 
     a = Assessment(
@@ -747,7 +804,7 @@ async def get_assessment_detail(
     result = await db.execute(detail_q)
     a = result.scalar_one_or_none()
     if not a:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     data = _assessment_to_read(a)
     # HRP-329: saved calibration closes the questionnaire for good — the
@@ -811,7 +868,9 @@ async def get_assessment_detail(
                 "external_reviewer_id": p.external_reviewer_id,
                 "role": p.role,
                 "is_completed": p.is_completed,
-                "external_name": p.external_reviewer.name if p.external_reviewer else None,
+                "external_name": (
+                    p.external_reviewer.name if p.external_reviewer else None
+                ),
                 "external_email": (
                     p.external_reviewer.email if p.external_reviewer else None
                 ),
@@ -825,12 +884,16 @@ async def get_assessment_detail(
             "competence_title": c.competence.title if c.competence else "",
             "skill_level_id": c.skill_level_id,
             "skill_level_title": c.skill_level.title if c.skill_level else None,
+            "skill_level_i18n_key": (c.skill_level.i18n_key if c.skill_level else None),
         }
         for c in a.competences
     ]
-    data["specialization_title"], data["grade_title"] = await _resolve_dict_titles(
-        db, a.specialization_id, a.grade_id
-    )
+    (
+        data["specialization_title"],
+        data["grade_title"],
+        data["specialization_i18n_key"],
+        data["grade_i18n_key"],
+    ) = await _resolve_dict_titles(db, a.specialization_id, a.grade_id)
     if a.scale_id is not None:
         scale = await _load_scale_full(db, a.scale_id)
         data["scale"] = await _scale_detail_dict(db, scale) if scale else None
@@ -869,6 +932,7 @@ async def get_assessment_detail(
                         "id": r.level.id,
                         "percent_from": r.level.percent_from,
                         "percent_to": r.level.percent_to,
+                        "system_code": r.level.system_code,
                         "system_title": r.level.system_title,
                         "description": r.level.description,
                         "sort_index": r.level.sort_index,
@@ -880,9 +944,7 @@ async def get_assessment_detail(
             }
             for r in a.results
         ]
-        data["overall_percent"] = compute_overall_percent(
-            r.percent for r in a.results
-        )
+        data["overall_percent"] = compute_overall_percent(r.percent for r in a.results)
     return data
 
 
@@ -898,22 +960,25 @@ async def change_status(
     )
     a = result.scalar_one_or_none()
     if not a:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     new_status = await _get_status_by_code(db, new_code)
 
     # Terminal statuses cannot be modified
     if a.status.code in TERMINAL_STATUSES:
-        raise HTTPException(
+        raise AppError(
+            "assessment_terminal_status",
             status.HTTP_400_BAD_REQUEST,
-            f"Assessment is in terminal status '{a.status.code}' and cannot be modified",
+            state=a.status.code,
         )
 
     # Validate sequence progression (must increment)
     if new_status.sequence <= a.status.sequence and new_code != "cancelled":
-        raise HTTPException(
+        raise AppError(
+            "assessment_invalid_transition",
             status.HTTP_400_BAD_REQUEST,
-            f"Cannot transition from {a.status.code} to {new_code}",
+            from_status=a.status.code,
+            to_status=new_code,
         )
 
     # Draft → Sent requires both evaluation criteria and a rating scale.
@@ -921,23 +986,23 @@ async def change_status(
     # gap first.
     if a.status.code == "draft" and new_code == "sent":
         if not a.criteria_type:
-            raise HTTPException(
+            raise AppError(
+                "assessment_criteria_not_selected",
                 status.HTTP_400_BAD_REQUEST,
-                "Evaluation criteria are not selected",
             )
         if a.scale_id is None:
-            raise HTTPException(
+            raise AppError(
+                "assessment_scale_not_selected",
                 status.HTTP_400_BAD_REQUEST,
-                "Evaluation scale is not selected",
             )
         # HRP-83: refuse to launch with an expired deadline so the assignee
         # never lands on an assessment that's already overdue. Returns
         # 409 because the request is well-formed — the conflict is with
         # the stored deadline state, not the payload.
         if _deadline_in_past(a.ended_at):
-            raise HTTPException(
+            raise AppError(
+                "assessment_deadline_in_past",
                 status.HTTP_409_CONFLICT,
-                "Deadline is in the past",
             )
 
     # Manual on_review requires at least one completed participant. The
@@ -953,9 +1018,9 @@ async def change_status(
             )
         )
         if (completed_q.scalar() or 0) == 0:
-            raise HTTPException(
+            raise AppError(
+                "assessment_on_review_requires_completed_participant",
                 status.HTTP_400_BAD_REQUEST,
-                "On Review requires at least one completed participant",
             )
 
     # Done is reachable only via on_review. Sequence numbers allow the
@@ -963,9 +1028,9 @@ async def change_status(
     # the calibration checkpoint — auto-completion routes through
     # on_review already, so legitimate flows are unaffected.
     if new_code == "done" and a.status.code != "on_review":
-        raise HTTPException(
+        raise AppError(
+            "assessment_done_requires_on_review",
             status.HTTP_400_BAD_REQUEST,
-            "Done is reachable only from On Review",
         )
 
     # HRP-192: Sent → In progress is auto-driven by the first submitted
@@ -976,9 +1041,9 @@ async def change_status(
     # — so the UI also greys the option out in Change status / Change
     # status (all) and removes the "in progress" button from Details.
     if new_code == "in_progress":
-        raise HTTPException(
+        raise AppError(
+            "assessment_manual_transition_not_allowed",
             status.HTTP_400_BAD_REQUEST,
-            "Manual transition is not allowed",
         )
 
     prev_code = a.status.code
@@ -1082,12 +1147,12 @@ async def update_assessment(
     )
     a = result.scalar_one_or_none()
     if not a:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     await _assert_not_terminal(db, a)
 
     if not isinstance(title, _UpdateSentinel):
         if title is None or not title.strip():
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Title cannot be empty")
+            raise AppError("assessment_title_empty", status.HTTP_400_BAD_REQUEST)
         a.title = title
     if not isinstance(ended_at, _UpdateSentinel):
         a.ended_at = ended_at
@@ -1114,7 +1179,7 @@ async def add_participant(
 ) -> dict:
     a = await db.get(Assessment, assessment_id)
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     await _assert_not_terminal(db, a)
 
     # Resolve employee_id → user_id
@@ -1123,16 +1188,16 @@ async def add_participant(
 
     emp = await db.get(Employee, data.employee_id)
     if not emp or emp.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found")
+        raise AppError("employee_not_found", status.HTTP_404_NOT_FOUND)
 
     # Guard against orphaned employee.user_id references — without this the
     # INSERT below trips a FK violation at commit time (seen in production
     # when employee.user_id pointed at a deleted user row).
     user = await db.get(User, emp.user_id) if emp.user_id else None
     if user is None:
-        raise HTTPException(
+        raise AppError(
+            "employee_has_no_user_account",
             status.HTTP_404_NOT_FOUND,
-            "Employee has no active user account",
         )
 
     # HRP-18: one human can occupy at most one participant slot per assessment
@@ -1145,9 +1210,9 @@ async def add_participant(
         )
     )
     if dup.scalar_one_or_none() is not None:
-        raise HTTPException(
+        raise AppError(
+            "assessment_employee_already_participant",
             status.HTTP_409_CONFLICT,
-            "Employee is already a participant in this assessment",
         )
 
     p = AssessmentParticipant(
@@ -1165,9 +1230,7 @@ async def add_participant(
     if a.status is None:
         await db.refresh(a, ["status"])
     if a.status is not None and a.status.code in ("sent", "in_progress", "on_review"):
-        await _dispatch_lifecycle_emails(
-            db, a, "evaluate", only_participant_id=p.id
-        )
+        await _dispatch_lifecycle_emails(db, a, "evaluate", only_participant_id=p.id)
 
     user_name = _user_full_name(user)
 
@@ -1195,15 +1258,15 @@ async def add_competences(
     """Legacy: append competences without level. Kept for backwards compatibility."""
     a = await db.get(Assessment, assessment_id)
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     await _assert_not_terminal(db, a)
 
     if a.criteria_type is None:
         a.criteria_type = "competences"
     elif a.criteria_type != "competences":
-        raise HTTPException(
+        raise AppError(
+            "assessment_criteria_type_not_competences",
             status.HTTP_400_BAD_REQUEST,
-            "Cannot add competences directly when criteria_type is not 'competences'",
         )
 
     for cid in competence_ids:
@@ -1284,9 +1347,9 @@ async def _validate_specialization_has_competences(
         db, tenant_id, specialization_id, grade_id
     )
     if not items:
-        raise HTTPException(
+        raise AppError(
+            "assessment_specialization_no_competences",
             status.HTTP_400_BAD_REQUEST,
-            "Selected specialization/grade has no competences configured",
         )
 
 
@@ -1369,9 +1432,9 @@ async def _apply_criteria_to_assessment(
             )
     elif data.criteria_type == "target_position":
         if data.specialization_id is None:
-            raise HTTPException(
+            raise AppError(
+                "assessment_specialization_id_required",
                 status.HTTP_400_BAD_REQUEST,
-                "specialization_id is required for target_position",
             )
         await _validate_specialization_has_competences(
             db, tenant_id, data.specialization_id, data.grade_id
@@ -1391,9 +1454,9 @@ async def _apply_criteria_to_assessment(
             )
     else:  # competences
         if not data.competences:
-            raise HTTPException(
+            raise AppError(
+                "assessment_competence_required",
                 status.HTTP_400_BAD_REQUEST,
-                "At least one competence is required for criteria_type=competences",
             )
         assessment.specialization_id = None
         assessment.grade_id = None
@@ -1417,7 +1480,7 @@ async def set_assessment_criteria(
         Assessment, assessment_id, options=[selectinload(Assessment.status)]
     )
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     await _assert_criteria_editable(db, a)
 
     passing_score = await _resolve_passing_score(db, tenant_id, data)
@@ -1434,14 +1497,14 @@ async def set_group_criteria(
 ) -> dict:
     g = await db.get(AssessmentGroup, group_id)
     if not g or g.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment group not found")
+        raise AppError("assessment_group_not_found", status.HTTP_404_NOT_FOUND)
 
     # Pre-validate target_position once for the whole group
     if data.criteria_type == "target_position":
         if data.specialization_id is None:
-            raise HTTPException(
+            raise AppError(
+                "assessment_specialization_id_required",
                 status.HTTP_400_BAD_REQUEST,
-                "specialization_id is required for target_position",
             )
         await _validate_specialization_has_competences(
             db, tenant_id, data.specialization_id, data.grade_id
@@ -1495,9 +1558,9 @@ async def list_criteria_specializations(
     from app.modules.dictionary.models import DictionaryItem
     from app.modules.dictionary.service import effective_is_active_expr
 
-    active_or_included: ColumnElement[bool] = effective_is_active_expr(
-        tenant_id
-    ).is_(True)
+    active_or_included: ColumnElement[bool] = effective_is_active_expr(tenant_id).is_(
+        True
+    )
     if include_id is not None:
         active_or_included = active_or_included | (DictionaryItem.id == include_id)
 
@@ -1514,7 +1577,7 @@ async def list_criteria_specializations(
         .order_by(DictionaryItem.sort_index, DictionaryItem.title)
     )
     items = (await db.execute(items_q)).scalars().all()
-    return [{"id": d.id, "title": d.title} for d in items]
+    return [{"id": d.id, "title": d.title, "i18n_key": d.i18n_key} for d in items]
 
 
 async def list_criteria_grades(
@@ -1550,9 +1613,9 @@ async def list_criteria_grades(
         )
         .distinct()
     )
-    active_or_included: ColumnElement[bool] = effective_is_active_expr(
-        tenant_id
-    ).is_(True)
+    active_or_included: ColumnElement[bool] = effective_is_active_expr(tenant_id).is_(
+        True
+    )
     if include_id is not None:
         active_or_included = active_or_included | (DictionaryItem.id == include_id)
     items_q = (
@@ -1561,7 +1624,7 @@ async def list_criteria_grades(
         .order_by(DictionaryItem.sort_index, DictionaryItem.title)
     )
     items = (await db.execute(items_q)).scalars().all()
-    return [{"id": d.id, "title": d.title} for d in items]
+    return [{"id": d.id, "title": d.title, "i18n_key": d.i18n_key} for d in items]
 
 
 # --- Answers ---
@@ -1576,7 +1639,7 @@ async def record_answer(
 ) -> dict:
     a = await db.get(Assessment, assessment_id)
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     await _assert_not_terminal(db, a)
     # HRP-185: lock the questionnaire while a reviewer is calibrating
     # Totals so the baseline doesn't shift underneath them.
@@ -1591,9 +1654,9 @@ async def record_answer(
         or participant.assessment_id != assessment_id
         or participant.user_id != current_user_id
     ):
-        raise HTTPException(
+        raise AppError(
+            "assessment_answer_own_participant_only",
             status.HTTP_403_FORBIDDEN,
-            "You can only submit answers for your own participant entry",
         )
 
     # Indicator must belong to one of the competences attached to the assessment
@@ -1601,7 +1664,7 @@ async def record_answer(
 
     indicator = await db.get(Indicator, data.indicator_id)
     if not indicator:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Indicator not found")
+        raise AppError("indicator_not_found", status.HTTP_404_NOT_FOUND)
     assessment_competences = await db.execute(
         select(AssessmentCompetence.competence_id).where(
             AssessmentCompetence.assessment_id == assessment_id
@@ -1609,9 +1672,9 @@ async def record_answer(
     )
     competence_ids = {c for (c,) in assessment_competences.all()}
     if indicator.competence_id not in competence_ids:
-        raise HTTPException(
+        raise AppError(
+            "assessment_indicator_not_in_competences",
             status.HTTP_400_BAD_REQUEST,
-            "Indicator does not belong to any competence in this assessment",
         )
 
     # HRP-146: assessment now opens in a Sheet with auto-save, so the
@@ -1702,7 +1765,7 @@ async def get_participant_answers(
     about other respondents' answers and don't 403 the page either)."""
     a = await db.get(Assessment, assessment_id)
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     participant_q = await db.execute(
         select(AssessmentParticipant).where(
@@ -1915,10 +1978,13 @@ async def get_results(
     a = await db.get(
         Assessment,
         assessment_id,
-        options=[selectinload(Assessment.status), selectinload(Assessment.participants)],
+        options=[
+            selectinload(Assessment.status),
+            selectinload(Assessment.participants),
+        ],
     )
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     if visible_employee_ids is not None:
         is_assessee_visible = a.employee_id in visible_employee_ids
@@ -1926,10 +1992,10 @@ async def get_results(
             p.user_id == participant_user_id for p in a.participants
         )
         if not is_assessee_visible and not is_participant:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+            raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     if restrict_to_active and a.status is not None and a.status.code == "draft":
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     # HRP-243: Employee-only callers don't see results unless they are the
     # assessee and the assessment is closed (Done). Mirrors the gate in
@@ -1967,6 +2033,7 @@ async def get_results(
                     "id": levels_by_id[r.level_id].id,
                     "percent_from": levels_by_id[r.level_id].percent_from,
                     "percent_to": levels_by_id[r.level_id].percent_to,
+                    "system_code": levels_by_id[r.level_id].system_code,
                     "system_title": levels_by_id[r.level_id].system_title,
                     "description": levels_by_id[r.level_id].description,
                     "sort_index": levels_by_id[r.level_id].sort_index,
@@ -1984,7 +2051,7 @@ async def calibrate(
 ) -> list[dict]:
     a = await db.get(Assessment, assessment_id)
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     await _assert_not_terminal(db, a)
 
     # HRP-126: derive percent (and matching level) from calibrated_score so
@@ -2065,6 +2132,7 @@ async def calibrate(
                     "id": levels_by_id[r.level_id].id,
                     "percent_from": levels_by_id[r.level_id].percent_from,
                     "percent_to": levels_by_id[r.level_id].percent_to,
+                    "system_code": levels_by_id[r.level_id].system_code,
                     "system_title": levels_by_id[r.level_id].system_title,
                     "description": levels_by_id[r.level_id].description,
                     "sort_index": levels_by_id[r.level_id].sort_index,
@@ -2083,9 +2151,7 @@ async def calibrate(
 _CALIBRATION_ALLOWED_STATUSES = ("on_review", "done")
 
 
-async def _has_calibrated_totals(
-    db: AsyncSession, assessment_id: uuid.UUID
-) -> bool:
+async def _has_calibrated_totals(db: AsyncSession, assessment_id: uuid.UUID) -> bool:
     return bool(
         await db.scalar(
             select(func.count(AssessmentCalibratedTotal.id)).where(
@@ -2095,21 +2161,19 @@ async def _has_calibrated_totals(
     )
 
 
-async def _assert_not_calibration_locked(
-    db: AsyncSession, a: Assessment
-) -> None:
+async def _assert_not_calibration_locked(db: AsyncSession, a: Assessment) -> None:
     """HRP-185: no submissions while a reviewer edits Totals.
     HRP-329: nor after a calibration was saved — the calibrated results
     are final and a late survey would shift the baseline under them."""
     if a.calibration_in_progress:
-        raise HTTPException(
+        raise AppError(
+            "assessment_calibration_in_progress",
             status.HTTP_409_CONFLICT,
-            "Assessment is currently being calibrated; please try again shortly",
         )
     if await _has_calibrated_totals(db, a.id):
-        raise HTTPException(
+        raise AppError(
+            "assessment_calibrated_questionnaire_closed",
             status.HTTP_409_CONFLICT,
-            "Assessment results were calibrated; the questionnaire is closed",
         )
 
 
@@ -2122,9 +2186,9 @@ async def _assert_calibration_eligible(
         assessment.status is None
         or assessment.status.code not in _CALIBRATION_ALLOWED_STATUSES
     ):
-        raise HTTPException(
+        raise AppError(
+            "assessment_calibration_not_eligible",
             status.HTTP_400_BAD_REQUEST,
-            "Calibration is available on On Review and Done assessments only",
         )
 
 
@@ -2139,7 +2203,7 @@ async def start_calibration(
         options=[selectinload(Assessment.status)],
     )
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     await _assert_calibration_eligible(db, a)
     a.calibration_in_progress = True
     await db.commit()
@@ -2164,7 +2228,7 @@ async def save_calibration(
         options=[selectinload(Assessment.status)],
     )
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     await _assert_calibration_eligible(db, a)
 
     seen_indicator_ids: set[uuid.UUID] = set()
@@ -2215,7 +2279,7 @@ async def cancel_calibration(
         options=[selectinload(Assessment.status)],
     )
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     await _assert_calibration_eligible(db, a)
 
     await db.execute(
@@ -2261,20 +2325,11 @@ def _nearest_option(
     Select with the computed Total, HRP-185 REDO).
     """
     rated = [
-        (o, o.weight)
-        for o in options
-        if not o.is_neutral and o.weight is not None
+        (o, o.weight) for o in options if not o.is_neutral and o.weight is not None
     ]
     if not rated:
         return None
     return min(rated, key=lambda pair: abs(float(pair[1]) - avg_weight))[0]
-
-
-def _nearest_option_title(
-    avg_weight: float, options: list[AnswerOption]
-) -> str | None:
-    opt = _nearest_option(avg_weight, options)
-    return opt.title if opt is not None else None
 
 
 def _detailed_indicator_row(
@@ -2331,11 +2386,12 @@ def _detailed_indicator_row(
 
         if real_weights:
             avg_w = sum(real_weights) / len(real_weights)
-            title = _nearest_option_title(avg_w, scale_options)
+            nearest = _nearest_option(avg_w, scale_options)
             roles_out.append(
                 {
                     "role": role,
-                    "answer_title": title,
+                    "answer_title": nearest.title if nearest is not None else None,
+                    "answer_code": nearest.code if nearest is not None else None,
                     "answer_weight": avg_w,
                     "is_neutral": False,
                     "answers_count": len(role_answers),
@@ -2353,9 +2409,10 @@ def _detailed_indicator_row(
                 {
                     "role": role,
                     "answer_title": (
-                        neutral_opt.title
-                        if neutral_opt is not None
-                        else "Don't know"
+                        neutral_opt.title if neutral_opt is not None else "Don't know"
+                    ),
+                    "answer_code": (
+                        neutral_opt.code if neutral_opt is not None else None
                     ),
                     "answer_weight": None,
                     "is_neutral": True,
@@ -2379,6 +2436,7 @@ def _detailed_indicator_row(
     overall_avg: float | None = None
     overall_percent: int | None = None
     overall_title: str | None = None
+    overall_code: str | None = None
     # HRP-185 REDO: expose the option id of the auto-computed
     # Total so the calibration Select can pre-populate with
     # the same answer the badge shows (instead of a "Total"
@@ -2391,11 +2449,10 @@ def _detailed_indicator_row(
         overall_opt = _nearest_option(overall_avg, scale_options)
         if overall_opt is not None:
             overall_title = overall_opt.title
+            overall_code = overall_opt.code
             overall_answer_option_id = overall_opt.id
         if max_weight > 0:
-            overall_percent = max(
-                0, min(100, round(overall_avg / max_weight * 100))
-            )
+            overall_percent = max(0, min(100, round(overall_avg / max_weight * 100)))
 
     # HRP-185: if a reviewer pinned this indicator's Total,
     # the calibrated option replaces the computed Total so
@@ -2408,6 +2465,7 @@ def _detailed_indicator_row(
         opt = options_by_id.get(calibrated_opt_id)
         if opt is not None:
             overall_title = opt.title
+            overall_code = opt.code
             overall_answer_option_id = opt.id
             if opt.weight is not None:
                 overall_avg = float(opt.weight)
@@ -2431,6 +2489,7 @@ def _detailed_indicator_row(
         "overall_avg_weight": overall_avg,
         "overall_percent": overall_percent,
         "overall_answer_title": overall_title,
+        "overall_answer_code": overall_code,
         "overall_answer_option_id": overall_answer_option_id,
         "all_dont_know": (
             not is_calibrated
@@ -2539,13 +2598,13 @@ async def get_detailed_results(
         Assessment, assessment_id, options=[selectinload(Assessment.status)]
     )
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     if visible_employee_ids is not None and a.employee_id not in visible_employee_ids:
         # Manager-scoped users can't peek at other divisions even if they
         # know the assessment id — match the HRP-112 fence on
         # ``get_results``.
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     if a.status is None or a.status.code not in _DETAILED_RESULTS_STATUSES:
         return {"assessment_id": assessment_id, "competences": []}
@@ -2572,24 +2631,28 @@ async def get_detailed_results(
 
     competence_ids = [ac.competence_id for ac in assessment_competences]
     competence_rows = (
-        await db.execute(select(Competence).where(Competence.id.in_(competence_ids)))
-    ).scalars().all()
+        (await db.execute(select(Competence).where(Competence.id.in_(competence_ids))))
+        .scalars()
+        .all()
+    )
     competence_by_id = {c.id: c for c in competence_rows}
 
     type_ids = {c.competence_type_id for c in competence_rows if c.competence_type_id}
-    type_titles: dict[uuid.UUID, str] = {}
+    type_items: dict[uuid.UUID, DictionaryItem] = {}
     if type_ids:
         type_rows = (
-            await db.execute(
-                select(DictionaryItem).where(DictionaryItem.id.in_(type_ids))
+            (
+                await db.execute(
+                    select(DictionaryItem).where(DictionaryItem.id.in_(type_ids))
+                )
             )
-        ).scalars().all()
-        type_titles = {row.id: row.title for row in type_rows}
+            .scalars()
+            .all()
+        )
+        type_items = {row.id: row for row in type_rows}
 
     # Scale (snapshot) for option titles and max weight.
-    scale = (
-        await _load_scale_full(db, a.scale_id) if a.scale_id is not None else None
-    )
+    scale = await _load_scale_full(db, a.scale_id) if a.scale_id is not None else None
     if scale is None:
         # No scale → no quantitative breakdown possible. Surface what we
         # have (titles + roles) with everything else null so the UI can
@@ -2630,10 +2693,14 @@ async def get_detailed_results(
     skill_levels_by_id: dict[uuid.UUID, SkillLevel] = {}
     if skill_level_ids:
         sl_rows = (
-            await db.execute(
-                select(SkillLevel).where(SkillLevel.id.in_(skill_level_ids))
+            (
+                await db.execute(
+                    select(SkillLevel).where(SkillLevel.id.in_(skill_level_ids))
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         skill_levels_by_id = {sl.id: sl for sl in sl_rows}
 
     # HRP-185: calibrated Totals override the per-indicator Total field
@@ -2643,9 +2710,7 @@ async def get_detailed_results(
 
     # Answers + the participant/user metadata we need for comments.
     answers_q = await db.execute(
-        select(AssessmentAnswer).where(
-            AssessmentAnswer.assessment_id == assessment_id
-        )
+        select(AssessmentAnswer).where(AssessmentAnswer.assessment_id == assessment_id)
     )
     answers = list(answers_q.scalars().all())
 
@@ -2656,41 +2721,45 @@ async def get_detailed_results(
         p.id: p.user_id for p in participants
     }
     participant_external_name: dict[uuid.UUID, str | None] = {}
-    external_ids = [p.external_reviewer_id for p in participants if p.external_reviewer_id]
+    external_ids = [
+        p.external_reviewer_id for p in participants if p.external_reviewer_id
+    ]
     if external_ids:
         ext_rows = (
-            await db.execute(
-                select(ExternalReviewer).where(ExternalReviewer.id.in_(external_ids))
+            (
+                await db.execute(
+                    select(ExternalReviewer).where(
+                        ExternalReviewer.id.in_(external_ids)
+                    )
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         ext_by_id = {row.id: row for row in ext_rows}
         for p in participants:
             if p.external_reviewer_id and p.external_reviewer_id in ext_by_id:
-                participant_external_name[p.id] = ext_by_id[
-                    p.external_reviewer_id
-                ].name
+                participant_external_name[p.id] = ext_by_id[p.external_reviewer_id].name
 
     user_ids = {uid for uid in participant_user_id.values() if uid is not None}
     user_names: dict[uuid.UUID, str] = {}
     if user_ids:
         user_rows = (
-            await db.execute(select(AuthUser).where(AuthUser.id.in_(user_ids)))
-        ).scalars().all()
+            (await db.execute(select(AuthUser).where(AuthUser.id.in_(user_ids))))
+            .scalars()
+            .all()
+        )
         for u in user_rows:
             user_names[u.id] = _user_full_name(u) or u.email
 
     # Existing aggregated results (calibrated overrides percent/level).
     results_q = await db.execute(
-        select(AssessmentResult).where(
-            AssessmentResult.assessment_id == assessment_id
-        )
+        select(AssessmentResult).where(AssessmentResult.assessment_id == assessment_id)
     )
     result_by_competence = {r.competence_id: r for r in results_q.scalars().all()}
 
     # Pre-bucket answers per indicator → role → list of answer rows.
-    answers_by_indicator_role: dict[
-        uuid.UUID, dict[str, list[AssessmentAnswer]]
-    ] = {}
+    answers_by_indicator_role: dict[uuid.UUID, dict[str, list[AssessmentAnswer]]] = {}
     for ans in answers:
         role = participant_role.get(ans.participant_id)
         if role is None:
@@ -2709,9 +2778,11 @@ async def get_detailed_results(
         comp_indicators = sorted(
             indicators_by_competence.get(ac.competence_id, []),
             key=lambda i: (
-                (skill_levels_by_id[i.skill_level_id].sort_index
-                 if i.skill_level_id and i.skill_level_id in skill_levels_by_id
-                 else 0),
+                (
+                    skill_levels_by_id[i.skill_level_id].sort_index
+                    if i.skill_level_id and i.skill_level_id in skill_levels_by_id
+                    else 0
+                ),
                 i.sort_index,
             ),
         )
@@ -2727,14 +2798,13 @@ async def get_detailed_results(
                 if i.skill_level_id and i.skill_level_id in skill_levels_by_id
             ]
             if sl_candidates:
-                required_sl_id = max(
-                    sl_candidates, key=lambda sl: sl.sort_index
-                ).id
-        required_sl_title = (
-            skill_levels_by_id[required_sl_id].title
+                required_sl_id = max(sl_candidates, key=lambda sl: sl.sort_index).id
+        required_sl = (
+            skill_levels_by_id[required_sl_id]
             if required_sl_id and required_sl_id in skill_levels_by_id
             else None
         )
+        required_sl_title = required_sl.title if required_sl else None
 
         # HRP-184: Detailed results must show only the indicators the
         # questionnaire actually surfaced — drop anything at a skill level
@@ -2752,8 +2822,7 @@ async def get_detailed_results(
                 for i in comp_indicators
                 if i.skill_level_id is not None
                 and i.skill_level_id in skill_levels_by_id
-                and skill_levels_by_id[i.skill_level_id].sort_index
-                <= target_sort_idx
+                and skill_levels_by_id[i.skill_level_id].sort_index <= target_sort_idx
             ]
 
         # Group indicators by skill level for the per-level breakdown.
@@ -2766,9 +2835,11 @@ async def get_detailed_results(
             indicators_by_level.keys(),
             key=lambda sl_id: (
                 1 if sl_id is None else 0,
-                skill_levels_by_id[sl_id].sort_index
-                if sl_id and sl_id in skill_levels_by_id
-                else 0,
+                (
+                    skill_levels_by_id[sl_id].sort_index
+                    if sl_id and sl_id in skill_levels_by_id
+                    else 0
+                ),
             ),
         )
 
@@ -2825,6 +2896,7 @@ async def get_detailed_results(
                 {
                     "skill_level_id": sl_id,
                     "skill_level_title": sl_obj.title if sl_obj else None,
+                    "skill_level_i18n_key": sl_obj.i18n_key if sl_obj else None,
                     "sort_index": sl_obj.sort_index if sl_obj else 0,
                     "percent_for_skill_level": percent_for_skill_level,
                     "all_dont_know": all_dont_know_level,
@@ -2838,15 +2910,22 @@ async def get_detailed_results(
         agg_percent = agg.percent if agg else None
         agg_level_id = agg.level_id if agg else None
         agg_level_title = None
+        agg_level_code = None
         if agg_level_id is not None:
             for lv in scale_levels:
                 if lv.id == agg_level_id:
+                    # Origin levels carry system_code with a NULL
+                    # system_title — without the code the seeded scale's
+                    # level is unlabelable (HRP-479).
                     agg_level_title = lv.system_title
+                    agg_level_code = lv.system_code
                     break
 
-        all_dont_know_comp = all(
-            sl["all_dont_know"] for sl in skill_levels_out
-        ) if skill_levels_out else True
+        all_dont_know_comp = (
+            all(sl["all_dont_know"] for sl in skill_levels_out)
+            if skill_levels_out
+            else True
+        )
 
         competences_out.append(
             {
@@ -2854,15 +2933,24 @@ async def get_detailed_results(
                 "competence_title": comp.title,
                 "competence_type_id": comp.competence_type_id,
                 "competence_type_title": (
-                    type_titles.get(comp.competence_type_id)
-                    if comp.competence_type_id
+                    type_items[comp.competence_type_id].title
+                    if comp.competence_type_id in type_items
+                    else None
+                ),
+                "competence_type_i18n_key": (
+                    type_items[comp.competence_type_id].i18n_key
+                    if comp.competence_type_id in type_items
                     else None
                 ),
                 "required_skill_level_id": required_sl_id,
                 "required_skill_level_title": required_sl_title,
+                "required_skill_level_i18n_key": (
+                    required_sl.i18n_key if required_sl else None
+                ),
                 "percent": agg_percent if not all_dont_know_comp else None,
                 "level_id": agg_level_id if not all_dont_know_comp else None,
                 "level_title": agg_level_title if not all_dont_know_comp else None,
+                "level_code": agg_level_code if not all_dont_know_comp else None,
                 "all_dont_know": all_dont_know_comp,
                 "skill_levels": skill_levels_out,
             }
@@ -2886,7 +2974,7 @@ async def set_assessment_scale(
         Assessment, assessment_id, options=[selectinload(Assessment.status)]
     )
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     await _assert_not_terminal(db, a)
 
     if scale_id is not None:
@@ -2902,7 +2990,7 @@ async def set_assessment_scale(
             )
         )
         if scale_row.scalar_one_or_none() is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Answer scale not found")
+            raise AppError("answer_scale_not_found", status.HTTP_404_NOT_FOUND)
 
     a.scale_id = scale_id
     await db.commit()
@@ -2919,7 +3007,7 @@ async def set_group_scale(
 
     g = await db.get(AssessmentGroup, group_id)
     if not g or g.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment group not found")
+        raise AppError("assessment_group_not_found", status.HTTP_404_NOT_FOUND)
 
     if scale_id is not None:
         scale_row = await db.execute(
@@ -2934,7 +3022,7 @@ async def set_group_scale(
             )
         )
         if scale_row.scalar_one_or_none() is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Answer scale not found")
+            raise AppError("answer_scale_not_found", status.HTTP_404_NOT_FOUND)
 
     # Scale is locked once any child has left draft — that's when the scale gets
     # snapshotted, so changing the group value would orphan snapshots.
@@ -2945,9 +3033,9 @@ async def set_group_scale(
     )
     assessments = children.scalars().all()
     if any(a.status and a.status.code != "draft" for a in assessments):
-        raise HTTPException(
+        raise AppError(
+            "assessment_group_scale_locked",
             status.HTTP_400_BAD_REQUEST,
-            "Rating scale is locked: not all assessments in the group are in draft",
         )
 
     g.scale_id = scale_id
@@ -3145,7 +3233,11 @@ async def _recompute_assessment_results(
         # HRP-126: when calibration override is present on an existing result,
         # keep percent/level aligned with the calibrated score so transitions
         # (on_review → done) don't silently revert the reviewer's decision.
-        if existing is not None and existing.calibrated_score is not None and max_weight > 0:
+        if (
+            existing is not None
+            and existing.calibrated_score is not None
+            and max_weight > 0
+        ):
             calibrated_ratio = float(existing.calibrated_score) / max_weight
             percent = max(0, min(100, round(calibrated_ratio * 100)))
             level_id = None
@@ -3184,7 +3276,7 @@ async def create_mass_assessment(
     # Deduplicate and validate employees
     unique_ids = list(dict.fromkeys(data.employee_ids))
     if not unique_ids:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No employees provided")
+        raise AppError("assessment_no_employees_provided", status.HTTP_400_BAD_REQUEST)
 
     result = await db.execute(
         select(Employee).where(
@@ -3194,9 +3286,10 @@ async def create_mass_assessment(
     found = {e.id for e in result.scalars().all()}
     missing = set(unique_ids) - found
     if missing:
-        raise HTTPException(
+        raise AppError(
+            "assessment_employees_not_found",
             status.HTTP_400_BAD_REQUEST,
-            f"Employees not found: {[str(m) for m in missing]}",
+            employee_ids=[str(m) for m in missing],
         )
 
     # HRP-37: enforce the per-employee active-assessment cap on Mass
@@ -3213,9 +3306,7 @@ async def create_mass_assessment(
         .group_by(Assessment.employee_id)
     )
     rows = (await db.execute(active_by_employee_q)).all()
-    active_count_by_emp: dict[uuid.UUID, int] = {
-        row[0]: row[1] for row in rows
-    }
+    active_count_by_emp: dict[uuid.UUID, int] = {row[0]: row[1] for row in rows}
     eligible_ids = [
         emp_id
         for emp_id in unique_ids
@@ -3223,11 +3314,10 @@ async def create_mass_assessment(
     ]
     skipped_count = len(unique_ids) - len(eligible_ids)
     if not eligible_ids:
-        raise HTTPException(
+        raise AppError(
+            "assessment_mass_all_employees_capped",
             status.HTTP_409_CONFLICT,
-            f"All selected employees already have "
-            f"{MAX_ACTIVE_ASSESSMENTS_PER_EMPLOYEE} or more active assessments. "
-            "Finish or cancel an existing one before starting a Mass assessment.",
+            limit=MAX_ACTIVE_ASSESSMENTS_PER_EMPLOYEE,
         )
 
     # Create group (still created even on partial — the assessment group
@@ -3338,9 +3428,7 @@ async def list_assessments_grouped(
     def _group_bucket_and_date(
         children: list[Assessment], group_created_at: datetime
     ) -> tuple[int, datetime]:
-        codes = [
-            a.status.code if a.status else "unknown" for a in children
-        ]
+        codes = [a.status.code if a.status else "unknown" for a in children]
         any_active = any(c not in TERMINAL_STATUSES for c in codes)
         if any_active or not codes:
             return 0, group_created_at
@@ -3451,9 +3539,7 @@ async def list_assessments_grouped(
                     return False
             if type_filter and a.get("type_code") not in type_filter:
                 return False
-            return not (
-                status_filter and a.get("status_code") not in status_filter
-            )
+            return not (status_filter and a.get("status_code") not in status_filter)
         g = item["group"]
         if search_q and search_q not in (g.get("title") or "").lower():
             return False
@@ -3491,7 +3577,7 @@ async def get_assessment_group(
 ) -> dict:
     g = await db.get(AssessmentGroup, group_id)
     if not g or g.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment group not found")
+        raise AppError("assessment_group_not_found", status.HTTP_404_NOT_FOUND)
 
     # HRP-40 follow-up: this endpoint is the lazy-load companion to
     # /assessments-grouped (frontend `assessments/page.tsx` fetches it when
@@ -3521,10 +3607,8 @@ async def get_assessment_group(
     # A scope-restricted caller with no visible child shouldn't be able to
     # confirm the group exists via this endpoint either — mirror the
     # hide-empty-group rule from list_assessments_grouped.
-    if (
-        visible_employee_ids is not None or restrict_to_active
-    ) and not assessments:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment group not found")
+    if (visible_employee_ids is not None or restrict_to_active) and not assessments:
+        raise AppError("assessment_group_not_found", status.HTTP_404_NOT_FOUND)
 
     status_summary: dict[str, int] = {}
     type_code = None
@@ -3551,11 +3635,14 @@ async def get_assessment_group(
                 "competence_title": c.competence.title if c.competence else "",
                 "skill_level_id": c.skill_level_id,
                 "skill_level_title": c.skill_level.title if c.skill_level else None,
+                "skill_level_i18n_key": (
+                    c.skill_level.i18n_key if c.skill_level else None
+                ),
             }
             for c in comp_q.scalars().all()
         ]
 
-    spec_title, grade_title = await _resolve_dict_titles(
+    spec_title, grade_title, spec_key, grade_key = await _resolve_dict_titles(
         db, g.specialization_id, g.grade_id
     )
     scale_data = None
@@ -3575,8 +3662,10 @@ async def get_assessment_group(
         "criteria_type": g.criteria_type,
         "specialization_id": g.specialization_id,
         "specialization_title": spec_title,
+        "specialization_i18n_key": spec_key,
         "grade_id": g.grade_id,
         "grade_title": grade_title,
+        "grade_i18n_key": grade_key,
         "passing_score": g.passing_score,
         "competences": competences_data,
         "scale_id": g.scale_id,
@@ -3599,11 +3688,11 @@ async def update_assessment_group(
     """
     g = await db.get(AssessmentGroup, group_id)
     if not g or g.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment group not found")
+        raise AppError("assessment_group_not_found", status.HTTP_404_NOT_FOUND)
 
     new_title = title.strip()
     if not new_title:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Title cannot be empty")
+        raise AppError("assessment_title_empty", status.HTTP_400_BAD_REQUEST)
 
     g.title = new_title
     children = await db.execute(
@@ -3620,7 +3709,7 @@ async def bulk_change_status(
 ) -> dict:
     g = await db.get(AssessmentGroup, group_id)
     if not g or g.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment group not found")
+        raise AppError("assessment_group_not_found", status.HTTP_404_NOT_FOUND)
 
     new_status = await _get_status_by_code(db, new_code)
 
@@ -3835,7 +3924,7 @@ async def get_cpa_detail(
     )
     c = result.scalar_one_or_none()
     if not c:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "CPA not found")
+        raise AppError("cpa_not_found", status.HTTP_404_NOT_FOUND)
 
     data = _cpa_to_read(c)
     data["criteria"] = [
@@ -3878,7 +3967,7 @@ async def add_cpa_criteria(
 ) -> dict:
     c = await db.get(CPA, cpa_id)
     if not c or c.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "CPA not found")
+        raise AppError("cpa_not_found", status.HTTP_404_NOT_FOUND)
 
     cr = CPACriteria(
         cpa_id=cpa_id,
@@ -3903,7 +3992,7 @@ async def add_cpa_participant(
 ) -> dict:
     c = await db.get(CPA, cpa_id)
     if not c or c.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "CPA not found")
+        raise AppError("cpa_not_found", status.HTTP_404_NOT_FOUND)
 
     p = CPAParticipant(cpa_id=cpa_id, user_id=data.user_id, role=data.role)
     db.add(p)
@@ -3917,7 +4006,7 @@ async def get_cpa_analytics(
 ) -> dict:
     c = await db.get(CPA, cpa_id)
     if not c or c.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "CPA not found")
+        raise AppError("cpa_not_found", status.HTTP_404_NOT_FOUND)
 
     # Get all assessments for this CPA
     result = await db.execute(
@@ -3998,7 +4087,7 @@ async def copy_cpa(
     )
     source = result.scalar_one_or_none()
     if not source:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Source CPA not found")
+        raise AppError("source_cpa_not_found", status.HTTP_404_NOT_FOUND)
 
     new_cpa = CPA(
         tenant_id=tenant_id,
@@ -4067,7 +4156,7 @@ async def create_external_reviewer(
 ) -> dict:
     a = await db.get(Assessment, assessment_id)
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     token = secrets.token_urlsafe(32)
     er = ExternalReviewer(
@@ -4098,9 +4187,19 @@ async def create_external_reviewer(
         try:
             from app.core.email import enqueue_email
             from app.core.email_templates import render_external_review_email
+            from app.core.i18n import format_date, resolve_locale
+            from app.modules.company.models import Tenant
 
-            deadline = er.expires_at.strftime("%B %d, %Y") if er.expires_at else None
-            subj, body = render_external_review_email(token, a.title or "", deadline)
+            # i18n F4: the invitee has no account yet, so the tenant
+            # default is the whole chain for them.
+            tenant = await db.get(Tenant, tenant_id)
+            locale = resolve_locale(
+                tenant_default=tenant.default_locale if tenant else None
+            )
+            deadline = format_date(er.expires_at, locale) if er.expires_at else None
+            subj, body = render_external_review_email(
+                token, a.title or "", deadline, locale=locale
+            )
             enqueue_email(
                 email,
                 subj,
@@ -4123,7 +4222,7 @@ async def list_external_reviewers(
 ) -> list[dict]:
     a = await db.get(Assessment, assessment_id)
     if not a or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     result = await db.execute(
         select(ExternalReviewer)
@@ -4138,7 +4237,7 @@ async def delete_external_reviewer(
 ) -> dict:
     er = await db.get(ExternalReviewer, reviewer_id)
     if not er or er.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "External reviewer not found")
+        raise AppError("external_reviewer_not_found", status.HTTP_404_NOT_FOUND)
 
     # Also remove participant
     result = await db.execute(
@@ -4163,13 +4262,11 @@ async def get_external_assessment(db: AsyncSession, token: str) -> dict:
     )
     er = result.scalar_one_or_none()
     if not er:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invalid review link")
+        raise AppError("external_review_link_invalid", status.HTTP_404_NOT_FOUND)
     if er.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This review link has expired")
+        raise AppError("external_review_link_expired", status.HTTP_400_BAD_REQUEST)
     if er.completed_at:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "This review has already been completed"
-        )
+        raise AppError("external_review_already_completed", status.HTTP_400_BAD_REQUEST)
 
     a = await db.execute(
         select(Assessment)
@@ -4221,6 +4318,7 @@ async def get_external_assessment(db: AsyncSession, token: str) -> dict:
                 "id": s.id,
                 "title": s.title,
                 "description": s.description,
+                "i18n_key": s.i18n_key,
                 "tenant_id": s.tenant_id,
                 "is_default": s.is_default,
                 "options": [
@@ -4250,6 +4348,8 @@ async def get_external_assessment(db: AsyncSession, token: str) -> dict:
         "assessment_id": assessment.id,
         "employee_name": employee_name,
         "type_title": assessment.assessment_type.title,
+        # HRP-479: stable code so a future external-review UI can localize.
+        "type_code": assessment.assessment_type.code,
         "competences": competences_data,
         "scale": scale_data,
     }
@@ -4262,13 +4362,11 @@ async def submit_external_answers(db: AsyncSession, token: str, answers: list) -
     )
     er = result.scalar_one_or_none()
     if not er:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invalid review link")
+        raise AppError("external_review_link_invalid", status.HTTP_404_NOT_FOUND)
     if er.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This review link has expired")
+        raise AppError("external_review_link_expired", status.HTTP_400_BAD_REQUEST)
     if er.completed_at:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "This review has already been completed"
-        )
+        raise AppError("external_review_already_completed", status.HTTP_400_BAD_REQUEST)
 
     # HRP-185 / HRP-329: refuse submission while the assessment is being
     # calibrated — or after a calibration was saved.
@@ -4284,7 +4382,9 @@ async def submit_external_answers(db: AsyncSession, token: str, answers: list) -
     )
     participant = p_result.scalar_one_or_none()
     if not participant:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Participant record not found")
+        raise AppError(
+            "assessment_participant_record_not_found", status.HTTP_400_BAD_REQUEST
+        )
 
     # Record all answers
     for ans in answers:

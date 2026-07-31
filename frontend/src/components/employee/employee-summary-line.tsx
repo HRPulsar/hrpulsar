@@ -12,8 +12,10 @@
 // across the product.
 
 import * as React from "react";
+import { useTranslations } from "next-intl";
 
 import { Badge } from "@/components/ui/badge";
+import { employeeStatusLabel } from "@/components/employees/employee-status";
 import { cn } from "@/lib/utils";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 
@@ -51,10 +53,6 @@ export function statusBadgeClass(status: string): string {
   }
 }
 
-export function statusLabel(status: string): string {
-  return status.replace(/_/g, " ");
-}
-
 export function deriveEmployeeSummary(emp: EmployeeSummaryShape): {
   name: string;
   position: string;
@@ -75,7 +73,9 @@ export function EmployeeSummaryLine({
   positionClassName,
   "data-testid": testId,
 }: EmployeeSummaryLineProps) {
+  const t = useTranslations("employees");
   const { name, position, status, showStatus } = deriveEmployeeSummary(employee);
+  const statusText = employeeStatusLabel(t, status);
 
   // HRP-333: with the name hidden and nothing to show (no position, active
   // status) render nothing — avoids a dead flex-gap under names of e.g.
@@ -106,7 +106,7 @@ export function EmployeeSummaryLine({
                 statusBadgeClass(status),
               )}
             >
-              {statusLabel(status)}
+              {statusText}
             </Badge>
           )}
         </div>
@@ -128,7 +128,7 @@ export function EmployeeSummaryLine({
           variant="secondary"
           className={cn("w-fit shrink-0 capitalize", statusBadgeClass(status))}
         >
-          {statusLabel(status)}
+          {statusText}
         </Badge>
       )}
     </div>

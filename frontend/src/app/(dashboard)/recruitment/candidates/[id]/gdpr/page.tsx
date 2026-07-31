@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
   Card,
@@ -34,6 +35,7 @@ export default function CandidateGDPRPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const t = useTranslations("recruitment");
   const [requests, setRequests] = useState<ExportRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
@@ -68,35 +70,30 @@ export default function CandidateGDPRPage({
         window.open(result.file_url, "_blank");
       } else {
         toast.success(
-          `Export registered (id ${result.id.slice(0, 8)}). The file will be available once it is ready.`,
+          t("gdprToastExportRegistered", { id: result.id.slice(0, 8) }),
         );
       }
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Export failed");
+      toast.error(err instanceof Error ? err.message : t("gdprExportFailed"));
     } finally {
       setExporting(false);
     }
   }
 
   async function handleErase() {
-    if (
-      !confirm(
-        "Are you sure you want to anonymize this candidate's data? This action is irreversible. Name, email and interview transcripts will be replaced with \"redacted\".",
-      )
-    )
-      return;
-    if (!confirm("Confirm once more: anonymize the data?")) return;
+    if (!confirm(t("gdprEraseConfirm"))) return;
+    if (!confirm(t("gdprEraseConfirmAgain"))) return;
     setErasing(true);
     try {
       await api.post("/recruitment/gdpr-erase", {
         candidate_id: id,
         confirm: true,
       });
-      toast.success("Candidate data anonymized");
+      toast.success(t("gdprToastErased"));
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
+      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setErasing(false);
     }
@@ -106,17 +103,20 @@ export default function CandidateGDPRPage({
     <div className="space-y-5" data-testid="candidate-gdpr-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Candidates", href: "/recruitment/candidates" },
-          { label: "Profile", href: `/recruitment/candidates/${id}` },
-          { label: "GDPR" },
+          { label: t("candidatesTitle"), href: "/recruitment/candidates" },
+          {
+            label: t("gdprBreadcrumbProfile"),
+            href: `/recruitment/candidates/${id}`,
+          },
+          { label: t("gdprTitle") },
         ]}
       />
       <header>
-        <h1 className="text-xl font-semibold tracking-tight">GDPR</h1>
+        <h1 className="text-xl font-semibold tracking-tight">
+          {t("gdprTitle")}
+        </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Data subject rights compliance: export all collected data and
-          anonymize it (right to be forgotten). Soft-erase: the record remains,
-          but PII is replaced with &ldquo;redacted&rdquo; for audit purposes.
+          {t("gdprDescription")}
         </p>
       </header>
 
@@ -125,13 +125,12 @@ export default function CandidateGDPRPage({
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm">
               <Download className="size-4" />
-              Export data
+              {t("gdprExportCardTitle")}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              We will collect all candidate data (resume, questions, interviews,
-              scores, consents) into JSON. The link will be valid for 7 days.
+              {t("gdprExportCardBody")}
             </p>
             <Button
               onClick={handleExport}
@@ -143,7 +142,7 @@ export default function CandidateGDPRPage({
               ) : (
                 <Download className="size-4" />
               )}
-              Start export
+              {t("gdprExportButton")}
             </Button>
           </CardContent>
         </Card>
@@ -152,18 +151,16 @@ export default function CandidateGDPRPage({
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm">
               <ShieldOff className="size-4" />
-              Erase data
+              {t("gdprEraseCardTitle")}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              Candidate name, email, phone, resume text, interview transcripts
-              and segments will be replaced with &ldquo;redacted&rdquo;. The
-              record structure is preserved for audit purposes.
+              {t("gdprEraseCardBody")}
             </p>
             <div className={`flex gap-2 rounded-md border p-2 text-xs ${ALERT_TONE.amber}`}>
               <AlertTriangle className="size-4 shrink-0" />
-              This action is irreversible.
+              {t("gdprIrreversible")}
             </div>
             <Button
               variant="destructive"
@@ -176,22 +173,22 @@ export default function CandidateGDPRPage({
               ) : (
                 <ShieldOff className="size-4" />
               )}
-              Anonymize
+              {t("gdprEraseButton")}
             </Button>
           </CardContent>
         </Card>
       </div>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-medium">Export request history</h2>
+        <h2 className="text-sm font-medium">{t("gdprHistoryTitle")}</h2>
         {loading ? (
           <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
             <Loader2 className="mr-2 size-4 animate-spin" />
-            Loading…
+            {t("loading")}
           </div>
         ) : requests.length === 0 ? (
           <div className="rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">
-            No export requests for this candidate yet.
+            {t("gdprHistoryEmpty")}
           </div>
         ) : (
           <ul className="space-y-2">
@@ -215,8 +212,9 @@ export default function CandidateGDPRPage({
                     </Badge>
                     {req.expires_at && (
                       <span className="text-[11px] text-muted-foreground">
-                        expires{" "}
-                        {formatDate(req.expires_at)}
+                        {t("gdprExpires", {
+                          date: formatDate(req.expires_at),
+                        })}
                       </span>
                     )}
                   </div>
@@ -231,11 +229,11 @@ export default function CandidateGDPRPage({
                     rel="noreferrer"
                     className="text-xs text-cyan-700 underline-offset-2 hover:underline"
                   >
-                    Download JSON →
+                    {t("gdprDownloadJson")}
                   </a>
                 ) : (
                   <span className="text-xs text-muted-foreground">
-                    File unavailable
+                    {t("gdprFileUnavailable")}
                   </span>
                 )}
               </li>

@@ -14,11 +14,13 @@ import {
  */
 const VERIFY_TIMEOUT_MS = 15_000;
 
-/** User-facing explanation shown by consumers when ``failed`` is true. */
-export const TURNSTILE_FAILED_MESSAGE =
-  "Browser verification could not load. This is usually caused by an ad " +
-  "blocker or privacy extension — allow challenges.cloudflare.com for " +
-  "this site and retry.";
+/**
+ * HRP-476: key in the `auth` i18n namespace for the user-facing
+ * explanation consumers render when ``failed`` is true. Every consumer is
+ * a client component with a translator in hand, so the English wording
+ * lives only in the catalog — no fallback constant here.
+ */
+export const TURNSTILE_FAILED_MESSAGE_KEY = "turnstileFailed";
 
 /**
  * Site key resolution order:
@@ -52,9 +54,9 @@ export interface TurnstileGate {
   /**
    * True when the widget reported an error or stayed unresolved past
    * ``VERIFY_TIMEOUT_MS``. Callers must surface
-   * ``TURNSTILE_FAILED_MESSAGE`` and offer a retry (``reset()``) instead
-   * of waiting on ``isReady`` forever. Cleared automatically if a token
-   * does eventually arrive.
+   * ``TURNSTILE_FAILED_MESSAGE_KEY`` and offer a retry (``reset()``)
+   * instead of waiting on ``isReady`` forever. Cleared automatically if a
+   * token does eventually arrive.
    */
   failed: boolean;
   /**

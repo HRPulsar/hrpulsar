@@ -19,6 +19,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Plus, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
@@ -77,7 +78,10 @@ function emptyLevel(): LevelDraft {
   };
 }
 
-function levelErrors(levels: LevelDraft[]): Record<string, string> {
+function levelErrors(
+  t: (key: string) => string,
+  levels: LevelDraft[],
+): Record<string, string> {
   const errs: Record<string, string> = {};
   if (levels.length === 0) return errs;
   const parsed = levels.map((lv) => ({
@@ -94,11 +98,11 @@ function levelErrors(levels: LevelDraft[]): Record<string, string> {
       p.to < 0 ||
       p.to > 100
     ) {
-      errs[p.uid] = "Value must be between 0 and 100";
+      errs[p.uid] = t("levelErrorRange");
       continue;
     }
     if (p.from > p.to) {
-      errs[p.uid] = "From cannot exceed To";
+      errs[p.uid] = t("levelErrorFromTo");
     }
   }
   const sorted = [...parsed]
@@ -106,17 +110,17 @@ function levelErrors(levels: LevelDraft[]): Record<string, string> {
     .sort((a, b) => a.from - b.from);
   if (sorted.length > 0) {
     if (sorted[0].from !== 0) {
-      errs[sorted[0].uid] = errs[sorted[0].uid] ?? "First level must start at 0";
+      errs[sorted[0].uid] = errs[sorted[0].uid] ?? t("levelErrorFirst");
     }
     if (sorted[sorted.length - 1].to !== 100) {
       const last = sorted[sorted.length - 1];
-      errs[last.uid] = errs[last.uid] ?? "Last level must end at 100";
+      errs[last.uid] = errs[last.uid] ?? t("levelErrorLast");
     }
     for (let i = 0; i + 1 < sorted.length; i += 1) {
       const cur = sorted[i];
       const nxt = sorted[i + 1];
       if (nxt.from !== cur.to + 1) {
-        errs[nxt.uid] = errs[nxt.uid] ?? "Overlap or gap with the previous level";
+        errs[nxt.uid] = errs[nxt.uid] ?? t("levelErrorOverlap");
       }
     }
   }
@@ -138,6 +142,7 @@ function SortableOption({
   onChange,
   onRemove,
 }: SortableOptionProps) {
+  const t = useTranslations("assessments");
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: option.uid });
 
@@ -159,19 +164,19 @@ function SortableOption({
         className="mt-1 cursor-grab text-muted-foreground"
         {...attributes}
         {...listeners}
-        aria-label="Drag to reorder"
+        aria-label={t("dragToReorder")}
       >
         <GripVertical className="size-4" />
       </button>
       <div className="flex flex-1 flex-col gap-1.5">
         <Input
-          placeholder="Option title"
+          placeholder={t("optionTitlePlaceholder")}
           value={option.title}
           onChange={(e) => onChange(option.uid, { title: e.target.value })}
           data-testid={`scale-editor-option-row-${index}-input-title`}
         />
         <Input
-          placeholder="Description (optional)"
+          placeholder={t("optionDescriptionPlaceholder")}
           value={option.description}
           onChange={(e) =>
             onChange(option.uid, { description: e.target.value })
@@ -180,7 +185,9 @@ function SortableOption({
         />
       </div>
       <div className="flex flex-col items-end gap-1">
-        <span className="text-xs text-muted-foreground">Score: {index}</span>
+        <span className="text-xs text-muted-foreground">
+          {t("scoreValue", { value: index })}
+        </span>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -220,6 +227,8 @@ function ScaleEditorBody({
   dirtyRef,
   onRequestCancel,
 }: ScaleEditorBodyProps) {
+  const t = useTranslations("assessments");
+  const tc = useTranslations("common");
   const [title, setTitle] = useState(initial?.title ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [options, setOptions] = useState<OptionDraft[]>(() => {
@@ -240,7 +249,9 @@ function ScaleEditorBody({
   );
   const [neutralTitle, setNeutralTitle] = useState<string>(() => {
     const n = initial?.options.find((o) => o.is_neutral);
-    return n?.title ?? "Don't know";
+    // i18n F7: prefill in the editor locale; the submit-time fallback
+    // below stays the English DB canon for a deliberately cleared field.
+    return n?.title ?? t("neutralOptionDefaultTitle");
   });
   const [levels, setLevels] = useState<LevelDraft[]>(() => {
     if (initial && initial.levels.length > 0) {
@@ -280,7 +291,7 @@ function ScaleEditorBody({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  const lvlErrs = useMemo(() => levelErrors(levels), [levels]);
+  const lvlErrs = useMemo(() => levelErrors(t, levels), [t, levels]);
   const hasLevelErrors = Object.keys(lvlErrs).length > 0;
 
   const optionsValid = options.length >= MIN_OPTIONS &&
@@ -386,14 +397,14 @@ function ScaleEditorBody({
             payload,
           );
       toast.success(
-        mode === "create" ? "Scale created" : "Scale updated",
+        mode === "create" ? t("toastScaleCreated") : t("toastScaleUpdated"),
       );
       onSaved(saved);
       setDirty(false);
       onClose();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save scale",
+        err instanceof Error ? err.message : t("errorScaleSaveFailed"),
       );
     } finally {
       setSaving(false);
@@ -416,13 +427,13 @@ function ScaleEditorBody({
       >
         <SheetHeader>
           <SheetTitle>
-            {mode === "create" ? "Create scale" : "Edit scale"}
+            {mode === "create" ? t("createScale") : t("editScale")}
           </SheetTitle>
         </SheetHeader>
 
         <div className="flex-1 space-y-5 overflow-y-auto pr-1">
           <div className="space-y-1.5">
-            <Label htmlFor="scale-title">Title</Label>
+            <Label htmlFor="scale-title">{t("fieldTitle")}</Label>
             <Input
               id="scale-title"
               value={title}
@@ -432,7 +443,7 @@ function ScaleEditorBody({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="scale-description">Description</Label>
+            <Label htmlFor="scale-description">{t("fieldDescription")}</Label>
             <Textarea
               id="scale-description"
               value={description}
@@ -443,7 +454,7 @@ function ScaleEditorBody({
 
           <section className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>Scale levels</Label>
+              <Label>{t("scaleLevels")}</Label>
               <Button
                 size="xs"
                 variant="outline"
@@ -451,17 +462,15 @@ function ScaleEditorBody({
                 data-testid="scale-editor-levels-btn-add"
               >
                 <Plus className="mr-1 size-3" />
-                Add level
+                {t("addLevel")}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Levels must cover the 0–100% range without overlaps or gaps.
-              Adjacent intervals are separated by 1% (e.g. 0–50 and
-              51–100).
+              {t("scaleLevelsHint")}
             </p>
             {levels.length === 0 ? (
               <p className="rounded-md border border-dashed py-3 text-center text-xs text-muted-foreground">
-                No levels defined — results will be shown as percentages only.
+                {t("noLevelsDefined")}
               </p>
             ) : (
               <div
@@ -479,7 +488,7 @@ function ScaleEditorBody({
                         type="number"
                         min={0}
                         max={100}
-                        placeholder="From"
+                        placeholder={t("fromPlaceholder")}
                         className="w-20"
                         value={lv.percent_from}
                         onChange={(e) =>
@@ -492,7 +501,7 @@ function ScaleEditorBody({
                         type="number"
                         min={0}
                         max={100}
-                        placeholder="To"
+                        placeholder={t("toPlaceholder")}
                         className="w-20"
                         value={lv.percent_to}
                         onChange={(e) =>
@@ -501,7 +510,7 @@ function ScaleEditorBody({
                         data-testid={`scale-editor-level-row-${idx}-input-to`}
                       />
                       <Input
-                        placeholder="Level title"
+                        placeholder={t("levelTitlePlaceholder")}
                         className="flex-1 min-w-40"
                         value={lv.system_title}
                         onChange={(e) =>
@@ -521,7 +530,7 @@ function ScaleEditorBody({
                       </Button>
                     </div>
                     <Input
-                      placeholder="Level description (optional)"
+                      placeholder={t("levelDescriptionPlaceholder")}
                       value={lv.description}
                       onChange={(e) =>
                         updateLevel(lv.uid, { description: e.target.value })
@@ -541,7 +550,7 @@ function ScaleEditorBody({
 
           <section className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>Answer options</Label>
+              <Label>{t("answerOptions")}</Label>
               <Button
                 size="xs"
                 variant="outline"
@@ -550,12 +559,11 @@ function ScaleEditorBody({
                 data-testid="scale-editor-options-btn-add"
               >
                 <Plus className="mr-1 size-3" />
-                Add option
+                {t("addOption")}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Score is assigned by position (0 — lowest). Drag options to
-              reorder.
+              {t("optionsScoreHint")}
             </p>
             <DndContext
               sensors={sensors}
@@ -592,13 +600,13 @@ function ScaleEditorBody({
                 checked={neutralEnabled}
                 onCheckedChange={(c) => setNeutralEnabled(c === true)}
               />
-              <span>Add a &quot;Don&apos;t know&quot; option (excluded from score)</span>
+              <span>{t("neutralOptionCheckbox")}</span>
             </label>
             {neutralEnabled && (
               <Input
                 value={neutralTitle}
                 onChange={(e) => setNeutralTitle(e.target.value)}
-                placeholder="Option title"
+                placeholder={t("optionTitlePlaceholder")}
                 className="ml-6 max-w-xs"
               />
             )}
@@ -612,14 +620,14 @@ function ScaleEditorBody({
             disabled={saving}
             data-testid="scale-editor-btn-cancel"
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={attemptSave}
             disabled={!canSave || saving}
             data-testid="scale-editor-btn-save"
           >
-            {saving ? "Saving…" : "Save"}
+            {saving ? t("savingEllipsis") : t("save")}
           </Button>
         </SheetFooter>
       </SheetContent>
@@ -627,9 +635,9 @@ function ScaleEditorBody({
       <ConfirmDialog
         open={confirmSaveOpen}
         onOpenChange={setConfirmSaveOpen}
-        title="Save changes?"
-        description="The changes will be applied to every draft assessment that uses this scale."
-        confirmLabel="Save"
+        title={t("saveChangesTitle")}
+        description={t("saveChangesDescription")}
+        confirmLabel={t("save")}
         onConfirm={performSave}
         testId="scale-confirm-save"
       />
@@ -644,6 +652,7 @@ export function ScaleEditorSheet({
   initial,
   onSaved,
 }: ScaleEditorSheetProps) {
+  const t = useTranslations("assessments");
   const dirtyRef = useRef(false);
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
 
@@ -683,9 +692,9 @@ export function ScaleEditorSheet({
       <ConfirmDialog
         open={confirmCancelOpen}
         onOpenChange={setConfirmCancelOpen}
-        title="Discard changes?"
-        description="Are you sure you want to discard your edits?"
-        confirmLabel="Discard"
+        title={t("discardChangesTitle")}
+        description={t("discardChangesDescription")}
+        confirmLabel={t("discard")}
         onConfirm={forceClose}
         testId="scale-confirm-cancel"
       />

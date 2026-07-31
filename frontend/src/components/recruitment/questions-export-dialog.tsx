@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -33,6 +34,8 @@ export function QuestionsExportDialog({
   candidateName,
   vacancyTitle,
 }: QuestionsExportDialogProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [includeGood, setIncludeGood] = useState(true);
   const [includeAcceptable, setIncludeAcceptable] = useState(true);
   const [includePoor, setIncludePoor] = useState(false);
@@ -61,7 +64,7 @@ export function QuestionsExportDialog({
       onOpenChange(false);
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Failed to export PDF";
+        err instanceof Error ? err.message : t("questionsExportFailed");
       toast.error(message);
     } finally {
       setDownloading(false);
@@ -72,16 +75,19 @@ export function QuestionsExportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="questions-export-dialog">
         <DialogHeader>
-          <DialogTitle>Export questions to PDF</DialogTitle>
+          <DialogTitle>{t("questionsExportTitle")}</DialogTitle>
           <DialogDescription>
             {candidateName && vacancyTitle
-              ? `Questions for ${candidateName} — ${vacancyTitle}`
-              : "Choose which reference answers to include in the PDF."}
+              ? t("questionsExportSubtitle", {
+                  candidate: candidateName,
+                  vacancy: vacancyTitle,
+                })
+              : t("questionsExportDescription")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            Include reference answers
+            {t("questionsExportIncludeHeading")}
           </p>
           <label className="flex items-center gap-3 text-sm">
             <Checkbox
@@ -89,7 +95,9 @@ export function QuestionsExportDialog({
               onCheckedChange={(v) => setIncludeGood(Boolean(v))}
               data-testid="export-good"
             />
-            <Label className="cursor-pointer">Good answer</Label>
+            <Label className="cursor-pointer">
+              {t("questionsExportGood")}
+            </Label>
           </label>
           <label className="flex items-center gap-3 text-sm">
             <Checkbox
@@ -97,7 +105,9 @@ export function QuestionsExportDialog({
               onCheckedChange={(v) => setIncludeAcceptable(Boolean(v))}
               data-testid="export-acceptable"
             />
-            <Label className="cursor-pointer">Acceptable answer</Label>
+            <Label className="cursor-pointer">
+              {t("questionsExportAcceptable")}
+            </Label>
           </label>
           <label className="flex items-center gap-3 text-sm">
             <Checkbox
@@ -105,10 +115,12 @@ export function QuestionsExportDialog({
               onCheckedChange={(v) => setIncludePoor(Boolean(v))}
               data-testid="export-poor"
             />
-            <Label className="cursor-pointer">Poor answer</Label>
+            <Label className="cursor-pointer">
+              {t("questionsExportPoor")}
+            </Label>
           </label>
           <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
-            PDF: questions grouped by competency, branded with your tenant.
+            {t("questionsExportNote")}
           </p>
         </div>
         <DialogFooter>
@@ -117,7 +129,7 @@ export function QuestionsExportDialog({
             onClick={() => onOpenChange(false)}
             disabled={downloading}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={handleDownload}
@@ -129,7 +141,7 @@ export function QuestionsExportDialog({
             ) : (
               <>
                 <Download className="mr-1 size-4" />
-                Download
+                {t("questionsExportDownload")}
               </>
             )}
           </Button>

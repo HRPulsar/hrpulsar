@@ -2,20 +2,30 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 const tabs = [
-  { href: "/company", label: "Overview", testId: "company-tab-overview" },
-  { href: "/company/profile", label: "Profile", testId: "company-tab-profile" },
-  { href: "/company/positions", label: "Positions", testId: "company-tab-positions" },
+  { href: "/company", labelKey: "tabOverview", testId: "company-tab-overview" },
+  {
+    href: "/company/profile",
+    labelKey: "tabProfile",
+    testId: "company-tab-profile",
+  },
+  {
+    href: "/company/positions",
+    labelKey: "tabPositions",
+    testId: "company-tab-positions",
+  },
   {
     href: "/company/specializations",
-    label: "Specializations",
+    labelKey: "tabSpecializations",
     testId: "company-tab-specializations",
   },
 ];
 
 export function CompanyTabs() {
   const pathname = usePathname() ?? "";
+  const t = useTranslations("company");
   return (
     <nav className="flex gap-1 border-b">
       {tabs.map((tab) => {
@@ -34,7 +44,7 @@ export function CompanyTabs() {
                 : "border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
             }
           >
-            {tab.label}
+            {t(tab.labelKey)}
           </Link>
         );
       })}

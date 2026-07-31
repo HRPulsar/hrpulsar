@@ -1,6 +1,7 @@
 "use client";
 
 import { forwardRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -45,6 +46,7 @@ export const ScoreCell = forwardRef<HTMLDivElement, ScoreCellProps>(
     },
     ref,
   ) {
+    const t = useTranslations("recruitment");
     const displayString =
       value === null || value === undefined ? "" : String(value);
     const [draftOverride, setDraftOverride] = useState<string | null>(null);
@@ -60,11 +62,11 @@ export const ScoreCell = forwardRef<HTMLDivElement, ScoreCellProps>(
       }
       const numeric = Number(trimmed.replace(",", "."));
       if (!Number.isFinite(numeric)) {
-        toast.error(`Not a number: "${trimmed}"`);
+        toast.error(t("canvasCellNotANumber", { value: trimmed }));
         return;
       }
       if (numeric < min || numeric > max) {
-        toast.error(`Score must be between ${min} and ${max}`);
+        toast.error(t("canvasCellScoreRange", { min, max }));
         return;
       }
       onCommit(numeric);
@@ -148,8 +150,8 @@ export const ScoreCell = forwardRef<HTMLDivElement, ScoreCellProps>(
         {divergence && (
           <span
             className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-[var(--rec-divergence)]"
-            aria-label="AI/human divergence"
-            title="AI/human divergence ≥ threshold"
+            aria-label={t("canvasCellDivergenceAria")}
+            title={t("canvasCellDivergenceTitle")}
           />
         )}
       </div>

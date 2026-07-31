@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   DndContext,
   type DragEndEvent,
@@ -59,11 +60,13 @@ interface Props {
 
 type DraftStage = StageDraftRow;
 
-const STAGE_TYPE_OPTIONS: Array<{ value: StageType; label: string }> = [
-  { value: "active", label: "Active" },
-  { value: "terminal_positive", label: "Terminal — positive" },
-  { value: "terminal_negative", label: "Terminal — negative" },
-  { value: "terminal_neutral", label: "Terminal — neutral" },
+// The stage-type set is frontend-owned, so the labels live in the
+// `recruitment` catalog and each row resolves them with its own `t`.
+const STAGE_TYPE_OPTIONS: Array<{ value: StageType; labelKey: string }> = [
+  { value: "active", labelKey: "stagesTypeActive" },
+  { value: "terminal_positive", labelKey: "stagesTypeTerminalPositive" },
+  { value: "terminal_negative", labelKey: "stagesTypeTerminalNegative" },
+  { value: "terminal_neutral", labelKey: "stagesTypeTerminalNeutral" },
 ];
 
 const STAGE_TYPE_TONE: Record<StageType, string> = {
@@ -86,6 +89,8 @@ export function VacancyStagesDrawer({
   onOpenChange,
   onSaved,
 }: Props) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [draft, setDraft] = useState<DraftStage[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -101,11 +106,13 @@ export function VacancyStagesDrawer({
       );
       setDraft(data.map(fromServer));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load stages");
+      toast.error(
+        err instanceof Error ? err.message : t("stagesLoadFailed"),
+      );
     } finally {
       setLoading(false);
     }
-  }, [vacancyId]);
+  }, [vacancyId, t]);
 
   useEffect(() => {
     if (open) load();
@@ -148,13 +155,13 @@ export function VacancyStagesDrawer({
       {
         key: genKey(),
         id: null,
-        name: "New stage",
+        name: t("stagesNewStageName"),
         code: `stage_${prev.length + 1}`,
         color: "slate",
         stage_type: "active",
       },
     ]);
-  }, []);
+  }, [t]);
 
   const restoreDefault = useCallback(async () => {
     try {
@@ -162,16 +169,16 @@ export function VacancyStagesDrawer({
         `/recruitment/recruitment-stages`,
       );
       setDraft(defaults.map(freshFromDefault));
-      toast.success("Restored tenant default stages — review and save.");
+      toast.success(t("stagesToastRestoredDefaults"));
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to load defaults",
+        err instanceof Error ? err.message : t("stagesLoadDefaultsFailed"),
       );
     }
-  }, []);
+  }, [t]);
 
   const save = useCallback(async () => {
-    const err = stagesValidationError(draft);
+    const err = stagesValidationError(t, draft);
     if (err) {
       toast.error(err);
       return;
@@ -183,7 +190,7 @@ export function VacancyStagesDrawer({
         { stages: buildStagesPayload(draft) },
       );
       onSaved?.(updated);
-      toast.success("Funnel saved");
+      toast.success(t("stagesToastSaved"));
       onOpenChange(false);
     } catch (err) {
       if (
@@ -198,12 +205,12 @@ export function VacancyStagesDrawer({
           affected_candidate_count: d.affected_candidate_count ?? 0,
         });
       } else {
-        toast.error(err instanceof Error ? err.message : "Save failed");
+        toast.error(err instanceof Error ? err.message : t("stagesSaveFailed"));
       }
     } finally {
       setSaving(false);
     }
-  }, [draft, onOpenChange, onSaved, vacancyId]);
+  }, [draft, onOpenChange, onSaved, vacancyId, t]);
 
   const items = useMemo(() => draft.map((s) => s.key), [draft]);
 
@@ -215,11 +222,8 @@ export function VacancyStagesDrawer({
         data-testid="vacancy-stage-manage-drawer"
       >
         <SheetHeader>
-          <SheetTitle>Manage funnel stages</SheetTitle>
-          <SheetDescription>
-            Drag to reorder, rename, recolor or change a stage&rsquo;s type. The
-            tenant defaults are the fallback when this vacancy has no override.
-          </SheetDescription>
+          <SheetTitle>{t("stagesDrawerTitle")}</SheetTitle>
+          <SheetDescription>{t("stagesDrawerDescription")}</SheetDescription>
         </SheetHeader>
 
         <div className="flex items-center gap-2">
@@ -230,7 +234,7 @@ export function VacancyStagesDrawer({
             disabled={loading || saving}
             data-testid="vacancy-stage-manage-restore-default-btn"
           >
-            <RotateCcw className="mr-1 size-3.5" /> Restore default
+            <RotateCcw className="mr-1 size-3.5" /> {t("stagesRestoreDefault")}
           </Button>
           <Button
             size="sm"
@@ -238,18 +242,18 @@ export function VacancyStagesDrawer({
             disabled={loading || saving}
             data-testid="vacancy-stage-manage-add-btn"
           >
-            <Plus className="mr-1 size-3.5" /> Add stage
+            <Plus className="mr-1 size-3.5" /> {t("stagesAddStage")}
           </Button>
         </div>
 
         <div className="flex-1 overflow-y-auto pr-1">
           {loading ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              Loading stages...
+              {t("stagesLoading")}
             </p>
           ) : draft.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              No stages yet. Add at least one before saving.
+              {t("stagesEmpty")}
             </p>
           ) : (
             <DndContext
@@ -282,14 +286,14 @@ export function VacancyStagesDrawer({
             onClick={() => onOpenChange(false)}
             disabled={saving}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={save}
             disabled={loading || saving || draft.length === 0}
             data-testid="vacancy-stage-manage-save-btn"
           >
-            {saving ? "Saving..." : "Save funnel"}
+            {saving ? t("actionSaving") : t("stagesSaveButton")}
           </Button>
         </SheetFooter>
 
@@ -298,14 +302,16 @@ export function VacancyStagesDrawer({
           onOpenChange={(o) => {
             if (!o) setConflict(null);
           }}
-          title="Stage has candidates"
+          title={t("stagesConflictTitle")}
           description={
             conflict
-              ? `${conflict.affected_candidate_count} candidate${conflict.affected_candidate_count === 1 ? "" : "s"} still sit on a stage you want to remove. Move them to another stage first.`
+              ? t("stagesConflictDescription", {
+                  count: conflict.affected_candidate_count,
+                })
               : ""
           }
-          confirmLabel="Got it"
-          cancelLabel="Close"
+          confirmLabel={t("stagesConflictConfirm")}
+          cancelLabel={t("stagesConflictClose")}
           onConfirm={() => setConflict(null)}
         />
       </SheetContent>
@@ -324,6 +330,7 @@ function SortableStageRow({
   onChange,
   onRemove,
 }: SortableStageRowProps) {
+  const t = useTranslations("recruitment");
   const {
     attributes,
     listeners,
@@ -353,7 +360,7 @@ function SortableStageRow({
         <button
           type="button"
           className="cursor-grab text-muted-foreground hover:text-foreground focus:outline-none"
-          aria-label="Drag handle"
+          aria-label={t("stagesDragHandle")}
           {...attributes}
           {...listeners}
         >
@@ -362,7 +369,7 @@ function SortableStageRow({
         <Input
           value={stage.name}
           onChange={(e) => onChange({ name: e.target.value })}
-          placeholder="Stage name"
+          placeholder={t("stagesNamePlaceholder")}
           className="flex-1"
           data-testid={`vacancy-stage-manage-item-${stage.id ?? stage.key}-name`}
         />
@@ -370,7 +377,7 @@ function SortableStageRow({
           variant="ghost"
           size="icon-sm"
           onClick={onRemove}
-          aria-label="Remove stage"
+          aria-label={t("stagesRemoveStage")}
           data-testid={`vacancy-stage-manage-item-${stage.id ?? stage.key}-delete-btn`}
         >
           <Trash2 className="size-4" />
@@ -380,7 +387,7 @@ function SortableStageRow({
         <Input
           value={stage.code}
           onChange={(e) => onChange({ code: e.target.value })}
-          placeholder="code"
+          placeholder={t("stagesCodePlaceholder")}
           data-testid={`vacancy-stage-manage-item-${stage.id ?? stage.key}-code`}
         />
         {/* HRP-357 REDO: active stages always render blue — the stored
@@ -388,11 +395,11 @@ function SortableStageRow({
         <Input
           value={stage.stage_type === "active" ? "blue" : stage.color}
           onChange={(e) => onChange({ color: e.target.value })}
-          placeholder="color"
+          placeholder={t("stagesColorPlaceholder")}
           disabled={stage.stage_type === "active"}
           title={
             stage.stage_type === "active"
-              ? "Active stages always use blue"
+              ? t("stagesActiveColorHint")
               : undefined
           }
           data-testid={`vacancy-stage-manage-item-${stage.id ?? stage.key}-color`}
@@ -406,14 +413,18 @@ function SortableStageRow({
             data-testid={`vacancy-stage-manage-item-${stage.id ?? stage.key}-type`}
           >
             <SelectValue>
-              {STAGE_TYPE_OPTIONS.find((opt) => opt.value === stage.stage_type)
-                ?.label ?? stage.stage_type}
+              {(() => {
+                const opt = STAGE_TYPE_OPTIONS.find(
+                  (o) => o.value === stage.stage_type,
+                );
+                return opt ? t(opt.labelKey) : stage.stage_type;
+              })()}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {STAGE_TYPE_OPTIONS.map((opt) => (
               <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
+                {t(opt.labelKey)}
               </SelectItem>
             ))}
           </SelectContent>

@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.competence.models import (
     Competence,
     CompetenceGroup,
@@ -30,9 +31,12 @@ from app.modules.competence.usage import (
 )
 
 
-class CompetenceCycleError(HTTPException):
-    def __init__(self, detail: str = "Cycle detected in competence group hierarchy"):
-        super().__init__(status.HTTP_400_BAD_REQUEST, detail)
+class CompetenceCycleError(AppError):
+    # ``code`` is keyword-only: the first positional argument used to be
+    # the English message, and a stale positional call would silently
+    # render "errors.<message>" instead of failing loudly.
+    def __init__(self, *, code: str = "competence_group_cycle_detected"):
+        super().__init__(code, status.HTTP_400_BAD_REQUEST)
 
 
 async def validate_no_cycles(
@@ -46,7 +50,7 @@ async def validate_no_cycles(
     if new_parent_id is None:
         return
     if new_parent_id == group_id:
-        raise CompetenceCycleError("Group cannot be its own parent")
+        raise CompetenceCycleError(code="competence_group_self_parent")
 
     sql = text("""
         WITH RECURSIVE parents AS (
@@ -148,15 +152,15 @@ async def cascade_deactivate_group(
     HRP-140: subtree queries are scoped to the caller's tenant so a stray
     cross-tenant descendant is never deactivated."""
     if await check_published_descendants(db, group.id):
-        raise HTTPException(
+        raise AppError(
+            "competence_group_deactivate_has_published",
             status.HTTP_409_CONFLICT,
-            "Cannot deactivate: the group contains published competences",
         )
     usage = await check_group_usage(db, group.id)
     if usage.is_used:
-        raise HTTPException(
+        raise AppError(
+            "competence_group_deactivate_in_use",
             status.HTTP_409_CONFLICT,
-            "Cannot deactivate: the group is referenced by other services",
         )
 
     visited: set[uuid.UUID] = set()
@@ -215,15 +219,15 @@ async def ensure_competence_can_deactivate(db: AsyncSession, comp: Competence) -
     competences have no reverse-deactivation flow). Origin/unpublished
     competences can — only if no link exists to user services."""
     if comp.tenant_id is not None and comp.is_published:
-        raise HTTPException(
+        raise AppError(
+            "competence_published_cannot_hide",
             status.HTTP_409_CONFLICT,
-            "A published client competence cannot be hidden",
         )
     usage = await check_competence_usage(db, comp.id)
     if usage.is_used:
-        raise HTTPException(
+        raise AppError(
+            "competence_deactivate_in_use",
             status.HTTP_409_CONFLICT,
-            "Cannot deactivate: the competence is referenced by other services",
         )
 
 
@@ -232,18 +236,18 @@ async def ensure_competence_can_delete(db: AsyncSession, comp: Competence) -> No
     via tenant guard); client competences can only be deleted when not referenced."""
     usage = await check_competence_usage(db, comp.id)
     if usage.is_used:
-        raise HTTPException(
+        raise AppError(
+            "competence_delete_in_use",
             status.HTTP_409_CONFLICT,
-            "Cannot delete: the competence is referenced by other services",
         )
 
 
 async def ensure_competence_can_unpublish(db: AsyncSession, comp: Competence) -> None:
     usage = await check_competence_usage(db, comp.id)
     if usage.is_used:
-        raise HTTPException(
+        raise AppError(
+            "competence_unpublish_in_use",
             status.HTTP_409_CONFLICT,
-            "Cannot unpublish: the competence is referenced by other services",
         )
 
 
@@ -252,18 +256,18 @@ async def ensure_indicator_can_mutate(db: AsyncSession, indicator: Indicator) ->
     or PDP items reference its parent competence (per product spec)."""
     usage = await check_indicator_usage(db, indicator)
     if usage.is_used:
-        raise HTTPException(
+        raise AppError(
+            "indicator_in_use",
             status.HTTP_409_CONFLICT,
-            "The indicator is referenced by an assessment or PDP",
         )
 
 
 async def ensure_material_can_mutate(db: AsyncSession, material: Material) -> None:
     usage = await check_material_usage(db, material.id)
     if usage.is_used:
-        raise HTTPException(
+        raise AppError(
+            "material_in_use",
             status.HTTP_409_CONFLICT,
-            "The material is referenced by a PDP",
         )
 
 

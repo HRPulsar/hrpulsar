@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 
@@ -33,6 +34,7 @@ export function TreeExpandControls(props: TreeExpandControlsProps) {
     size = "sm",
     className,
   } = props;
+  const t = useTranslations("common");
   return (
     <div className={`inline-flex items-center gap-1 ${className ?? ""}`}>
       <Button
@@ -42,10 +44,10 @@ export function TreeExpandControls(props: TreeExpandControlsProps) {
         onClick={expandAll}
         disabled={allExpanded}
         data-testid={`${testIdPrefix}-btn-expand-all`}
-        aria-label="Expand all"
+        aria-label={t("expandAll")}
       >
         <ChevronsUpDown className="mr-1 h-3.5 w-3.5" />
-        Expand all
+        {t("expandAll")}
       </Button>
       <Button
         type="button"
@@ -54,10 +56,10 @@ export function TreeExpandControls(props: TreeExpandControlsProps) {
         onClick={collapseAll}
         disabled={allCollapsed}
         data-testid={`${testIdPrefix}-btn-collapse-all`}
-        aria-label="Collapse all"
+        aria-label={t("collapseAll")}
       >
         <ChevronsDownUp className="mr-1 h-3.5 w-3.5" />
-        Collapse all
+        {t("collapseAll")}
       </Button>
     </div>
   );

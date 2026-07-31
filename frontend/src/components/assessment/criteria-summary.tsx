@@ -1,15 +1,19 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import type {
   AssessmentCompetence,
   CriteriaType,
 } from "@/lib/types";
+import { dictionaryItemLabel, skillLevelLabel } from "@/lib/reference-labels";
 import { Badge } from "@/components/ui/badge";
 
-const TYPE_LABEL: Record<CriteriaType, string> = {
-  current_positions: "Employees' current positions",
-  target_position: "Target position",
-  competences: "Individual competences",
+/** Criteria type codes → keys in the `assessments` i18n namespace. */
+export const CRITERIA_TYPE_KEYS: Record<CriteriaType, string> = {
+  current_positions: "criteriaTypeCurrentPositions",
+  target_position: "criteriaTypeTargetPosition",
+  competences: "criteriaTypeCompetences",
 };
 
 /**
@@ -17,22 +21,24 @@ const TYPE_LABEL: Record<CriteriaType, string> = {
  * conditional logic is unit-testable without a React renderer.
  */
 export function formatCriteriaTypeValue(
+  t: (key: string) => string,
   criteriaType: CriteriaType,
   specializationTitle: string | null,
   gradeTitle: string | null,
   gradeId: string | null,
 ): string {
+  const typeLabel = t(CRITERIA_TYPE_KEYS[criteriaType]);
   if (criteriaType !== "target_position") {
-    return TYPE_LABEL[criteriaType];
+    return typeLabel;
   }
   const parts = [
     specializationTitle,
-    gradeId ? gradeTitle : "All grades",
+    gradeId ? gradeTitle : t("allGrades"),
   ].filter((part): part is string => Boolean(part));
   if (parts.length === 0) {
-    return TYPE_LABEL[criteriaType];
+    return typeLabel;
   }
-  return `${TYPE_LABEL[criteriaType]}: ${parts.join(" - ")}`;
+  return `${typeLabel}: ${parts.join(" - ")}`;
 }
 
 export function shouldShowCurrentPositionsHint(
@@ -56,6 +62,10 @@ export interface CriteriaSummaryProps {
   criteriaType: CriteriaType | null;
   specializationTitle: string | null;
   gradeTitle: string | null;
+  // HRP-479: reference.dictionary.* keys for origin rows; the titles are
+  // resolved before entering the pure `formatCriteriaTypeValue` helper.
+  specializationI18nKey?: string | null;
+  gradeI18nKey?: string | null;
   gradeId: string | null;
   competences: AssessmentCompetence[];
   /**
@@ -79,22 +89,40 @@ export function CriteriaSummary({
   criteriaType,
   specializationTitle,
   gradeTitle,
+  specializationI18nKey,
+  gradeI18nKey,
   gradeId,
   competences,
   isMassParent = false,
 }: CriteriaSummaryProps) {
+  const t = useTranslations("assessments");
+  const tRef = useTranslations("reference");
+
   if (!criteriaType) {
     return (
       <p className="py-4 text-center text-sm text-muted-foreground">
-        No evaluation criteria selected yet.
+        {t("noCriteriaYet")}
       </p>
     );
   }
 
   const typeValue = formatCriteriaTypeValue(
+    t,
     criteriaType,
-    specializationTitle,
-    gradeTitle,
+    specializationTitle === null
+      ? null
+      : dictionaryItemLabel(tRef, {
+          type: "specialization",
+          title: specializationTitle,
+          i18n_key: specializationI18nKey,
+        }),
+    gradeTitle === null
+      ? null
+      : dictionaryItemLabel(tRef, {
+          type: "grade",
+          title: gradeTitle,
+          i18n_key: gradeI18nKey,
+        }),
     gradeId,
   );
   const showCurrentPositionsHint = shouldShowCurrentPositionsHint(
@@ -109,17 +137,20 @@ export function CriteriaSummary({
 
   return (
     <div className="space-y-3">
-      <Field label="Type" value={<span className="font-medium">{typeValue}</span>} />
+      <Field
+        label={t("fieldType")}
+        value={<span className="font-medium">{typeValue}</span>}
+      />
 
       {showCurrentPositionsHint && (
         <p className="text-xs text-muted-foreground">
-          Competences are picked automatically from each employee&apos;s current position.
+          {t("criteriaCurrentPositionsHint")}
         </p>
       )}
 
       {showCompetencesBlock && (
         <Field
-          label="Competences"
+          label={t("fieldCompetences")}
           value={
             <div className="flex flex-wrap gap-1.5">
               {competences.map((c) => (
@@ -127,7 +158,11 @@ export function CriteriaSummary({
                   {c.competence_title}
                   {c.skill_level_title && (
                     <span className="ml-1 text-muted-foreground">
-                      · {c.skill_level_title}
+                      ·{" "}
+                      {skillLevelLabel(tRef, {
+                        title: c.skill_level_title,
+                        i18n_key: c.skill_level_i18n_key,
+                      })}
                     </span>
                   )}
                 </Badge>

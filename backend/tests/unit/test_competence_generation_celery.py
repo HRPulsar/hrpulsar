@@ -14,6 +14,8 @@ from app.modules.ai_competence_generation.schemas import (
     GeneratedTreeSchema,
     SessionCreate,
 )
+from app.modules.ai_settings import service as ai_settings_service
+from app.modules.ai_settings.schemas import AISettingsUpdate
 from app.modules.dictionary.models import DictionaryItem
 from app.modules.notification.models import Notification
 from sqlalchemy import select
@@ -97,6 +99,7 @@ class TestExecuteSession:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
 
@@ -115,6 +118,62 @@ class TestExecuteSession:
         assert sess.selection_state[gid] is True
         assert sess.selection_state[cid] is True
         assert sess.selection_state[iid] is True
+
+    async def test_language_directive_appended_to_system_prompt(
+        self,
+        db: AsyncSession,
+        tenant,
+        user,
+        specialization,
+        session_factory,
+    ) -> None:
+        """HRP-480: the tenant's content_language reaches the LLM as an
+        output-language directive; the prompt templates stay English."""
+        await ai_settings_service.update(
+            db, tenant.id, AISettingsUpdate(content_language="de")
+        )
+        sess = await service.create_session(
+            db, tenant.id, user.id, SessionCreate(scope="whole_base")
+        )
+
+        captured: dict[str, str] = {}
+
+        async def fake_generate(prompt, system=None, **kwargs):
+            captured["system"] = system
+            return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
+
+        with patch.object(llm_client, "generate_json", side_effect=fake_generate):
+            result = await tasks.execute_session(session_factory, sess.id)
+
+        assert result["status"] == "ready"
+        assert "Generate ALL content in German." in captured["system"]
+        assert "in English" not in captured["system"]
+
+    async def test_english_directive_by_default(
+        self,
+        db: AsyncSession,
+        tenant,
+        user,
+        specialization,
+        session_factory,
+    ) -> None:
+        """Default settings must still carry an explicit English directive —
+        the hardcoded prompt bullet it replaced is gone (HRP-480)."""
+        sess = await service.create_session(
+            db, tenant.id, user.id, SessionCreate(scope="whole_base")
+        )
+
+        captured: dict[str, str] = {}
+
+        async def fake_generate(prompt, system=None, **kwargs):
+            captured["system"] = system
+            return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
+
+        with patch.object(llm_client, "generate_json", side_effect=fake_generate):
+            result = await tasks.execute_session(session_factory, sess.id)
+
+        assert result["status"] == "ready"
+        assert "Generate ALL content in English." in captured["system"]
 
     async def test_parse_error_then_success(
         self,
@@ -138,6 +197,7 @@ class TestExecuteSession:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             call_count["n"] += 1
             if call_count["n"] < 2:
@@ -170,6 +230,7 @@ class TestExecuteSession:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             raise json.JSONDecodeError("bad", "", 0)
 
@@ -261,6 +322,7 @@ class TestExecuteSession:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
 
@@ -298,21 +360,20 @@ class TestExecuteSession:
         # Seed the notification template (migration already does it in prod).
         from sqlalchemy import text
 
-        await db.execute(
-            text("""
+        await db.execute(text("""
                 INSERT INTO notification_templates
-                    (id, code, subject_template, body_template,
+                    (id, code, locale, subject_template, body_template,
                      notification_type, created_at, updated_at)
                 VALUES (
                     gen_random_uuid(),
                     'competence_generation_ready',
+                    'en',
                     'AI competence generation is ready',
                     '<p>Hi {{ recipient_name }}.</p>',
                     'in_app', now(), now()
                 )
-                ON CONFLICT (code) DO NOTHING
-                """)
-        )
+                ON CONFLICT (code, locale) DO NOTHING
+                """))
         await db.commit()
 
         sess = await service.create_session(
@@ -327,6 +388,7 @@ class TestExecuteSession:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
 
@@ -371,6 +433,7 @@ class TestContextExcludesWholeBase:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             captured["user"] = prompt
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
@@ -412,6 +475,7 @@ class TestContextExcludesWholeBase:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             captured["user"] = prompt
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
@@ -457,6 +521,7 @@ class TestContextExcludesWholeBase:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             captured["user"] = prompt
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
@@ -518,6 +583,7 @@ class TestContextExcludesWholeBase:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             captured["user"] = prompt
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
@@ -562,6 +628,7 @@ class TestContextExcludesWholeBase:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             captured["user"] = prompt
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
@@ -608,6 +675,7 @@ class TestProgressStreaming:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
 
@@ -704,6 +772,7 @@ class TestProgressStreaming:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
 
@@ -969,9 +1038,9 @@ class TestGroupScopeRelatedSpecsAndAncestry:
 
         assert "related_specializations" in captured["user"]
         # Backend Engineer is the linked spec; Frontend Engineer is not.
-        related_block = captured["user"].split("related_specializations")[1].split(
-            "]"
-        )[0]
+        related_block = (
+            captured["user"].split("related_specializations")[1].split("]")[0]
+        )
         assert "Backend Engineer" in related_block
         assert "Frontend Engineer" not in related_block
 
@@ -1106,9 +1175,7 @@ class TestGroupScopeRelatedSpecsAndAncestry:
             SessionCreate(
                 scope="group",
                 target_id=target.id,
-                params=SessionParams(
-                    context_excludes=[f"descendant:{drop.id}"]
-                ),
+                params=SessionParams(context_excludes=[f"descendant:{drop.id}"]),
             ),
         )
 
@@ -1216,9 +1283,9 @@ class TestIndicatorsScopeRelatedSpecs:
             await tasks.execute_session(session_factory, sess.id)
 
         assert "related_specializations" in captured["user"]
-        related_block = captured["user"].split("related_specializations")[1].split(
-            "]"
-        )[0]
+        related_block = (
+            captured["user"].split("related_specializations")[1].split("]")[0]
+        )
         assert "Backend Engineer" in related_block
         assert "Frontend Engineer" not in related_block
 
@@ -1720,6 +1787,7 @@ class TestMaxTokensByScope:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             captured["max_tokens"] = max_tokens
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
@@ -1821,6 +1889,7 @@ class TestCeleryHeartbeatFromTask:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
 
@@ -1870,6 +1939,7 @@ class TestCeleryHeartbeatFromTask:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             await _asyncio.sleep(0.25)
             return GeneratedTreeSchema.model_validate(_FAKE_TREE_PAYLOAD)
@@ -1997,9 +2067,7 @@ class TestCeleryHeartbeatFromTask:
             user.id,
             SessionCreate(
                 scope="whole_base",
-                params=SessionParams(
-                    context_excludes=[f"division:{drop.id}"]
-                ),
+                params=SessionParams(context_excludes=[f"division:{drop.id}"]),
             ),
         )
 
@@ -2125,9 +2193,7 @@ class TestCeleryHeartbeatFromTask:
             user.id,
             SessionCreate(
                 scope="whole_base",
-                params=SessionParams(
-                    context_excludes=[f"competence:{drop.id}"]
-                ),
+                params=SessionParams(context_excludes=[f"competence:{drop.id}"]),
             ),
         )
 
@@ -2389,13 +2455,9 @@ class TestGroupAugmentMode:
         assert top["snapshot_id"] == str(group_with_indicators["parent"].id)
         # Existing competence carries snapshot_id.
         net = next(c for c in top["competences"] if c["title"] == "Networking")
-        assert net["snapshot_id"] == str(
-            group_with_indicators["comp_existing"].id
-        )
+        assert net["snapshot_id"] == str(group_with_indicators["comp_existing"].id)
         # New competence stays unannotated — frontend renders it as "new".
-        containers = next(
-            c for c in top["competences"] if c["title"] == "Containers"
-        )
+        containers = next(c for c in top["competences"] if c["title"] == "Containers")
         assert "snapshot_id" not in containers
         # Indicator that echoes the existing one is tagged; the new one is not.
         existing_ind = next(
@@ -2416,9 +2478,7 @@ class TestGroupAugmentMode:
         assert sess.selection_state[new_ind["temp_id"]] is True
         # Descendant subgroup also matched.
         descendant_group = top["children"][0]
-        assert descendant_group["snapshot_id"] == str(
-            group_with_indicators["child"].id
-        )
+        assert descendant_group["snapshot_id"] == str(group_with_indicators["child"].id)
 
     async def test_augment_off_skips_annotation_and_source_tree(
         self,
@@ -2511,40 +2571,52 @@ class TestGroupAugmentMode:
 
         # Existing competence row reused — no duplicate "Networking" row.
         net_rows = (
-            await db.execute(
-                select(Competence).where(
-                    Competence.tenant_id == tenant.id,
-                    Competence.title == "Networking",
+            (
+                await db.execute(
+                    select(Competence).where(
+                        Competence.tenant_id == tenant.id,
+                        Competence.title == "Networking",
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(net_rows) == 1
         assert net_rows[0].id == group_with_indicators["comp_existing"].id
 
         # Existing indicator stays a single row — the echoed one was skipped.
         existing_ind_rows = (
-            await db.execute(
-                select(Indicator).where(
-                    Indicator.tenant_id == tenant.id,
-                    Indicator.title == "Knows TCP basics",
-                    Indicator.competence_id
-                    == group_with_indicators["comp_existing"].id,
+            (
+                await db.execute(
+                    select(Indicator).where(
+                        Indicator.tenant_id == tenant.id,
+                        Indicator.title == "Knows TCP basics",
+                        Indicator.competence_id
+                        == group_with_indicators["comp_existing"].id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(existing_ind_rows) == 1
 
         # New indicator under the existing competence WAS persisted.
         new_ind_rows = (
-            await db.execute(
-                select(Indicator).where(
-                    Indicator.tenant_id == tenant.id,
-                    Indicator.competence_id
-                    == group_with_indicators["comp_existing"].id,
-                    Indicator.title == "Debugs latency with traceroute",
+            (
+                await db.execute(
+                    select(Indicator).where(
+                        Indicator.tenant_id == tenant.id,
+                        Indicator.competence_id
+                        == group_with_indicators["comp_existing"].id,
+                        Indicator.title == "Debugs latency with traceroute",
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(new_ind_rows) == 1
         assert new_ind_rows[0].id in [
             (uuid.UUID(s) if isinstance(s, str) else s)
@@ -2553,14 +2625,18 @@ class TestGroupAugmentMode:
 
         # Brand-new competence under the target group was created fresh.
         containers_rows = (
-            await db.execute(
-                select(Competence).where(
-                    Competence.tenant_id == tenant.id,
-                    Competence.title == "Containers",
-                    Competence.group_id == group_with_indicators["parent"].id,
+            (
+                await db.execute(
+                    select(Competence).where(
+                        Competence.tenant_id == tenant.id,
+                        Competence.title == "Containers",
+                        Competence.group_id == group_with_indicators["parent"].id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(containers_rows) == 1
 
 

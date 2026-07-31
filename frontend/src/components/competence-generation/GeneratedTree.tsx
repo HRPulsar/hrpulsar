@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronRight, Lock, Sparkles, Star } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -141,6 +142,7 @@ export function GeneratedTree({
   lockedIds,
   existingTree,
 }: GeneratedTreeProps) {
+  const t = useTranslations("competences");
   const stateMap = buildStateMap(payload, selection);
   const selectedTotal = countSelectedCompetences(payload, selection);
   // HRP-114 re-spec: filter and summary only kick in when the caller passes
@@ -168,21 +170,26 @@ export function GeneratedTree({
           className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs"
         >
           <span className="text-muted-foreground">
-            <span
-              data-testid="compgen-result-summary-new-count"
-              className="font-medium text-foreground"
-            >
-              {selectedTotal}
-            </span>{" "}
-            new {selectedTotal === 1 ? "item" : "items"} will be added
-            {" · "}
-            <span
-              data-testid="compgen-result-summary-existing-count"
-              className="font-medium text-foreground"
-            >
-              {existingCount}
-            </span>{" "}
-            existing {existingCount === 1 ? "item" : "items"} in this group
+            {t.rich("resultSummaryTree", {
+              newCount: selectedTotal,
+              existingCount,
+              new: (chunks) => (
+                <span
+                  data-testid="compgen-result-summary-new-count"
+                  className="font-medium text-foreground"
+                >
+                  {chunks}
+                </span>
+              ),
+              existing: (chunks) => (
+                <span
+                  data-testid="compgen-result-summary-existing-count"
+                  className="font-medium text-foreground"
+                >
+                  {chunks}
+                </span>
+              ),
+            })}
           </span>
           <div className="ml-auto inline-flex rounded-md border bg-background p-0.5 text-[11px]">
             <Button
@@ -193,7 +200,7 @@ export function GeneratedTree({
               className="h-6 px-2 text-[11px]"
               onClick={() => setView("all")}
             >
-              All
+              {t("filterAll")}
             </Button>
             <Button
               data-testid="compgen-result-filter-show-new-only"
@@ -203,7 +210,7 @@ export function GeneratedTree({
               className="h-6 px-2 text-[11px]"
               onClick={() => setView("new-only")}
             >
-              New only
+              {t("filterNewOnly")}
             </Button>
           </div>
         </div>
@@ -214,8 +221,7 @@ export function GeneratedTree({
           data-testid="compgen-result-empty-state-only-duplicates"
           className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
         >
-          Generated items duplicate existing ones in this group. Nothing new
-          to add — refine the prompt or try again.
+          {t("resultOnlyDuplicatesTree")}
         </div>
       )}
 
@@ -225,7 +231,7 @@ export function GeneratedTree({
           className="rounded-md border border-dashed bg-muted/20 p-2"
         >
           <div className="mb-1.5 flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            <Lock className="h-3 w-3" /> Existing in this group (read-only)
+            <Lock className="h-3 w-3" /> {t("resultExistingGroupHeader")}
           </div>
           <TooltipProvider>
             <div className="space-y-1">
@@ -254,8 +260,12 @@ export function GeneratedTree({
         data-testid="compgen-drawer-counter"
         className="sticky bottom-0 mt-2 rounded-md border bg-background/95 px-3 py-2 text-xs text-muted-foreground"
       >
-        Selected competences:{" "}
-        <span className="font-medium text-foreground">{selectedTotal}</span>
+        {t.rich("counterCompetences", {
+          selected: selectedTotal,
+          count: (chunks) => (
+            <span className="font-medium text-foreground">{chunks}</span>
+          ),
+        })}
       </div>
     </div>
   );
@@ -276,6 +286,7 @@ function GroupRow({
   onToggle: (nodeId: string, selected: boolean) => void;
   lockedIds?: Set<string>;
 }) {
+  const t = useTranslations("competences");
   const [expanded, setExpanded] = useState(true);
   const tempId = group.temp_id;
   const tri = tempId ? stateMap[tempId] : "unchecked";
@@ -318,7 +329,7 @@ function GroupRow({
         </span>
         {isNew && (
           <Badge variant="secondary" className="text-[10px]">
-            new
+            {t("badgeNew")}
           </Badge>
         )}
       </div>
@@ -367,6 +378,7 @@ function CompetenceRow({
   onToggle: (nodeId: string, selected: boolean) => void;
   lockedIds?: Set<string>;
 }) {
+  const t = useTranslations("competences");
   const [expanded, setExpanded] = useState(false);
   const tempId = comp.temp_id;
   const tri = tempId ? stateMap[tempId] : "unchecked";
@@ -420,7 +432,10 @@ function CompetenceRow({
             variant="outline"
             className="text-[10px]"
           >
-            Indicators: {indicatorsTotal} | Selected: {indicatorsSelected}
+            {t("treeChipIndicators", {
+              total: indicatorsTotal,
+              selected: indicatorsSelected,
+            })}
           </Badge>
         )}
         {isNew && <Sparkles className="h-3 w-3 text-primary" />}
@@ -486,6 +501,7 @@ function ExistingGroupRow({
   group: ExistingTreeGroup;
   depth: number;
 }) {
+  const t = useTranslations("competences");
   const [expanded, setExpanded] = useState(true);
   const children = group.descendants ?? group.children ?? [];
   const competences = group.competences ?? [];
@@ -501,7 +517,7 @@ function ExistingGroupRow({
             type="button"
             onClick={() => setExpanded((v) => !v)}
             className="text-muted-foreground"
-            aria-label={expanded ? "Collapse" : "Expand"}
+            aria-label={expanded ? t("collapse") : t("expand")}
           >
             {expanded ? (
               <ChevronDown className="h-3 w-3" />
@@ -520,8 +536,7 @@ function ExistingGroupRow({
             />
           </TooltipTrigger>
           <TooltipContent side="right" className="max-w-xs text-xs">
-            This item is already in the group and cannot be modified here.
-            Edit it from the group page.
+            {t("resultExistingTooltip")}
           </TooltipContent>
         </Tooltip>
         <span className="flex-1 truncate" title={group.description ?? undefined}>
@@ -532,7 +547,7 @@ function ExistingGroupRow({
           variant="outline"
           className="text-[10px] text-muted-foreground"
         >
-          existing
+          {t("badgeExisting")}
         </Badge>
       </div>
       {expanded && hasChildren && (
@@ -564,6 +579,7 @@ function ExistingCompetenceRow({
   comp: NonNullable<ExistingTreeGroup["competences"]>[number];
   depth: number;
 }) {
+  const t = useTranslations("competences");
   const [expanded, setExpanded] = useState(false);
   const indicators = comp.indicators ?? [];
   return (
@@ -595,8 +611,7 @@ function ExistingCompetenceRow({
             />
           </TooltipTrigger>
           <TooltipContent side="right" className="max-w-xs text-xs">
-            This item is already in the group and cannot be modified here.
-            Edit it from the group page.
+            {t("resultExistingTooltip")}
           </TooltipContent>
         </Tooltip>
         <Star className="h-3 w-3 text-muted-foreground" />
@@ -608,7 +623,7 @@ function ExistingCompetenceRow({
           variant="outline"
           className="text-[10px] text-muted-foreground"
         >
-          existing
+          {t("badgeExisting")}
         </Badge>
       </div>
       {expanded && indicators.length > 0 && (

@@ -102,16 +102,19 @@ class CompetenceDetail(CompetenceRead):
 # --- SkillLevel ---
 
 
+# HRP-479: i18n_key is system-owned (seed migrations only) — since F5 it
+# drives frontend label resolution, so a client-writable key would let a
+# tenant admin stamp e.g. "advanced" onto a custom level and have the
+# catalog string override their own title. Create/Update no longer
+# accept it; SkillLevelRead still exposes it.
 class SkillLevelCreate(BaseModel):
     title: str = Field(max_length=300)
     sort_index: int = 0
-    i18n_key: str | None = Field(default=None, max_length=100)
 
 
 class SkillLevelUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=300)
     sort_index: int | None = None
-    i18n_key: str | None = Field(default=None, max_length=100)
     is_active: bool | None = None
 
 

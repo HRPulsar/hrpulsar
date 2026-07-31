@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { useParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { getBrandAccent } from "@/lib/brand";
 import { api } from "@/lib/api";
@@ -11,11 +12,12 @@ import {
   isPDPGradeLocked,
   isTerminalPDPStatus,
   pdpNextStatuses,
-  pdpStatusActionLabel,
   pdpStatusColor,
-  pdpStatusLabel,
+  translatePdpStatus,
+  translatePdpStatusAction,
   type PDPStatus,
 } from "@/lib/pdp-status";
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type {
   DictionaryItem,
   GradeOption,
@@ -63,6 +65,9 @@ import {
 const brandAccent = getBrandAccent();
 
 export default function PDPDetailPage() {
+  const t = useTranslations("development");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const { id } = useParams<{ id: string }>();
   const [pdp, setPdp] = useState<PDPDetail | null>(null);
   const [progressTimeline, setProgressTimeline] = useState<PDPProgressEntry[]>([]);
@@ -120,6 +125,7 @@ export default function PDPDetailPage() {
     () => specializations.filter((s) => s.is_active || s.id === specDraft),
     [specializations, specDraft],
   );
+  const selectedSpec = specializations.find((s) => s.id === specDraft);
   const dictsLoaded = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -138,11 +144,11 @@ export default function PDPDetailPage() {
       setPdp(detail);
       setProgressTimeline(timeline);
     } catch {
-      toast.error("Failed to load PDP");
+      toast.error(t("errorLoadPdp"));
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     load();
@@ -152,10 +158,14 @@ export default function PDPDetailPage() {
     setSaving(true);
     try {
       await api.post(`/pdp/${id}/status`, { status_code: status });
-      toast.success(`Status changed to ${pdpStatusLabel(status)}`);
+      toast.success(
+        t("toastStatusChanged", { status: translatePdpStatus(t, status) }),
+      );
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to change status");
+      toast.error(
+        err instanceof Error ? err.message : t("errorStatusChangeFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -179,9 +189,11 @@ export default function PDPDetailPage() {
       const updated = await api.patch<PDPDetail>(`/pdp/${id}`, { title: next });
       setPdp((cur) => (cur ? { ...cur, title: updated.title } : cur));
       setEditingTitle(false);
-      toast.success("Title updated");
+      toast.success(t("toastTitleUpdated"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update title");
+      toast.error(
+        err instanceof Error ? err.message : t("errorTitleUpdateFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -279,11 +291,11 @@ export default function PDPDetailPage() {
         specialization_id: nextSpec,
         grade_id: nextGrade,
       });
-      toast.success("Specialization and grade updated");
+      toast.success(t("toastSpecGradeUpdated"));
       setGradeChangeOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update");
+      toast.error(err instanceof Error ? err.message : t("errorUpdateFailed"));
     } finally {
       setSaving(false);
     }
@@ -298,7 +310,7 @@ export default function PDPDetailPage() {
       return;
     }
     if (isPastDeadline(value)) {
-      toast.error("Deadline cannot be in the past");
+      toast.error(t("errorDeadlineInPast"));
       return;
     }
     let nextIso: string | null = null;
@@ -313,9 +325,11 @@ export default function PDPDetailPage() {
       const updated = await api.patch<PDPDetail>(`/pdp/${id}`, { deadline: nextIso });
       setPdp((cur) => (cur ? { ...cur, deadline: updated.deadline } : cur));
       setEditingDeadline(false);
-      toast.success("Deadline updated");
+      toast.success(t("toastDeadlineUpdated"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update deadline");
+      toast.error(
+        err instanceof Error ? err.message : t("errorDeadlineUpdateFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -345,31 +359,33 @@ export default function PDPDetailPage() {
           title: itemForm.title.trim(),
           description: itemForm.description || null,
         });
-        toast.success("Item updated");
+        toast.success(t("toastItemUpdated"));
       } else {
         await api.post(`/pdp/${id}/items`, itemForm);
-        toast.success("Item added");
+        toast.success(t("toastItemAdded"));
       }
       setItemOpen(false);
       setEditingItemId(null);
       setItemForm({ title: "", description: "", sort_index: 0 });
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save item");
+      toast.error(err instanceof Error ? err.message : t("errorItemSaveFailed"));
     } finally {
       setSaving(false);
     }
   }
 
   async function deleteItem(itemId: string) {
-    if (!confirm("Delete this item?")) return;
+    if (!confirm(t("confirmDeleteItem"))) return;
     setSaving(true);
     try {
       await api.delete(`/pdp/${id}/items/${itemId}`);
-      toast.success("Item deleted");
+      toast.success(t("toastItemDeleted"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete item");
+      toast.error(
+        err instanceof Error ? err.message : t("errorItemDeleteFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -390,7 +406,7 @@ export default function PDPDetailPage() {
         ordered_ids: reordered.map((it) => it.id),
       });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to reorder");
+      toast.error(err instanceof Error ? err.message : t("errorReorderFailed"));
       await load();
     }
   }
@@ -398,10 +414,14 @@ export default function PDPDetailPage() {
   async function toggleItemPassed(itemId: string, nextPassed: boolean) {
     try {
       await api.post(`/pdp/${id}/items/${itemId}/pass`, { is_passed: nextPassed });
-      toast.success(nextPassed ? "Item marked as passed" : "Item unmarked");
+      toast.success(
+        nextPassed ? t("toastItemPassed") : t("toastItemUnmarked"),
+      );
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update item");
+      toast.error(
+        err instanceof Error ? err.message : t("errorItemUpdateFailed"),
+      );
     }
   }
 
@@ -430,13 +450,15 @@ export default function PDPDetailPage() {
   }
 
   async function deleteMaterial(itemId: string, materialId: string) {
-    if (!confirm("Delete this material?")) return;
+    if (!confirm(t("confirmDeleteMaterial"))) return;
     try {
       await api.delete(`/pdp/${id}/items/${itemId}/materials/${materialId}`);
-      toast.success("Material deleted");
+      toast.success(t("toastMaterialDeleted"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete material");
+      toast.error(
+        err instanceof Error ? err.message : t("errorMaterialDeleteFailed"),
+      );
     }
   }
 
@@ -468,7 +490,9 @@ export default function PDPDetailPage() {
         controller.signal.aborted ||
         (err instanceof DOMException && err.name === "AbortError");
       if (!aborted) {
-        toast.error(err instanceof Error ? err.message : "Failed to upload file");
+        toast.error(
+          err instanceof Error ? err.message : t("errorFileUploadFailed"),
+        );
       }
     } finally {
       if (matUploadAbortRef.current === controller) {
@@ -500,19 +524,21 @@ export default function PDPDetailPage() {
           link: matForm.link || null,
           file_id: matFile?.id || null,
         });
-        toast.success("Material updated");
+        toast.success(t("toastMaterialUpdated"));
       } else {
         await api.post(`/pdp/${id}/items/${matItemId}/materials`, {
           ...matForm,
           file_id: matFile?.id || null,
         });
-        toast.success("Material added");
+        toast.success(t("toastMaterialAdded"));
       }
       setMatOpen(false);
       setEditingMaterialId(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save material");
+      toast.error(
+        err instanceof Error ? err.message : t("errorMaterialSaveFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -526,7 +552,9 @@ export default function PDPDetailPage() {
       const res = await api.upload<{ id: string; original_name: string }>("/files/upload", file);
       setCommentFile({ id: res.id, name: res.original_name });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to upload file");
+      toast.error(
+        err instanceof Error ? err.message : t("errorFileUploadFailed"),
+      );
     } finally {
       setCommentUploading(false);
       e.target.value = "";
@@ -541,12 +569,14 @@ export default function PDPDetailPage() {
         text: commentText || (commentFile ? `Attached: ${commentFile.name}` : ""),
         file_id: commentFile?.id || null,
       });
-      toast.success("Comment added");
+      toast.success(t("toastCommentAdded"));
       setCommentText("");
       setCommentFile(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add comment");
+      toast.error(
+        err instanceof Error ? err.message : t("errorCommentAddFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -554,7 +584,7 @@ export default function PDPDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12 text-muted-foreground">Loading...</div>
+      <div className="flex items-center justify-center py-12 text-muted-foreground">{tc("loading")}</div>
     );
   }
 
@@ -563,9 +593,9 @@ export default function PDPDetailPage() {
       <div className="space-y-4">
         <Button variant="ghost" size="sm" render={<Link href="/development" />}>
           <ArrowLeft className="mr-1 h-4 w-4" />
-          Back to development plans
+          {t("backToPlans")}
         </Button>
-        <div className="py-12 text-center text-muted-foreground">PDP not found</div>
+        <div className="py-12 text-center text-muted-foreground">{t("notFound")}</div>
       </div>
     );
   }
@@ -606,17 +636,17 @@ export default function PDPDetailPage() {
   // the action is greyed out.
   const sendBlockedReason =
     pdp.status === "draft" && pdp.items.length === 0
-      ? "Add at least one item before sending"
+      ? t("sendBlockedNoItems")
       : pdp.status === "draft" &&
           pdp.items.some((it) => it.materials.length === 0)
-        ? "Each item must have at least one material before sending"
+        ? t("sendBlockedNoMaterials")
         : null;
   // HRP-19: employee submitting for review needs every item ticked off.
   const reviewBlockedReason = ownerCanSubmitForReview
     ? pdp.items.length === 0
-      ? "There are no items to review yet"
+      ? t("reviewBlockedNoItems")
       : pdp.items.some((it) => !it.is_passed)
-        ? "Mark every item as passed before submitting for review"
+        ? t("reviewBlockedUnpassed")
         : null
     : null;
   // HRP-130 / HRP-187: while a plan is under review the admin/reviewer
@@ -631,14 +661,14 @@ export default function PDPDetailPage() {
   // snackbar.
   const returnFromReviewBlockedReason =
     pdp.status === "review" && pdp.items.length === 0
-      ? "Add at least one item before returning"
+      ? t("returnBlockedNoItems")
       : pdp.status === "review" &&
           pdp.items.some((it) => it.materials.length === 0)
-        ? "Each item must have at least one material before returning"
+        ? t("returnBlockedNoMaterials")
         : pdp.status === "review" &&
             pdp.items.length > 0 &&
             pdp.items.every((it) => it.is_passed)
-          ? "All items are accepted — complete the plan instead of returning it"
+          ? t("returnBlockedAllAccepted")
           : null;
   // Same exception as Assessment detail (HRP-23 review): if the draft equals
   // the existing saved deadline, don't paint it as past — the operator just
@@ -682,7 +712,7 @@ export default function PDPDetailPage() {
                 onClick={saveTitle}
                 disabled={saving || !titleDraft.trim()}
                 data-testid="development-detail-title-save"
-                aria-label="Save title"
+                aria-label={t("saveTitle")}
               >
                 <Check className="h-4 w-4" />
               </Button>
@@ -692,7 +722,7 @@ export default function PDPDetailPage() {
                 onClick={() => setEditingTitle(false)}
                 disabled={saving}
                 data-testid="development-detail-title-cancel"
-                aria-label="Cancel edit"
+                aria-label={t("cancelEdit")}
               >
                 <X className="h-4 w-4" />
               </Button>
@@ -714,7 +744,7 @@ export default function PDPDetailPage() {
                   variant="ghost"
                   onClick={startEditTitle}
                   data-testid="development-detail-title-edit"
-                  aria-label="Edit title"
+                  aria-label={t("editTitle")}
                 >
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
@@ -722,29 +752,29 @@ export default function PDPDetailPage() {
             </div>
           )}
           <p className="text-sm text-muted-foreground">
-            {pdp.total_progress}% complete
+            {t("percentComplete", { percent: pdp.total_progress })}
           </p>
         </div>
         <Badge variant="secondary" className={pdpStatusColor(pdp.status)} data-testid="development-detail-status">
-          {pdpStatusLabel(pdp.status)}
+          {translatePdpStatus(t, pdp.status)}
         </Badge>
       </div>
 
       {/* Info */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Details</CardTitle>
+          <CardTitle className="text-base">{t("details")}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
             <div>
-              <p className="text-muted-foreground">Status</p>
+              <p className="text-muted-foreground">{t("status")}</p>
               <Badge variant="secondary" className={pdpStatusColor(pdp.status)}>
-                {pdpStatusLabel(pdp.status)}
+                {translatePdpStatus(t, pdp.status)}
               </Badge>
             </div>
             <div>
-              <p className="text-muted-foreground">Employee</p>
+              <p className="text-muted-foreground">{tc("employee")}</p>
               <p className="font-medium" data-testid="development-detail-employee">
                 {pdp.employee_name ? (
                   <Link href={`/employees/${pdp.employee_id}`} className="hover:underline">
@@ -769,7 +799,7 @@ export default function PDPDetailPage() {
               )}
             </div>
             <div>
-              <p className="text-muted-foreground">Progress</p>
+              <p className="text-muted-foreground">{t("progress")}</p>
               <div className="flex items-center gap-2">
                 <div className="h-2 w-20 overflow-hidden rounded-full bg-muted" data-testid="development-detail-progress">
                   <div className="h-full rounded-full bg-primary" style={{ width: `${pdp.total_progress}%` }} />
@@ -782,10 +812,10 @@ export default function PDPDetailPage() {
                 {/* HRP-132: terminal plans expose the moment they ended,
                     not the deadline they were planning against. */}
                 {pdp.status === "done"
-                  ? "Completed at"
+                  ? t("completedAt")
                   : pdp.status === "cancelled"
-                    ? "Cancelled at"
-                    : "Deadline"}
+                    ? t("cancelledAt")
+                    : t("deadline")}
               </p>
               {editingDeadline ? (
                 <div className="flex items-center gap-1">
@@ -805,7 +835,7 @@ export default function PDPDetailPage() {
                     onClick={saveDeadline}
                     disabled={saving || pdpDeadlineDraftIsPast}
                     data-testid="development-detail-deadline-save"
-                    aria-label="Save deadline"
+                    aria-label={t("saveDeadline")}
                   >
                     <Check className="h-3.5 w-3.5" />
                   </Button>
@@ -815,7 +845,7 @@ export default function PDPDetailPage() {
                     onClick={() => setEditingDeadline(false)}
                     disabled={saving}
                     data-testid="development-detail-deadline-cancel"
-                    aria-label="Cancel deadline edit"
+                    aria-label={t("cancelDeadlineEdit")}
                   >
                     <X className="h-3.5 w-3.5" />
                   </Button>
@@ -850,7 +880,7 @@ export default function PDPDetailPage() {
                       variant="ghost"
                       onClick={startEditDeadline}
                       data-testid="development-detail-deadline-edit"
-                      aria-label="Edit deadline"
+                      aria-label={t("editDeadline")}
                     >
                       <Pencil className="h-3 w-3" />
                     </Button>
@@ -859,13 +889,13 @@ export default function PDPDetailPage() {
               )}
             </div>
             <div>
-              <p className="text-muted-foreground">Reviewer</p>
+              <p className="text-muted-foreground">{t("reviewer")}</p>
               <p className="font-medium" data-testid="development-detail-reviewer">
                 {pdp.reviewer_name || "—"}
               </p>
             </div>
             <div>
-              <p className="text-muted-foreground">Created</p>
+              <p className="text-muted-foreground">{t("dateCreated")}</p>
               <p className="font-medium">{formatDate(pdp.created_at)}</p>
             </div>
           </div>
@@ -874,7 +904,7 @@ export default function PDPDetailPage() {
               affordance that opens the Specialization & Grade dialog. */}
           <div className="mt-4 grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
             <div>
-              <p className="text-muted-foreground">Development specialization</p>
+              <p className="text-muted-foreground">{t("fieldSpecialization")}</p>
               <div className="flex items-center gap-1">
                 <p
                   className="font-medium"
@@ -889,7 +919,7 @@ export default function PDPDetailPage() {
                     onClick={openGradeChange}
                     disabled={saving}
                     data-testid="development-detail-specialization-edit"
-                    aria-label="Edit specialization"
+                    aria-label={t("editSpecialization")}
                   >
                     <Pencil className="h-3 w-3" />
                   </Button>
@@ -897,7 +927,7 @@ export default function PDPDetailPage() {
               </div>
             </div>
             <div>
-              <p className="text-muted-foreground">Development grade</p>
+              <p className="text-muted-foreground">{t("fieldGrade")}</p>
               <div className="flex items-center gap-1">
                 <p
                   className="font-medium"
@@ -912,7 +942,7 @@ export default function PDPDetailPage() {
                     onClick={openGradeChange}
                     disabled={saving}
                     data-testid="development-detail-grade-edit"
-                    aria-label="Edit grade"
+                    aria-label={t("editGrade")}
                   >
                     <Pencil className="h-3 w-3" />
                   </Button>
@@ -950,7 +980,7 @@ export default function PDPDetailPage() {
                     ) : (
                       <Send className="mr-1 h-4 w-4" />
                     )}
-                    {pdpStatusActionLabel(s)}
+                    {translatePdpStatusAction(t, s)}
                   </Button>
                 );
               })}
@@ -962,17 +992,17 @@ export default function PDPDetailPage() {
       {/* Items */}
       <Card>
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Items</CardTitle>
+          <CardTitle className="text-base">{t("items")}</CardTitle>
           {canManage && !isTerminal && (
             <Button size="sm" variant="outline" onClick={openAddItem} data-testid="development-detail-btn-add-goal">
               <Plus className="mr-1 h-4 w-4" />
-              Add item
+              {t("addItem")}
             </Button>
           )}
         </CardHeader>
         <CardContent data-testid="development-detail-goals-list">
           {pdp.items.length === 0 ? (
-            <p className="py-4 text-center text-sm text-muted-foreground">No items</p>
+            <p className="py-4 text-center text-sm text-muted-foreground">{t("noItems")}</p>
           ) : (
             <div className="space-y-3">
               {pdp.items
@@ -1047,7 +1077,7 @@ export default function PDPDetailPage() {
                           {item.is_passed && (
                             <Badge variant="secondary" className={`mt-1 ${BADGE_COLOR.green}`}>
                               <Check className="mr-1 h-3 w-3" />
-                              Passed
+                              {t("passed")}
                             </Badge>
                           )}
 
@@ -1083,7 +1113,7 @@ export default function PDPDetailPage() {
                                         className="h-5 w-5"
                                         onClick={() => openEditMaterial(item.id, mat)}
                                         data-testid={`development-detail-mat-${mat.id}-edit`}
-                                        aria-label="Edit material"
+                                        aria-label={t("editMaterial")}
                                       >
                                         <Pencil className="h-3 w-3" />
                                       </Button>
@@ -1093,7 +1123,7 @@ export default function PDPDetailPage() {
                                         className="h-5 w-5 text-destructive"
                                         onClick={() => deleteMaterial(item.id, mat.id)}
                                         data-testid={`development-detail-mat-${mat.id}-delete`}
-                                        aria-label="Delete material"
+                                        aria-label={t("deleteMaterial")}
                                       >
                                         <Trash2 className="h-3 w-3" />
                                       </Button>
@@ -1110,7 +1140,7 @@ export default function PDPDetailPage() {
                               size="icon-sm"
                               variant="ghost"
                               onClick={() => openAddMaterial(item.id)}
-                              aria-label="Add material"
+                              aria-label={t("addMaterial")}
                               data-testid={`development-detail-item-${item.id}-add-material`}
                             >
                               <Plus className="h-3.5 w-3.5" />
@@ -1119,7 +1149,7 @@ export default function PDPDetailPage() {
                               size="icon-sm"
                               variant="ghost"
                               onClick={() => openEditItem(item)}
-                              aria-label="Edit item"
+                              aria-label={t("editItem")}
                               data-testid={`development-detail-item-${item.id}-edit`}
                             >
                               <Pencil className="h-3.5 w-3.5" />
@@ -1129,7 +1159,7 @@ export default function PDPDetailPage() {
                               variant="ghost"
                               className="text-destructive"
                               onClick={() => deleteItem(item.id)}
-                              aria-label="Delete item"
+                              aria-label={t("deleteItem")}
                               data-testid={`development-detail-item-${item.id}-delete`}
                             >
                               <Trash2 className="h-3.5 w-3.5" />
@@ -1148,7 +1178,7 @@ export default function PDPDetailPage() {
       {/* Comments */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Comments</CardTitle>
+          <CardTitle className="text-base">{t("comments")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {pdp.comments.length > 0 && (
@@ -1169,7 +1199,7 @@ export default function PDPDetailPage() {
                       ) : (
                         <>
                           <FileText className="h-3 w-3" />
-                          {c.file_name || "Attachment"}
+                          {c.file_name || t("attachment")}
                         </>
                       )}
                     </a>
@@ -1190,12 +1220,12 @@ export default function PDPDetailPage() {
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Paperclip className="h-3 w-3" />
                   <span>{commentFile.name}</span>
-                  <button onClick={() => setCommentFile(null)} className="text-destructive hover:underline">Remove</button>
+                  <button onClick={() => setCommentFile(null)} className="text-destructive hover:underline">{t("remove")}</button>
                 </div>
               )}
               <div className="flex gap-2">
                 <Textarea
-                  placeholder="Add a comment..."
+                  placeholder={t("commentPlaceholder")}
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)}
                   rows={2}
@@ -1207,14 +1237,14 @@ export default function PDPDetailPage() {
                     <input type="file" className="hidden" onChange={handleCommentFileUpload} disabled={commentUploading} />
                   </label>
                   <Button size="sm" onClick={addComment} disabled={saving || (!commentText.trim() && !commentFile)}>
-                    Send
+                    {t("send")}
                   </Button>
                 </div>
               </div>
             </div>
           )}
           {isTerminal && pdp.comments.length === 0 && (
-            <p className="py-4 text-center text-sm text-muted-foreground">No comments</p>
+            <p className="py-4 text-center text-sm text-muted-foreground">{t("noComments")}</p>
           )}
         </CardContent>
       </Card>
@@ -1223,7 +1253,7 @@ export default function PDPDetailPage() {
       {progressTimeline.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Progress Timeline</CardTitle>
+            <CardTitle className="text-base">{t("progressTimeline")}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-64">
@@ -1251,11 +1281,22 @@ export default function PDPDetailPage() {
                       const d = payload[0].payload as PDPProgressEntry;
                       return (
                         <div className="rounded-lg border bg-background p-3 text-sm shadow-sm">
-                          <p className="font-medium">Version {d.version}</p>
-                          <p className="text-muted-foreground">Status: {pdpStatusLabel(d.status)}</p>
-                          <p className="text-muted-foreground">Progress: {d.progress}%</p>
+                          <p className="font-medium">
+                            {t("chartVersion", { version: d.version })}
+                          </p>
                           <p className="text-muted-foreground">
-                            Items: {d.passed_items}/{d.total_items} passed
+                            {t("chartStatus", {
+                              status: translatePdpStatus(t, d.status),
+                            })}
+                          </p>
+                          <p className="text-muted-foreground">
+                            {t("chartProgress", { percent: d.progress })}
+                          </p>
+                          <p className="text-muted-foreground">
+                            {t("chartItems", {
+                              passed: d.passed_items,
+                              total: d.total_items,
+                            })}
                           </p>
                           {d.created_at && (
                             <p className="text-muted-foreground">
@@ -1284,18 +1325,18 @@ export default function PDPDetailPage() {
       <Dialog open={itemOpen} onOpenChange={setItemOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editingItemId ? "Edit item" : "Add item"}</DialogTitle>
+            <DialogTitle>{editingItemId ? t("editItem") : t("addItem")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Title</Label>
+              <Label>{t("fieldTitle")}</Label>
               <Input
                 value={itemForm.title}
                 onChange={(e) => setItemForm({ ...itemForm, title: e.target.value })}
               />
             </div>
             <div className="space-y-2">
-              <Label>Description</Label>
+              <Label>{t("fieldDescription")}</Label>
               <Textarea
                 value={itemForm.description}
                 onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })}
@@ -1304,9 +1345,9 @@ export default function PDPDetailPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setItemOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setItemOpen(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button onClick={saveItem} disabled={saving || !itemForm.title.trim()}>
-              {saving ? "Saving..." : editingItemId ? "Save" : "Add"}
+              {saving ? t("saving") : editingItemId ? t("save") : t("add")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1316,17 +1357,17 @@ export default function PDPDetailPage() {
       <Dialog open={gradeChangeOpen} onOpenChange={setGradeChangeOpen}>
         <DialogContent data-testid="development-detail-grade-dialog">
           <DialogHeader>
-            <DialogTitle>Development specialization & grade</DialogTitle>
+            <DialogTitle>{t("gradeDialogTitle")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p
               className={`rounded-md p-3 text-xs ${ALERT_TONE.amber}`}
               data-testid="development-detail-grade-warning"
             >
-              All items will be replaced with the new specialization & grade set.
+              {t("gradeDialogWarning")}
             </p>
             <div className="space-y-2">
-              <Label>Development specialization</Label>
+              <Label>{t("fieldSpecialization")}</Label>
               <Select
                 value={specDraft}
                 onValueChange={(val) => handleSpecDraftChange(val ?? "")}
@@ -1335,21 +1376,21 @@ export default function PDPDetailPage() {
                   className="w-full"
                   data-testid="development-detail-grade-spec-select"
                 >
-                  <SelectValue placeholder="No specialization">
-                    {specializations.find((s) => s.id === specDraft)?.title}
+                  <SelectValue placeholder={t("noSpecialization")}>
+                    {selectedSpec ? dictionaryItemLabel(tRef, selectedSpec) : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {specOptions.map((s) => (
                     <SelectItem key={s.id} value={s.id}>
-                      {s.title}
+                      {dictionaryItemLabel(tRef, s)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Development grade</Label>
+              <Label>{t("fieldGrade")}</Label>
               {/* HRP-293: disabled until a specialization is chosen;
                   options are the specialization's configured grades. */}
               <Select
@@ -1363,16 +1404,21 @@ export default function PDPDetailPage() {
                 >
                   <SelectValue
                     placeholder={
-                      specDraft ? "No grade" : "Select specialization first"
+                      specDraft ? t("noGrade") : t("selectSpecializationFirst")
                     }
                   >
-                    {specGrades.find((g) => g.id === gradeDraft)?.title}
+                    {(() => {
+                      const g = specGrades.find((x) => x.id === gradeDraft);
+                      return g
+                        ? dictionaryItemLabel(tRef, { ...g, type: "grade" })
+                        : undefined;
+                    })()}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {specGrades.map((g) => (
                     <SelectItem key={g.id} value={g.id}>
-                      {g.title}
+                      {dictionaryItemLabel(tRef, { ...g, type: "grade" })}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1386,14 +1432,14 @@ export default function PDPDetailPage() {
               disabled={saving}
               data-testid="development-detail-grade-cancel"
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={saveGradeChange}
               disabled={saving}
               data-testid="development-detail-grade-save"
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1403,24 +1449,24 @@ export default function PDPDetailPage() {
       <Dialog open={matOpen} onOpenChange={handleMatOpenChange}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editingMaterialId ? "Edit material" : "Add material"}</DialogTitle>
+            <DialogTitle>{editingMaterialId ? t("editMaterial") : t("addMaterial")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Title</Label>
+              <Label>{t("fieldTitle")}</Label>
               <Input
                 value={matForm.title}
                 onChange={(e) => setMatForm({ ...matForm, title: e.target.value })}
               />
             </div>
             <div className="space-y-2">
-              <Label>Format</Label>
+              <Label>{t("fieldFormat")}</Label>
               <Select
                 value={matForm.format}
                 onValueChange={(val) => setMatForm({ ...matForm, format: val ?? "" })}
               >
                 <SelectTrigger className="w-full" data-testid="development-detail-mat-format">
-                  <SelectValue placeholder="Select format">
+                  <SelectValue placeholder={t("selectFormat")}>
                     {matForm.format || undefined}
                   </SelectValue>
                 </SelectTrigger>
@@ -1432,7 +1478,7 @@ export default function PDPDetailPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Link</Label>
+              <Label>{t("fieldLink")}</Label>
               <Input
                 placeholder="https://..."
                 value={matForm.link}
@@ -1440,12 +1486,12 @@ export default function PDPDetailPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Or upload file</Label>
+              <Label>{t("fieldUploadFile")}</Label>
               {matFile ? (
                 <div className="flex items-center gap-2 text-sm">
                   <Paperclip className="h-4 w-4 text-muted-foreground" />
                   <span data-testid="development-detail-mat-file-name">{matFile.name}</span>
-                  <button onClick={() => setMatFile(null)} className="text-xs text-destructive hover:underline">Remove</button>
+                  <button onClick={() => setMatFile(null)} className="text-xs text-destructive hover:underline">{t("remove")}</button>
                 </div>
               ) : (
                 <label
@@ -1453,7 +1499,7 @@ export default function PDPDetailPage() {
                   data-testid="development-detail-mat-file-upload"
                 >
                   <Paperclip className="mr-2 h-4 w-4" />
-                  <span>{matUploading ? "Uploading..." : "Choose file..."}</span>
+                  <span>{matUploading ? t("uploading") : t("chooseFile")}</span>
                   <input
                     type="file"
                     className="hidden"
@@ -1465,7 +1511,7 @@ export default function PDPDetailPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => handleMatOpenChange(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => handleMatOpenChange(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button
               onClick={saveMaterial}
               disabled={
@@ -1476,7 +1522,7 @@ export default function PDPDetailPage() {
               }
               data-testid="development-detail-mat-save"
             >
-              {saving ? "Saving..." : editingMaterialId ? "Save" : "Add"}
+              {saving ? t("saving") : editingMaterialId ? t("save") : t("add")}
             </Button>
           </DialogFooter>
         </DialogContent>

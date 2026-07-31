@@ -8,27 +8,29 @@ import {
   Info,
   XCircle,
 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 import type { AiReadiness, AiVerdict } from "@/lib/recruitment-types";
 
 interface VerdictConfig {
-  label: string;
+  /** Key in the `recruitment` i18n namespace. */
+  labelKey: string;
   icon: typeof CheckCircle2;
   chipClass: string;
 }
 
 const VERDICT_CONFIG: Record<AiVerdict, VerdictConfig> = {
-  pending: { label: "Pending", icon: CircleHelp, chipClass: BADGE_COLOR.neutral },
-  recommended: { label: "Recommended", icon: CheckCircle2, chipClass: BADGE_COLOR.emerald },
-  needs_check: { label: "Needs check", icon: AlertTriangle, chipClass: BADGE_COLOR.amber },
-  not_recommended: { label: "Not recommended", icon: XCircle, chipClass: BADGE_COLOR.rose },
+  pending: { labelKey: "verdictPending", icon: CircleHelp, chipClass: BADGE_COLOR.neutral },
+  recommended: { labelKey: "verdictRecommended", icon: CheckCircle2, chipClass: BADGE_COLOR.emerald },
+  needs_check: { labelKey: "verdictNeedsCheck", icon: AlertTriangle, chipClass: BADGE_COLOR.amber },
+  not_recommended: { labelKey: "verdictNotRecommended", icon: XCircle, chipClass: BADGE_COLOR.rose },
 };
 
-const READINESS_TEXT: Record<AiReadiness, string> = {
-  none: "no resume parsed yet",
-  resume_only: "resume only",
-  resume_and_transcript: "resume + interview transcript",
+const READINESS_TEXT_KEYS: Record<AiReadiness, string> = {
+  none: "verdictReadinessNone",
+  resume_only: "verdictReadinessResumeOnly",
+  resume_and_transcript: "verdictReadinessResumeAndTranscript",
 };
 
 interface Props {
@@ -60,8 +62,10 @@ export function AiVerdictBadge({
   riskMitigation,
   testIdPrefix,
 }: Props) {
+  const t = useTranslations("recruitment");
   const cfg = VERDICT_CONFIG[verdict];
   const Icon = cfg.icon;
+  const label = t(cfg.labelKey);
   const hasDetails = verdict !== "pending" &&
     (summary || keyStrength || keyRisk || riskMitigation);
 
@@ -76,7 +80,7 @@ export function AiVerdictBadge({
       }
     >
       <Icon className="size-3" aria-hidden />
-      <span>{cfg.label}</span>
+      <span>{label}</span>
     </span>
   );
 
@@ -91,8 +95,8 @@ export function AiVerdictBadge({
         )}
         title={
           analysisMode === "resume_only"
-            ? "Based on resume only — interview required for full assessment"
-            : "Based on resume and interview transcript"
+            ? t("verdictModeResumeOnlyTooltip")
+            : t("verdictModeFullTooltip")
         }
         data-testid={
           testIdPrefix
@@ -100,7 +104,9 @@ export function AiVerdictBadge({
             : `ai-analysis-mode-badge-${analysisMode}`
         }
       >
-        {analysisMode === "resume_only" ? "resume only" : "full"}
+        {analysisMode === "resume_only"
+          ? t("verdictModeResumeOnly")
+          : t("verdictModeFull")}
       </span>
     ) : null;
 
@@ -117,8 +123,8 @@ export function AiVerdictBadge({
       {scoreDivergence && (
         <span
           className="inline-flex items-center text-amber-700 dark:text-amber-300"
-          title="Manager and AI scores disagree by ≥ 1.0"
-          aria-label="Manager and AI scores disagree by at least 1.0"
+          title={t("verdictDivergenceTooltip")}
+          aria-label={t("verdictDivergenceAria")}
           data-testid={
             testIdPrefix
               ? `${testIdPrefix}-score-divergence-marker`
@@ -133,7 +139,7 @@ export function AiVerdictBadge({
           <Popover.Trigger
             type="button"
             className="inline-flex items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full"
-            aria-label="AI verdict details"
+            aria-label={t("verdictDetailsAria")}
             data-testid={
               testIdPrefix
                 ? `${testIdPrefix}-ai-verdict-info-btn`
@@ -156,11 +162,11 @@ export function AiVerdictBadge({
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <Icon className="size-4" aria-hidden />
-                  <span className="text-sm font-semibold">{cfg.label}</span>
+                  <span className="text-sm font-semibold">{label}</span>
                 </div>
                 {aiScore !== null && aiScore !== undefined && (
                   <span className="text-xs tabular-nums text-muted-foreground">
-                    Score {aiScore.toFixed(2)}
+                    {t("verdictScore", { score: aiScore.toFixed(2) })}
                   </span>
                 )}
               </div>
@@ -171,21 +177,23 @@ export function AiVerdictBadge({
                 {keyStrength && (
                   <div>
                     <dt className="font-medium text-foreground">
-                      Key strength
+                      {t("verdictKeyStrength")}
                     </dt>
                     <dd className="text-muted-foreground">{keyStrength}</dd>
                   </div>
                 )}
                 {keyRisk && (
                   <div>
-                    <dt className="font-medium text-foreground">Key risk</dt>
+                    <dt className="font-medium text-foreground">
+                      {t("verdictKeyRisk")}
+                    </dt>
                     <dd className="text-muted-foreground">{keyRisk}</dd>
                   </div>
                 )}
                 {riskMitigation && (
                   <div>
                     <dt className="font-medium text-foreground">
-                      Risk mitigation
+                      {t("verdictRiskMitigation")}
                     </dt>
                     <dd className="text-muted-foreground">{riskMitigation}</dd>
                   </div>
@@ -193,7 +201,9 @@ export function AiVerdictBadge({
               </dl>
               {aiReadiness && (
                 <p className="mt-3 border-t pt-2 text-[11px] text-muted-foreground">
-                  Based on: {READINESS_TEXT[aiReadiness]}
+                  {t("verdictBasedOn", {
+                    readiness: t(READINESS_TEXT_KEYS[aiReadiness]),
+                  })}
                 </p>
               )}
             </Popover.Content>

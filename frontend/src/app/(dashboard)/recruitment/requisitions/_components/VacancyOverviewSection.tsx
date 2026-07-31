@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { ApiError, api } from "@/lib/api";
 import type { Vacancy } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -29,13 +30,15 @@ import { trimLongText } from "@/lib/long-text";
 // internal scrollbar kicks in.
 const LONG_TEXTAREA_MAX_HEIGHT = "30rem";
 
+// HRP-476: labels live in the `recruitment` i18n namespace; this map only
+// owns the API code → key relation (mirrors VacancyForm).
 const employmentTypes = [
-  { value: "full_time", label: "Full-time" },
-  { value: "part_time", label: "Part-time" },
-  { value: "contract", label: "Contract" },
-  { value: "internship", label: "Internship" },
-  { value: "temporary", label: "Temporary" },
-  { value: "remote", label: "Remote" },
+  { value: "full_time", labelKey: "employmentTypeFullTime" },
+  { value: "part_time", labelKey: "employmentTypePartTime" },
+  { value: "contract", labelKey: "employmentTypeContract" },
+  { value: "internship", labelKey: "employmentTypeInternship" },
+  { value: "temporary", labelKey: "employmentTypeTemporary" },
+  { value: "remote", labelKey: "employmentTypeRemote" },
 ];
 
 interface PositionOption {
@@ -183,6 +186,8 @@ export function VacancyOverviewSection({
   canEdit,
   onSaved,
 }: VacancyOverviewSectionProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const initial = useMemo(() => vacancyToOverviewForm(vacancy), [vacancy]);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<OverviewFormValues>(initial);
@@ -299,10 +304,7 @@ export function VacancyOverviewSection({
   const isDirty = JSON.stringify(form) !== JSON.stringify(initial);
 
   function handleCancel() {
-    if (
-      isDirty &&
-      !window.confirm("Discard unsaved changes in Overview?")
-    ) {
+    if (isDirty && !window.confirm(t("vacancyOverviewDiscardConfirm"))) {
       return;
     }
     setForm(initial);
@@ -320,14 +322,16 @@ export function VacancyOverviewSection({
         payload,
         etag ? { headers: { "If-Match": etag } } : undefined,
       );
-      toast.success("Overview saved");
+      toast.success(t("vacancyOverviewToastSaved"));
       onSaved(updated, headers.get("ETag"));
       setEditing(false);
     } catch (err) {
       if (err instanceof ApiError && err.status === 412) {
-        toast.error("Vacancy was modified by someone else. Reload and retry.");
+        toast.error(t("vacancyConflictRetry"));
       } else {
-        toast.error(err instanceof Error ? err.message : "Failed to update");
+        toast.error(
+          err instanceof Error ? err.message : t("vacancyUpdateFailed"),
+        );
       }
     } finally {
       setSaving(false);
@@ -337,7 +341,7 @@ export function VacancyOverviewSection({
   return (
     <Card data-testid="vacancy-section-overview" id="overview">
       <CardHeader className="flex flex-row items-center justify-between gap-2">
-        <CardTitle>Overview</CardTitle>
+        <CardTitle>{t("vacancyTabOverview")}</CardTitle>
         {canEdit && !editing && (
           <Button
             variant="outline"
@@ -346,7 +350,7 @@ export function VacancyOverviewSection({
             data-testid="vacancy-section-overview-edit-btn"
           >
             <Pencil className="mr-1 size-4" />
-            Edit
+            {t("actionEdit")}
           </Button>
         )}
         {editing && (
@@ -358,7 +362,7 @@ export function VacancyOverviewSection({
               disabled={saving}
               data-testid="vacancy-section-overview-cancel-btn"
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               size="sm"
@@ -366,7 +370,7 @@ export function VacancyOverviewSection({
               disabled={saving || !isDirty}
               data-testid="vacancy-section-overview-save-btn"
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("actionSaving") : t("save")}
             </Button>
           </div>
         )}
@@ -403,9 +407,9 @@ export function VacancyOverviewSection({
         onOpenChange={(open) => {
           if (!open) setPendingPositionChange(null);
         }}
-        title="Change position?"
-        description="Changing position will reset specializations and grades. Continue?"
-        confirmLabel="Reset and switch"
+        title={t("vacancyPositionChangeTitle")}
+        description={t("vacancyPositionChangeDescription")}
+        confirmLabel={t("vacancyPositionChangeConfirm")}
         onConfirm={() => {
           const target = pendingPositionChange ?? null;
           setPendingPositionChange(null);
@@ -438,18 +442,19 @@ function OverviewViewGrid({
   tasksAdditional,
   tasksKpi,
 }: OverviewViewGridProps) {
+  const t = useTranslations("recruitment");
   const specsLabel = (vacancy.specializations ?? [])
     .map((s) => s.title || s.id)
     .join(", ");
   const gradesLabel = (vacancy.grades ?? [])
     .map((g) => g.title || g.id)
     .join(", ");
-  const salaryLabel = formatSalary(vacancy);
+  const salaryLabel = formatSalary(t, vacancy);
 
   return (
     <div className="space-y-6">
       <div className="grid gap-x-6 gap-y-4 sm:grid-cols-3">
-        <FieldRow label="Position">
+        <FieldRow label={t("columnPosition")}>
           {vacancy.position_id ? (
             <Link
               href={`/company/positions/${vacancy.position_id}`}
@@ -463,20 +468,20 @@ function OverviewViewGrid({
             <EmptyValue />
           )}
         </FieldRow>
-        <FieldRow label="Salary">
+        <FieldRow label={t("vacancyFieldSalary")}>
           {salaryLabel ? <span className="text-sm">{salaryLabel}</span> : <EmptyValue />}
         </FieldRow>
-        <FieldRow label="Division">
+        <FieldRow label={t("columnDivision")}>
           {vacancy.division_name ? (
             <span className="text-sm">{vacancy.division_name}</span>
           ) : (
             <EmptyValue />
           )}
         </FieldRow>
-        <FieldRow label="Specializations">
+        <FieldRow label={t("vacancyFieldSpecializations")}>
           {specsLabel ? <span className="text-sm">{specsLabel}</span> : <EmptyValue />}
         </FieldRow>
-        <FieldRow label="Employment type">
+        <FieldRow label={t("vacancyFieldEmploymentType")}>
           {vacancy.employment_type ? (
             <span className="text-sm capitalize">
               {vacancy.employment_type.replace("_", " ")}
@@ -485,17 +490,17 @@ function OverviewViewGrid({
             <EmptyValue />
           )}
         </FieldRow>
-        <FieldRow label="Location">
+        <FieldRow label={t("candidateFieldLocation")}>
           {vacancy.location ? (
             <span className="text-sm">{vacancy.location}</span>
           ) : (
             <EmptyValue />
           )}
         </FieldRow>
-        <FieldRow label="Grades">
+        <FieldRow label={t("vacancyFieldGrades")}>
           {gradesLabel ? <span className="text-sm">{gradesLabel}</span> : <EmptyValue />}
         </FieldRow>
-        <FieldRow label="Hiring manager">
+        <FieldRow label={t("vacancyFieldHiringManager")}>
           {vacancy.hiring_manager_name ? (
             <span className="text-sm" data-testid="vacancy-field-hiring-manager">
               {vacancy.hiring_manager_name}
@@ -508,24 +513,24 @@ function OverviewViewGrid({
 
       <LongTextField
         testId="vacancy-field-description"
-        title="Description"
+        title={t("vacancyFieldDescription")}
         text={description}
       />
 
       <div className="grid gap-4 sm:grid-cols-3">
         <LongTextBlock
           testId="vacancy-field-requirements"
-          title="Requirements"
+          title={t("vacancyFieldRequirements")}
           text={requirements}
         />
         <LongTextBlock
           testId="vacancy-field-responsibilities"
-          title="Responsibilities"
+          title={t("vacancyFieldResponsibilities")}
           text={responsibilities}
         />
         <LongTextBlock
           testId="vacancy-field-conditions"
-          title="Conditions"
+          title={t("vacancyFieldConditions")}
           text={conditions}
         />
       </div>
@@ -533,15 +538,19 @@ function OverviewViewGrid({
       <div className="grid gap-4 sm:grid-cols-3">
         <LongTextBlock
           testId="vacancy-field-main-tasks"
-          title="Main tasks"
+          title={t("vacancyFieldTasksMain")}
           text={tasksMain}
         />
         <LongTextBlock
           testId="vacancy-field-additional-tasks"
-          title="Additional tasks"
+          title={t("vacancyFieldTasksAdditional")}
           text={tasksAdditional}
         />
-        <LongTextBlock testId="vacancy-field-kpi" title="KPI" text={tasksKpi} />
+        <LongTextBlock
+          testId="vacancy-field-kpi"
+          title={t("vacancyFieldKpi")}
+          text={tasksKpi}
+        />
       </div>
     </div>
   );
@@ -556,6 +565,7 @@ function LongTextField({
   title: string;
   text: string;
 }) {
+  const t = useTranslations("recruitment");
   const [expanded, setExpanded] = useState(false);
   const { visible, isLong: long } = trimLongText(text, expanded);
   return (
@@ -576,11 +586,11 @@ function LongTextField({
             >
               {expanded ? (
                 <>
-                  Show less <ChevronUp className="size-4" />
+                  {t("vacancyShowLess")} <ChevronUp className="size-4" />
                 </>
               ) : (
                 <>
-                  Show more <ChevronDown className="size-4" />
+                  {t("vacancyShowMore")} <ChevronDown className="size-4" />
                 </>
               )}
             </button>
@@ -593,13 +603,22 @@ function LongTextField({
   );
 }
 
-function formatSalary(vacancy: Vacancy): string {
+// HRP-476: the open-ended forms carry a translatable prefix, so the helper
+// takes the `recruitment` translator as its first argument.
+function formatSalary(
+  t: (key: string, values?: Record<string, string>) => string,
+  vacancy: Vacancy,
+): string {
   const cur = vacancy.salary_currency ? ` ${vacancy.salary_currency}` : "";
   if (vacancy.salary_min != null && vacancy.salary_max != null) {
     return `${vacancy.salary_min}–${vacancy.salary_max}${cur}`;
   }
-  if (vacancy.salary_min != null) return `from ${vacancy.salary_min}${cur}`;
-  if (vacancy.salary_max != null) return `up to ${vacancy.salary_max}${cur}`;
+  if (vacancy.salary_min != null) {
+    return t("vacancySalaryFrom", { amount: `${vacancy.salary_min}${cur}` });
+  }
+  if (vacancy.salary_max != null) {
+    return t("vacancySalaryUpTo", { amount: `${vacancy.salary_max}${cur}` });
+  }
   return "";
 }
 
@@ -627,6 +646,7 @@ function LongTextBlock({
   title: string;
   text: string;
 }) {
+  const t = useTranslations("recruitment");
   const [expanded, setExpanded] = useState(false);
   const { visible, isLong: long } = trimLongText(text, expanded);
   return (
@@ -645,11 +665,11 @@ function LongTextBlock({
             >
               {expanded ? (
                 <>
-                  Show less <ChevronUp className="size-4" />
+                  {t("vacancyShowLess")} <ChevronUp className="size-4" />
                 </>
               ) : (
                 <>
-                  Show more <ChevronDown className="size-4" />
+                  {t("vacancyShowMore")} <ChevronDown className="size-4" />
                 </>
               )}
             </button>
@@ -688,13 +708,14 @@ function OverviewEditGrid({
   disabled,
   onPositionChange,
 }: OverviewEditGridProps) {
+  const t = useTranslations("recruitment");
   const specDisabled = !form.position_id || positionSpecOptions.length === 0;
   const gradeDisabled = !form.position_id || positionGradeOptions.length === 0;
   return (
     <div className="space-y-5">
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="space-y-1">
-          <Label htmlFor="position-select">Position</Label>
+          <Label htmlFor="position-select">{t("columnPosition")}</Label>
           <Select
             value={form.position_id ?? ""}
             onValueChange={(val) => onPositionChange(val)}
@@ -704,11 +725,11 @@ function OverviewEditGrid({
               id="position-select"
               data-testid="vacancy-field-position-select"
             >
-              <SelectValue placeholder="Select position">
+              <SelectValue placeholder={t("vacancySelectPosition")}>
                 {form.position_id
                   ? (positions.find((p) => p.id === form.position_id)?.title ??
-                    "Select position")
-                  : "Select position"}
+                    t("vacancySelectPosition"))
+                  : t("vacancySelectPosition")}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -721,13 +742,13 @@ function OverviewEditGrid({
           </Select>
         </div>
         <div className="space-y-1">
-          <Label>Salary range</Label>
+          <Label>{t("vacancyFieldSalaryRange")}</Label>
           <div className="flex items-center gap-2">
             <Input
               type="number"
               value={form.salary_min}
               onChange={(e) => setField("salary_min", e.target.value)}
-              placeholder="min"
+              placeholder={t("vacancySalaryMinPlaceholder")}
               disabled={disabled}
               data-testid="vacancy-field-salary"
             />
@@ -736,7 +757,7 @@ function OverviewEditGrid({
               type="number"
               value={form.salary_max}
               onChange={(e) => setField("salary_max", e.target.value)}
-              placeholder="max"
+              placeholder={t("vacancySalaryMaxPlaceholder")}
               disabled={disabled}
             />
             <Input
@@ -749,18 +770,18 @@ function OverviewEditGrid({
           </div>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="division-select">Division</Label>
+          <Label htmlFor="division-select">{t("columnDivision")}</Label>
           <Select
             value={form.division_id ?? ""}
             onValueChange={(val) => setField("division_id", val || null)}
             disabled={disabled}
           >
             <SelectTrigger id="division-select" data-testid="vacancy-field-division">
-              <SelectValue placeholder="Select division">
+              <SelectValue placeholder={t("vacancySelectDivision")}>
                 {form.division_id
                   ? (divisions.find((d) => d.id === form.division_id)?.name ??
                     form.division_id)
-                  : "Select division"}
+                  : t("vacancySelectDivision")}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -774,20 +795,24 @@ function OverviewEditGrid({
         </div>
 
         <div className="space-y-1">
-          <Label>Specializations</Label>
+          <Label>{t("vacancyFieldSpecializations")}</Label>
           <MultiSelectFilter
             options={positionSpecOptions}
             value={form.specialization_ids}
             onChange={(next) => setField("specialization_ids", next)}
             placeholder={
-              specDisabled ? "Select position first" : "Pick specializations"
+              specDisabled
+                ? t("vacancySelectPositionFirst")
+                : t("vacancyPickSpecializations")
             }
             disabled={disabled || specDisabled}
             data-testid="vacancy-field-specializations-multiselect"
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="employment-select">Employment type</Label>
+          <Label htmlFor="employment-select">
+            {t("vacancyFieldEmploymentType")}
+          </Label>
           <Select
             value={form.employment_type}
             onValueChange={(val) => setField("employment_type", val)}
@@ -797,46 +822,56 @@ function OverviewEditGrid({
               id="employment-select"
               data-testid="vacancy-field-employment-type"
             >
-              <SelectValue placeholder="Select type">
-                {employmentTypes.find((t) => t.value === form.employment_type)
-                  ?.label ?? "Select type"}
+              <SelectValue placeholder={t("vacancySelectType")}>
+                {(() => {
+                  const picked = employmentTypes.find(
+                    (opt) => opt.value === form.employment_type,
+                  );
+                  return picked ? t(picked.labelKey) : t("vacancySelectType");
+                })()}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {employmentTypes.map((t) => (
-                <SelectItem key={t.value} value={t.value}>
-                  {t.label}
+              {employmentTypes.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {t(opt.labelKey)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="location-input">Location</Label>
+          <Label htmlFor="location-input">{t("candidateFieldLocation")}</Label>
           <Input
             id="location-input"
             value={form.location}
             onChange={(e) => setField("location", e.target.value)}
-            placeholder="Location"
+            placeholder={t("candidateFieldLocation")}
             disabled={disabled}
             data-testid="vacancy-field-location"
           />
         </div>
 
         <div className="space-y-1">
-          <Label>Grades</Label>
+          <Label>{t("vacancyFieldGrades")}</Label>
           <MultiSelectFilter
             options={positionGradeOptions}
             value={form.grade_ids}
             onChange={(next) => setField("grade_ids", next)}
-            placeholder={gradeDisabled ? "Select position first" : "Pick grades"}
+            placeholder={
+              gradeDisabled
+                ? t("vacancySelectPositionFirst")
+                : t("vacancyPickGrades")
+            }
             disabled={disabled || gradeDisabled}
             data-testid="vacancy-field-grades-multiselect"
           />
         </div>
 
         <div className="space-y-1">
-          <Label htmlFor="hiring-manager-select">Hiring manager</Label>
+          <Label htmlFor="hiring-manager-select">
+            {t("vacancyFieldHiringManager")}
+          </Label>
           <HiringManagerSelect
             id="hiring-manager-select"
             testId="vacancy-field-hiring-manager-select"
@@ -849,7 +884,7 @@ function OverviewEditGrid({
       </div>
 
       <div className="space-y-1">
-        <Label htmlFor="description-input">Description</Label>
+        <Label htmlFor="description-input">{t("vacancyFieldDescription")}</Label>
         <Textarea
           id="description-input"
           value={form.description}
@@ -862,7 +897,9 @@ function OverviewEditGrid({
       </div>
 
       <div className="space-y-1">
-        <Label htmlFor="requirements-input">Requirements</Label>
+        <Label htmlFor="requirements-input">
+          {t("vacancyFieldRequirements")}
+        </Label>
         <Textarea
           id="requirements-input"
           value={form.requirements}
@@ -876,7 +913,9 @@ function OverviewEditGrid({
       </div>
 
       <div className="space-y-1">
-        <Label htmlFor="responsibilities-input">Responsibilities</Label>
+        <Label htmlFor="responsibilities-input">
+          {t("vacancyFieldResponsibilities")}
+        </Label>
         <Textarea
           id="responsibilities-input"
           value={form.responsibilities}
@@ -890,7 +929,7 @@ function OverviewEditGrid({
       </div>
 
       <div className="space-y-1">
-        <Label htmlFor="conditions-input">Conditions</Label>
+        <Label htmlFor="conditions-input">{t("vacancyFieldConditions")}</Label>
         <Textarea
           id="conditions-input"
           value={form.conditions}
@@ -905,7 +944,7 @@ function OverviewEditGrid({
 
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="space-y-1">
-          <Label htmlFor="tasks-main-input">Main tasks</Label>
+          <Label htmlFor="tasks-main-input">{t("vacancyFieldTasksMain")}</Label>
           <Textarea
             id="tasks-main-input"
             value={form.tasks_main}
@@ -917,7 +956,9 @@ function OverviewEditGrid({
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="tasks-additional-input">Additional tasks</Label>
+          <Label htmlFor="tasks-additional-input">
+            {t("vacancyFieldTasksAdditional")}
+          </Label>
           <Textarea
             id="tasks-additional-input"
             value={form.tasks_additional}
@@ -929,7 +970,7 @@ function OverviewEditGrid({
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="tasks-kpi-input">KPI</Label>
+          <Label htmlFor="tasks-kpi-input">{t("vacancyFieldKpi")}</Label>
           <Textarea
             id="tasks-kpi-input"
             value={form.tasks_kpi}

@@ -17,11 +17,10 @@ class TenantAISettings(BaseModel):
     """
 
     __tablename__ = "tenant_ai_settings"
+    # `content_language` is validated at the API layer (the ContentLanguage
+    # Literal in schemas.py) rather than by a DB CHECK — adding a language
+    # must not require a migration (HRP-480).
     __table_args__ = (
-        CheckConstraint(
-            "content_language IN ('en')",
-            name="ck_tenant_ai_settings_content_language",
-        ),
         CheckConstraint(
             "effort_level IN ('fast','balanced','thorough','custom')",
             name="ck_tenant_ai_settings_effort_level",

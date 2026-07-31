@@ -105,6 +105,12 @@ class UserRead(BaseModel):
     # SPA can render <DemoBanner/> + the countdown without an extra request.
     tenant_is_demo: bool = False
     tenant_expires_at: datetime | None = None
+    # i18n (F0): personal interface locale; None → tenant/deployment default.
+    language: str | None = None
+    # Tenant-default interface locale — populated by /auth/me (tenant row is
+    # already loaded there) so the SPA resolves the locale without an extra
+    # company-profile request.
+    tenant_default_locale: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -116,6 +122,9 @@ class UserUpdate(BaseModel):
 
     first_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, max_length=100)
+    # Interface locale from AVAILABLE_LOCALES; explicit null clears the
+    # personal choice (falls back to tenant/deployment default).
+    language: str | None = Field(default=None, max_length=10)
 
 
 class ChangePasswordRequest(BaseModel):

@@ -6,10 +6,12 @@
 // blur by clicking elsewhere — pin that commit path plus the min-bound
 // revert so the swap can't silently break form state.
 
+import { NextIntlClientProvider } from "next-intl";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import enMessages from "../../messages/en.json";
 import { DatePicker } from "@/components/ui/date-picker";
 
 let container: HTMLDivElement;
@@ -30,12 +32,15 @@ function renderPicker(props: Partial<React.ComponentProps<typeof DatePicker>>) {
   const onChange = vi.fn();
   act(() => {
     root.render(
-      <DatePicker
-        value={props.value ?? ""}
-        onChange={props.onChange ?? onChange}
-        data-testid="dp"
-        {...props}
-      />,
+      // HRP-482: the picker's Clear button reads common.* via t()
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <DatePicker
+          value={props.value ?? ""}
+          onChange={props.onChange ?? onChange}
+          data-testid="dp"
+          {...props}
+        />
+      </NextIntlClientProvider>,
     );
   });
   const input = container.querySelector(

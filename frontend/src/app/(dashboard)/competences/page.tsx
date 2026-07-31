@@ -13,9 +13,11 @@ import {
   useSensors,
 } from "@dnd-kit/core";
 import { GripVertical } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { ApiError, api } from "@/lib/api";
 import { getBrandName } from "@/lib/brand";
 import { visibleCompetenceTypes } from "@/lib/competence-type-filter";
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import {
   isActiveSessionConflict,
   type ActiveSessionRef,
@@ -76,8 +78,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-const ACTIVE_SESSION_HINT =
-  "AI generation is in progress. Open the active session to wait or cancel it.";
 import { GenerationStatusButton } from "@/components/competence-generation/GenerationStatusButton";
 import { GenerationDrawer } from "@/components/competence-generation/GenerationDrawer";
 import { useGenerationSession } from "@/hooks/use-generation-session";
@@ -162,6 +162,7 @@ function GroupNode({
   isExpanded: (groupId: string) => boolean;
   onToggleExpand: (groupId: string) => void;
 }) {
+  const t = useTranslations("competences");
   const isOriginGroup = group.tenant_id === null;
   const expanded = isExpanded(group.id);
   const hasChildren =
@@ -208,15 +209,13 @@ function GroupNode({
           {...dragAttrs}
           {...dragListeners}
           type="button"
-          aria-label="Drag group"
+          aria-label={t("dragGroupAria")}
           data-testid={`competences-group-${group.id}-handle`}
           className={`text-muted-foreground ${
             isOriginGroup ? "opacity-30 cursor-not-allowed" : "cursor-grab"
           }`}
           title={
-            isOriginGroup
-              ? "Origin groups cannot be moved"
-              : "Drag to move"
+            isOriginGroup ? t("originGroupCannotMove") : t("dragToMove")
           }
           disabled={isOriginGroup}
           onClick={(e) => e.preventDefault()}
@@ -271,14 +270,14 @@ function GroupNode({
               data-testid={`competences-group-${group.id}-hidden-badge`}
               className="text-[10px]"
             >
-              hidden
+              {t("badgeHidden")}
             </Badge>
           )}
           <span
             data-testid={`competences-group-${group.id}-count`}
             className="ml-auto text-xs text-muted-foreground"
           >
-            competences: {group.competences.length}
+            {t("groupCompetencesCount", { count: group.competences.length })}
           </span>
         </button>
         {isLitUp && (
@@ -294,7 +293,7 @@ function GroupNode({
               render={
                 <Button
                   data-testid={`competences-group-${group.id}-btn-bulk-add`}
-                  aria-label="Add competences"
+                  aria-label={t("addCompetences")}
                   size="icon-xs"
                   variant="ghost"
                   className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
@@ -304,7 +303,7 @@ function GroupNode({
             >
               <Plus className="h-4 w-4" />
             </TooltipTrigger>
-            <TooltipContent side="top">Add competences</TooltipContent>
+            <TooltipContent side="top">{t("addCompetences")}</TooltipContent>
           </Tooltip>
         )}
         <DropdownMenu>
@@ -314,11 +313,11 @@ function GroupNode({
           <DropdownMenuContent align="end" className="min-w-[12rem]">
             <DropdownMenuItem data-testid={`competences-group-${group.id}-btn-add-competence`} onClick={() => onAddCompetence(group.id)} className="whitespace-nowrap">
               <Star className="mr-2 h-4 w-4" />
-              Add competence
+              {t("addCompetence")}
             </DropdownMenuItem>
             <DropdownMenuItem data-testid={`competences-group-${group.id}-btn-add-subgroup`} onClick={() => onAddChild(group.id)} className="whitespace-nowrap">
               <Plus className="mr-2 h-4 w-4" />
-              Add subgroup
+              {t("addSubgroup")}
             </DropdownMenuItem>
             {generationLocked ? (
               <Tooltip>
@@ -336,11 +335,13 @@ function GroupNode({
                   <DropdownMenuItem disabled className="whitespace-nowrap">
                     <Sparkles className="mr-2 h-4 w-4" />
                     {group.competences.length === 0
-                      ? "Fill group with AI"
-                      : "Extend group with AI"}
+                      ? t("fillGroupWithAi")
+                      : t("extendGroupWithAi")}
                   </DropdownMenuItem>
                 </TooltipTrigger>
-                <TooltipContent side="left">{ACTIVE_SESSION_HINT}</TooltipContent>
+                <TooltipContent side="left">
+                  {t("activeSessionHint")}
+                </TooltipContent>
               </Tooltip>
             ) : (
               <DropdownMenuItem
@@ -354,13 +355,13 @@ function GroupNode({
               >
                 <Sparkles className="mr-2 h-4 w-4" />
                 {group.competences.length === 0
-                  ? "Fill group with AI"
-                  : "Extend group with AI"}
+                  ? t("fillGroupWithAi")
+                  : t("extendGroupWithAi")}
               </DropdownMenuItem>
             )}
             <DropdownMenuItem data-testid={`competences-group-${group.id}-btn-edit`} onClick={() => onEditGroup(group)} className="whitespace-nowrap">
               <Pencil className="mr-2 h-4 w-4" />
-              Edit group
+              {t("editGroup")}
             </DropdownMenuItem>
             {!isOriginGroup && (
               <DropdownMenuItem
@@ -371,12 +372,12 @@ function GroupNode({
                 {group.is_active ? (
                   <>
                     <EyeOff className="mr-2 h-4 w-4" />
-                    Hide from users
+                    {t("hideFromUsers")}
                   </>
                 ) : (
                   <>
                     <Eye className="mr-2 h-4 w-4" />
-                    Show to users
+                    {t("showToUsers")}
                   </>
                 )}
               </DropdownMenuItem>
@@ -391,7 +392,7 @@ function GroupNode({
                 className="whitespace-nowrap"
               >
                 <Trash2 className="mr-2 h-4 w-4" />
-                Delete group
+                {t("deleteGroup")}
               </DropdownMenuItem>
             )}
           </DropdownMenuContent>
@@ -495,6 +496,8 @@ function CompetenceRow({
   activeSessionsMap: Map<string, ActiveAiSession[]>;
   onOpenActiveSession: (sessionId: string) => void;
 }) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
   const compSessions =
     activeSessionsMap.get(
       activeAiSessionsKey("competence_indicators", comp.id),
@@ -525,13 +528,13 @@ function CompetenceRow({
         {...dragAttrs}
         {...dragListeners}
         type="button"
-        aria-label="Drag competence"
+        aria-label={t("dragCompetenceAria")}
         data-testid={`competences-item-${comp.id}-handle`}
         className={`text-muted-foreground ${
           isOriginComp ? "opacity-30 cursor-not-allowed" : "cursor-grab"
         }`}
         title={
-          isOriginComp ? "Origin competences cannot be moved" : "Drag to move"
+          isOriginComp ? t("originCompetenceCannotMove") : t("dragToMove")
         }
         disabled={isOriginComp}
         onClick={(e) => e.preventDefault()}
@@ -550,7 +553,11 @@ function CompetenceRow({
         <Tooltip>
           <TooltipTrigger
             render={
-              <span className="inline-flex" tabIndex={-1} aria-label="Published" />
+              <span
+                className="inline-flex"
+                tabIndex={-1}
+                aria-label={t("publishedAria")}
+              />
             }
           >
             <CheckCircle2
@@ -558,13 +565,17 @@ function CompetenceRow({
               data-testid={`competences-item-${comp.id}-published-icon`}
             />
           </TooltipTrigger>
-          <TooltipContent>Published — visible to assessors and admins</TooltipContent>
+          <TooltipContent>{t("publishedTooltip")}</TooltipContent>
         </Tooltip>
       ) : (
         <Tooltip>
           <TooltipTrigger
             render={
-              <span className="inline-flex" tabIndex={-1} aria-label="Not published" />
+              <span
+                className="inline-flex"
+                tabIndex={-1}
+                aria-label={t("notPublishedAria")}
+              />
             }
           >
             <CircleSlash
@@ -572,14 +583,18 @@ function CompetenceRow({
               data-testid={`competences-item-${comp.id}-unpublished-icon`}
             />
           </TooltipTrigger>
-          <TooltipContent>Not published — hidden from assessors</TooltipContent>
+          <TooltipContent>{t("notPublishedTooltip")}</TooltipContent>
         </Tooltip>
       )}
       {isOriginComp && (
         <Tooltip>
           <TooltipTrigger
             render={
-              <span className="inline-flex" tabIndex={-1} aria-label="Origin (shipped) competence" />
+              <span
+                className="inline-flex"
+                tabIndex={-1}
+                aria-label={t("originCompetenceAria")}
+              />
             }
           >
             <Lock
@@ -587,14 +602,20 @@ function CompetenceRow({
               data-testid={`competences-item-${comp.id}-origin-icon`}
             />
           </TooltipTrigger>
-          <TooltipContent>Origin competence — shipped with {getBrandName()}, cannot be edited</TooltipContent>
+          <TooltipContent>
+            {t("originCompetenceTooltip", { brand: getBrandName() })}
+          </TooltipContent>
         </Tooltip>
       )}
       {comp.is_used && (
         <Tooltip>
           <TooltipTrigger
             render={
-              <span className="inline-flex" tabIndex={-1} aria-label="In use" />
+              <span
+                className="inline-flex"
+                tabIndex={-1}
+                aria-label={t("inUseAria")}
+              />
             }
           >
             <Link2
@@ -602,7 +623,7 @@ function CompetenceRow({
               data-testid={`competences-item-${comp.id}-used-badge`}
             />
           </TooltipTrigger>
-          <TooltipContent>In use — referenced in matrices, assessments or development plans</TooltipContent>
+          <TooltipContent>{t("inUseTooltip")}</TooltipContent>
         </Tooltip>
       )}
       {isLitUp && (
@@ -634,7 +655,7 @@ function CompetenceRow({
             className="whitespace-nowrap"
           >
             <ExternalLink className="mr-2 h-4 w-4" />
-            Open detail page
+            {t("openDetailPage")}
           </DropdownMenuItem>
           <DropdownMenuItem
             data-testid={`competences-item-${comp.id}-btn-edit`}
@@ -643,7 +664,7 @@ function CompetenceRow({
             className="whitespace-nowrap"
           >
             <Pencil className="mr-2 h-4 w-4" />
-            Edit
+            {t("edit")}
           </DropdownMenuItem>
           {generationLocked && generationLockedTargetId !== comp.id ? (
             <Tooltip>
@@ -654,10 +675,12 @@ function CompetenceRow({
               >
                 <DropdownMenuItem disabled className="whitespace-nowrap">
                   <Sparkles className="mr-2 h-4 w-4" />
-                  Generate indicators (AI)
+                  {t("generateIndicatorsAi")}
                 </DropdownMenuItem>
               </TooltipTrigger>
-              <TooltipContent side="left">{ACTIVE_SESSION_HINT}</TooltipContent>
+              <TooltipContent side="left">
+                {t("activeSessionHint")}
+              </TooltipContent>
             </Tooltip>
           ) : (
             <DropdownMenuItem
@@ -666,7 +689,7 @@ function CompetenceRow({
               className="whitespace-nowrap"
             >
               <Sparkles className="mr-2 h-4 w-4" />
-              Generate indicators (AI)
+              {t("generateIndicatorsAi")}
             </DropdownMenuItem>
           )}
           {/* HRP-118 redo: mirror the group "Hide from users / Show to
@@ -681,12 +704,12 @@ function CompetenceRow({
               {comp.is_published ? (
                 <>
                   <EyeOff className="mr-2 h-4 w-4" />
-                  Hide from users
+                  {t("hideFromUsers")}
                 </>
               ) : (
                 <>
                   <Eye className="mr-2 h-4 w-4" />
-                  Show to users
+                  {t("showToUsers")}
                 </>
               )}
             </DropdownMenuItem>
@@ -697,14 +720,12 @@ function CompetenceRow({
             onClick={() => onDeleteCompetence(comp)}
             disabled={isOriginComp || comp.is_used}
             title={
-              comp.is_used
-                ? "Competence is used in matrices/assessments/IDPs and cannot be deleted"
-                : undefined
+              comp.is_used ? t("competenceUsedCannotDelete") : undefined
             }
             className="whitespace-nowrap"
           >
             <Trash2 className="mr-2 h-4 w-4" />
-            Delete
+            {tc("delete")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -713,10 +734,18 @@ function CompetenceRow({
 }
 
 export default function CompetencesPage() {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const { tree, loading: treeLoading } = useCompetenceTree();
   const [compTypes, setCompTypes] = useState<DictionaryItem[]>([]);
   const [auxLoading, setAuxLoading] = useState(true);
   const loading = treeLoading || auxLoading;
+  // HRP-479: display-only lookup — the stored value stays the type id.
+  const compTypeLabel = (typeId: string) => {
+    const ct = compTypes.find((c) => c.id === typeId);
+    return ct ? dictionaryItemLabel(tRef, ct) : "";
+  };
 
   // Group dialog
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -835,7 +864,7 @@ export default function CompetencesPage() {
     if (overData.kind !== "group") return;
 
     if (activeData.isOrigin) {
-      toast.error("Origin elements cannot be moved");
+      toast.error(t("errorOriginCannotMove"));
       return;
     }
     if (activeData.kind === "competence") {
@@ -849,10 +878,12 @@ export default function CompetencesPage() {
           new_group_id: overData.groupId,
           new_sort_index: 0,
         });
-        toast.success("Competence moved");
+        toast.success(t("toastCompetenceMoved"));
         await invalidateCompetenceTree();
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to move competence");
+        toast.error(
+          err instanceof Error ? err.message : t("errorMoveCompetence"),
+        );
       }
     } else if (activeData.kind === "group") {
       const grpId = activeData.groupId!;
@@ -863,10 +894,10 @@ export default function CompetencesPage() {
           new_parent_id: overData.groupId,
           new_sort_index: 0,
         });
-        toast.success("Group moved");
+        toast.success(t("toastGroupMoved"));
         await invalidateCompetenceTree();
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to move group");
+        toast.error(err instanceof Error ? err.message : t("errorMoveGroup"));
       }
     }
   }
@@ -964,16 +995,14 @@ export default function CompetencesPage() {
       // HRP-118: matches the snack-bar copy in the spec — the deactivate case
       // explicitly tells the admin everything below is hidden too.
       toast.success(
-        g.is_active
-          ? "Competence group and its contents are hidden from users"
-          : "Group and its descendants are visible",
+        g.is_active ? t("toastGroupHidden") : t("toastGroupVisible"),
       );
       await invalidateCompetenceTree();
     } catch (err) {
       toast.error(
         err instanceof Error
           ? err.message
-          : "Failed to update group visibility",
+          : t("errorUpdateGroupVisibility"),
       );
     } finally {
       setSaving(false);
@@ -991,15 +1020,15 @@ export default function CompetencesPage() {
       await api.post(`/competences/${c.id}/${path}`);
       toast.success(
         c.is_published
-          ? "Competence is hidden from users"
-          : "Competence is visible to users",
+          ? t("toastCompetenceHidden")
+          : t("toastCompetenceVisible"),
       );
       await invalidateCompetenceTree();
     } catch (err) {
       toast.error(
         err instanceof Error
           ? err.message
-          : "Failed to update competence visibility",
+          : t("errorUpdateCompetenceVisibility"),
       );
     } finally {
       setSaving(false);
@@ -1012,15 +1041,15 @@ export default function CompetencesPage() {
       const payload = { ...groupForm, parent_id: groupForm.parent_id || null };
       if (groupDialogMode === "create") {
         await api.post("/competence-groups", payload);
-        toast.success("Group created");
+        toast.success(t("toastGroupCreated"));
       } else {
         await api.put(`/competence-groups/${editingGroupId}`, payload);
-        toast.success("Group updated");
+        toast.success(t("toastGroupUpdated"));
       }
       setGroupDialogOpen(false);
       await invalidateCompetenceTree();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("errorSave"));
     } finally {
       setSaving(false);
     }
@@ -1057,15 +1086,15 @@ export default function CompetencesPage() {
       };
       if (compDialogMode === "create") {
         await api.post("/competences", payload);
-        toast.success("Competence created");
+        toast.success(t("toastCompetenceCreated"));
       } else {
         await api.put(`/competences/${editingCompId}`, payload);
-        toast.success("Competence updated");
+        toast.success(t("toastCompetenceUpdated"));
       }
       setCompDialogOpen(false);
       await invalidateCompetenceTree();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("errorSave"));
     } finally {
       setSaving(false);
     }
@@ -1088,7 +1117,7 @@ export default function CompetencesPage() {
       }))
       .filter((row) => row.title.length > 0);
     if (items.length === 0) {
-      toast.error("Add at least one competence with a title");
+      toast.error(t("errorBulkNeedTitle"));
       return;
     }
     setSaving(true);
@@ -1097,15 +1126,11 @@ export default function CompetencesPage() {
         `/competence-groups/${bulkTargetGroup.id}/competences/bulk`,
         { items },
       );
-      toast.success(
-        items.length === 1
-          ? "Competence created"
-          : `${items.length} competences created`,
-      );
+      toast.success(t("toastCompetencesBulkCreated", { count: items.length }));
       setBulkDialogOpen(false);
       await invalidateCompetenceTree();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("errorSave"));
     } finally {
       setSaving(false);
     }
@@ -1131,11 +1156,11 @@ export default function CompetencesPage() {
       } else {
         await api.delete(`/competences/${deleteTarget.id}`);
       }
-      toast.success("Deleted");
+      toast.success(t("toastDeleted"));
       setDeleteOpen(false);
       await invalidateCompetenceTree();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(err instanceof Error ? err.message : t("errorDelete"));
     } finally {
       setSaving(false);
     }
@@ -1187,7 +1212,7 @@ export default function CompetencesPage() {
         }
       }
       toast.error(
-        err instanceof Error ? err.message : "Failed to start generation",
+        err instanceof Error ? err.message : t("errorStartGeneration"),
       );
     }
   }
@@ -1226,7 +1251,7 @@ export default function CompetencesPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -1240,10 +1265,14 @@ export default function CompetencesPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">Competences</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("title")}
+          </h1>
           <p className="text-sm text-muted-foreground">
-            {tree.length} group{tree.length !== 1 ? "s" : ""},{" "}
-            {totalCompetences} competence{totalCompetences !== 1 ? "s" : ""}
+            {t("subtitleCounts", {
+              groups: tree.length,
+              competences: totalCompetences,
+            })}
           </p>
         </div>
         {canManage && (
@@ -1260,7 +1289,7 @@ export default function CompetencesPage() {
             />
             <Button data-testid="competences-btn-add-group" size="sm" onClick={() => openCreateGroup()}>
               <Plus className="mr-1 h-4 w-4" />
-              Add group
+              {t("addGroup")}
             </Button>
           </div>
         )}
@@ -1268,7 +1297,7 @@ export default function CompetencesPage() {
 
       <Card>
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Competence Tree</CardTitle>
+          <CardTitle className="text-base">{t("competenceTree")}</CardTitle>
           {/* HRP-109: bulk expand/collapse for the whole tree. */}
           <TreeExpandControls
             expandAll={expandAllGroups}
@@ -1281,7 +1310,7 @@ export default function CompetencesPage() {
         <CardContent data-testid="competences-tree">
           {tree.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              No competence groups yet
+              {t("emptyGroups")}
             </p>
           ) : (
             <DndContext sensors={dndSensors} onDragEnd={handleDragEnd}>
@@ -1320,12 +1349,12 @@ export default function CompetencesPage() {
         <DialogContent data-testid="competences-modal-group" className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
-              {groupDialogMode === "create" ? "Add group" : "Edit group"}
+              {groupDialogMode === "create" ? t("addGroup") : t("editGroup")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Title</Label>
+              <Label>{t("fieldTitle")}</Label>
               <Input
                 data-testid="competences-modal-group-input-title"
                 value={groupForm.title}
@@ -1335,7 +1364,7 @@ export default function CompetencesPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Description</Label>
+              <Label>{t("fieldDescription")}</Label>
               <Textarea
                 data-testid="competences-modal-group-input-description"
                 value={groupForm.description}
@@ -1346,7 +1375,7 @@ export default function CompetencesPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Parent group</Label>
+              <Label>{t("fieldParentGroup")}</Label>
               <Select
                 value={groupForm.parent_id}
                 onValueChange={(val) =>
@@ -1354,12 +1383,12 @@ export default function CompetencesPage() {
                 }
               >
                 <SelectTrigger data-testid="competences-modal-group-select-parent" className="w-full">
-                  <SelectValue placeholder="None (top level)">
+                  <SelectValue placeholder={t("noneTopLevel")}>
                     {(() => { if (!groupForm.parent_id) return undefined; const g = flatGroups.find((g) => g.id === groupForm.parent_id); return g ? `${"—".repeat(g.depth)} ${g.title}` : undefined; })()}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None (top level)</SelectItem>
+                  <SelectItem value="">{t("noneTopLevel")}</SelectItem>
                   {flatGroups
                     .filter((g) => g.id !== editingGroupId)
                     .map((g) => (
@@ -1371,7 +1400,7 @@ export default function CompetencesPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Sort index</Label>
+              <Label>{t("fieldSortIndex")}</Label>
               <Input
                 type="number"
                 value={groupForm.sort_index}
@@ -1397,17 +1426,14 @@ export default function CompetencesPage() {
                           className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
                           data-testid="competences-modal-group-used-by-client"
                           tabIndex={-1}
-                          aria-label="Used by client services"
+                          aria-label={t("usedByClientAria")}
                         />
                       }
                     >
                       <Link2 className="h-4 w-4 text-primary" />
-                      <span>Used by client — cannot be deactivated</span>
+                      <span>{t("usedByClient")}</span>
                     </TooltipTrigger>
-                    <TooltipContent>
-                      This group is referenced by matrices, assessments or
-                      development plans and cannot be hidden from users.
-                    </TooltipContent>
+                    <TooltipContent>{t("usedByClientTooltip")}</TooltipContent>
                   </Tooltip>
                 );
               }
@@ -1423,17 +1449,21 @@ export default function CompetencesPage() {
                     }
                     data-testid="competences-modal-group-checkbox-active"
                   />
-                  <span>Activate by default (visible to users immediately)</span>
+                  <span>{t("activateByDefault")}</span>
                 </label>
               );
             })()}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setGroupDialogOpen(false)} disabled={saving}>
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button data-testid="competences-modal-group-btn-submit" onClick={saveGroup} disabled={saving}>
-              {saving ? "Saving..." : groupDialogMode === "create" ? "Create" : "Save"}
+              {saving
+                ? t("saving")
+                : groupDialogMode === "create"
+                  ? t("create")
+                  : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1449,10 +1479,10 @@ export default function CompetencesPage() {
             <DialogTitle>
               {compDialogMode === "create" ? (
                 <span data-testid="competences-modal-competence-step-label">
-                  Add competence — step {compStep} of 2
+                  {t("addCompetenceStep", { step: compStep })}
                 </span>
               ) : (
-                "Edit competence"
+                t("editCompetence")
               )}
             </DialogTitle>
           </DialogHeader>
@@ -1463,7 +1493,7 @@ export default function CompetencesPage() {
                   className="space-y-2"
                   data-testid="competences-modal-competence-step-1"
                 >
-                  <Label>Title</Label>
+                  <Label>{t("fieldTitle")}</Label>
                   <Input
                     data-testid="competences-modal-competence-input-title"
                     value={compForm.title}
@@ -1473,7 +1503,7 @@ export default function CompetencesPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Description</Label>
+                  <Label>{t("fieldDescription")}</Label>
                   <Textarea
                     data-testid="competences-modal-competence-input-description"
                     value={compForm.description}
@@ -1484,7 +1514,7 @@ export default function CompetencesPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Competence type</Label>
+                  <Label>{t("fieldCompetenceType")}</Label>
                   <Select
                     value={compForm.competence_type_id}
                     onValueChange={(val) =>
@@ -1492,18 +1522,18 @@ export default function CompetencesPage() {
                     }
                   >
                     <SelectTrigger data-testid="competences-modal-competence-select-type" className="w-full">
-                      <SelectValue placeholder="None">
-                        {compTypes.find((ct) => ct.id === compForm.competence_type_id)?.title || "None"}
+                      <SelectValue placeholder={t("none")}>
+                        {compTypeLabel(compForm.competence_type_id) || t("none")}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">None</SelectItem>
+                      <SelectItem value="">{t("none")}</SelectItem>
                       {visibleCompetenceTypes(
                         compTypes,
                         compForm.competence_type_id,
                       ).map((ct) => (
                         <SelectItem key={ct.id} value={ct.id}>
-                          {ct.title}
+                          {dictionaryItemLabel(tRef, ct)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -1516,7 +1546,7 @@ export default function CompetencesPage() {
                 className="space-y-2"
                 data-testid="competences-modal-competence-step-2"
               >
-                <Label>Group</Label>
+                <Label>{t("fieldGroup")}</Label>
                 <Select
                   value={compForm.group_id}
                   onValueChange={(val) =>
@@ -1524,8 +1554,8 @@ export default function CompetencesPage() {
                   }
                 >
                   <SelectTrigger data-testid="competences-modal-competence-select-group" className="w-full">
-                    <SelectValue placeholder="Select group">
-                      {flatGroups.find((g) => g.id === compForm.group_id)?.title || "Select group"}
+                    <SelectValue placeholder={t("selectGroup")}>
+                      {flatGroups.find((g) => g.id === compForm.group_id)?.title || t("selectGroup")}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
@@ -1543,7 +1573,9 @@ export default function CompetencesPage() {
             <div className="mt-4 border-t pt-4">
               <IndicatorsEditor
                 competenceId={editingCompId}
-                disabledReason={generationLocked ? ACTIVE_SESSION_HINT : null}
+                disabledReason={
+                  generationLocked ? t("activeSessionHint") : null
+                }
                 onGenerateAi={() => {
                   setCompDialogOpen(false);
                   setGroupConfirm({
@@ -1559,21 +1591,21 @@ export default function CompetencesPage() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCompDialogOpen(false)} disabled={saving}>
-              Cancel
+              {tc("cancel")}
             </Button>
             {compDialogMode === "create" && compStep === 1 ? (
               <Button
                 data-testid="competences-modal-competence-btn-next"
                 onClick={() => {
                   if (!compForm.title.trim()) {
-                    toast.error("Title is required");
+                    toast.error(t("errorTitleRequired"));
                     return;
                   }
                   setCompStep(2);
                 }}
                 disabled={saving}
               >
-                Next
+                {t("next")}
               </Button>
             ) : (
               <>
@@ -1584,11 +1616,15 @@ export default function CompetencesPage() {
                     onClick={() => setCompStep(1)}
                     disabled={saving}
                   >
-                    Back
+                    {t("back")}
                   </Button>
                 )}
                 <Button data-testid="competences-modal-competence-btn-submit" onClick={saveCompetence} disabled={saving}>
-                  {saving ? "Saving..." : compDialogMode === "create" ? "Create" : "Save"}
+                  {saving
+                    ? t("saving")
+                    : compDialogMode === "create"
+                      ? t("create")
+                      : t("save")}
                 </Button>
               </>
             )}
@@ -1600,8 +1636,14 @@ export default function CompetencesPage() {
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title={`Delete ${deleteTarget?.type}`}
-        description={`Are you sure you want to delete "${deleteTarget?.title}"? This action cannot be undone.`}
+        title={
+          deleteTarget?.type === "competence"
+            ? t("deleteCompetence")
+            : t("deleteGroup")
+        }
+        description={t("deleteConfirmDescription", {
+          title: deleteTarget?.title ?? "",
+        })}
         onConfirm={confirmDelete}
         loading={saving}
       />
@@ -1614,13 +1656,14 @@ export default function CompetencesPage() {
         >
           <DialogHeader>
             <DialogTitle>
-              Add competences to {bulkTargetGroup?.title ?? "group"}
+              {t("bulkAddTitle", {
+                group: bulkTargetGroup?.title ?? t("groupFallback"),
+              })}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Add several competences in one go. Indicators are added later
-              per competence.
+              {t("bulkAddHint")}
             </p>
             <div className="space-y-2">
               {bulkRows.map((row, idx) => (
@@ -1632,7 +1675,7 @@ export default function CompetencesPage() {
                   <div className="flex-1 space-y-2">
                     <Input
                       data-testid={`competences-modal-bulk-row-${idx}-title`}
-                      placeholder="Title"
+                      placeholder={t("placeholderTitle")}
                       value={row.title}
                       onChange={(e) =>
                         setBulkRows((rows) =>
@@ -1644,7 +1687,7 @@ export default function CompetencesPage() {
                     />
                     <Textarea
                       data-testid={`competences-modal-bulk-row-${idx}-description`}
-                      placeholder="Description (optional)"
+                      placeholder={t("placeholderDescriptionOptional")}
                       rows={1}
                       value={row.description}
                       onChange={(e) =>
@@ -1673,19 +1716,18 @@ export default function CompetencesPage() {
                         className="w-full"
                         data-testid={`competences-modal-bulk-row-${idx}-type`}
                       >
-                        <SelectValue placeholder="Type (optional)">
-                          {compTypes.find((ct) => ct.id === row.competence_type_id)
-                            ?.title || undefined}
+                        <SelectValue placeholder={t("placeholderTypeOptional")}>
+                          {compTypeLabel(row.competence_type_id) || undefined}
                         </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">None</SelectItem>
+                        <SelectItem value="">{t("none")}</SelectItem>
                         {visibleCompetenceTypes(
                           compTypes,
                           row.competence_type_id,
                         ).map((ct) => (
                           <SelectItem key={ct.id} value={ct.id}>
-                            {ct.title}
+                            {dictionaryItemLabel(tRef, ct)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1722,7 +1764,7 @@ export default function CompetencesPage() {
               disabled={saving}
             >
               <Plus className="mr-1 h-4 w-4" />
-              Add row
+              {t("addRow")}
             </Button>
           </div>
           <DialogFooter>
@@ -1731,14 +1773,14 @@ export default function CompetencesPage() {
               onClick={() => setBulkDialogOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               data-testid="competences-modal-bulk-btn-submit"
               onClick={saveBulkCompetences}
               disabled={saving}
             >
-              {saving ? "Saving..." : "Create all"}
+              {saving ? t("saving") : t("createAll")}
             </Button>
           </DialogFooter>
         </DialogContent>

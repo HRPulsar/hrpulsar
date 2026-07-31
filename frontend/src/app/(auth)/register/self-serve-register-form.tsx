@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,8 @@ import { register, login, getLoginRedirect } from "@/lib/auth";
 // (no email provider configured), the user is logged in right away;
 // otherwise they land on the check-your-email screen.
 export function SelfServeRegisterForm() {
+  const t = useTranslations("auth");
+  const tc = useTranslations("common");
   const router = useRouter();
   const [form, setForm] = useState({
     email: "",
@@ -50,7 +53,7 @@ export function SelfServeRegisterForm() {
         router.push(`/verify-email?email=${encodeURIComponent(form.email)}`);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Registration failed");
+      setError(err instanceof Error ? err.message : t("registrationFailed"));
       setLoading(false);
     }
   }
@@ -61,7 +64,7 @@ export function SelfServeRegisterForm() {
       <Card className="w-full max-w-sm border-white/10 bg-black/40 backdrop-blur-xl">
         <CardHeader className="text-center">
           <CardTitle className="text-xl text-white">
-            Create your account
+            {t("createYourAccount")}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -81,7 +84,7 @@ export function SelfServeRegisterForm() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label htmlFor="first_name" className="text-white/70">
-                  First name
+                  {t("firstName")}
                 </Label>
                 <Input
                   id="first_name"
@@ -94,7 +97,7 @@ export function SelfServeRegisterForm() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="last_name" className="text-white/70">
-                  Last name
+                  {t("lastName")}
                 </Label>
                 <Input
                   id="last_name"
@@ -108,7 +111,7 @@ export function SelfServeRegisterForm() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="company" className="text-white/70">
-                Company name
+                {t("companyName")}
               </Label>
               <Input
                 id="company"
@@ -121,12 +124,12 @@ export function SelfServeRegisterForm() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="email" className="text-white/70">
-                Work email
+                {t("workEmail")}
               </Label>
               <Input
                 id="email"
                 type="email"
-                placeholder="you@company.com"
+                placeholder={t("emailPlaceholder")}
                 value={form.email}
                 onChange={(e) => update("email", e.target.value)}
                 className="border-white/10 bg-white/5 text-white placeholder:text-white/30"
@@ -136,12 +139,12 @@ export function SelfServeRegisterForm() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="password" className="text-white/70">
-                Password
+                {t("password")}
               </Label>
               <Input
                 id="password"
                 type="password"
-                placeholder="At least 8 characters"
+                placeholder={t("passwordMinPlaceholder")}
                 value={form.password}
                 onChange={(e) => update("password", e.target.value)}
                 className="border-white/10 bg-white/5 text-white placeholder:text-white/30"
@@ -156,17 +159,17 @@ export function SelfServeRegisterForm() {
               disabled={loading}
               data-testid="register-btn-submit"
             >
-              {loading ? "Creating account..." : "Create account"}
+              {loading ? t("creatingAccount") : t("createAccount")}
             </Button>
           </form>
           <p className="mt-4 text-center text-sm text-white/50">
-            Already have an account?{" "}
+            {t("haveAccount")}{" "}
             <a
               href="/login"
               className="text-brand hover:underline"
               data-testid="register-link-login"
             >
-              Sign in
+              {tc("signIn")}
             </a>
           </p>
         </CardContent>

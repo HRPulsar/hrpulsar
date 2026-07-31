@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { ComparisonResponse, ComparisonCompetence, Vacancy } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +29,8 @@ function divergenceFlag(comp: ComparisonCompetence): "ok" | "warn" | "none" {
 
 export default function CompareCandidatesPage() {
   const { id } = useParams<{ id: string }>();
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const search = useSearchParams();
   const [comparison, setComparison] = useState<ComparisonResponse | null>(null);
   const [vacancy, setVacancy] = useState<Vacancy | null>(null);
@@ -71,20 +74,20 @@ export default function CompareCandidatesPage() {
       .catch((err) => {
         if (cancelled) return;
         setFetchError(
-          err instanceof Error ? err.message : "Failed to load",
+          err instanceof Error ? err.message : t("compareLoadFailed"),
         );
         setRequestKey(expectedKey);
       });
     return () => {
       cancelled = true;
     };
-  }, [id, candidateIds, tooFewCandidates, expectedKey]);
+  }, [id, candidateIds, tooFewCandidates, expectedKey, t]);
 
   // Loading is derived from "we expect data for these ids but haven't
   // received it yet" — no effect-driven setState needed.
   const loading = !tooFewCandidates && requestKey !== expectedKey && !fetchError;
   const error = tooFewCandidates
-    ? "Select 2–5 candidates to compare"
+    ? t("compareSelectHint")
     : fetchError;
 
   const competences = comparison?.competences || [];
@@ -94,24 +97,27 @@ export default function CompareCandidatesPage() {
     <div className="space-y-6" data-testid="recruitment-compare-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Vacancies", href: "/recruitment/requisitions" },
+          { label: t("vacanciesTitle"), href: "/recruitment/requisitions" },
           {
-            label: vacancy?.title || "Vacancy",
+            label: vacancy?.title || tc("vacancy"),
             href: `/recruitment/requisitions/${id}`,
           },
-          { label: "Compare" },
+          { label: t("compareBreadcrumb") },
         ]}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
-            Compare candidates
+            {t("compareTitle")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {candidates.length > 0
-              ? `${candidates.length} candidates · ${competences.length} competences`
-              : "Select candidates in the vacancy table."}
+              ? t("compareSummary", {
+                  candidates: String(candidates.length),
+                  competences: String(competences.length),
+                })
+              : t("compareEmptySelection")}
           </p>
         </div>
         <Button
@@ -120,7 +126,7 @@ export default function CompareCandidatesPage() {
           render={
             <Link href={`/recruitment/requisitions/${id}`}>
               <ArrowLeft className="mr-1 size-4" />
-              Back to vacancy
+              {t("vacancyBackToVacancy")}
             </Link>
           }
         />
@@ -129,7 +135,7 @@ export default function CompareCandidatesPage() {
       {loading && (
         <div className="flex items-center justify-center py-16 text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
-          <span className="ml-2">Loading…</span>
+          <span className="ml-2">{t("loading")}</span>
         </div>
       )}
 
@@ -141,10 +147,8 @@ export default function CompareCandidatesPage() {
 
       {!loading && !error && competences.length === 0 && (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-          <p className="text-sm font-medium">No data to compare</p>
-          <p className="mt-1 text-xs">
-            Generate a vacancy profile and score candidates first.
-          </p>
+          <p className="text-sm font-medium">{t("compareNoData")}</p>
+          <p className="mt-1 text-xs">{t("compareNoDataHint")}</p>
         </div>
       )}
 
@@ -154,7 +158,9 @@ export default function CompareCandidatesPage() {
             <Table data-testid="recruitment-compare-table">
               <TableHeader className="sticky top-0 z-10 bg-background">
                 <TableRow>
-                  <TableHead className="min-w-[240px]">Competence</TableHead>
+                  <TableHead className="min-w-[240px]">
+                    {t("compareColCompetence")}
+                  </TableHead>
                   {candidates.map((cand) => (
                     <TableHead
                       key={cand.id}

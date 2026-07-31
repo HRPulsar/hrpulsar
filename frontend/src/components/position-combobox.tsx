@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import * as Popover from "@radix-ui/react-popover";
 import { Command } from "cmdk";
 import { api } from "@/lib/api";
@@ -24,10 +25,13 @@ interface PositionComboboxProps {
 export function PositionCombobox({
   value,
   onValueChange,
-  placeholder = "Select position...",
+  placeholder,
   disabled,
   "data-testid": testId,
 }: PositionComboboxProps) {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
+  const resolvedPlaceholder = placeholder ?? t("selectPositionPlaceholder");
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [positions, setPositions] = useState<Position[]>([]);
@@ -123,7 +127,7 @@ export function PositionCombobox({
           role="combobox"
           aria-expanded={open}
           aria-controls="position-combobox-list"
-          aria-label="Select position"
+          aria-label={t("selectPosition")}
           data-testid={testId}
           className={cn(
             "flex h-8 w-full items-center justify-between rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50",
@@ -131,7 +135,7 @@ export function PositionCombobox({
           )}
         >
           <span className="flex-1 truncate text-left">
-            {selectedTitle || placeholder}
+            {selectedTitle || resolvedPlaceholder}
           </span>
           <span className="flex items-center gap-1">
             {selectedTitle && (
@@ -140,7 +144,7 @@ export function PositionCombobox({
                 tabIndex={-1}
                 onClick={handleClear}
                 className="rounded-sm p-0.5 hover:bg-muted"
-                aria-label="Clear position"
+                aria-label={t("clearPosition")}
               >
                 <X className="h-3 w-3" />
               </span>
@@ -162,7 +166,7 @@ export function PositionCombobox({
               <Command.Input
                 value={search}
                 onValueChange={setSearch}
-                placeholder="Search positions..."
+                placeholder={t("searchPositionsPlaceholder")}
                 className="flex h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
             </div>
@@ -170,12 +174,12 @@ export function PositionCombobox({
               {loading && (
                 <Command.Loading>
                   <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-                    Loading...
+                    {tc("loading")}
                   </div>
                 </Command.Loading>
               )}
               <Command.Empty className="px-2 py-3 text-center text-xs text-muted-foreground">
-                No positions found
+                {t("noPositionsFound")}
               </Command.Empty>
               {positions.map((pos) => (
                 <Command.Item
@@ -207,7 +211,7 @@ export function PositionCombobox({
                   <Input
                     value={newTitle}
                     onChange={(e) => setNewTitle(e.target.value)}
-                    placeholder="Position title"
+                    placeholder={t("positionTitlePlaceholder")}
                     className="h-7 flex-1 text-sm"
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
@@ -225,7 +229,7 @@ export function PositionCombobox({
                     onClick={handleQuickCreate}
                     disabled={creating || !newTitle.trim()}
                   >
-                    {creating ? "..." : "Add"}
+                    {creating ? "..." : t("add")}
                   </Button>
                 </div>
               ) : (
@@ -238,7 +242,7 @@ export function PositionCombobox({
                   className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  Create new position
+                  {t("createNewPosition")}
                 </button>
               )}
             </div>

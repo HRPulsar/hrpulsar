@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Dialog,
   DialogContent,
@@ -98,6 +99,8 @@ export function ApplyDialog({
   warning,
   applyGuard,
 }: ApplyDialogProps) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
   const [confirmPublishOpen, setConfirmPublishOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const idempotencyRef = useRef<string | null>(null);
@@ -159,13 +162,15 @@ export function ApplyDialog({
         >
           <DialogHeader>
             <DialogTitle>
-              {isIndicatorScope ? "Add indicators" : "Add to library"}
+              {isIndicatorScope ? t("applyTitleIndicators") : t("addToLibrary")}
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             {isIndicatorScope
-              ? `${indicatorSummary.length} indicator${indicatorSummary.length === 1 ? "" : "s"} will be added to the competence. Choose whether to publish them right away or add as drafts.`
-              : "All checked items will be added to the competence library. You can publish the new competences and indicators for company-wide use immediately, or add them without publishing and publish later."}
+              ? t("applyIndicatorsDescription", {
+                  count: indicatorSummary.length,
+                })
+              : t("applyLibraryDescription")}
           </p>
           {isIndicatorScope && indicatorSummary.length > 0 && (
             <ul
@@ -191,7 +196,7 @@ export function ApplyDialog({
               onClick={() => onOpenChange(false)}
               disabled={submitting}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               data-testid="compgen-apply-btn-unpublished"
@@ -199,7 +204,7 @@ export function ApplyDialog({
               onClick={() => submit(false)}
               disabled={submitting || !hasSelection}
             >
-              Add without publishing
+              {t("applyWithoutPublishing")}
             </Button>
             <Button
               data-testid="compgen-apply-btn-publish"
@@ -208,7 +213,7 @@ export function ApplyDialog({
               }
               disabled={submitting || !hasSelection}
             >
-              Add and publish
+              {t("applyAndPublish")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -220,11 +225,11 @@ export function ApplyDialog({
           className="sm:max-w-lg"
         >
           <DialogHeader>
-            <DialogTitle>Confirm publish</DialogTitle>
+            <DialogTitle>{t("applyConfirmPublishTitle")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 text-sm">
             <p className="text-muted-foreground">
-              Will be added and published:
+              {t("applyWillBePublished")}
             </p>
             <ul className="space-y-1 rounded-md border bg-muted/30 p-3 text-sm">
               {summary
@@ -239,8 +244,7 @@ export function ApplyDialog({
             {wontBePublished.length > 0 && (
               <>
                 <p className="text-muted-foreground">
-                  Won&apos;t be published (no indicators selected — added as
-                  hidden):
+                  {t("applyWontBePublished")}
                 </p>
                 <ul className="space-y-1 rounded-md border bg-amber-50 p-3 text-sm dark:bg-amber-950/20">
                   {wontBePublished.map((s, i) => (
@@ -259,7 +263,7 @@ export function ApplyDialog({
               onClick={() => setConfirmPublishOpen(false)}
               disabled={submitting}
             >
-              Back
+              {t("back")}
             </Button>
             <Button
               onClick={() => {
@@ -268,7 +272,7 @@ export function ApplyDialog({
               }}
               disabled={submitting}
             >
-              {submitting ? "Applying…" : "Publish"}
+              {submitting ? t("applyApplying") : t("publish")}
             </Button>
           </DialogFooter>
         </DialogContent>

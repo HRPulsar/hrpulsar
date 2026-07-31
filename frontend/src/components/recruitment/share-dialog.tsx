@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Dialog,
   DialogContent,
@@ -27,6 +28,7 @@ interface ShareDialogProps {
 const EXPIRY_OPTIONS = [3, 7, 14, 30];
 
 export function RecruitmentShareDialog({ reportId, open, onClose }: ShareDialogProps) {
+  const t = useTranslations("recruitment");
   const [recipients, setRecipients] = useState("");
   const [expires, setExpires] = useState(7);
   const [message, setMessage] = useState("");
@@ -65,33 +67,33 @@ export function RecruitmentShareDialog({ reportId, open, onClose }: ShareDialogP
         expires_in_days: expires,
         message: message || null,
       });
-      toast.success("Share link created");
+      toast.success(t("shareToastCreated"));
       setRecipients("");
       setMessage("");
       await refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to share report");
+      toast.error(err instanceof Error ? err.message : t("shareFailed"));
     } finally {
       setSubmitting(false);
     }
-  }, [recipients, expires, message, reportId, refresh]);
+  }, [recipients, expires, message, reportId, refresh, t]);
 
   const revoke = useCallback(
     async (shareId: string) => {
       try {
         await api.delete(`/recruitment/reports/${reportId}/shares/${shareId}`);
-        toast.success("Share revoked");
+        toast.success(t("shareToastRevoked"));
         await refresh();
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to revoke");
+        toast.error(err instanceof Error ? err.message : t("shareRevokeFailed"));
       }
     },
-    [reportId, refresh],
+    [reportId, refresh, t],
   );
 
   const copy = (url: string) => {
     void navigator.clipboard.writeText(url);
-    toast.success("Link copied");
+    toast.success(t("shareLinkCopied"));
   };
 
   return (
@@ -100,25 +102,23 @@ export function RecruitmentShareDialog({ reportId, open, onClose }: ShareDialogP
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Share2 className="h-4 w-4" />
-            Share report
+            {t("shareTitle")}
           </DialogTitle>
-          <DialogDescription>
-            Generate a tokenised link recipients can open without an account.
-          </DialogDescription>
+          <DialogDescription>{t("shareDescription")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="share-recipients">Recipients (comma-separated)</Label>
+            <Label htmlFor="share-recipients">{t("shareRecipientsLabel")}</Label>
             <Input
               id="share-recipients"
               value={recipients}
               onChange={(e) => setRecipients(e.target.value)}
-              placeholder="hiring-manager@example.com"
+              placeholder={t("shareRecipientsPlaceholder")}
               data-testid="share-recipients"
             />
           </div>
           <div className="flex items-center gap-2">
-            <Label className="text-sm">Expiry:</Label>
+            <Label className="text-sm">{t("shareExpiryLabel")}</Label>
             {EXPIRY_OPTIONS.map((d) => (
               <Button
                 key={d}
@@ -127,12 +127,12 @@ export function RecruitmentShareDialog({ reportId, open, onClose }: ShareDialogP
                 onClick={() => setExpires(d)}
                 data-testid={`share-expires-${d}`}
               >
-                {d}d
+                {t("shareExpiryOption", { days: d })}
               </Button>
             ))}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="share-message">Message (optional, 200 chars)</Label>
+            <Label htmlFor="share-message">{t("shareMessageLabel")}</Label>
             <Input
               id="share-message"
               value={message}
@@ -142,15 +142,15 @@ export function RecruitmentShareDialog({ reportId, open, onClose }: ShareDialogP
           </div>
           <Button onClick={submit} disabled={submitting} data-testid="share-submit">
             {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Share2 className="mr-2 h-4 w-4" />}
-            Create share link
+            {t("shareCreateButton")}
           </Button>
 
           <div className="space-y-2">
-            <h4 className="text-sm font-medium">Active shares</h4>
+            <h4 className="text-sm font-medium">{t("shareActiveTitle")}</h4>
             {loading ? (
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             ) : shares.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No shares yet.</p>
+              <p className="text-sm text-muted-foreground">{t("shareEmpty")}</p>
             ) : (
               <ul className="divide-y rounded border">
                 {shares.map((s) => (
@@ -158,12 +158,15 @@ export function RecruitmentShareDialog({ reportId, open, onClose }: ShareDialogP
                     <div className="min-w-0">
                       <p className="truncate font-mono text-xs">{s.share_url}</p>
                       <p className="text-xs text-muted-foreground">
-                        Expires {formatDate(s.expires_at)} • Opens: {s.open_count}
-                        {s.revoked_at ? " • revoked" : ""}
+                        {t("shareMeta", {
+                          date: formatDate(s.expires_at),
+                          opens: s.open_count,
+                        })}
+                        {s.revoked_at ? t("shareRevokedSuffix") : ""}
                       </p>
                     </div>
                     <div className="flex items-center gap-1">
-                      <Button size="sm" variant="ghost" onClick={() => copy(s.share_url)} aria-label="Copy">
+                      <Button size="sm" variant="ghost" onClick={() => copy(s.share_url)} aria-label={t("shareCopyAria")}>
                         <Copy className="h-4 w-4" />
                       </Button>
                       {!s.revoked_at && (
@@ -171,7 +174,7 @@ export function RecruitmentShareDialog({ reportId, open, onClose }: ShareDialogP
                           size="sm"
                           variant="ghost"
                           onClick={() => void revoke(s.id)}
-                          aria-label="Revoke"
+                          aria-label={t("shareRevokeAria")}
                           data-testid={`share-revoke-${s.id}`}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -186,7 +189,7 @@ export function RecruitmentShareDialog({ reportId, open, onClose }: ShareDialogP
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
-            Close
+            {t("shareClose")}
           </Button>
         </DialogFooter>
       </DialogContent>

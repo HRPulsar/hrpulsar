@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
@@ -38,9 +39,7 @@ async def get_public_company_profile(
 ):
     result = await service.get_public_company_profile(db, slug)
     if result is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Company not found")
+        raise AppError("company_not_found", status_code=404)
     return result
 
 

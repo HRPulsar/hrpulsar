@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import { useLocale, useTranslations } from "next-intl";
 import { Loader2, Pencil } from "lucide-react";
 import { api } from "@/lib/api";
 import {
@@ -87,18 +88,25 @@ type Phase =
 
 const AUTOSAVE_MS = 1500;
 
-function formatTimeLeft(expiresAt: string): string {
+/** `auth` namespace translator, threaded into module-level helpers. */
+type Translator = ReturnType<typeof useTranslations>;
+
+function formatTimeLeft(expiresAt: string, t: Translator): string {
   const ms = new Date(expiresAt).getTime() - Date.now();
-  if (ms <= 0) return "expired";
+  if (ms <= 0) return t("timeLeftExpired");
   const totalHours = Math.floor(ms / 3_600_000);
   const days = Math.floor(totalHours / 24);
   const hours = totalHours % 24;
-  if (days > 0) return `${days} day${days === 1 ? "" : "s"} ${hours} hours`;
-  if (totalHours > 0) return `${totalHours} hours`;
-  return `${Math.max(1, Math.floor(ms / 60_000))} minutes`;
+  if (days > 0) return t("timeLeftDaysHours", { days, hours });
+  if (totalHours > 0) return t("timeLeftHours", { hours: totalHours });
+  return t("timeLeftMinutes", {
+    minutes: Math.max(1, Math.floor(ms / 60_000)),
+  });
 }
 
 export default function PublicAssessmentPage() {
+  const t = useTranslations("auth");
+  const locale = useLocale();
   const { token } = useParams<{ token: string }>();
   const [phase, setPhase] = useState<Phase>("loading");
   const [ctx, setCtx] = useState<PublicContext | null>(null);
@@ -171,7 +179,7 @@ export default function PublicAssessmentPage() {
       // reload to get the full evaluation payload.
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("actionFailed"));
     }
   }
   async function decline() {
@@ -190,9 +198,9 @@ export default function PublicAssessmentPage() {
       });
       setCtx((prev) => (prev ? { ...prev, evaluator_name: nameDraft } : prev));
       setEditingName(false);
-      toast.success("Name updated");
+      toast.success(t("nameUpdated"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("actionFailed"));
     }
   }
 
@@ -222,7 +230,7 @@ export default function PublicAssessmentPage() {
             }, 1200);
           }
         } catch {
-          toast.error("Failed to save — please retry");
+          toast.error(t("autosaveFailed"));
           if (--pendingSaves.current <= 0) {
             pendingSaves.current = 0;
             setSavingState("idle");
@@ -377,7 +385,7 @@ export default function PublicAssessmentPage() {
       try {
         await fn();
       } catch {
-        toast.error("Failed to save a score — please retry");
+        toast.error(t("scoreSaveFailed"));
       }
     }
     pendingSaves.current = 0;
@@ -391,10 +399,10 @@ export default function PublicAssessmentPage() {
         final_notes: finalNotes,
       });
       setCtx((prev) => (prev ? { ...prev, status: "submitted" } : prev));
-      toast.success("Submitted, thank you");
+      toast.success(t("submittedThanks"));
       window.scrollTo({ top: 0 });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("actionFailed"));
     }
   }
 
@@ -415,34 +423,34 @@ export default function PublicAssessmentPage() {
     return (
       <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" />
-        Loading…
+        {t("loadingEllipsis")}
       </div>
     );
   }
   if (phase === "expired") {
     return (
       <ErrorPage
-        title="This link has expired"
+        title={t("expiredTitle")}
         testid="public-error-expired-token-page"
-        body="Your previous answers are saved. Please contact the recruiter if you need to add more."
+        body={t("expiredBody")}
       />
     );
   }
   if (phase === "revoked") {
     return (
       <ErrorPage
-        title="This invitation was revoked"
+        title={t("revokedTitle")}
         testid="public-error-revoked-token-page"
-        body="Please contact the recruiter for details."
+        body={t("revokedBody")}
       />
     );
   }
   if (phase === "invalid") {
     return (
       <ErrorPage
-        title="This link is invalid"
+        title={t("invalidLinkTitle")}
         testid="public-error-invalid-token-page"
-        body="Please contact the recruiter who sent it."
+        body={t("invalidLinkBody")}
       />
     );
   }
@@ -454,20 +462,18 @@ export default function PublicAssessmentPage() {
         data-testid="public-assessment-consent-modal"
       >
         <CardHeader>
-          <CardTitle className="text-base">Before you begin</CardTitle>
+          <CardTitle className="text-base">
+            {t("consentBeforeYouBegin")}
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
-          <p>
-            You&apos;re about to access an evaluation form for a job candidate.
-            By continuing you acknowledge that:
-          </p>
+          <p>{t("consentIntro")}</p>
           <ul className="list-disc space-y-1 pl-5 text-sm">
-            <li>You&apos;ll see personal information of a candidate.</li>
-            <li>You must not share this link with anyone.</li>
-            <li>Your evaluation will be shared with the recruiter.</li>
+            <li>{t("consentItemPersonalData")}</li>
+            <li>{t("consentItemNoShare")}</li>
+            <li>{t("consentItemShared")}</li>
             <li>
-              Your name &quot;{ctx?.evaluator_name ?? "—"}&quot; will appear in
-              the consolidated report.
+              {t("consentItemName", { name: ctx?.evaluator_name ?? "—" })}
             </li>
           </ul>
           <div className="flex justify-between gap-2">
@@ -476,13 +482,13 @@ export default function PublicAssessmentPage() {
               onClick={decline}
               data-testid="public-assessment-consent-decline-btn"
             >
-              Decline
+              {t("decline")}
             </Button>
             <Button
               onClick={acceptConsent}
               data-testid="public-assessment-consent-accept-btn"
             >
-              I understand
+              {t("iUnderstand")}
             </Button>
           </div>
         </CardContent>
@@ -499,18 +505,29 @@ export default function PublicAssessmentPage() {
               className="text-xs uppercase tracking-wide text-muted-foreground"
               data-testid="public-assessment-tenant-line"
             >
-              Evaluation for {ctx.tenant_name}
+              {t("evaluationForTenant", { tenant: ctx.tenant_name })}
             </p>
           )}
           <h1 className="text-xl font-semibold">
-            Welcome, {ctx?.evaluator_name || "evaluator"}
+            {t("welcomeEvaluator", {
+              name: ctx?.evaluator_name || t("evaluatorFallback"),
+            })}
           </h1>
           <p className="text-sm text-muted-foreground">
-            You&apos;re evaluating{" "}
-            <strong data-testid="public-assessment-candidate-name">
-              {ctx?.candidate_name}
-            </strong>
-            {ctx?.vacancy_title ? <> for {ctx.vacancy_title}.</> : "."}
+            {t.rich(
+              ctx?.vacancy_title
+                ? "evaluatingCandidateForVacancy"
+                : "evaluatingCandidate",
+              {
+                candidate: ctx?.candidate_name || t("unnamedCandidate"),
+                vacancy: ctx?.vacancy_title ?? "",
+                name: (chunks) => (
+                  <strong data-testid="public-assessment-candidate-name">
+                    {chunks}
+                  </strong>
+                ),
+              },
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm">
@@ -523,13 +540,13 @@ export default function PublicAssessmentPage() {
                 data-testid="public-assessment-evaluator-name-input"
               />
               <Button size="sm" onClick={saveName}>
-                Save
+                {t("save")}
               </Button>
             </>
           ) : (
             <>
               <span data-testid="public-assessment-evaluator-name-display">
-                {ctx?.evaluator_name ?? "Unnamed"}
+                {ctx?.evaluator_name ?? t("unnamed")}
               </span>
               {!readOnly && (
                 <Button
@@ -553,22 +570,23 @@ export default function PublicAssessmentPage() {
         >
           <CardContent className="space-y-1 py-4 text-sm">
             <p className="font-medium">
-              Thank you! Your evaluation has been submitted.
-              {ctx?.recruiter_name ? ` ${ctx.recruiter_name}` : " The recruiter"}{" "}
-              will be notified.
+              {t("submittedBanner", {
+                recruiter: ctx?.recruiter_name ?? t("theRecruiter"),
+              })}
             </p>
             {ctx?.allow_reediting ? (
               <p
                 className="text-muted-foreground"
                 data-testid="public-assessment-reedit-note"
               >
-                Submitted — you can still edit until{" "}
-                {ctx ? new Date(ctx.expires_at).toLocaleDateString() : "—"}.
+                {t("reeditNote", {
+                  date: ctx
+                    ? new Date(ctx.expires_at).toLocaleDateString(locale)
+                    : "—",
+                })}
               </p>
             ) : (
-              <p className="text-muted-foreground">
-                The form below is read-only now.
-              </p>
+              <p className="text-muted-foreground">{t("readOnlyNote")}</p>
             )}
           </CardContent>
         </Card>
@@ -577,7 +595,7 @@ export default function PublicAssessmentPage() {
       {ctx?.personal_message && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm">From the recruiter</CardTitle>
+            <CardTitle className="text-sm">{t("fromRecruiter")}</CardTitle>
           </CardHeader>
           <CardContent className="whitespace-pre-wrap text-sm">
             {ctx.personal_message}
@@ -590,19 +608,19 @@ export default function PublicAssessmentPage() {
         <div className="space-y-4" data-testid="public-assessment-context-pane">
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm">Resume</CardTitle>
+              <CardTitle className="text-sm">{t("resume")}</CardTitle>
             </CardHeader>
             <CardContent>
               {ctx?.resume_url ? (
                 <iframe
                   src={ctx.resume_url}
-                  title={ctx.resume_filename ?? "Resume"}
+                  title={ctx.resume_filename ?? t("resume")}
                   className="h-[480px] w-full rounded-md border"
                   data-testid="public-assessment-resume-frame"
                 />
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  No resume uploaded for this candidate.
+                  {t("noResumeUploaded")}
                 </p>
               )}
             </CardContent>
@@ -610,7 +628,9 @@ export default function PublicAssessmentPage() {
           {(ctx?.questions?.length ?? 0) > 0 && (
             <Card data-testid="public-assessment-questions">
               <CardHeader>
-                <CardTitle className="text-sm">Individual questions</CardTitle>
+                <CardTitle className="text-sm">
+                  {t("individualQuestions")}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <ol className="list-decimal space-y-2 pl-5 text-sm">
@@ -619,7 +639,9 @@ export default function PublicAssessmentPage() {
                       {q.question_text}
                       {q.resume_fragment && (
                         <p className="mt-0.5 text-xs text-muted-foreground">
-                          Based on: “{q.resume_fragment}”
+                          {t("questionBasedOn", {
+                            fragment: q.resume_fragment,
+                          })}
                         </p>
                       )}
                     </li>
@@ -633,12 +655,17 @@ export default function PublicAssessmentPage() {
         {/* Pane B — evaluation form */}
         <Card data-testid="public-assessment-form-pane">
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-sm">Competency evaluation</CardTitle>
+            <CardTitle className="text-sm">
+              {t("competencyEvaluation")}
+            </CardTitle>
             <span
               className="text-xs text-muted-foreground"
               data-testid="public-assessment-progress"
             >
-              {scoredCount} / {competences.length} assessed
+              {t("progressAssessed", {
+                scored: scoredCount,
+                total: competences.length,
+              })}
             </span>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -648,12 +675,12 @@ export default function PublicAssessmentPage() {
               competenceScores={sheet?.competence_scores ?? []}
               indicatorScores={sheet?.indicator_scores ?? []}
               disabled={readOnly}
-              emptyHint="The evaluation sheet is not ready yet. Please contact the recruiter."
+              emptyHint={t("sheetNotReady")}
               onCompetenceScore={setCompetenceScore}
               onIndicatorScore={setIndicatorScore}
             />
             <textarea
-              placeholder="Final notes (optional)"
+              placeholder={t("finalNotesPlaceholder")}
               value={finalNotes}
               readOnly={readOnly}
               onChange={(e) => {
@@ -672,17 +699,17 @@ export default function PublicAssessmentPage() {
                 data-testid="assessment-autosave-status"
               >
                 {savingState === "saving"
-                  ? "Saving…"
+                  ? t("saving")
                   : savingState === "saved"
-                    ? "Saved"
-                    : "Saved automatically"}
+                    ? t("saved")
+                    : t("savedAutomatically")}
               </div>
               {!readOnly && (
                 <Button
                   onClick={submitClicked}
                   data-testid="public-assessment-submit-btn"
                 >
-                  {submitted ? "Resubmit evaluation" : "Submit evaluation"}
+                  {submitted ? t("resubmitEvaluation") : t("submitEvaluation")}
                 </Button>
               )}
             </div>
@@ -692,11 +719,13 @@ export default function PublicAssessmentPage() {
 
       <footer className="flex flex-col gap-1 border-t pt-3 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between">
         <span data-testid="public-assessment-expiration-countdown">
-          Link expires in: {ctx ? formatTimeLeft(ctx.expires_at) : "—"}
+          {t("linkExpiresIn", {
+            time: ctx ? formatTimeLeft(ctx.expires_at, t) : "—",
+          })}
         </span>
         {ctx?.recruiter_email && (
           <span>
-            Need help?{" "}
+            {t("needHelp")}{" "}
             <a className="underline" href={`mailto:${ctx.recruiter_email}`}>
               {ctx.recruiter_email}
             </a>
@@ -707,10 +736,12 @@ export default function PublicAssessmentPage() {
       <ConfirmDialog
         open={submitWarning}
         onOpenChange={setSubmitWarning}
-        title="Submit with unevaluated critical competences?"
-        description={`You haven't evaluated ${unscoredCritical.length} critical competence${unscoredCritical.length === 1 ? "" : "s"}. Submit anyway?`}
-        confirmLabel="Submit anyway"
-        cancelLabel="Continue editing"
+        title={t("submitWarningTitle")}
+        description={t("submitWarningBody", {
+          count: unscoredCritical.length,
+        })}
+        confirmLabel={t("submitAnyway")}
+        cancelLabel={t("continueEditing")}
         onConfirm={() => {
           setSubmitWarning(false);
           void doSubmit();

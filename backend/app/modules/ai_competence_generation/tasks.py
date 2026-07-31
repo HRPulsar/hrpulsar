@@ -378,6 +378,7 @@ async def _generate_with_retries(
     tenant_settings: Any,
     max_attempts: int,
     max_tokens: int | None = None,
+    credentials: Any = None,
 ) -> tuple[BaseModel, str | None]:
     """Returns (model_instance, error_code_or_None). Bounded exponential backoff.
 
@@ -398,6 +399,7 @@ async def _generate_with_retries(
         "system": system,
         "tenant_settings": tenant_settings,
         "schema": schema,
+        "credentials": credentials,
     }
     if max_tokens is not None:
         generate_kwargs["max_tokens"] = max_tokens
@@ -1513,21 +1515,43 @@ async def _execute_session_body(
         # refresh/_terminate would then crash with "connection is closed"
         # and mask the real error. Committing releases the connection;
         # the next statement checks out a fresh one (pool_pre_ping).
+        # HRP-465: resolve the tenant's BYOK/local credentials while the
+        # session connection is still ours — the LLM phase below runs
+        # without an open transaction.
+        from app.modules.ai import providers as ai_providers
+
+        credentials = await ai_providers.resolve_generation_target(
+            db,
+            sess.tenant_id,
+            ai_settings_service.get_effective_model(tenant_settings)
+            if tenant_settings
+            else None,
+        )
+
         await db.commit()
 
         # --- Call LLM with retries ----------------------------------
         max_attempts = max(
             5, ai_settings_service.get_effective_max_retries(tenant_settings)
         )
+        # HRP-480: generated content follows the tenant's content_language;
+        # the prompt templates themselves stay English.
+        system = "\n\n".join(
+            [
+                built.system,
+                ai_settings_service.build_language_directive(tenant_settings),
+            ]
+        )
         try:
             model_instance, _ = await _generate_with_retries(
                 user_prompt=built.user_prompt,
-                system=built.system,
+                system=system,
                 schema=built.schema_cls,
                 tenant_settings=tenant_settings,
                 max_attempts=max_attempts,
                 # HRP-122: scope-aware output budget — see _max_tokens_for_scope.
                 max_tokens=_max_tokens_for_scope(sess.scope),
+                credentials=credentials,
             )
         except RuntimeError as exc:
             code = str(exc) or "service_error"

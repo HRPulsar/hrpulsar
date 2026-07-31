@@ -304,19 +304,19 @@ async def get_candidate_breakdown(
 
     HRP-209: Employees can only open the drawer on their own row;
     other employees' breakdowns return 403."""
-    from fastapi import HTTPException
     from fastapi import status as _status
 
     from app.core.access_scope import (
         get_current_employee,
         is_employee_only,
     )
+    from app.core.errors import AppError
 
     if is_employee_only(current_user):
         emp = await get_current_employee(db, current_user)
         if emp is None or emp.id != employee_id:
-            raise HTTPException(
-                _status.HTTP_403_FORBIDDEN, "Insufficient permissions"
+            raise AppError(
+                "tm_insufficient_permissions", _status.HTTP_403_FORBIDDEN
             )
     return await service.get_candidate_breakdown(
         db, current_user.tenant_id, card_id, employee_id

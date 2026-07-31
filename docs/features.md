@@ -17,7 +17,7 @@ A central record for every person in the company: position, division, hire date,
 - Edit rights follow the role matrix: admins and HR edit any record, division managers edit only employees in their own subtree, the employee role is read-only
 - Assigning someone as a division manager or deputy upgrades their role automatically; removing the assignment asks for confirmation before the downgrade
 
-### Employees List
+### Employee Directory
 
 A filterable directory of everyone in the workspace.
 
@@ -67,7 +67,7 @@ Compensation history per employee: salaries, bonuses, and allowances.
 - Admins and HR see all records; division managers see records inside their own subtree only
 - Compensation analytics: average salary by division and totals by type
 
-### Competences Tab
+### Competence Snapshot
 
 A snapshot of the employee's competence profile in two blocks.
 
@@ -146,6 +146,85 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Built-in and custom entries with sort ordering and active/inactive status
 - Built-in entries can be switched on or off per workspace; their titles stay fixed
 - Deleting a custom entry that is referenced elsewhere is blocked with a clear message
+
+---
+
+## Recruitment
+
+### First Hiring Cycle
+
+- A non-blocking banner walks a new workspace through the first cycle: create a vacancy, add a candidate, schedule an interview, run the AI analysis, generate a report. Steps advance automatically as the work happens
+- Demo data seeds a sample vacancy with candidates and cleans itself up after 14 days
+
+### Vacancies
+
+- Structured vacancy fields: position, specializations, grades, division, salary, KPIs, requirements, responsibilities, conditions
+- Selects cascade from the company library — position constrains specializations, specializations constrain grades — and the competence profile prefills from the matching grade matrix
+- Every vacancy has a hiring manager, defaulting to the creator
+- Lifecycle: edit, archive with a 90-day retention window, restore, or permanently delete a draft without candidates
+- Parallel edits are protected: a stale save is rejected instead of silently overwriting someone else's change
+- Per-vacancy attachments (documents, spreadsheets, presentations, images; 25 MB each, up to 10) feed context into AI generation
+
+### Competency Profiles
+
+- Generate a vacancy's competence profile with AI from the description, tasks, and attachments; a clarification note passes straight into the prompt
+- The review screen supports keep/drop per competence, inline edits to names, indicators, and interview questions, and shows previously saved rows as locked
+- Nothing writes to the profile until the recruiter saves the reviewed selection
+
+### Candidate Pipeline
+
+- Add candidates by hand (name plus email or phone) or by bulk resume upload: up to 50 PDF and DOCX files at once, parsed by an LLM into structured data
+- Duplicate emails are caught before import with a link-or-create choice per file
+- The candidate page carries contact details, the parsed resume with per-section inline editing, files, and every vacancy application with its scores
+- Funnel stages ship with a 9-stage default (new through hired, rejected, withdrew) and can be customized per workspace or per vacancy; stage changes into a terminal state ask for confirmation
+- The vacancy table shows last position, experience, current stage, manager score, AI score, and AI verdict, and flags rows where the manager and AI diverge
+
+### Interview Questions
+
+- Question sets per candidate and vacancy, generated from the resume and the competence profile, with manual editing throughout
+- Sets evolve across rounds: covered topics are marked (by hand or from the transcript) so the next round skips answered ground, and blind spots from prior analyses become probes
+- PDF export in compact, full, and card layouts
+
+### Manager Assessments
+
+- Workspace-defined assessment scales (2–10 weighted levels); each vacancy freezes its scale on the first score
+- Assessment rounds per candidate (pre-interview, numbered interviews, final) with a separate sheet per evaluator
+- Indicator-level and competence-level scoring with autosave and a completion marker; evaluator disagreement above the scale threshold is highlighted
+- External evaluators join through secure token links with expiry, no account needed. The public evaluation page shows the resume and question list next to the scoring sheet and keeps the platform itself closed off
+- Recruiters track invite status (pending, opened, in progress, submitted, expired) with resend, extend, and revoke actions
+
+### Interviews & AI Analysis
+
+- Schedule interviews with type, timezone, duration, and interviewers directly from the candidate page
+- Upload audio (mp3, wav, m4a) and video (mp4, webm, mov, avi) up to 500 MB, or text transcripts up to 10 MB, several files at once
+- Uploads are chunked and resumable: pause, resume, retry, and continue after a browser reload
+- Consent capture with magic-link signing runs before any upload
+- Transcription through pluggable providers, including Whisper and Deepgram with speaker separation; an in-app player covers audio and video with speed control and keyboard shortcuts
+- The analysis pipeline reports data completeness, competence scores, blind spots, process findings, red flags, and a verdict
+- Two modes: resume-only (a fast pre-screen that never returns "recommended") and full (interview-anchored, with citations from the transcript). A prior resume-only run upgrades to full for the price difference
+- Progress renders stage by stage with a cancel option; resume citations click through to the matching resume section
+- When a candidate uploads a newer CV after a run, the platform flags the analysis as outdated and offers a re-run
+- Bulk analyze queues a resume-only run for every candidate that has a parsed resume but no verdict yet
+- Hiring managers see reframed process findings rather than raw red flags; access is role-aware throughout
+
+### Hiring Reports
+
+- Consolidated XLSX reports generated in the background: a summary sheet, a competence matrix of candidates against the profile, a detail sheet per candidate, and a data-completeness sheet
+- An audience switch keeps recruiter-only findings out of the hiring manager's copy
+- Saved report templates with one default per workspace, a report list with filters, and download links valid for 24 hours
+- Workspace logo branding on the cover sheet
+
+### Recruitment Settings
+
+- A single settings hub for scales, AI and speech-to-text providers, branding, retention, roles, and templates
+- Bring your own keys for LLM and transcription providers (Anthropic, OpenAI, Gemini, Azure, Yandex, GigaChat, Whisper, Deepgram, AssemblyAI, faster-whisper); keys are encrypted at rest and never returned in full
+- Retention windows per data type with a warning on legally short values
+
+### Audit & Compliance
+
+- An append-only audit log of every mutating action with change diffs, IP, and user agent, browsable with filters
+- GDPR export gathers everything about a person into one JSON document with a 7-day download link
+- GDPR erasure replaces personal data with redaction markers across resumes, transcripts, and consents while preserving the audit trail
 
 ---
 
@@ -233,19 +312,19 @@ Structured growth plans tied to assessment results.
 - Past-due deadlines are highlighted in red in the list and on the plan page
 - The assigned employee gets an email when the plan is sent; deadline reminders follow
 
-### Items & Materials
+### Plan Items & Materials
 
 - Items link to specific competences or stand alone
 - Materials carry a title, format (course, book, article, video, practice), link or attached file, and estimated study time
 - Items and materials reorder by hand; completed items become read-only until unchecked during review
 - Progress recomputes whenever items are added, removed, or toggled
 
-### Comments
+### Plan Comments
 
 - Comments at the plan, item, or material level with file attachments; images render inline
 - A threaded discussion between the employee and the reviewer lives next to the work itself
 
-### History & Versioning
+### Plan History & Versioning
 
 - The platform snapshots the full plan state on every key transition: sent, review, returned, done
 - Any version can be viewed or restored later
@@ -263,7 +342,7 @@ Knowledge testing with configurable questions and pass criteria.
 - Status flow mirrors assessments: Draft → Sent → In progress → Completed, with Cancelled available until the exam terminates
 - Launch validates at least one question, at least one assigned employee, and a future deadline
 
-### Assigning & Taking
+### Assigning & Taking Exams
 
 - Employees are assigned through a searchable picker filtered by name, email, division, or position
 - The exam opens in a side panel; answers save automatically and a closed panel resumes from the draft
@@ -302,72 +381,13 @@ An internal job board for open positions and project opportunities.
 - The candidate pool fills automatically: an employee qualifies on work experience at matching positions and on assessment results for the required competences. Results from higher-level assessments project down to the required level
 - The match cell shows competence and experience scores as separate chips; clicking it opens a breakdown with the exact numbers the matcher used
 
-### Candidates
+### Candidate Pool
 
 - Candidate statuses: matched, not matched, appointed. Manual nominees and appointed candidates survive automatic recomputes
 - Employees on a published card can react to express interest; their manager gets an email, and reactions break ties in the ranking
 - Appointment asks for confirmation, so a stray click cannot pin a candidate
 - Emails go out on every lifecycle event: publish, being added to a live card, appointment, completion, cancellation, and removal from a published card
 - Regular employees see only published cards and cards where they are a candidate; all write controls stay hidden
-
----
-
-## User Invitations
-
-- Invite colleagues by email with a pre-assigned role, division, and position; accepting creates the user account and the employee card in one step
-- Invitation links expire after 7 days; an inviter can never grant a role above their own
-- Bulk invite up to 100 people at once
-- A management page tracks all invitations with status filters (pending, accepted, cancelled, expired), resend and cancel actions, and inline editing of pending invites
-- Changing the email on a pending invite issues a fresh link, resets the expiry, and disables the old link
-
----
-
-## Notifications
-
-### In-App Notifications
-
-- A bell icon with an unread count and a notification list
-- Covers assessments, development plans, exams, and approaching deadlines
-- Mark as read individually or in bulk
-
-### Real-Time Updates
-
-- A single WebSocket connection per user pushes new notifications, AI generation status changes, and background task updates without a page refresh
-- Polling backs up the socket, so a dropped connection never strands the interface on a stale state
-
-### Email Notifications
-
-- Branded HTML templates, white-label ready, with a responsive layout
-- Templates cover verification, password reset, invitations, assessments, plans, exams, certificate expiry, deadline reminders, and external reviews
-- Delivery through the Resend API (cloud) or SMTP (self-hosted), sent in the background so the interface never waits on mail
-
-### Delivery Tracking
-
-- Every outbound email is logged with its status: sent, delivered, bounced, complained, failed
-- Automatic retries on failure and a webhook for real-time delivery updates
-- Admins can browse the log with status and recipient filters
-
-### Preferences
-
-- Per-user settings by event type and channel (email and in-app independently)
-- Everything is on by default; disabled channels are skipped silently
-
----
-
-## Analytics & Dashboards
-
-- An overview dashboard with employee counts by status and division, active assessments, completion rates, plan progress, and recent activity
-- Reports: assessment score distributions, competence heatmaps, and division comparisons
-- Assessment export to XLSX, generated in the background with a download link when ready
-- Long-running operations (imports, exports, AI generation) report their status through a single task-tracking mechanism
-
----
-
-## Data Import
-
-- Bulk employee import from Excel: email, name, position, hire date, work experience, education, courses
-- Dictionary import: specializations, grades, skill levels
-- Drag-and-drop upload, validation with row-level errors, and background processing with progress tracking
 
 ---
 
@@ -391,22 +411,11 @@ Per-workspace configuration that applies to every AI call.
 
 - Effort tiers: fast, balanced (default), and thorough, each mapping to a model and a retry budget; a custom tier opens model, temperature, and retry controls
 - Models come from a managed allow list, so only vetted models can be selected
+- A content language setting (English or German) controls the language the AI generates competences, indicators, positions, learning materials, and development plans in — independent of the interface language
 - A company context field (up to 2000 characters) is appended to every prompt
-- Supported providers: Claude, OpenAI, and Gemini
-
----
-
-## Public API
-
-### REST API (v1)
-
-Programmatic access for integrations and automation.
-
-- API key authentication, generated per workspace in settings
-- All endpoints live under `/v1/` with a rate limit of 60 requests per minute per key and validated pagination
-- Read endpoints for employees, assessments, divisions, specializations, and grades
-- Batch operations create or update up to 100 resources per call — employees, divisions, specializations, grades, assessments, and exams — with per-item error reporting and partial success
-- An OpenAPI specification at `/v1/openapi.json` works with any API client or code generator
+- Supported providers: Anthropic, OpenAI, Google Gemini, and any OpenAI-compatible server (Ollama, vLLM, LM Studio) via a custom endpoint URL
+- The provider selector offers only providers with working credentials: a platform-wide key, a workspace key (bring your own key), or a configured local endpoint — workspace credentials take priority over platform keys in every AI call
+- The model list refreshes itself: a daily background sweep asks each configured provider for its current models, so newly released model versions appear without a redeploy; models a provider retires are never silently removed
 
 ---
 
@@ -439,6 +448,10 @@ Programmatic access for integrations and automation.
 - Full dark mode: light, dark, or system preference, persisted across sessions
 - Responsive layout tested on phone, tablet, and desktop sizes
 - Global search on Cmd+K / Ctrl+K across employees, assessments, plans, and exams
+- Interface languages: English and German ship with the product; the deployment configures the offered languages, the onboarding wizard records the workspace default, and every member can pick a personal language in their profile or the header language switcher; the wizard also sets the AI content language separately
+- Backend error messages follow the interface language too, and every error carries a stable machine-readable code; adding a community language is a translation-catalog pull request — see the contributing guide
+- Outbound email arrives in the recipient's language — their personal preference, else the workspace default — for both built-in templates and database notification templates, falling back to English where a translation is missing
+- Built-in reference data follows the interface language too: shipped grades, specializations, competence types, skill levels, assessment statuses and types, and the default answer scale translate with the UI, while entries your team creates always display exactly as typed
 
 ### Waitlist
 
@@ -449,7 +462,34 @@ Programmatic access for integrations and automation.
 
 - Docker Compose deployment with PostgreSQL, Redis, MinIO, and Caddy for automatic SSL
 - White-label branding: installation name, logos, accent color, and favicon set through environment variables, for the web UI and outgoing emails alike
+- Theme presets: switch the whole UI (surfaces, accent, charts, sidebar, corner radius, light and dark mode) to a curated look with one variable
+- Custom sign-in background: a solid color or a full-bleed cover image on the login and registration pages
 - See the [Self-Hosted Guide](/docs/self-hosted) for the full walkthrough
+
+---
+
+## Public API
+
+### REST API (v1)
+
+Programmatic access for integrations and automation.
+
+- API key authentication, generated per workspace in settings
+- All endpoints live under `/v1/` with a rate limit of 60 requests per minute per key and validated pagination
+- Read endpoints for employees, assessments, divisions, specializations, and grades
+- Batch operations create or update up to 100 resources per call — employees, divisions, specializations, grades, assessments, and exams — with per-item error reporting and partial success
+- An OpenAPI specification at `/v1/openapi.json` works with any API client or code generator
+
+---
+
+## Monitoring & Observability
+
+For teams running HRPulsar on their own infrastructure.
+
+- A Prometheus metrics endpoint with request counts, latency histograms, and in-progress gauges, with path normalization to keep label cardinality under control
+- Structured JSON logs with a request ID on every entry and an `X-Request-ID` response header for correlation
+- Optional Sentry error tracking for backend and frontend, with personal data stripped from events before they leave the server
+- Health endpoints for load balancers and Kubernetes: a full check covering the database, Redis, and S3, plus a lightweight readiness probe
 
 ---
 
@@ -462,90 +502,59 @@ A first-login wizard for newly registered organizations.
 
 ---
 
-## Recruitment
+## User Invitations
 
-### Getting Started
-
-- A non-blocking banner walks a new workspace through the first cycle: create a vacancy, add a candidate, schedule an interview, run the AI analysis, generate a report. Steps advance automatically as the work happens
-- Demo data seeds a sample vacancy with candidates and cleans itself up after 14 days
-
-### Vacancies
-
-- Structured vacancy fields: position, specializations, grades, division, salary, KPIs, requirements, responsibilities, conditions
-- Selects cascade from the company library — position constrains specializations, specializations constrain grades — and the competence profile prefills from the matching grade matrix
-- Every vacancy has a hiring manager, defaulting to the creator
-- Lifecycle: edit, archive with a 90-day retention window, restore, or permanently delete a draft without candidates
-- Parallel edits are protected: a stale save is rejected instead of silently overwriting someone else's change
-- Per-vacancy attachments (documents, spreadsheets, presentations, images; 25 MB each, up to 10) feed context into AI generation
-
-### Competency Profiles
-
-- Generate a vacancy's competence profile with AI from the description, tasks, and attachments; a clarification note passes straight into the prompt
-- The review screen supports keep/drop per competence, inline edits to names, indicators, and interview questions, and shows previously saved rows as locked
-- Nothing writes to the profile until the recruiter saves the reviewed selection
-
-### Candidates
-
-- Add candidates by hand (name plus email or phone) or by bulk resume upload: up to 50 PDF and DOCX files at once, parsed by an LLM into structured data
-- Duplicate emails are caught before import with a link-or-create choice per file
-- The candidate page carries contact details, the parsed resume with per-section inline editing, files, and every vacancy application with its scores
-- Funnel stages ship with a 9-stage default (new through hired, rejected, withdrew) and can be customized per workspace or per vacancy; stage changes into a terminal state ask for confirmation
-- The vacancy table shows last position, experience, current stage, manager score, AI score, and AI verdict, and flags rows where the manager and AI diverge
-
-### Interview Questions
-
-- Question sets per candidate and vacancy, generated from the resume and the competence profile, with manual editing throughout
-- Sets evolve across rounds: covered topics are marked (by hand or from the transcript) so the next round skips answered ground, and blind spots from prior analyses become probes
-- PDF export in compact, full, and card layouts
-
-### Manager Assessments
-
-- Workspace-defined assessment scales (2–10 weighted levels); each vacancy freezes its scale on the first score
-- Assessment rounds per candidate (pre-interview, numbered interviews, final) with a separate sheet per evaluator
-- Indicator-level and competence-level scoring with autosave and a completion marker; evaluator disagreement above the scale threshold is highlighted
-- External evaluators join through secure token links with expiry, no account needed. The public evaluation page shows the resume and question list next to the scoring sheet and keeps the platform itself closed off
-- Recruiters track invite status (pending, opened, in progress, submitted, expired) with resend, extend, and revoke actions
-
-### Interviews & AI Analysis
-
-- Schedule interviews with type, timezone, duration, and interviewers directly from the candidate page
-- Upload audio (mp3, wav, m4a) and video (mp4, webm, mov, avi) up to 500 MB, or text transcripts up to 10 MB, several files at once
-- Uploads are chunked and resumable: pause, resume, retry, and continue after a browser reload
-- Consent capture with magic-link signing runs before any upload
-- Transcription through pluggable providers, including Whisper and Deepgram with speaker separation; an in-app player covers audio and video with speed control and keyboard shortcuts
-- The analysis pipeline reports data completeness, competence scores, blind spots, process findings, red flags, and a verdict
-- Two modes: resume-only (a fast pre-screen that never returns "recommended") and full (interview-anchored, with citations from the transcript). A prior resume-only run upgrades to full for the price difference
-- Progress renders stage by stage with a cancel option; resume citations click through to the matching resume section
-- When a candidate uploads a newer CV after a run, the platform flags the analysis as outdated and offers a re-run
-- Bulk analyze queues a resume-only run for every candidate that has a parsed resume but no verdict yet
-- Hiring managers see reframed process findings rather than raw red flags; access is role-aware throughout
-
-### Reports
-
-- Consolidated XLSX reports generated in the background: a summary sheet, a competence matrix of candidates against the profile, a detail sheet per candidate, and a data-completeness sheet
-- An audience switch keeps recruiter-only findings out of the hiring manager's copy
-- Saved report templates with one default per workspace, a report list with filters, and download links valid for 24 hours
-- Workspace logo branding on the cover sheet
-
-### Settings
-
-- A single settings hub for scales, AI and speech-to-text providers, branding, retention, roles, and templates
-- Bring your own keys for LLM and transcription providers (Anthropic, OpenAI, Gemini, Azure, Yandex, GigaChat, Whisper, Deepgram, AssemblyAI, faster-whisper); keys are encrypted at rest and never returned in full
-- Retention windows per data type with a warning on legally short values
-
-### Compliance
-
-- An append-only audit log of every mutating action with change diffs, IP, and user agent, browsable with filters
-- GDPR export gathers everything about a person into one JSON document with a 7-day download link
-- GDPR erasure replaces personal data with redaction markers across resumes, transcripts, and consents while preserving the audit trail
+- Invite colleagues by email with a pre-assigned role, division, and position; accepting creates the user account and the employee card in one step
+- Invitation links expire after 7 days; an inviter can never grant a role above their own
+- Bulk invite up to 100 people at once
+- A management page tracks all invitations with status filters (pending, accepted, cancelled, expired), resend and cancel actions, and inline editing of pending invites
+- Changing the email on a pending invite issues a fresh link, resets the expiry, and disables the old link
 
 ---
 
-## Monitoring & Observability
+## Notifications
 
-For teams running HRPulsar on their own infrastructure.
+### In-App Notifications
 
-- A Prometheus metrics endpoint with request counts, latency histograms, and in-progress gauges, with path normalization to keep label cardinality under control
-- Structured JSON logs with a request ID on every entry and an `X-Request-ID` response header for correlation
-- Optional Sentry error tracking for backend and frontend, with personal data stripped from events before they leave the server
-- Health endpoints for load balancers and Kubernetes: a full check covering the database, Redis, and S3, plus a lightweight readiness probe
+- A bell icon with an unread count and a notification list
+- Covers assessments, development plans, exams, and approaching deadlines
+- Mark as read individually or in bulk
+
+### Real-Time Updates
+
+- A single WebSocket connection per user pushes new notifications, AI generation status changes, and background task updates without a page refresh
+- Polling backs up the socket, so a dropped connection never strands the interface on a stale state
+
+### Email Notifications
+
+- Branded HTML templates, white-label ready, with a responsive layout
+- Templates cover verification, password reset, invitations, assessments, plans, exams, certificate expiry, deadline reminders, and external reviews
+- Delivery through the Resend API (cloud) or SMTP (self-hosted), sent in the background so the interface never waits on mail
+
+### Email Delivery Tracking
+
+- Every outbound email is logged with its status: sent, delivered, bounced, complained, failed
+- Automatic retries on failure and a webhook for real-time delivery updates
+- Admins can browse the log with status and recipient filters
+
+### Notification Preferences
+
+- Per-user settings by event type and channel (email and in-app independently)
+- Everything is on by default; disabled channels are skipped silently
+
+---
+
+## Analytics & Dashboards
+
+- An overview dashboard with employee counts by status and division, active assessments, completion rates, plan progress, and recent activity
+- Reports: assessment score distributions, competence heatmaps, and division comparisons
+- Assessment export to XLSX, generated in the background with a download link when ready
+- Long-running operations (imports, exports, AI generation) report their status through a single task-tracking mechanism
+
+---
+
+## Data Import
+
+- Bulk employee import from Excel: email, name, position, hire date, work experience, education, courses
+- Dictionary import: specializations, grades, skill levels
+- Drag-and-drop upload, validation with row-level errors, and background processing with progress tracking

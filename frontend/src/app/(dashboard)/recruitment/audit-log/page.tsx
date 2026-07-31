@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
   Card,
@@ -52,6 +53,8 @@ const ENTITY_TYPE_OPTIONS = [
 ] as const;
 
 export default function AuditLogPage() {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [items, setItems] = useState<AuditEvent[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -102,24 +105,23 @@ export default function AuditLogPage() {
     <div className="space-y-5" data-testid="recruitment-audit-log-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Settings", href: "/recruitment/settings" },
-          { label: "Audit log" },
+          { label: tc("settings"), href: "/recruitment/settings" },
+          { label: t("auditTitle") },
         ]}
       />
       <RecruitmentTabs />
       <header>
         <h1 className="text-xl font-semibold tracking-tight">
-          Audit log
+          {t("auditTitle")}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          All mutating operations in the recruitment module: creating vacancies,
-          changing stages, sending consents, generating reports, GDPR requests.
+          {t("auditDescription")}
         </p>
       </header>
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Filters</CardTitle>
+          <CardTitle className="text-sm">{t("auditFiltersTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-3">
@@ -131,7 +133,7 @@ export default function AuditLogPage() {
               }
               data-testid="audit-filter-entity-type"
             >
-              <option value="">entity_type (all)</option>
+              <option value="">{t("auditEntityTypeAll")}</option>
               {ENTITY_TYPE_OPTIONS.map((opt) => (
                 <option key={opt} value={opt}>
                   {opt}
@@ -139,7 +141,7 @@ export default function AuditLogPage() {
               ))}
             </select>
             <Input
-              placeholder="action (vacancy.create, …)"
+              placeholder={t("auditActionPlaceholder")}
               value={filters.action}
               onChange={(e) =>
                 setFilters((f) => ({ ...f, action: e.target.value }))
@@ -151,7 +153,7 @@ export default function AuditLogPage() {
               size="sm"
               onClick={() => setPage(0)}
             >
-              Apply
+              {t("auditApply")}
             </Button>
           </div>
         </CardContent>
@@ -162,24 +164,24 @@ export default function AuditLogPage() {
           <thead className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="w-8 p-2"></th>
-              <th className="p-2 text-left">Time</th>
-              <th className="p-2 text-left">User</th>
-              <th className="p-2 text-left">Action</th>
-              <th className="p-2 text-left">Entity</th>
-              <th className="p-2 text-left">IP</th>
+              <th className="p-2 text-left">{t("auditColTime")}</th>
+              <th className="p-2 text-left">{t("auditColUser")}</th>
+              <th className="p-2 text-left">{t("auditColAction")}</th>
+              <th className="p-2 text-left">{t("auditColEntity")}</th>
+              <th className="p-2 text-left">{t("auditColIp")}</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
                 <td colSpan={6} className="p-4 text-center text-muted-foreground">
-                  <Loader2 className="inline size-4 animate-spin" /> Loading…
+                  <Loader2 className="inline size-4 animate-spin" /> {t("loading")}
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
                 <td colSpan={6} className="p-6 text-center text-xs text-muted-foreground">
-                  No records found.
+                  {t("auditEmpty")}
                 </td>
               </tr>
             ) : (
@@ -198,8 +200,11 @@ export default function AuditLogPage() {
 
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>
-          {total} records · page {page + 1} of{" "}
-          {Math.max(1, Math.ceil(total / PAGE_SIZE))}
+          {t("auditPagination", {
+            total: String(total),
+            page: String(page + 1),
+            pages: String(Math.max(1, Math.ceil(total / PAGE_SIZE))),
+          })}
         </span>
         <div className="flex items-center gap-1">
           <Button
@@ -208,7 +213,7 @@ export default function AuditLogPage() {
             onClick={() => setPage((p) => Math.max(0, p - 1))}
             disabled={page === 0}
           >
-            ← Previous
+            {t("auditPrevious")}
           </Button>
           <Button
             size="sm"
@@ -216,7 +221,7 @@ export default function AuditLogPage() {
             onClick={() => setPage((p) => p + 1)}
             disabled={(page + 1) * PAGE_SIZE >= total}
           >
-            Next →
+            {t("auditNext")}
           </Button>
         </div>
       </div>

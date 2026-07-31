@@ -1,3 +1,5 @@
+/* eslint-disable react/jsx-no-literals -- accepted F2 debt (HRP-476): public
+   unauthenticated company profile, deliberately English until localized */
 "use client";
 
 import { useEffect, useState } from "react";

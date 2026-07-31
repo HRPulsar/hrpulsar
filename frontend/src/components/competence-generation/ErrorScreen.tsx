@@ -1,28 +1,31 @@
 "use client";
 
 import { AlertCircle } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 
-const MESSAGES: Record<string, { title: string; body: string }> = {
+/** HRP-476: error_code → key pair in the `competences` i18n namespace. The
+ *  map owns the code → key relation only; the wording lives in the catalog. */
+const MESSAGE_KEYS: Record<string, { titleKey: string; bodyKey: string }> = {
   parse_error: {
-    title: "AI returned an invalid response",
-    body: "The model couldn't format the result correctly. Try again — this is usually a transient issue.",
+    titleKey: "genErrorParseTitle",
+    bodyKey: "genErrorParseBody",
   },
   service_error: {
-    title: "AI service error",
-    body: "The AI service is temporarily unavailable or returned an error. Retry the request or try again later.",
+    titleKey: "genErrorServiceTitle",
+    bodyKey: "genErrorServiceBody",
   },
   insufficient_data: {
-    title: "Not enough input data",
-    body: "Generation needs at least one specialization, active skill levels, and a populated company description.",
+    titleKey: "genErrorInsufficientDataTitle",
+    bodyKey: "genErrorInsufficientDataBody",
   },
   overload: {
-    title: "AI service overloaded",
-    body: "Too many concurrent requests. Wait a minute and try again.",
+    titleKey: "genErrorOverloadTitle",
+    bodyKey: "genErrorOverloadBody",
   },
   output_truncated: {
-    title: "Result too large for one run",
-    body: "The generated tree hit the model's output limit. Narrow the scope — generate one group at a time, or reduce the number of specializations.",
+    titleKey: "genErrorTruncatedTitle",
+    bodyKey: "genErrorTruncatedBody",
   },
 };
 
@@ -39,11 +42,15 @@ export function ErrorScreen({
   onRetry,
   retrying = false,
 }: ErrorScreenProps) {
-  const fallback = {
-    title: "Generation failed",
-    body: errorMessage || "Something went wrong. Please try again later.",
-  };
-  const m = (errorCode && MESSAGES[errorCode]) || fallback;
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
+  const keys = errorCode ? MESSAGE_KEYS[errorCode] : undefined;
+  const m = keys
+    ? { title: t(keys.titleKey), body: t(keys.bodyKey) }
+    : {
+        title: t("genErrorFallbackTitle"),
+        body: errorMessage || t("genErrorFallbackBody"),
+      };
   // Retrying a truncated generation re-runs the same over-budget request;
   // the remedy is a narrower scope, so the retry button is hidden.
   const retryable = errorCode !== "output_truncated";
@@ -63,7 +70,7 @@ export function ErrorScreen({
           onClick={onRetry}
           disabled={retrying}
         >
-          {retrying ? "Retrying…" : "Try again"}
+          {retrying ? t("genRetrying") : tc("tryAgain")}
         </Button>
       )}
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CompetenceItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,9 @@ function SpacerRow({ height, cols }: { height: number; cols: number }) {
   );
 }
 
+/** Minimal shape of the `next-intl` translator the row renderer needs. */
+type Translate = (key: string, values?: Record<string, string>) => string;
+
 interface CanvasCandidateRow {
   candidate_vacancy_id: string;
   name: string;
@@ -73,6 +77,7 @@ function renderRow(
     evaluatorId: string,
     score: number | null,
   ) => void,
+  t: Translate,
 ) {
   let colIdx = 0;
   return (
@@ -117,7 +122,11 @@ function renderRow(
                     setScore(cand.candidate_vacancy_id, cid, ev.id, next)
                   }
                   data-testid={`canvas-cell-${cand.candidate_vacancy_id}-${cid}-${ev.id}`}
-                  ariaLabel={`Score for ${cand.name} on ${c.name} by ${ev.name}`}
+                  ariaLabel={t("canvasCellAriaLabel", {
+                    candidate: cand.name,
+                    competence: c.name,
+                    evaluator: ev.name,
+                  })}
                 />
               </td>
             );
@@ -142,6 +151,8 @@ export function CanvasGrid({
   mode,
   scale = DEFAULT_SCALE,
 }: CanvasGridProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const tableRef = useRef<HTMLTableElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [versionsOpen, setVersionsOpen] = useState(false);
@@ -191,10 +202,10 @@ export function CanvasGrid({
   const evaluatorList = useMemo(() => {
     const list = data?.evaluators ?? [];
     if (selfEvaluatorId && !list.find((e) => e.id === selfEvaluatorId)) {
-      return [{ id: selfEvaluatorId, name: "You" }, ...list];
+      return [{ id: selfEvaluatorId, name: t("canvasEvaluatorYou") }, ...list];
     }
     return list;
-  }, [data?.evaluators, selfEvaluatorId]);
+  }, [data?.evaluators, selfEvaluatorId, t]);
 
   const candidates = data?.candidates ?? [];
 
@@ -280,17 +291,24 @@ export function CanvasGrid({
       if (written > 0) {
         toast.success(
           skipped > 0
-            ? `Pasted ${written} cells, skipped ${skipped}`
-            : `Pasted ${written} cells`,
+            ? t("canvasPasteToastSkipped", {
+                written: String(written),
+                skipped: String(skipped),
+              })
+            : t("canvasPasteToast", { written: String(written) }),
         );
       } else if (skipped > 0) {
         toast.error(
-          `Could not paste any cells (${skipped} skipped). Check that values are within ${scale.min}–${scale.max}.`,
+          t("canvasPasteToastNone", {
+            skipped: String(skipped),
+            min: String(scale.min),
+            max: String(scale.max),
+          }),
         );
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [candidates, colMeta, inviteToken, selfEvaluatorId, scale.min, scale.max, setScore],
+    [candidates, colMeta, inviteToken, selfEvaluatorId, scale.min, scale.max, setScore, t],
   );
 
   // Row-level virtualization for fullscreen mode with many candidates.
@@ -310,7 +328,7 @@ export function CanvasGrid({
     return (
       <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" />
-        Loading canvas…
+        {t("canvasLoadingState")}
       </div>
     );
   }
@@ -326,7 +344,7 @@ export function CanvasGrid({
   if (competences.length === 0) {
     return (
       <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-        Generate the vacancy competency profile before evaluating candidates.
+        {t("canvasEmptyNoProfile")}
       </div>
     );
   }
@@ -334,7 +352,7 @@ export function CanvasGrid({
   if (candidates.length === 0) {
     return (
       <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-        Attach at least one candidate to start evaluation.
+        {t("canvasEmptyNoCandidates")}
       </div>
     );
   }
@@ -345,14 +363,14 @@ export function CanvasGrid({
         <div className="text-xs text-muted-foreground">
           {dirtyCells.size > 0 ? (
             <span className="text-[var(--rec-data-partial)]">
-              {dirtyCells.size} unsaved
+              {t("canvasUnsavedCount", { count: String(dirtyCells.size) })}
             </span>
           ) : pendingCells.size > 0 ? (
             <span className="flex items-center gap-1">
-              <Loader2 className="size-3 animate-spin" /> saving…
+              <Loader2 className="size-3 animate-spin" /> {t("canvasSaving")}
             </span>
           ) : (
-            <span>All saved</span>
+            <span>{t("canvasAllSaved")}</span>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -364,7 +382,7 @@ export function CanvasGrid({
             data-testid="canvas-btn-undo"
           >
             <Undo2 className="mr-1 size-3.5" />
-            Undo
+            {t("canvasUndo")}
           </Button>
           <Button
             variant="ghost"
@@ -373,7 +391,7 @@ export function CanvasGrid({
             data-testid="canvas-btn-versions"
           >
             <History className="mr-1 size-3.5" />
-            Versions
+            {t("canvasVersionsButton")}
           </Button>
           <Button
             variant="outline"
@@ -383,7 +401,7 @@ export function CanvasGrid({
             data-testid="canvas-btn-save-now"
           >
             <Save className="mr-1 size-3.5" />
-            Save now
+            {t("canvasSaveNow")}
           </Button>
         </div>
       </div>
@@ -420,7 +438,9 @@ export function CanvasGrid({
                 )}
                 rowSpan={2}
               >
-                {mode === "fullscreen" ? "Candidate" : "Evaluator"}
+                {mode === "fullscreen"
+                  ? tc("candidate")
+                  : t("canvasColEvaluator")}
               </th>
               {competences.map((c) => (
                 <th
@@ -452,7 +472,7 @@ export function CanvasGrid({
                     key={`${competenceId(c)}::self`}
                     className="border-b border-r bg-muted/20 px-2 py-1 text-[10px] font-normal text-muted-foreground"
                   >
-                    You
+                    {t("canvasEvaluatorYou")}
                   </th>
                 ),
               )}
@@ -479,6 +499,7 @@ export function CanvasGrid({
                     pendingCells,
                     scale,
                     setScore,
+                    t,
                   );
                 })}
                 <SpacerRow
@@ -502,6 +523,7 @@ export function CanvasGrid({
                   pendingCells,
                   scale,
                   setScore,
+                  t,
                 ),
               )
             )}

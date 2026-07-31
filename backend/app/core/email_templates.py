@@ -4,12 +4,20 @@ All emails share a common base layout with the installation brand
 (HRP-393: BRAND_NAME / BRAND_LOGO_URL / BRAND_ACCENT_COLOR settings,
 stock HRPulsar by default), inline CSS, and a consistent footer. Templates are rendered
 as Python strings (no external template files needed).
+
+Copy lives in the ``email.*`` section of ``app/i18n/{locale}.json`` (i18n
+F4): every ``render_*`` takes a keyword-only ``locale`` (default ``"en"``)
+that selects the catalog and fills ``<html lang>``. Markup and the
+HTML-escaping policy stay here — values are escaped at the call site and
+handed to :func:`translate` as parameters, so catalog strings never decide
+what gets escaped.
 """
 
 from jinja2 import BaseLoader, Environment
 from markupsafe import escape
 
 from app.config import settings
+from app.core.i18n import translate
 
 TEXT_COLOR = "#1a1f36"
 MUTED_COLOR = "#6b7280"
@@ -54,7 +62,7 @@ _env = Environment(loader=BaseLoader(), autoescape=True)
 
 BASE_TEMPLATE = """\
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ lang }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -83,8 +91,8 @@ BASE_TEMPLATE = """\
           <tr>
             <td style="padding: 0 32px 24px 32px; border-top: 1px solid #e5e7eb;">
               <p style="margin: 16px 0 0 0; font-size: 12px; line-height: 1.5; color: {{ muted_color }};">
-                This is an automated message from <a href="{{ frontend_url }}" style="color: {{ brand_color }}; text-decoration: none;">{{ brand_name }}</a>.
-                Please do not reply to this email.
+                {{ footer_automated | safe }}
+                {{ footer_no_reply | safe }}
               </p>
             </td>
           </tr>
@@ -114,16 +122,23 @@ def _logo_html(base_url: str) -> str:
     )
 
 
-def _render(subject: str, content_html: str) -> str:
+def _render(subject: str, content_html: str, *, locale: str = "en") -> str:
     """Render content into the base email layout."""
     base_url = frontend_url()
+    brand_link = (
+        f'<a href="{base_url}" style="color: {settings.brand_accent_color}; '
+        f'text-decoration: none;">{_brand_name_html()}</a>'
+    )
     tpl = _env.from_string(BASE_TEMPLATE)
     return tpl.render(
         subject=subject,
         content=content_html,
-        brand_name=settings.brand_name,
+        lang=locale,
         logo_html=_logo_html(base_url),
-        brand_color=settings.brand_accent_color,
+        footer_automated=translate(
+            "email.footer_automated", locale, brand_link=brand_link
+        ),
+        footer_no_reply=translate("email.footer_no_reply", locale),
         text_color=TEXT_COLOR,
         muted_color=MUTED_COLOR,
         bg_color=BG_COLOR,
@@ -171,21 +186,22 @@ def _muted(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def render_verification_email(token: str) -> tuple[str, str]:
+def render_verification_email(token: str, *, locale: str = "en") -> tuple[str, str]:
     """Return (subject, html_body) for email verification."""
     verify_url = f"{frontend_url()}/verify-email?token={token}"
-    subject = f"Verify your email — {settings.brand_name}"
-    content = (
-        _heading("Verify your email")
-        + _paragraph(
-            f"Click the button below to verify your email address and activate your {_brand_name_html()} account."
-        )
-        + f'<div style="margin: 24px 0;">{_button(verify_url, "Verify Email")}</div>'
-        + _muted(
-            "This link expires in 24 hours. If you didn't create an account, ignore this email."
-        )
+    subject = translate(
+        "email.verification.subject", locale, brand_name=settings.brand_name
     )
-    return subject, _render(subject, content)
+    button = _button(verify_url, translate("email.verification.button", locale))
+    content = (
+        _heading(translate("email.verification.heading", locale))
+        + _paragraph(
+            translate("email.verification.body", locale, brand_name=_brand_name_html())
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+        + _muted(translate("email.verification.note", locale))
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -193,21 +209,20 @@ def render_verification_email(token: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def render_password_reset_email(token: str) -> tuple[str, str]:
+def render_password_reset_email(token: str, *, locale: str = "en") -> tuple[str, str]:
     """Return (subject, html_body) for password reset."""
     reset_url = f"{frontend_url()}/reset-password?token={token}"
-    subject = f"Reset your password — {settings.brand_name}"
-    content = (
-        _heading("Reset your password")
-        + _paragraph(
-            "We received a request to reset your password. Click the button below to choose a new one."
-        )
-        + f'<div style="margin: 24px 0;">{_button(reset_url, "Reset Password")}</div>'
-        + _muted(
-            "This link expires in 15 minutes. If you didn't request a password reset, ignore this email."
-        )
+    subject = translate(
+        "email.password_reset.subject", locale, brand_name=settings.brand_name
     )
-    return subject, _render(subject, content)
+    button = _button(reset_url, translate("email.password_reset.button", locale))
+    content = (
+        _heading(translate("email.password_reset.heading", locale))
+        + _paragraph(translate("email.password_reset.body", locale))
+        + f'<div style="margin: 24px 0;">{button}</div>'
+        + _muted(translate("email.password_reset.note", locale))
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -215,60 +230,75 @@ def render_password_reset_email(token: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def render_signup_verify_email(token: str) -> tuple[str, str]:
+def render_signup_verify_email(token: str, *, locale: str = "en") -> tuple[str, str]:
     """Verify-email link emailed after /api/signup-request."""
     verify_url = f"{frontend_url()}/verify-email?token={token}&flow=signup"
-    subject = f"Confirm your email — {settings.brand_name}"
+    subject = translate(
+        "email.signup_verify.subject", locale, brand_name=settings.brand_name
+    )
+    button = _button(verify_url, translate("email.signup_verify.button", locale))
     content = (
-        _heading("Confirm your email")
+        _heading(translate("email.signup_verify.heading", locale))
         + _paragraph(
-            f"Thanks for requesting access to {_brand_name_html()}. "
-            "Confirm your email address so our team can review your request."
+            translate("email.signup_verify.body", locale, brand_name=_brand_name_html())
         )
-        + f'<div style="margin: 24px 0;">{_button(verify_url, "Confirm Email")}</div>'
-        + _muted(
-            "After confirming, our team typically reviews new requests "
-            "within 24 hours. This link expires in 24 hours."
-        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+        + _muted(translate("email.signup_verify.note", locale))
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
-def render_signup_rejected_email(reason: str | None) -> tuple[str, str]:
+def render_signup_rejected_email(
+    reason: str | None, *, locale: str = "en"
+) -> tuple[str, str]:
     """Notification sent after a moderator rejects a signup request."""
-    subject = f"Update on your {settings.brand_name} request"
-    body = _heading(f"Update on your {_brand_name_html()} request") + _paragraph(
-        "We've reviewed your request and unfortunately can't open "
-        "an account at this time."
+    subject = translate(
+        "email.signup_rejected.subject", locale, brand_name=settings.brand_name
     )
+    body = _heading(
+        translate(
+            "email.signup_rejected.heading", locale, brand_name=_brand_name_html()
+        )
+    ) + _paragraph(translate("email.signup_rejected.body", locale))
     if reason:
-        body += _paragraph(f"Note from our team: {escape(reason)}")
-    body += _muted(
-        "If this is unexpected, reply to this email and we'll take another look."
-    )
-    return subject, _render(subject, body)
+        body += _paragraph(
+            translate("email.signup_rejected.reason", locale, reason=escape(reason))
+        )
+    body += _muted(translate("email.signup_rejected.note", locale))
+    return subject, _render(subject, body, locale=locale)
 
 
-def render_magic_login_email(token: str, company_name: str | None) -> tuple[str, str]:
+def render_magic_login_email(
+    token: str, company_name: str | None, *, locale: str = "en"
+) -> tuple[str, str]:
     """One-time login link emailed after a signup is approved."""
     login_url = f"{frontend_url()}/magic-login?token={token}"
-    subject = f"Welcome to {settings.brand_name} — your account is ready"
-    intro = (
-        f"Your {_brand_name_html()} account for {escape(company_name)} is ready."
-        if company_name
-        else f"Your {_brand_name_html()} account is ready."
+    subject = translate(
+        "email.magic_login.subject", locale, brand_name=settings.brand_name
     )
-    content = (
-        _heading("You're in")
-        + _paragraph(intro)
-        + _paragraph("Use the button below to sign in. This link works once.")
-        + f'<div style="margin: 24px 0;">{_button(login_url, "Sign in")}</div>'
-        + _muted(
-            "Link expires in 24 hours. If you didn't request access, "
-            "ignore this email."
+    intro = (
+        translate(
+            "email.magic_login.intro",
+            locale,
+            brand_name=_brand_name_html(),
+            company_name=escape(company_name),
+        )
+        if company_name
+        else translate(
+            "email.magic_login.intro_no_company",
+            locale,
+            brand_name=_brand_name_html(),
         )
     )
-    return subject, _render(subject, content)
+    button = _button(login_url, translate("email.magic_login.button", locale))
+    content = (
+        _heading(translate("email.magic_login.heading", locale))
+        + _paragraph(intro)
+        + _paragraph(translate("email.magic_login.body", locale))
+        + f'<div style="margin: 24px 0;">{button}</div>'
+        + _muted(translate("email.magic_login.note", locale))
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -277,39 +307,50 @@ def render_magic_login_email(token: str, company_name: str | None) -> tuple[str,
 
 
 def render_invitation_email(
-    name: str, token: str, expire_days: int = 7
+    name: str, token: str, expire_days: int = 7, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Return (subject, html_body) for user invitation."""
     accept_url = f"{frontend_url()}/accept-invite?token={token}"
-    subject = f"You're invited to join {settings.brand_name}"
-    content = (
-        _heading(f"Hi {escape(name)}, you're invited!")
-        + _paragraph(
-            f"You've been invited to join your team on {_brand_name_html()} — "
-            "a platform for managing talent, competencies, and employee development."
-        )
-        + _paragraph("Click the button below to set up your account and get started.")
-        + f'<div style="margin: 24px 0;">{_button(accept_url, "Accept Invitation")}</div>'
-        + _muted(f"This invitation expires in {expire_days} days.")
+    subject = translate(
+        "email.invitation.subject", locale, brand_name=settings.brand_name
     )
-    return subject, _render(subject, content)
+    button = _button(accept_url, translate("email.invitation.button", locale))
+    content = (
+        _heading(translate("email.invitation.heading", locale, name=escape(name)))
+        + _paragraph(
+            translate("email.invitation.intro", locale, brand_name=_brand_name_html())
+        )
+        + _paragraph(translate("email.invitation.body", locale))
+        + f'<div style="margin: 24px 0;">{button}</div>'
+        + _muted(translate("email.invitation.note", locale, expire_days=expire_days))
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_invitation_reminder_email(
-    name: str, token: str, expire_days: int = 7
+    name: str, token: str, expire_days: int = 7, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Return (subject, html_body) for invitation reminder."""
     accept_url = f"{frontend_url()}/accept-invite?token={token}"
-    subject = f"Reminder: You're invited to join {settings.brand_name}"
-    content = (
-        _heading(f"Hi {escape(name)}, your invitation is waiting")
-        + _paragraph(
-            f"You have a pending invitation to join your team on {_brand_name_html()}. Don't miss out!"
-        )
-        + f'<div style="margin: 24px 0;">{_button(accept_url, "Accept Invitation")}</div>'
-        + _muted(f"This invitation expires in {expire_days} days.")
+    subject = translate(
+        "email.invitation_reminder.subject", locale, brand_name=settings.brand_name
     )
-    return subject, _render(subject, content)
+    button = _button(accept_url, translate("email.invitation_reminder.button", locale))
+    content = (
+        _heading(
+            translate("email.invitation_reminder.heading", locale, name=escape(name))
+        )
+        + _paragraph(
+            translate(
+                "email.invitation_reminder.body", locale, brand_name=_brand_name_html()
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+        + _muted(
+            translate("email.invitation_reminder.note", locale, expire_days=expire_days)
+        )
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -321,37 +362,68 @@ def render_assessment_assigned_email(
     assessment_title: str,
     deadline: str | None = None,
     assessment_id: str | None = None,
+    *,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Generic Evaluate-employee email used for peer / subordinate / external
     participants and as a fallback for unknown roles."""
-    subject = f"Evaluate employee: {assessment_title}"
-    deadline_line = f" The deadline is <strong>{deadline}</strong>." if deadline else ""
-    content = (
-        _heading("Evaluate employee")
-        + _paragraph(
-            f"You have been assigned as a participant in the assessment "
-            f'"<strong>{assessment_title}</strong>".{deadline_line}'
-        )
-        + _paragraph(f"Please log in to {_brand_name_html()} to submit your evaluation.")
-        + f'<div style="margin: 24px 0;">{_button(_assessment_url(assessment_id), "Open Assessment")}</div>'
+    subject = translate(
+        "email.assessment_assigned.subject", locale, assessment_title=assessment_title
     )
-    return subject, _render(subject, content)
+    deadline_line = (
+        translate("email.assessment_assigned.deadline_line", locale, deadline=deadline)
+        if deadline
+        else ""
+    )
+    button = _button(
+        _assessment_url(assessment_id),
+        translate("email.assessment_assigned.button", locale),
+    )
+    content = (
+        _heading(translate("email.assessment_assigned.heading", locale))
+        + _paragraph(
+            translate(
+                "email.assessment_assigned.intro",
+                locale,
+                assessment_title=assessment_title,
+                deadline_line=deadline_line,
+            )
+        )
+        + _paragraph(
+            translate(
+                "email.assessment_assigned.body",
+                locale,
+                brand_name=_brand_name_html(),
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_assessment_completed_email(
-    assessment_title: str, assessment_id: str | None = None
+    assessment_title: str, assessment_id: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
     """HRP-84: self-role completion email — "Your assessment has completed"."""
-    subject = f"Your assessment has completed: {assessment_title}"
-    content = (
-        _heading("Your assessment has completed")
-        + _paragraph(
-            f'The assessment "<strong>{assessment_title}</strong>" has been '
-            f"completed. Results are now available."
-        )
-        + f'<div style="margin: 24px 0;">{_button(_assessment_url(assessment_id), "View Results")}</div>'
+    subject = translate(
+        "email.assessment_completed.subject", locale, assessment_title=assessment_title
     )
-    return subject, _render(subject, content)
+    button = _button(
+        _assessment_url(assessment_id),
+        translate("email.assessment_completed.button", locale),
+    )
+    content = (
+        _heading(translate("email.assessment_completed.heading", locale))
+        + _paragraph(
+            translate(
+                "email.assessment_completed.body",
+                locale,
+                assessment_title=assessment_title,
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 # HRP-84: per-role messaging on lifecycle events (send / late-add / complete /
@@ -363,20 +435,46 @@ def render_assessment_self_evaluate_email(
     assessment_title: str,
     deadline: str | None = None,
     assessment_id: str | None = None,
+    *,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Self-role: "Evaluate yourself" email triggered on Draft → Sent."""
-    subject = f"Evaluate yourself: {assessment_title}"
-    deadline_line = f" The deadline is <strong>{deadline}</strong>." if deadline else ""
-    content = (
-        _heading("Evaluate yourself")
-        + _paragraph(
-            f'The self-assessment "<strong>{assessment_title}</strong>" is '
-            f"now open for you.{deadline_line}"
-        )
-        + _paragraph(f"Please log in to {_brand_name_html()} and complete your evaluation.")
-        + f'<div style="margin: 24px 0;">{_button(_assessment_url(assessment_id), "Open Assessment")}</div>'
+    subject = translate(
+        "email.assessment_self_evaluate.subject",
+        locale,
+        assessment_title=assessment_title,
     )
-    return subject, _render(subject, content)
+    deadline_line = (
+        translate(
+            "email.assessment_self_evaluate.deadline_line", locale, deadline=deadline
+        )
+        if deadline
+        else ""
+    )
+    button = _button(
+        _assessment_url(assessment_id),
+        translate("email.assessment_self_evaluate.button", locale),
+    )
+    content = (
+        _heading(translate("email.assessment_self_evaluate.heading", locale))
+        + _paragraph(
+            translate(
+                "email.assessment_self_evaluate.intro",
+                locale,
+                assessment_title=assessment_title,
+                deadline_line=deadline_line,
+            )
+        )
+        + _paragraph(
+            translate(
+                "email.assessment_self_evaluate.body",
+                locale,
+                brand_name=_brand_name_html(),
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_assessment_manager_evaluate_email(
@@ -384,82 +482,176 @@ def render_assessment_manager_evaluate_email(
     employee_name: str | None = None,
     deadline: str | None = None,
     assessment_id: str | None = None,
+    *,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Manager role: "Evaluate your employee" email."""
-    who = f" of <strong>{employee_name}</strong>" if employee_name else ""
-    subject = f"Evaluate your employee: {assessment_title}"
-    deadline_line = f" The deadline is <strong>{deadline}</strong>." if deadline else ""
-    content = (
-        _heading("Evaluate your employee")
-        + _paragraph(
-            f'The assessment "<strong>{assessment_title}</strong>"{who} is '
-            f"ready for your input.{deadline_line}"
+    who = (
+        translate(
+            "email.assessment_manager_evaluate.who",
+            locale,
+            employee_name=employee_name,
         )
-        + _paragraph(f"Please log in to {_brand_name_html()} and submit your evaluation.")
-        + f'<div style="margin: 24px 0;">{_button(_assessment_url(assessment_id), "Open Assessment")}</div>'
+        if employee_name
+        else ""
     )
-    return subject, _render(subject, content)
+    subject = translate(
+        "email.assessment_manager_evaluate.subject",
+        locale,
+        assessment_title=assessment_title,
+    )
+    deadline_line = (
+        translate(
+            "email.assessment_manager_evaluate.deadline_line", locale, deadline=deadline
+        )
+        if deadline
+        else ""
+    )
+    button = _button(
+        _assessment_url(assessment_id),
+        translate("email.assessment_manager_evaluate.button", locale),
+    )
+    content = (
+        _heading(translate("email.assessment_manager_evaluate.heading", locale))
+        + _paragraph(
+            translate(
+                "email.assessment_manager_evaluate.intro",
+                locale,
+                assessment_title=assessment_title,
+                who=who,
+                deadline_line=deadline_line,
+            )
+        )
+        + _paragraph(
+            translate(
+                "email.assessment_manager_evaluate.body",
+                locale,
+                brand_name=_brand_name_html(),
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_assessment_manager_completed_email(
     assessment_title: str,
     employee_name: str | None = None,
     assessment_id: str | None = None,
+    *,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Manager role: "Your employee assessment has completed"."""
-    who = f" for <strong>{employee_name}</strong>" if employee_name else ""
-    subject = f"Employee assessment completed: {assessment_title}"
-    content = (
-        _heading("Your employee assessment has completed")
-        + _paragraph(
-            f'The assessment "<strong>{assessment_title}</strong>"{who} has '
-            f"been completed. Results are now available."
+    who = (
+        translate(
+            "email.assessment_manager_completed.who",
+            locale,
+            employee_name=employee_name,
         )
-        + f'<div style="margin: 24px 0;">{_button(_assessment_url(assessment_id), "View Results")}</div>'
+        if employee_name
+        else ""
     )
-    return subject, _render(subject, content)
+    subject = translate(
+        "email.assessment_manager_completed.subject",
+        locale,
+        assessment_title=assessment_title,
+    )
+    button = _button(
+        _assessment_url(assessment_id),
+        translate("email.assessment_manager_completed.button", locale),
+    )
+    content = (
+        _heading(translate("email.assessment_manager_completed.heading", locale))
+        + _paragraph(
+            translate(
+                "email.assessment_manager_completed.body",
+                locale,
+                assessment_title=assessment_title,
+                who=who,
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_assessment_self_cancelled_email(
     assessment_title: str,
     assessment_id: str | None = None,
+    *,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Self-role: "Your assessment cancelled"."""
-    subject = f"Your assessment cancelled: {assessment_title}"
-    content = (
-        _heading("Your assessment cancelled")
-        + _paragraph(
-            f'The assessment "<strong>{assessment_title}</strong>" has been '
-            f"cancelled. No further action is required from you."
-        )
-        + f'<div style="margin: 24px 0;">{_button(_assessment_url(assessment_id), "Open Assessment")}</div>'
+    subject = translate(
+        "email.assessment_self_cancelled.subject",
+        locale,
+        assessment_title=assessment_title,
     )
-    return subject, _render(subject, content)
+    button = _button(
+        _assessment_url(assessment_id),
+        translate("email.assessment_self_cancelled.button", locale),
+    )
+    content = (
+        _heading(translate("email.assessment_self_cancelled.heading", locale))
+        + _paragraph(
+            translate(
+                "email.assessment_self_cancelled.body",
+                locale,
+                assessment_title=assessment_title,
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_assessment_manager_cancelled_email(
     assessment_title: str,
     employee_name: str | None = None,
     assessment_id: str | None = None,
+    *,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Manager role: "Your employee assessment cancelled"."""
-    who = f" for <strong>{employee_name}</strong>" if employee_name else ""
-    subject = f"Employee assessment cancelled: {assessment_title}"
-    content = (
-        _heading("Your employee assessment cancelled")
-        + _paragraph(
-            f'The assessment "<strong>{assessment_title}</strong>"{who} has '
-            f"been cancelled. No further action is required from you."
+    who = (
+        translate(
+            "email.assessment_manager_cancelled.who",
+            locale,
+            employee_name=employee_name,
         )
-        + f'<div style="margin: 24px 0;">{_button(_assessment_url(assessment_id), "Open Assessment")}</div>'
+        if employee_name
+        else ""
     )
-    return subject, _render(subject, content)
+    subject = translate(
+        "email.assessment_manager_cancelled.subject",
+        locale,
+        assessment_title=assessment_title,
+    )
+    button = _button(
+        _assessment_url(assessment_id),
+        translate("email.assessment_manager_cancelled.button", locale),
+    )
+    content = (
+        _heading(translate("email.assessment_manager_cancelled.heading", locale))
+        + _paragraph(
+            translate(
+                "email.assessment_manager_cancelled.body",
+                locale,
+                assessment_title=assessment_title,
+                who=who,
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_assessment_peer_cancelled_email(
     assessment_title: str,
     employee_name: str | None = None,
     assessment_id: str | None = None,
+    *,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Peer / subordinate / external reviewer: "Evaluation cancelled".
 
@@ -468,17 +660,35 @@ def render_assessment_peer_cancelled_email(
     employee's manager) so the inbox copy matches what they were actually
     asked to do.
     """
-    who = f" of <strong>{employee_name}</strong>" if employee_name else ""
-    subject = f"Evaluation cancelled: {assessment_title}"
-    content = (
-        _heading("Evaluation cancelled")
-        + _paragraph(
-            f'The evaluation{who} for "<strong>{assessment_title}</strong>" '
-            f"has been cancelled. No further action is required from you."
+    who = (
+        translate(
+            "email.assessment_peer_cancelled.who", locale, employee_name=employee_name
         )
-        + f'<div style="margin: 24px 0;">{_button(_assessment_url(assessment_id), "Open Assessment")}</div>'
+        if employee_name
+        else ""
     )
-    return subject, _render(subject, content)
+    subject = translate(
+        "email.assessment_peer_cancelled.subject",
+        locale,
+        assessment_title=assessment_title,
+    )
+    button = _button(
+        _assessment_url(assessment_id),
+        translate("email.assessment_peer_cancelled.button", locale),
+    )
+    content = (
+        _heading(translate("email.assessment_peer_cancelled.heading", locale))
+        + _paragraph(
+            translate(
+                "email.assessment_peer_cancelled.body",
+                locale,
+                assessment_title=assessment_title,
+                who=who,
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -491,209 +701,267 @@ def render_pdp_sent_email(
     deadline: str | None = None,
     *,
     pdp_title: str | None = None,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Return (subject, html_body) for PDP assignment."""
     title = (pdp_title or "").strip()
-    subject = (
-        f"Development plan assigned: {title}" if title else "Development plan assigned"
+    deadline_line = (
+        translate("email.pdp_sent.deadline_line", locale, deadline=deadline)
+        if deadline
+        else ""
     )
-    heading_html = (
-        f"Development plan assigned: {escape(title)}"
-        if title
-        else "Development plan assigned"
-    )
-    deadline_line = f" The deadline is <strong>{deadline}</strong>." if deadline else ""
-    intro = (
-        f'The development plan "<strong>{escape(title)}</strong>" has been assigned to '
-        f"<strong>{employee_name}</strong>.{deadline_line}"
-        if title
-        else f"A personal development plan has been assigned to "
-        f"<strong>{employee_name}</strong>.{deadline_line}"
+    if title:
+        subject = translate("email.pdp_sent.subject", locale, title=title)
+        heading_html = translate("email.pdp_sent.heading", locale, title=escape(title))
+        intro = translate(
+            "email.pdp_sent.intro",
+            locale,
+            title=escape(title),
+            employee_name=employee_name,
+            deadline_line=deadline_line,
+        )
+    else:
+        subject = translate("email.pdp_sent.subject_untitled", locale)
+        heading_html = translate("email.pdp_sent.heading_untitled", locale)
+        intro = translate(
+            "email.pdp_sent.intro_untitled",
+            locale,
+            employee_name=employee_name,
+            deadline_line=deadline_line,
+        )
+    button = _button(
+        frontend_url() + "/development", translate("email.pdp_sent.button", locale)
     )
     content = (
         _heading(heading_html)
         + _paragraph(intro)
-        + _paragraph("Please review the plan items and start working on them.")
-        + f'<div style="margin: 24px 0;">{_button(frontend_url() + "/development", "View Plan")}</div>'
+        + _paragraph(translate("email.pdp_sent.body", locale))
+        + f'<div style="margin: 24px 0;">{button}</div>'
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_pdp_returned_email(
-    employee_name: str, pdp_title: str | None = None
+    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Return (subject, html_body) for PDP return to the plan owner."""
     title = (pdp_title or "").strip()
-    subject = (
-        f"Development plan returned: {title}" if title else "Development plan returned"
-    )
-    heading_html = (
-        f"Development plan returned: {escape(title)}"
-        if title
-        else "Development plan returned"
-    )
-    intro = (
-        f'The development plan "<strong>{escape(title)}</strong>" assigned to '
-        f"<strong>{employee_name}</strong> has been returned for revision."
-        if title
-        else f"The development plan for <strong>{employee_name}</strong> has been "
-        f"returned for revision."
+    if title:
+        subject = translate("email.pdp_returned.subject", locale, title=title)
+        heading_html = translate(
+            "email.pdp_returned.heading", locale, title=escape(title)
+        )
+        intro = translate(
+            "email.pdp_returned.intro",
+            locale,
+            title=escape(title),
+            employee_name=employee_name,
+        )
+    else:
+        subject = translate("email.pdp_returned.subject_untitled", locale)
+        heading_html = translate("email.pdp_returned.heading_untitled", locale)
+        intro = translate(
+            "email.pdp_returned.intro_untitled", locale, employee_name=employee_name
+        )
+    button = _button(
+        frontend_url() + "/development", translate("email.pdp_returned.button", locale)
     )
     content = (
         _heading(heading_html)
         + _paragraph(intro)
-        + _paragraph("Please review the comments and update the plan.")
-        + f'<div style="margin: 24px 0;">{_button(frontend_url() + "/development", "View Plan")}</div>'
+        + _paragraph(translate("email.pdp_returned.body", locale))
+        + f'<div style="margin: 24px 0;">{button}</div>'
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_pdp_review_submitted_email(
-    employee_name: str, pdp_title: str | None = None
+    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Reviewer notification: the employee has submitted their plan for review."""
     title = (pdp_title or "").strip()
-    subject = (
-        f"Your employee's development plan submitted for review: {title}"
-        if title
-        else "Your employee's development plan submitted for review"
-    )
-    heading_html = (
-        f"Plan submitted for review: {escape(title)}"
-        if title
-        else "Plan submitted for review"
-    )
-    intro = (
-        f"<strong>{employee_name}</strong> has submitted their development plan "
-        f'"<strong>{escape(title)}</strong>" for your review.'
-        if title
-        else f"<strong>{employee_name}</strong> has submitted their development plan "
-        f"for your review."
+    if title:
+        subject = translate("email.pdp_review_submitted.subject", locale, title=title)
+        heading_html = translate(
+            "email.pdp_review_submitted.heading", locale, title=escape(title)
+        )
+        intro = translate(
+            "email.pdp_review_submitted.intro",
+            locale,
+            title=escape(title),
+            employee_name=employee_name,
+        )
+    else:
+        subject = translate("email.pdp_review_submitted.subject_untitled", locale)
+        heading_html = translate("email.pdp_review_submitted.heading_untitled", locale)
+        intro = translate(
+            "email.pdp_review_submitted.intro_untitled",
+            locale,
+            employee_name=employee_name,
+        )
+    button = _button(
+        frontend_url() + "/development",
+        translate("email.pdp_review_submitted.button", locale),
     )
     content = (
         _heading(heading_html)
         + _paragraph(intro)
-        + _paragraph("Open the plan to accept items or return it with comments.")
-        + f'<div style="margin: 24px 0;">{_button(frontend_url() + "/development", "View Plan")}</div>'
+        + _paragraph(translate("email.pdp_review_submitted.body", locale))
+        + f'<div style="margin: 24px 0;">{button}</div>'
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_pdp_done_to_employee_email(
-    employee_name: str, pdp_title: str | None = None
+    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Employee notification: their development plan has been completed."""
     title = (pdp_title or "").strip()
-    subject = (
-        f"Your development plan completed: {title}"
-        if title
-        else "Your development plan completed"
-    )
-    heading_html = (
-        f"Development plan completed: {escape(title)}"
-        if title
-        else "Development plan completed"
-    )
-    intro = (
-        f"Congratulations, <strong>{employee_name}</strong> — your development plan "
-        f'"<strong>{escape(title)}</strong>" is now marked as completed.'
-        if title
-        else f"Congratulations, <strong>{employee_name}</strong> — your development "
-        f"plan is now marked as completed."
+    if title:
+        subject = translate("email.pdp_done_to_employee.subject", locale, title=title)
+        heading_html = translate(
+            "email.pdp_done_to_employee.heading", locale, title=escape(title)
+        )
+        intro = translate(
+            "email.pdp_done_to_employee.intro",
+            locale,
+            title=escape(title),
+            employee_name=employee_name,
+        )
+    else:
+        subject = translate("email.pdp_done_to_employee.subject_untitled", locale)
+        heading_html = translate("email.pdp_done_to_employee.heading_untitled", locale)
+        intro = translate(
+            "email.pdp_done_to_employee.intro_untitled",
+            locale,
+            employee_name=employee_name,
+        )
+    button = _button(
+        frontend_url() + "/development",
+        translate("email.pdp_done_to_employee.button", locale),
     )
     content = (
         _heading(heading_html)
         + _paragraph(intro)
-        + f'<div style="margin: 24px 0;">{_button(frontend_url() + "/development", "View Plan")}</div>'
+        + f'<div style="margin: 24px 0;">{button}</div>'
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_pdp_done_to_reviewer_email(
-    employee_name: str, pdp_title: str | None = None
+    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Reviewer notification: their employee's plan has been completed."""
     title = (pdp_title or "").strip()
-    subject = (
-        f"Your employee's development plan completed: {title}"
-        if title
-        else "Your employee's development plan completed"
-    )
-    heading_html = (
-        f"Employee's plan completed: {escape(title)}"
-        if title
-        else "Employee's plan completed"
-    )
-    intro = (
-        f"<strong>{employee_name}</strong> has completed the development plan "
-        f'"<strong>{escape(title)}</strong>".'
-        if title
-        else f"<strong>{employee_name}</strong> has completed their development plan."
+    if title:
+        subject = translate("email.pdp_done_to_reviewer.subject", locale, title=title)
+        heading_html = translate(
+            "email.pdp_done_to_reviewer.heading", locale, title=escape(title)
+        )
+        intro = translate(
+            "email.pdp_done_to_reviewer.intro",
+            locale,
+            title=escape(title),
+            employee_name=employee_name,
+        )
+    else:
+        subject = translate("email.pdp_done_to_reviewer.subject_untitled", locale)
+        heading_html = translate("email.pdp_done_to_reviewer.heading_untitled", locale)
+        intro = translate(
+            "email.pdp_done_to_reviewer.intro_untitled",
+            locale,
+            employee_name=employee_name,
+        )
+    button = _button(
+        frontend_url() + "/development",
+        translate("email.pdp_done_to_reviewer.button", locale),
     )
     content = (
         _heading(heading_html)
         + _paragraph(intro)
-        + f'<div style="margin: 24px 0;">{_button(frontend_url() + "/development", "View Plan")}</div>'
+        + f'<div style="margin: 24px 0;">{button}</div>'
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_pdp_cancelled_to_employee_email(
-    employee_name: str, pdp_title: str | None = None
+    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Employee notification: their development plan has been cancelled."""
     title = (pdp_title or "").strip()
-    subject = (
-        f"Your development plan cancelled: {title}"
-        if title
-        else "Your development plan cancelled"
-    )
-    heading_html = (
-        f"Development plan cancelled: {escape(title)}"
-        if title
-        else "Development plan cancelled"
-    )
-    intro = (
-        f'The development plan "<strong>{escape(title)}</strong>" assigned to '
-        f"<strong>{employee_name}</strong> has been cancelled."
-        if title
-        else f"The development plan for <strong>{employee_name}</strong> has been cancelled."
+    if title:
+        subject = translate(
+            "email.pdp_cancelled_to_employee.subject", locale, title=title
+        )
+        heading_html = translate(
+            "email.pdp_cancelled_to_employee.heading", locale, title=escape(title)
+        )
+        intro = translate(
+            "email.pdp_cancelled_to_employee.intro",
+            locale,
+            title=escape(title),
+            employee_name=employee_name,
+        )
+    else:
+        subject = translate("email.pdp_cancelled_to_employee.subject_untitled", locale)
+        heading_html = translate(
+            "email.pdp_cancelled_to_employee.heading_untitled", locale
+        )
+        intro = translate(
+            "email.pdp_cancelled_to_employee.intro_untitled",
+            locale,
+            employee_name=employee_name,
+        )
+    button = _button(
+        frontend_url() + "/development",
+        translate("email.pdp_cancelled_to_employee.button", locale),
     )
     content = (
         _heading(heading_html)
         + _paragraph(intro)
-        + f'<div style="margin: 24px 0;">{_button(frontend_url() + "/development", "View Plans")}</div>'
+        + f'<div style="margin: 24px 0;">{button}</div>'
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_pdp_cancelled_to_reviewer_email(
-    employee_name: str, pdp_title: str | None = None
+    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Reviewer notification: their employee's plan has been cancelled."""
     title = (pdp_title or "").strip()
-    subject = (
-        f"Your employee's development plan cancelled: {title}"
-        if title
-        else "Your employee's development plan cancelled"
-    )
-    heading_html = (
-        f"Employee's plan cancelled: {escape(title)}"
-        if title
-        else "Employee's plan cancelled"
-    )
-    intro = (
-        f"The development plan for <strong>{employee_name}</strong> "
-        f'("<strong>{escape(title)}</strong>") has been cancelled.'
-        if title
-        else f"The development plan for <strong>{employee_name}</strong> has been cancelled."
+    if title:
+        subject = translate(
+            "email.pdp_cancelled_to_reviewer.subject", locale, title=title
+        )
+        heading_html = translate(
+            "email.pdp_cancelled_to_reviewer.heading", locale, title=escape(title)
+        )
+        intro = translate(
+            "email.pdp_cancelled_to_reviewer.intro",
+            locale,
+            title=escape(title),
+            employee_name=employee_name,
+        )
+    else:
+        subject = translate("email.pdp_cancelled_to_reviewer.subject_untitled", locale)
+        heading_html = translate(
+            "email.pdp_cancelled_to_reviewer.heading_untitled", locale
+        )
+        intro = translate(
+            "email.pdp_cancelled_to_reviewer.intro_untitled",
+            locale,
+            employee_name=employee_name,
+        )
+    button = _button(
+        frontend_url() + "/development",
+        translate("email.pdp_cancelled_to_reviewer.button", locale),
     )
     content = (
         _heading(heading_html)
         + _paragraph(intro)
-        + f'<div style="margin: 24px 0;">{_button(frontend_url() + "/development", "View Plans")}</div>'
+        + f'<div style="margin: 24px 0;">{button}</div>'
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -702,38 +970,53 @@ def render_pdp_cancelled_to_reviewer_email(
 
 
 def render_exam_assigned_email(
-    exam_title: str, deadline: str | None = None
+    exam_title: str, deadline: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Return (subject, html_body) for exam assignment."""
-    subject = f"Exam assigned: {exam_title}"
-    deadline_line = f" The deadline is <strong>{deadline}</strong>." if deadline else ""
-    content = (
-        _heading("Exam assigned")
-        + _paragraph(
-            f'You have been assigned the exam "<strong>{exam_title}</strong>".{deadline_line}'
-        )
-        + f'<div style="margin: 24px 0;">{_button(frontend_url() + "/exams", "View Exam")}</div>'
+    subject = translate("email.exam_assigned.subject", locale, exam_title=exam_title)
+    deadline_line = (
+        translate("email.exam_assigned.deadline_line", locale, deadline=deadline)
+        if deadline
+        else ""
     )
-    return subject, _render(subject, content)
+    button = _button(
+        frontend_url() + "/exams", translate("email.exam_assigned.button", locale)
+    )
+    content = (
+        _heading(translate("email.exam_assigned.heading", locale))
+        + _paragraph(
+            translate(
+                "email.exam_assigned.body",
+                locale,
+                exam_title=exam_title,
+                deadline_line=deadline_line,
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_exam_results_email(
-    exam_title: str, score: int | float, max_score: int | float
+    exam_title: str, score: int | float, max_score: int | float, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Return (subject, html_body) for exam results."""
-    subject = f"Exam results: {exam_title}"
+    subject = translate("email.exam_results.subject", locale, exam_title=exam_title)
+    button = _button(
+        frontend_url() + "/exams", translate("email.exam_results.button", locale)
+    )
     content = (
-        _heading("Exam results")
+        _heading(translate("email.exam_results.heading", locale))
         + _paragraph(
-            f'Your results for the exam "<strong>{exam_title}</strong>" are ready.'
+            translate("email.exam_results.body", locale, exam_title=exam_title)
         )
         + f'<div style="margin: 0 0 16px 0; padding: 16px; background: {BG_COLOR}; border-radius: 6px; text-align: center;">'
         + f'<span style="font-size: 24px; font-weight: 700; color: {TEXT_COLOR};">{score}</span>'
         + f'<span style="font-size: 16px; color: {MUTED_COLOR};"> / {max_score}</span>'
         + "</div>"
-        + f'<div style="margin: 24px 0;">{_button(frontend_url() + "/exams", "View Details")}</div>'
+        + f'<div style="margin: 24px 0;">{button}</div>'
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -742,21 +1025,37 @@ def render_exam_results_email(
 
 
 def render_certificate_expiry_email(
-    course_title: str, expiry_date: str, days_left: int, employee_name: str
+    course_title: str,
+    expiry_date: str,
+    days_left: int,
+    employee_name: str,
+    *,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Return (subject, html_body) for certificate expiry warning."""
-    subject = f"Certificate expiring soon: {course_title}"
-    content = (
-        _heading("Certificate expiring soon")
-        + _paragraph(
-            f'The certificate for "<strong>{course_title}</strong>" '
-            f"({employee_name}) expires on <strong>{expiry_date}</strong> "
-            f"({days_left} days remaining)."
-        )
-        + _paragraph("Please arrange for renewal before the expiration date.")
-        + f'<div style="margin: 24px 0;">{_button(frontend_url() + "/employees", "View Employee")}</div>'
+    subject = translate(
+        "email.certificate_expiry.subject", locale, course_title=course_title
     )
-    return subject, _render(subject, content)
+    button = _button(
+        frontend_url() + "/employees",
+        translate("email.certificate_expiry.button", locale),
+    )
+    content = (
+        _heading(translate("email.certificate_expiry.heading", locale))
+        + _paragraph(
+            translate(
+                "email.certificate_expiry.intro",
+                locale,
+                course_title=course_title,
+                employee_name=employee_name,
+                expiry_date=expiry_date,
+                days_left=days_left,
+            )
+        )
+        + _paragraph(translate("email.certificate_expiry.body", locale))
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -765,21 +1064,33 @@ def render_certificate_expiry_email(
 
 
 def render_deadline_reminder_email(
-    entity_type: str, entity_title: str, deadline: str
+    entity_type: str, entity_title: str, deadline: str, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Return (subject, html_body) for deadline reminder."""
-    subject = f"Deadline approaching: {entity_title}"
-    type_label = entity_type.upper()
-    content = (
-        _heading("Deadline approaching")
-        + _paragraph(
-            f'The {type_label} "<strong>{entity_title}</strong>" '
-            f"has a deadline of <strong>{deadline}</strong>. "
-            f"Please make sure to complete it on time."
-        )
-        + f'<div style="margin: 24px 0;">{_button(frontend_url(), f"Open {_brand_name_html()}")}</div>'
+    subject = translate(
+        "email.deadline_reminder.subject", locale, entity_title=entity_title
     )
-    return subject, _render(subject, content)
+    type_label = entity_type.upper()
+    button = _button(
+        frontend_url(),
+        translate(
+            "email.deadline_reminder.button", locale, brand_name=_brand_name_html()
+        ),
+    )
+    content = (
+        _heading(translate("email.deadline_reminder.heading", locale))
+        + _paragraph(
+            translate(
+                "email.deadline_reminder.body",
+                locale,
+                type_label=type_label,
+                entity_title=entity_title,
+                deadline=deadline,
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+    )
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -788,26 +1099,37 @@ def render_deadline_reminder_email(
 
 
 def render_external_review_email(
-    token: str, assessment_title: str, deadline: str | None = None
+    token: str,
+    assessment_title: str,
+    deadline: str | None = None,
+    *,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Return (subject, html_body) for external reviewer invitation."""
     review_url = f"{frontend_url()}/review/{token}"
-    subject = f"Review request: {assessment_title}"
+    subject = translate(
+        "email.external_review.subject", locale, assessment_title=assessment_title
+    )
     deadline_line = (
-        f" Please complete by <strong>{deadline}</strong>." if deadline else ""
+        translate("email.external_review.deadline_line", locale, deadline=deadline)
+        if deadline
+        else ""
     )
+    button = _button(review_url, translate("email.external_review.button", locale))
     content = (
-        _heading("Review request")
+        _heading(translate("email.external_review.heading", locale))
         + _paragraph(
-            f"You have been invited to participate as an external reviewer in the assessment "
-            f'"<strong>{assessment_title}</strong>".{deadline_line}'
+            translate(
+                "email.external_review.intro",
+                locale,
+                assessment_title=assessment_title,
+                deadline_line=deadline_line,
+            )
         )
-        + _paragraph(
-            "Click the button below to submit your evaluation. No account is needed."
-        )
-        + f'<div style="margin: 24px 0;">{_button(review_url, "Start Review")}</div>'
+        + _paragraph(translate("email.external_review.body", locale))
+        + f'<div style="margin: 24px 0;">{button}</div>'
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -826,25 +1148,51 @@ def render_recruitment_invite_email(
     vacancy_title: str | None = None,
     *,
     expires_in_days: int = 7,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Return (subject, html_body) for an external evaluator's recruiting invite."""
     invite_url = f"{frontend_url()}/recruitment/invite/{token}"
-    subject = _sanitize_subject(f"Invitation to evaluate candidate {candidate_name}")
+    subject = _sanitize_subject(
+        translate(
+            "email.recruitment_invite.subject", locale, candidate_name=candidate_name
+        )
+    )
     vacancy_line = (
-        f' for the role of "<strong>{escape(vacancy_title)}</strong>"'
+        translate(
+            "email.recruitment_invite.vacancy_line",
+            locale,
+            vacancy_title=escape(vacancy_title),
+        )
         if vacancy_title
         else ""
     )
+    button = _button(invite_url, translate("email.recruitment_invite.button", locale))
     content = (
-        _heading(f"Candidate evaluation: {escape(candidate_name)}")
-        + _paragraph(
-            f"You've been invited to evaluate candidate <strong>{escape(candidate_name)}</strong>{vacancy_line}. "
-            "The link below gives you direct access — no account is required."
+        _heading(
+            translate(
+                "email.recruitment_invite.heading",
+                locale,
+                candidate_name=escape(candidate_name),
+            )
         )
-        + f'<div style="margin: 24px 0;">{_button(invite_url, "Open evaluation form")}</div>'
-        + _muted(f"This link is valid for {expires_in_days} days.")
+        + _paragraph(
+            translate(
+                "email.recruitment_invite.body",
+                locale,
+                candidate_name=escape(candidate_name),
+                vacancy_line=vacancy_line,
+            )
+        )
+        + f'<div style="margin: 24px 0;">{button}</div>'
+        + _muted(
+            translate(
+                "email.recruitment_invite.note",
+                locale,
+                expires_in_days=expires_in_days,
+            )
+        )
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_manager_assessment_invite_email(
@@ -855,6 +1203,7 @@ def render_manager_assessment_invite_email(
     evaluator_name: str | None = None,
     personal_message: str | None = None,
     expires_in_days: int = 7,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Return (subject, html_body) for an HRP-186 external evaluator invite.
 
@@ -863,34 +1212,75 @@ def render_manager_assessment_invite_email(
     carries the recruiter's optional personal message.
     """
     invite_url = f"{frontend_url()}/public/assessments/{token}"
-    subject = _sanitize_subject(f"Invitation to evaluate candidate {candidate_name}")
+    subject = _sanitize_subject(
+        translate(
+            "email.manager_assessment_invite.subject",
+            locale,
+            candidate_name=candidate_name,
+        )
+    )
     greeting = (
-        _paragraph(f"Hi <strong>{escape(evaluator_name)}</strong>,")
+        _paragraph(
+            translate(
+                "email.manager_assessment_invite.greeting",
+                locale,
+                evaluator_name=escape(evaluator_name),
+            )
+        )
         if evaluator_name
         else ""
     )
     vacancy_line = (
-        f' for the role of "<strong>{escape(vacancy_title)}</strong>"'
+        translate(
+            "email.manager_assessment_invite.vacancy_line",
+            locale,
+            vacancy_title=escape(vacancy_title),
+        )
         if vacancy_title
         else ""
     )
     message_block = ""
     if personal_message and personal_message.strip():
-        message_block = _muted("Message from the recruiter:") + _paragraph(
-            f"<em>&ldquo;{escape(personal_message.strip())}&rdquo;</em>"
+        message_block = _muted(
+            translate("email.manager_assessment_invite.message_label", locale)
+        ) + _paragraph(
+            translate(
+                "email.manager_assessment_invite.message_body",
+                locale,
+                personal_message=escape(personal_message.strip()),
+            )
         )
+    button = _button(
+        invite_url, translate("email.manager_assessment_invite.button", locale)
+    )
     content = (
-        _heading(f"Candidate evaluation: {escape(candidate_name)}")
+        _heading(
+            translate(
+                "email.manager_assessment_invite.heading",
+                locale,
+                candidate_name=escape(candidate_name),
+            )
+        )
         + greeting
         + _paragraph(
-            f"You've been invited to evaluate candidate <strong>{escape(candidate_name)}</strong>{vacancy_line}. "
-            "The link below gives you direct access — no account is required."
+            translate(
+                "email.manager_assessment_invite.body",
+                locale,
+                candidate_name=escape(candidate_name),
+                vacancy_line=vacancy_line,
+            )
         )
         + message_block
-        + f'<div style="margin: 24px 0;">{_button(invite_url, "Open evaluation form")}</div>'
-        + _muted(f"This link is valid for {expires_in_days} days.")
+        + f'<div style="margin: 24px 0;">{button}</div>'
+        + _muted(
+            translate(
+                "email.manager_assessment_invite.note",
+                locale,
+                expires_in_days=expires_in_days,
+            )
+        )
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 def render_recruitment_consent_email(
@@ -899,27 +1289,37 @@ def render_recruitment_consent_email(
     template_body: str,
     *,
     expires_in_days: int = 14,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Return (subject, html_body) for a candidate consent magic-link email."""
 
     consent_url = f"{frontend_url()}/recruitment/consent/{token}"
-    subject = _sanitize_subject("Consent for interview recording and analysis")
+    subject = _sanitize_subject(translate("email.recruitment_consent.subject", locale))
     summary = (template_body or "").strip()
     if len(summary) > 600:
         summary = summary[:600].rsplit(" ", 1)[0] + "…"
     summary_html = _muted(escape(summary)) if summary else ""
+    button = _button(consent_url, translate("email.recruitment_consent.button", locale))
     content = (
-        _heading(f"Hello, {escape(candidate_name)}")
-        + _paragraph(
-            "To run an interview with recording and AI-powered analysis, "
-            "we need your consent. Please review the terms and confirm "
-            "via the link below — no account is required."
+        _heading(
+            translate(
+                "email.recruitment_consent.heading",
+                locale,
+                candidate_name=escape(candidate_name),
+            )
         )
+        + _paragraph(translate("email.recruitment_consent.body", locale))
         + summary_html
-        + f'<div style="margin: 24px 0;">{_button(consent_url, "Review and sign consent")}</div>'
-        + _muted(f"This link is valid for {expires_in_days} days.")
+        + f'<div style="margin: 24px 0;">{button}</div>'
+        + _muted(
+            translate(
+                "email.recruitment_consent.note",
+                locale,
+                expires_in_days=expires_in_days,
+            )
+        )
     )
-    return subject, _render(subject, content)
+    return subject, _render(subject, content, locale=locale)
 
 
 # ---------------------------------------------------------------------------
@@ -944,10 +1344,13 @@ def _render_talent_email(
     heading: str,
     paragraphs: list[str],
     card_id: str,
-    cta_label: str | None = "Open card",
+    cta_label: str | None,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Shared shell for the HRP-211 Talent Market emails.
 
+    ``cta_label`` is required and localized by the caller (i18n F7 —
+    the old "Open card" default was an untranslatable hardcode).
     ``cta_label=None`` drops the card button — used when the recipient no
     longer has access to the card (HRP-245 redo).
     """
@@ -960,126 +1363,172 @@ def _render_talent_email(
             f"{_button(_talent_market_card_url(card_id), cta_label)}"
             f"</div>"
         )
-    return subject, _render(subject, body)
+    return subject, _render(subject, body, locale=locale)
 
 
-def render_talent_market_matched_email(title: str, card_id: str) -> tuple[str, str]:
+def render_talent_market_matched_email(
+    title: str, card_id: str, *, locale: str = "en"
+) -> tuple[str, str]:
     """HRP-211: card published — candidate currently `matched`."""
     safe = escape(title)
     return _render_talent_email(
-        subject=f"You're matched candidate: {title}",
-        heading="You're a matched candidate",
+        subject=translate("email.talent_market_matched.subject", locale, title=title),
+        heading=translate("email.talent_market_matched.heading", locale),
         paragraphs=[
-            f'You\'ve been picked as a matched candidate for "<strong>{safe}</strong>".',
-            "Open the card to review the role and the requirements.",
+            translate("email.talent_market_matched.intro", locale, title=safe),
+            translate("email.talent_market_matched.body", locale),
         ],
         card_id=card_id,
+        cta_label=translate("email.talent_market_matched.button", locale),
+        locale=locale,
     )
 
 
-def render_talent_market_not_matched_email(title: str, card_id: str) -> tuple[str, str]:
+def render_talent_market_not_matched_email(
+    title: str, card_id: str, *, locale: str = "en"
+) -> tuple[str, str]:
     """HRP-211: card published — candidate currently `not_matched`."""
     safe = escape(title)
     return _render_talent_email(
-        subject=f"You're a candidate: {title}",
-        heading="You're a candidate",
+        subject=translate(
+            "email.talent_market_not_matched.subject", locale, title=title
+        ),
+        heading=translate("email.talent_market_not_matched.heading", locale),
         paragraphs=[
-            f'You\'ve been added as a candidate on "<strong>{safe}</strong>".',
-            "Open the card to see the requirements and where you stand.",
+            translate("email.talent_market_not_matched.intro", locale, title=safe),
+            translate("email.talent_market_not_matched.body", locale),
         ],
         card_id=card_id,
+        cta_label=translate("email.talent_market_not_matched.button", locale),
+        locale=locale,
     )
 
 
 def render_talent_market_appointed_self_email(
-    title: str, card_id: str
+    title: str, card_id: str, *, locale: str = "en"
 ) -> tuple[str, str]:
     """HRP-211: employee appointment notification."""
     safe = escape(title)
     return _render_talent_email(
-        subject=f"You are appointed! {title}",
-        heading="You're appointed",
+        subject=translate(
+            "email.talent_market_appointed_self.subject", locale, title=title
+        ),
+        heading=translate("email.talent_market_appointed_self.heading", locale),
         paragraphs=[
-            f'You\'ve been appointed on "<strong>{safe}</strong>". ' "Congratulations!",
+            translate("email.talent_market_appointed_self.body", locale, title=safe),
         ],
         card_id=card_id,
+        cta_label=translate("email.talent_market_appointed_self.button", locale),
+        locale=locale,
     )
 
 
 def render_talent_market_appointed_manager_email(
-    title: str, employee_name: str | None, card_id: str
+    title: str, employee_name: str | None, card_id: str, *, locale: str = "en"
 ) -> tuple[str, str]:
     """HRP-211: manager-side appointment notification."""
     safe_title = escape(title)
     who = (
-        f" <strong>{escape(employee_name)}</strong>"
+        translate(
+            "email.talent_market_appointed_manager.who",
+            locale,
+            employee_name=escape(employee_name),
+        )
         if employee_name
-        else " an employee"
+        else translate("email.talent_market_appointed_manager.who_unknown", locale)
     )
     return _render_talent_email(
-        subject=f"Your employee appointed: {title}",
-        heading="Your employee was appointed",
+        subject=translate(
+            "email.talent_market_appointed_manager.subject", locale, title=title
+        ),
+        heading=translate("email.talent_market_appointed_manager.heading", locale),
         paragraphs=[
-            f'{who} has just been appointed on "<strong>{safe_title}</strong>".',
+            translate(
+                "email.talent_market_appointed_manager.body",
+                locale,
+                who=who,
+                title=safe_title,
+            ),
         ],
         card_id=card_id,
+        cta_label=translate("email.talent_market_appointed_manager.button", locale),
+        locale=locale,
     )
 
 
-def render_talent_market_completed_email(title: str, card_id: str) -> tuple[str, str]:
+def render_talent_market_completed_email(
+    title: str, card_id: str, *, locale: str = "en"
+) -> tuple[str, str]:
     """HRP-211: card moved to Completed — sent to every matched /
     not_matched candidate."""
     safe = escape(title)
     return _render_talent_email(
-        subject=f"Appointment completed: {title}",
-        heading="The appointment is complete",
+        subject=translate("email.talent_market_completed.subject", locale, title=title),
+        heading=translate("email.talent_market_completed.heading", locale),
         paragraphs=[
-            f'The talent card "<strong>{safe}</strong>" has been marked '
-            "Completed. The role is filled.",
+            translate("email.talent_market_completed.body", locale, title=safe),
         ],
         card_id=card_id,
+        cta_label=translate("email.talent_market_completed.button", locale),
+        locale=locale,
     )
 
 
 def render_talent_market_cancelled_self_email(
-    title: str, card_id: str
+    title: str, card_id: str, *, locale: str = "en"
 ) -> tuple[str, str]:
     """HRP-211: appointed employee notification when the card is cancelled."""
     safe = escape(title)
     return _render_talent_email(
-        subject=f"Your appointment cancelled: {title}",
-        heading="Your appointment was cancelled",
+        subject=translate(
+            "email.talent_market_cancelled_self.subject", locale, title=title
+        ),
+        heading=translate("email.talent_market_cancelled_self.heading", locale),
         paragraphs=[
-            f'The appointment on "<strong>{safe}</strong>" has been ' "cancelled.",
+            translate("email.talent_market_cancelled_self.body", locale, title=safe),
         ],
         card_id=card_id,
+        cta_label=translate("email.talent_market_cancelled_self.button", locale),
+        locale=locale,
     )
 
 
 def render_talent_market_cancelled_manager_email(
-    title: str, employee_name: str | None, card_id: str
+    title: str, employee_name: str | None, card_id: str, *, locale: str = "en"
 ) -> tuple[str, str]:
     """HRP-211: manager notification — single appointed employee cancelled
     (used from Draft cancel)."""
     safe_title = escape(title)
     who = (
-        f" <strong>{escape(employee_name)}</strong>"
+        translate(
+            "email.talent_market_cancelled_manager.who",
+            locale,
+            employee_name=escape(employee_name),
+        )
         if employee_name
-        else " your employee"
+        else translate("email.talent_market_cancelled_manager.who_unknown", locale)
     )
     return _render_talent_email(
-        subject=f"Your employee's appointment cancelled: {title}",
-        heading="Your employee's appointment was cancelled",
+        subject=translate(
+            "email.talent_market_cancelled_manager.subject", locale, title=title
+        ),
+        heading=translate("email.talent_market_cancelled_manager.heading", locale),
         paragraphs=[
-            f"The appointment{who} on "
-            f'"<strong>{safe_title}</strong>" has been cancelled.',
+            translate(
+                "email.talent_market_cancelled_manager.body",
+                locale,
+                who=who,
+                title=safe_title,
+            ),
         ],
         card_id=card_id,
+        cta_label=translate("email.talent_market_cancelled_manager.button", locale),
+        locale=locale,
     )
 
 
 def render_talent_market_cancelled_manager_plural_email(
-    title: str, employee_names: list[str], card_id: str
+    title: str, employee_names: list[str], card_id: str, *, locale: str = "en"
 ) -> tuple[str, str]:
     """HRP-211: manager notification — multiple appointed employees were
     cancelled in one transition (Published cancel can hit several)."""
@@ -1087,38 +1536,55 @@ def render_talent_market_cancelled_manager_plural_email(
     name_line = (
         ", ".join(f"<strong>{escape(n)}</strong>" for n in employee_names)
         if employee_names
-        else "your employees"
+        else translate(
+            "email.talent_market_cancelled_manager_plural.names_unknown", locale
+        )
     )
     return _render_talent_email(
-        subject=f"Your employees' appointment cancelled: {title}",
-        heading="Your employees' appointment was cancelled",
+        subject=translate(
+            "email.talent_market_cancelled_manager_plural.subject", locale, title=title
+        ),
+        heading=translate(
+            "email.talent_market_cancelled_manager_plural.heading", locale
+        ),
         paragraphs=[
-            f"The appointments for {name_line} on "
-            f'"<strong>{safe_title}</strong>" have been cancelled.',
+            translate(
+                "email.talent_market_cancelled_manager_plural.body",
+                locale,
+                name_line=name_line,
+                title=safe_title,
+            ),
         ],
         card_id=card_id,
+        cta_label=translate(
+            "email.talent_market_cancelled_manager_plural.button", locale
+        ),
+        locale=locale,
     )
 
 
 def render_talent_market_cancelled_generic_email(
-    title: str, card_id: str
+    title: str, card_id: str, *, locale: str = "en"
 ) -> tuple[str, str]:
     """HRP-211: matched / not_matched candidates notification when the
     card transitions from Published to Cancelled."""
     safe = escape(title)
     return _render_talent_email(
-        subject=f"Cancelled: {title}",
-        heading="The talent card was cancelled",
+        subject=translate(
+            "email.talent_market_cancelled_generic.subject", locale, title=title
+        ),
+        heading=translate("email.talent_market_cancelled_generic.heading", locale),
         paragraphs=[
-            f'The talent card "<strong>{safe}</strong>" you were on has '
-            "been cancelled.",
+            translate("email.talent_market_cancelled_generic.body", locale, title=safe),
         ],
         card_id=card_id,
+        cta_label=translate("email.talent_market_cancelled_generic.button", locale),
+        locale=locale,
     )
 
 
 def render_talent_market_removed_candidate_email(
-    title: str, card_id: str
+    title: str, card_id: str, *, locale: str = "en"
 ) -> tuple[str, str]:
     """HRP-245: notify a candidate when they are removed from the
     Candidates block of a Published card.
@@ -1128,34 +1594,48 @@ def render_talent_market_removed_candidate_email(
     """
     safe = escape(title)
     return _render_talent_email(
-        subject=f"You are not considered more: {title}",
-        heading="You are not considered any more",
+        subject=translate(
+            "email.talent_market_removed_candidate.subject", locale, title=title
+        ),
+        heading=translate("email.talent_market_removed_candidate.heading", locale),
         paragraphs=[
-            f"You have been removed from the candidates list on "
-            f'"<strong>{safe}</strong>".',
+            translate("email.talent_market_removed_candidate.body", locale, title=safe),
         ],
         card_id=card_id,
         cta_label=None,
+        locale=locale,
     )
 
 
 def render_talent_market_reacted_manager_email(
-    title: str, employee_name: str | None, card_id: str
+    title: str, employee_name: str | None, card_id: str, *, locale: str = "en"
 ) -> tuple[str, str]:
     """HRP-213: manager-side notification when an employee reacts to a
     Published card they're a candidate on."""
     safe_title = escape(title)
     who = (
-        f"<strong>{escape(employee_name)}</strong>"
+        translate(
+            "email.talent_market_reacted_manager.who",
+            locale,
+            employee_name=escape(employee_name),
+        )
         if employee_name
-        else "Your employee"
+        else translate("email.talent_market_reacted_manager.who_unknown", locale)
     )
     return _render_talent_email(
-        subject=f"Your employee has reacted: {title}",
-        heading="Your employee reacted to a talent card",
+        subject=translate(
+            "email.talent_market_reacted_manager.subject", locale, title=title
+        ),
+        heading=translate("email.talent_market_reacted_manager.heading", locale),
         paragraphs=[
-            f"{who} has reacted to the talent card "
-            f'"<strong>{safe_title}</strong>".',
+            translate(
+                "email.talent_market_reacted_manager.body",
+                locale,
+                who=who,
+                title=safe_title,
+            ),
         ],
         card_id=card_id,
+        cta_label=translate("email.talent_market_reacted_manager.button", locale),
+        locale=locale,
     )

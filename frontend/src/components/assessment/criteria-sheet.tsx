@@ -2,17 +2,20 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Info, Pencil, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
 import { ALERT_TONE } from "@/lib/badge-tones";
 import { useCompetenceTree } from "@/hooks/use-competence-tree";
+import { dictionaryItemLabel, skillLevelLabel } from "@/lib/reference-labels";
 import type {
   AssessmentCompetence,
   Competence,
   CompetenceGroupTree,
   CriteriaType,
   CriteriaUpdate,
+  DictionaryItem,
   GradeOption,
   GradeSpecialization,
   SkillLevel,
@@ -78,6 +81,9 @@ function CriteriaBody({
   onClose: () => void;
   onSave: CriteriaSheetProps["onSave"];
 }) {
+  const t = useTranslations("assessments");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [type, setType] = useState<CriteriaType | "">(initial.criteria_type ?? "");
   const [specId, setSpecId] = useState<string>(initial.specialization_id ?? "");
   const [gradeId, setGradeId] = useState<string>(
@@ -105,22 +111,35 @@ function CriteriaBody({
   const [specs, setSpecs] = useState<SpecializationOption[]>([]);
   const [grades, setGrades] = useState<GradeOption[]>([]);
   const [skillLevels, setSkillLevels] = useState<SkillLevel[]>([]);
-  const [compTypes, setCompTypes] = useState<Record<string, string>>({});
+  // HRP-479: keep the dictionary rows (not just their titles) so origin
+  // types can resolve through the reference catalog.
+  const [compTypes, setCompTypes] = useState<Record<string, DictionaryItem>>({});
 
   const specItems = useMemo(
-    () => specs.map((s) => ({ value: s.id, label: s.title })),
-    [specs],
+    () =>
+      specs.map((s) => ({
+        value: s.id,
+        label: dictionaryItemLabel(tRef, { ...s, type: "specialization" }),
+      })),
+    [specs, tRef],
   );
   const gradeItems = useMemo(
     () => [
-      { value: ALL_GRADES_VALUE, label: "All grades" },
-      ...grades.map((g) => ({ value: g.id, label: g.title })),
+      { value: ALL_GRADES_VALUE, label: t("allGrades") },
+      ...grades.map((g) => ({
+        value: g.id,
+        label: dictionaryItemLabel(tRef, { ...g, type: "grade" }),
+      })),
     ],
-    [grades],
+    [grades, t, tRef],
   );
   const skillLevelItems = useMemo(
-    () => skillLevels.map((sl) => ({ value: sl.id, label: sl.title })),
-    [skillLevels],
+    () =>
+      skillLevels.map((sl) => ({
+        value: sl.id,
+        label: skillLevelLabel(tRef, sl),
+      })),
+    [skillLevels, tRef],
   );
 
   const { tree: competenceTree } = useCompetenceTree();
@@ -145,16 +164,16 @@ function CriteriaBody({
     Promise.all([
       api.get<SpecializationOption[]>(specsUrl),
       api.get<SkillLevel[]>("/skill-levels"),
-      api.get<{ id: string; title: string }[]>("/dictionaries/competence_type").catch(
-        () => [] as { id: string; title: string }[],
+      api.get<DictionaryItem[]>("/dictionaries/competence_type").catch(
+        () => [] as DictionaryItem[],
       ),
     ])
       .then(([s, sl, types]) => {
         if (!alive) return;
         setSpecs(s);
         setSkillLevels([...sl].sort((a, b) => a.sort_index - b.sort_index));
-        const tmap: Record<string, string> = {};
-        for (const t of types) tmap[t.id] = t.title;
+        const tmap: Record<string, DictionaryItem> = {};
+        for (const item of types) tmap[item.id] = item;
         setCompTypes(tmap);
       })
       .catch(() => {});
@@ -250,33 +269,42 @@ function CriteriaBody({
       await onSave(payload);
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("errorSaveFailed"));
     } finally {
       setSaving(false);
     }
   }
 
+  // HRP-479: group by the type id — the visible heading is localized, so a
+  // translated string must never double as the grouping key. Ids that
+  // did not resolve to a dictionary row (e.g. the fetch failed) collapse
+  // into the single "" bucket so they share one "No type" card instead
+  // of one card per unknown id.
   const groupedComps = useMemo(() => {
     const groups: Record<string, AssessmentCompetence[]> = {};
     for (const c of competences) {
       const typeId = compTypeMap[c.competence_id] || "";
-      const typeTitle = compTypes[typeId] || "No type";
-      if (!groups[typeTitle]) groups[typeTitle] = [];
-      groups[typeTitle].push(c);
+      const key = typeId && compTypes[typeId] ? typeId : "";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(c);
     }
     return groups;
   }, [competences, compTypeMap, compTypes]);
+
+  const compTypeTitle = (typeId: string) => {
+    const item = compTypes[typeId];
+    return item ? dictionaryItemLabel(tRef, item) : t("noType");
+  };
 
   return (
     <>
       <SheetContent className="max-w-lg" data-testid="criteria-sheet">
           <SheetHeader>
-            <SheetTitle>Evaluation criteria</SheetTitle>
+            <SheetTitle>{t("evaluationCriteria")}</SheetTitle>
           </SheetHeader>
           <div className="rounded-md bg-accent/40 p-3 text-sm text-muted-foreground">
             <Info className="mr-2 inline-block size-4 text-primary" />
-            Choose what employees will be evaluated against — a specialization
-            or a hand-picked set of competences.
+            {t("criteriaIntro")}
           </div>
 
           <div className="flex-1 space-y-5 overflow-y-auto">
@@ -287,21 +315,21 @@ function CriteriaBody({
             >
               <label className="flex items-center gap-3 rounded-md border p-3" data-testid="criteria-radio-current">
                 <RadioItem value="current_positions" disabled={readOnly} />
-                <span className="text-sm">Employees&apos; current positions</span>
+                <span className="text-sm">{t("criteriaTypeCurrentPositions")}</span>
               </label>
               <label className="flex items-center gap-3 rounded-md border p-3" data-testid="criteria-radio-target">
                 <RadioItem value="target_position" disabled={readOnly} />
-                <span className="text-sm">Target position</span>
+                <span className="text-sm">{t("criteriaTypeTargetPosition")}</span>
               </label>
               <label className="flex items-center gap-3 rounded-md border p-3" data-testid="criteria-radio-competences">
                 <RadioItem value="competences" disabled={readOnly} />
-                <span className="text-sm">Individual competences</span>
+                <span className="text-sm">{t("criteriaTypeCompetences")}</span>
               </label>
             </RadioGroup>
 
             {readOnly && (
               <div className={`rounded-md border p-3 text-xs ${ALERT_TONE.amber}`}>
-                Criteria cannot be changed after the assessment starts.
+                {t("criteriaLocked")}
               </div>
             )}
 
@@ -309,7 +337,7 @@ function CriteriaBody({
               <Card>
                 <CardContent className="space-y-3 pt-4">
                   <div className="space-y-1.5">
-                    <Label>Specialization *</Label>
+                    <Label>{t("fieldSpecialization")}</Label>
                     <Select
                       value={specId}
                       items={specItems}
@@ -321,19 +349,22 @@ function CriteriaBody({
                       disabled={readOnly}
                     >
                       <SelectTrigger className="w-full" data-testid="criteria-spec-select">
-                        <SelectValue placeholder="Select" />
+                        <SelectValue placeholder={t("select")} />
                       </SelectTrigger>
                       <SelectContent>
                         {specs.map((s) => (
                           <SelectItem key={s.id} value={s.id}>
-                            {s.title}
+                            {dictionaryItemLabel(tRef, {
+                              ...s,
+                              type: "specialization",
+                            })}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <Label>Grade *</Label>
+                    <Label>{t("fieldGrade")}</Label>
                     <Select
                       value={gradeId}
                       items={gradeItems}
@@ -344,13 +375,13 @@ function CriteriaBody({
                       disabled={!specId || readOnly}
                     >
                       <SelectTrigger className="w-full" data-testid="criteria-grade-select">
-                        <SelectValue placeholder="Select" />
+                        <SelectValue placeholder={t("select")} />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={ALL_GRADES_VALUE}>All grades</SelectItem>
+                        <SelectItem value={ALL_GRADES_VALUE}>{t("allGrades")}</SelectItem>
                         {grades.map((g) => (
                           <SelectItem key={g.id} value={g.id}>
-                            {g.title}
+                            {dictionaryItemLabel(tRef, { ...g, type: "grade" })}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -379,7 +410,7 @@ function CriteriaBody({
                         setPassingScoreTouched(false);
                       }}
                     >
-                      <X className="mr-1 size-3.5" /> Clear
+                      <X className="mr-1 size-3.5" /> {t("clear")}
                     </Button>
                   )}
                 </CardContent>
@@ -408,10 +439,10 @@ function CriteriaBody({
                   <Card>
                     <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
                       <p className="text-sm text-muted-foreground">
-                        Select the competences this assessment evaluates
+                        {t("selectCompetencesHint")}
                       </p>
                       <Button onClick={() => setTreeOpen(true)} data-testid="criteria-pick-competences">
-                        <Pencil className="mr-1 size-3.5" /> Select
+                        <Pencil className="mr-1 size-3.5" /> {t("select")}
                       </Button>
                     </CardContent>
                   </Card>
@@ -419,14 +450,16 @@ function CriteriaBody({
                   <>
                     <p className="rounded-md bg-accent/40 p-2 text-xs text-muted-foreground">
                       <Info className="mr-1 inline-block size-3 text-primary" />
-                      Each skill level includes the indicators of all preceding levels
+                      {t("skillLevelInheritHint")}
                     </p>
-                    {Object.entries(groupedComps).map(([typeTitle, items]) => (
-                      <Card key={typeTitle}>
+                    {Object.entries(groupedComps).map(([typeId, items]) => (
+                      <Card key={typeId}>
                         <CardContent className="space-y-2 pt-4">
                           <div className="flex items-center justify-between text-sm">
-                            <span className="font-medium">{typeTitle}</span>
-                            <span className="text-xs text-muted-foreground">Skill level</span>
+                            <span className="font-medium">
+                              {compTypeTitle(typeId)}
+                            </span>
+                            <span className="text-xs text-muted-foreground">{t("skillLevel")}</span>
                           </div>
                           {items.map((item) => {
                             return (
@@ -466,7 +499,7 @@ function CriteriaBody({
                                   <SelectContent>
                                     {skillLevels.map((sl) => (
                                       <SelectItem key={sl.id} value={sl.id}>
-                                        {sl.title}
+                                        {skillLevelLabel(tRef, sl)}
                                       </SelectItem>
                                     ))}
                                   </SelectContent>
@@ -494,14 +527,14 @@ function CriteriaBody({
                         size="sm"
                         onClick={() => setCompetences([])}
                       >
-                        <X className="mr-1 size-3.5" /> Remove all
+                        <X className="mr-1 size-3.5" /> {t("removeAll")}
                       </Button>
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => setTreeOpen(true)}
                       >
-                        <Pencil className="mr-1 size-3.5" /> Edit
+                        <Pencil className="mr-1 size-3.5" /> {t("edit")}
                       </Button>
                     </div>
                   </>
@@ -512,7 +545,7 @@ function CriteriaBody({
 
         <SheetFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            {readOnly ? "Close" : "Cancel"}
+            {readOnly ? t("close") : tc("cancel")}
           </Button>
           {!readOnly && (
             <Button
@@ -520,7 +553,7 @@ function CriteriaBody({
               disabled={!canSave || saving}
               data-testid="criteria-save"
             >
-              {saving ? "Saving…" : "Save"}
+              {saving ? t("savingEllipsis") : t("save")}
             </Button>
           )}
         </SheetFooter>
@@ -586,10 +619,12 @@ function PassingScoreField({
   disabled,
   invalid,
 }: PassingScoreFieldProps) {
+  const t = useTranslations("assessments");
+
   return (
     <div className="space-y-2">
       <Label htmlFor="criteria-passing-score">
-        Passing score for recommended grade (%)
+        {t("passingScoreLabel")}
       </Label>
       <div className="flex items-center gap-3">
         <Input
@@ -606,11 +641,11 @@ function PassingScoreField({
           aria-invalid={invalid || undefined}
           className="w-24"
         />
-        <span className="text-xs text-muted-foreground">step 1%, range 0–100</span>
+        <span className="text-xs text-muted-foreground">{t("passingScoreHint")}</span>
       </div>
       {invalid && (
         <p className="text-xs text-destructive">
-          Enter a whole number between 0 and 100.
+          {t("passingScoreError")}
         </p>
       )}
     </div>

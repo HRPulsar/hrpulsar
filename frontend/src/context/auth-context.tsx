@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import type { TenantInfo, User } from "@/lib/types";
 import {
   fetchCurrentUser,
@@ -16,6 +17,11 @@ import {
   logout,
   switchTenant as doSwitchTenant,
 } from "@/lib/auth";
+import {
+  normalizeLocale,
+  readLocaleCookie,
+  setLocaleCookie,
+} from "@/i18n/config";
 
 interface AuthContextValue {
   user: User | null;
@@ -40,6 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [tenants, setTenants] = useState<TenantInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  const t = useTranslations("common");
 
   const refresh = useCallback(async () => {
     if (!isAuthenticated()) {
@@ -52,12 +59,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     try {
-      const [u, t] = await Promise.all([
+      const [u, tenantList] = await Promise.all([
         fetchCurrentUser(),
         fetchUserTenants(),
       ]);
       setUser(u);
-      setTenants(t);
+      setTenants(tenantList);
     } catch (err) {
       // Don't clear auth state on aborted fetches — when a client-side
       // navigation (router.push) tears down the current page mid-fetch,
@@ -92,10 +99,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     refresh();
   }, [refresh]);
 
+  // i18n (F1): reconcile the account's language into the device cookie.
+  // SSR resolves the locale from the NEXT_LOCALE cookie only (Bearer
+  // auth — the server never sees the user), so once the user is known,
+  // an account-level preference (User.language, else Tenant.default_locale)
+  // that differs from the cookie wins: the choice follows the account
+  // across devices. Users without an account preference keep the
+  // cookie's Accept-Language-derived value. No loop: after the refresh
+  // the cookie equals the preference, so the effect no-ops.
+  useEffect(() => {
+    if (!user) return;
+    const desired = normalizeLocale(
+      user.language || user.tenant_default_locale,
+    );
+    if (!desired) return;
+    if (readLocaleCookie() === desired) return;
+    setLocaleCookie(desired);
+    router.refresh();
+  }, [user, router]);
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
+        <div className="text-muted-foreground">{t("loading")}</div>
       </div>
     );
   }

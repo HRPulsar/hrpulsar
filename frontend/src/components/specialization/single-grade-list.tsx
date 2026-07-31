@@ -15,6 +15,9 @@ import {
   ExternalLink,
   X,
 } from "lucide-react";
+import { useTranslations } from "next-intl";
+
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import { toast } from "sonner";
 
 import { specializationsApi, type SpecializationGrade } from "@/lib/api/specializations";
@@ -66,6 +69,18 @@ export function SingleGradeList({
   onGradeUpdated,
   onGradeRemoved,
 }: Props) {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
+  // HRP-479: localized display name for the grade; toasts and the header
+  // share it so the wording matches the dictionary everywhere.
+  const gradeLabel = grade.grade_title
+    ? dictionaryItemLabel(tRef, {
+        type: "grade",
+        title: grade.grade_title,
+        i18n_key: grade.grade_i18n_key,
+      })
+    : null;
   const [editingSalary, setEditingSalary] = useState(false);
   const [salaryMin, setSalaryMin] = useState<string>(
     grade.salary_min != null ? String(grade.salary_min) : "",
@@ -80,29 +95,29 @@ export function SingleGradeList({
   const hasSalary = grade.salary_min != null || grade.salary_max != null;
   const salaryLabel = hasSalary
     ? `${grade.salary_min ?? "?"} – ${grade.salary_max ?? "?"} ${grade.salary_currency}`
-    : "Add salary";
+    : t("addSalary");
 
   async function handleSaveSalary() {
     const min = salaryMin.trim() === "" ? null : Number(salaryMin);
     const max = salaryMax.trim() === "" ? null : Number(salaryMax);
     if (min != null && Number.isNaN(min)) {
-      toast.error("salary_min must be a number");
+      toast.error(t("errorSalaryMinNumber"));
       return;
     }
     if (max != null && Number.isNaN(max)) {
-      toast.error("salary_max must be a number");
+      toast.error(t("errorSalaryMaxNumber"));
       return;
     }
     if (min != null && min < 0) {
-      toast.error("salary_min must be non-negative");
+      toast.error(t("errorSalaryMinNegative"));
       return;
     }
     if (max != null && max < 0) {
-      toast.error("salary_max must be non-negative");
+      toast.error(t("errorSalaryMaxNegative"));
       return;
     }
     if (min != null && max != null && min > max) {
-      toast.error("salary_min must be less than or equal to salary_max");
+      toast.error(t("errorSalaryMinGreaterThanMax"));
       return;
     }
     setSavingSalary(true);
@@ -113,9 +128,11 @@ export function SingleGradeList({
       });
       onGradeUpdated(next);
       setEditingSalary(false);
-      toast.success("Salary updated");
+      toast.success(t("toastSalaryUpdated"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save salary");
+      toast.error(
+        err instanceof Error ? err.message : t("toastSalarySaveFailed"),
+      );
     } finally {
       setSavingSalary(false);
     }
@@ -126,9 +143,13 @@ export function SingleGradeList({
     try {
       await specializationsApi.deleteGrade(specId, grade.grade_id);
       onGradeRemoved(grade.grade_id);
-      toast.success(`Removed ${grade.grade_title ?? "grade"}`);
+      toast.success(
+        t("toastGradeRemoved", { grade: gradeLabel ?? t("gradeFallback") }),
+      );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to remove grade");
+      toast.error(
+        err instanceof Error ? err.message : t("toastGradeRemoveFailed"),
+      );
     } finally {
       setRemoving(false);
     }
@@ -154,7 +175,7 @@ export function SingleGradeList({
       >
         <div className="flex flex-wrap items-center gap-3">
           <h3 className="text-base font-semibold tracking-tight">
-            {grade.grade_title ?? "—"}
+            {gradeLabel ?? "—"}
           </h3>
           {editingSalary ? (
             <div
@@ -167,7 +188,7 @@ export function SingleGradeList({
                 min={0}
                 value={salaryMin}
                 onChange={(e) => setSalaryMin(e.target.value)}
-                placeholder="min"
+                placeholder={t("salaryMinPlaceholder")}
                 className="h-7 w-24 px-1.5 text-xs"
               />
               <Input
@@ -176,7 +197,7 @@ export function SingleGradeList({
                 min={0}
                 value={salaryMax}
                 onChange={(e) => setSalaryMax(e.target.value)}
-                placeholder="max"
+                placeholder={t("salaryMaxPlaceholder")}
                 className="h-7 w-24 px-1.5 text-xs"
               />
               <Button
@@ -186,7 +207,7 @@ export function SingleGradeList({
                 disabled={savingSalary}
                 className="h-7 px-2 text-xs"
               >
-                {savingSalary ? "…" : "Save"}
+                {savingSalary ? "…" : t("save")}
               </Button>
               <Button
                 size="sm"
@@ -203,7 +224,7 @@ export function SingleGradeList({
                 disabled={savingSalary}
                 className="h-7 px-2 text-xs"
               >
-                Cancel
+                {tc("cancel")}
               </Button>
             </div>
           ) : (
@@ -228,8 +249,10 @@ export function SingleGradeList({
           data-testid={`matrix-single-grade-remove-${grade.grade_id}`}
           onClick={() => setConfirmRemoveOpen(true)}
           disabled={removing}
-          aria-label={`Remove ${grade.grade_title ?? "grade"}`}
-          title="Remove grade"
+          aria-label={t("removeGrade", {
+            grade: gradeLabel ?? t("gradeFallback"),
+          })}
+          title={t("removeGradeTitle")}
           className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
         >
           <X className="h-4 w-4" />
@@ -253,7 +276,7 @@ export function SingleGradeList({
               activeAiSessionsKey("competence_indicators", comp.id),
             ) ?? [];
           const compIsLitUp = compSessions.length > 0;
-          const coverageWarning = coverageGapMessage(comp);
+          const coverageWarning = coverageGapMessage(t, comp);
 
           return (
             <li
@@ -331,8 +354,10 @@ export function SingleGradeList({
               <button
                 type="button"
                 data-testid={`matrix-row-${comp.id}-btn-remove`}
-                aria-label={`Remove ${comp.title} from matrix`}
-                title="Remove competence from matrix"
+                aria-label={t("removeCompetenceFromMatrix", {
+                  competence: comp.title,
+                })}
+                title={t("removeCompetenceFromMatrixTitle")}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                 onClick={() => onRemoveCompetence(comp.id)}
                 disabled={saving}
@@ -347,12 +372,11 @@ export function SingleGradeList({
       <ConfirmDialog
         open={confirmRemoveOpen}
         onOpenChange={setConfirmRemoveOpen}
-        title={`Remove ${grade.grade_title ?? "grade"}?`}
-        description={
-          "All matrix levels saved against this grade will be lost. " +
-          "This cannot be undone."
-        }
-        confirmLabel={removing ? "Removing…" : "Remove grade"}
+        title={t("removeGradeConfirmTitle", {
+          grade: gradeLabel ?? t("gradeFallback"),
+        })}
+        description={t("removeGradeConfirmBody")}
+        confirmLabel={removing ? t("removing") : t("removeGradeTitle")}
         destructive
         onConfirm={handleConfirmedRemoveGrade}
         testId={`matrix-single-grade-remove-confirm-${grade.grade_id}`}

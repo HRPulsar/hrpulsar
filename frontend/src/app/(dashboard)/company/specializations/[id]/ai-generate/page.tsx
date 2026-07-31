@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { ArrowLeft, Sparkles } from "lucide-react";
 import {
@@ -20,6 +21,7 @@ import { api } from "@/lib/api";
 import type { Position } from "@/lib/types";
 
 export default function SpecializationAIGeneratePage() {
+  const t = useTranslations("company");
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -66,14 +68,14 @@ export default function SpecializationAIGeneratePage() {
         if (!cancelled) {
           hydratedSessionRef.current = null;
           toast.error(
-            err instanceof Error ? err.message : "Failed to load session",
+            err instanceof Error ? err.message : t("toastSessionLoadFailed"),
           );
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [sessionParam]);
+  }, [sessionParam, t]);
 
   useEffect(() => {
     if (!id) return;
@@ -84,12 +86,14 @@ export default function SpecializationAIGeneratePage() {
         if (!cancelled) setSpec(d);
       })
       .catch((err) =>
-        toast.error(err instanceof Error ? err.message : "Failed to load specialization"),
+        toast.error(
+          err instanceof Error ? err.message : t("toastSpecLoadFailed"),
+        ),
       );
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, t]);
 
   // HRP-33 REDO: pull the originating Position when we have `?position=<id>`
   // so the brief can pin its grade as required and the banner can name it.
@@ -107,7 +111,7 @@ export default function SpecializationAIGeneratePage() {
       .catch((err) => {
         if (!cancelled) {
           toast.error(
-            err instanceof Error ? err.message : "Failed to load position",
+            err instanceof Error ? err.message : t("toastPositionLoadFailed"),
           );
         }
       });
@@ -115,7 +119,7 @@ export default function SpecializationAIGeneratePage() {
       cancelled = true;
       setContextPosition(null);
     };
-  }, [positionParam]);
+  }, [positionParam, t]);
 
   // `contextPosition` is gated on the live `positionParam` so dropping the
   // query param immediately removes the banner / grade pin without waiting
@@ -140,23 +144,23 @@ export default function SpecializationAIGeneratePage() {
           // HRP-119 AC3: notify even when the user scrolled away from the
           // review section. Dedup'd by session id so reopening the page
           // doesn't pile up toasts.
-          toast.success("Matrix ready for review", {
+          toast.success(t("toastMatrixReady"), {
             id: `matrix-ready-${next.id}`,
             action: {
-              label: "Open review",
+              label: t("openReview"),
               onClick: () => setShowReview(true),
             },
           });
           return;
         }
         if (next.status === "error") {
-          toast.error(next.error_message ?? "Generation failed");
+          toast.error(next.error_message ?? t("generationFailed"));
           return;
         }
         pollRef.current = setTimeout(tick, 3000);
       } catch (err) {
         if (!cancelled) {
-          toast.error(err instanceof Error ? err.message : "Polling failed");
+          toast.error(err instanceof Error ? err.message : t("pollingFailed"));
         }
       }
     };
@@ -165,7 +169,7 @@ export default function SpecializationAIGeneratePage() {
       cancelled = true;
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [session]);
+  }, [session, t]);
 
   const initialGradeIds = useMemo(() => {
     const base = spec ? spec.grades.map((g) => g.grade_id) : [];
@@ -204,23 +208,23 @@ export default function SpecializationAIGeneratePage() {
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:underline"
           >
             <ArrowLeft className="h-3 w-3" />
-            Back to position
+            {t("backToPositionPlain")}
           </Link>
         ) : (
           <Link
             href={`/company/specializations/${id}`}
             className="text-xs text-muted-foreground hover:underline"
           >
-            ← Back to specialization
+            {t("backToSpecialization")}
           </Link>
         )}
         <h1 className="text-2xl font-semibold tracking-tight">
-          AI Generate matrix{spec ? ` — ${spec.title}` : ""}
+          {spec
+            ? t("aiGenerateMatrixFor", { title: spec.title })
+            : t("aiGenerateMatrix")}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Describe the role and upload reference files. The model proposes a
-          matrix of competences across the specialization&apos;s grades; you
-          review and apply.
+          {t("aiGenerateMatrixIntro")}
         </p>
       </div>
 
@@ -232,21 +236,28 @@ export default function SpecializationAIGeneratePage() {
           <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
           <div className="min-w-0">
             <p className="font-medium">
-              Matrix generation runs on the{" "}
-              <span className="text-primary">
-                {spec?.title ?? "specialization"}
-              </span>{" "}
-              page so all grades stay together.
+              {t.rich("positionBannerHeadline", {
+                spec: spec?.title ?? t("specializationFallback"),
+                specName: (chunks) => (
+                  <span className="text-primary">{chunks}</span>
+                ),
+              })}
             </p>
             <p className="text-xs text-muted-foreground">
-              Triggered from position{" "}
-              <span className="font-medium text-foreground">
-                {effectivePosition.title}
-              </span>
-              {effectivePosition.grade_title
-                ? ` (${effectivePosition.grade_title} is pre-selected and required)`
-                : ""}
-              . You&apos;ll return to the position after Apply.
+              {t.rich(
+                effectivePosition.grade_title
+                  ? "positionBannerBodyWithGrade"
+                  : "positionBannerBody",
+                {
+                  position: effectivePosition.title,
+                  grade: effectivePosition.grade_title ?? "",
+                  positionName: (chunks) => (
+                    <span className="font-medium text-foreground">
+                      {chunks}
+                    </span>
+                  ),
+                },
+              )}
             </p>
           </div>
         </div>
@@ -285,13 +296,12 @@ export default function SpecializationAIGeneratePage() {
           )}
           {session.status === "running" && (
             <p className="text-xs text-muted-foreground">
-              Feel free to leave the page; the session keeps running on the
-              server and you&apos;ll see results when you come back.
+              {t("sessionKeepsRunning")}
             </p>
           )}
           {session.status === "error" && (
             <p className="text-destructive">
-              {session.error_message ?? "Generation failed"}
+              {session.error_message ?? t("generationFailed")}
             </p>
           )}
           {session.status === "ready" && (
@@ -301,7 +311,7 @@ export default function SpecializationAIGeneratePage() {
               className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
               data-testid="ai-generate-open-review"
             >
-              Review suggestions
+              {t("reviewSuggestions")}
             </button>
           )}
         </div>
@@ -323,19 +333,16 @@ export default function SpecializationAIGeneratePage() {
             // — staying silent on a 0-row Apply makes the spec page look
             // like it just lost the suggestions.
             if (decision.kind === "warning") {
-              toast.warning(
-                "AI Generate finished but added no new competences. " +
-                  "Refine the brief or deselect existing matches and try again.",
-                {
-                  id: `matrix-applied-empty-${result.idempotency_key}`,
-                  duration: 8000,
-                },
-              );
+              toast.warning(t("toastApplyEmpty"), {
+                id: `matrix-applied-empty-${result.idempotency_key}`,
+                duration: 8000,
+              });
             } else {
               toast.success(
-                `Matrix applied — ${addedComps} new competence${
-                  addedComps === 1 ? "" : "s"
-                }, ${addedLinks} grade link${addedLinks === 1 ? "" : "s"}.`,
+                t("toastMatrixApplied", {
+                  competences: addedComps,
+                  links: addedLinks,
+                }),
               );
             }
             redirectAfterApply();

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import {
@@ -27,6 +28,8 @@ function flattenCompetences(tree: CompetenceGroupTree[]): Competence[] {
 }
 
 export default function SpecializationMatrixPage() {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   const params = useParams<{ id: string }>();
   const search = useSearchParams();
   const id = params?.id;
@@ -61,7 +64,9 @@ export default function SpecializationMatrixPage() {
           setSkillLevels(levels);
         }
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to load matrix");
+        toast.error(
+          err instanceof Error ? err.message : t("toastMatrixLoadFailed"),
+        );
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -69,18 +74,20 @@ export default function SpecializationMatrixPage() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, t]);
 
   if (loading) {
     return (
-      <div className="py-12 text-center text-sm text-muted-foreground">Loading...</div>
+      <div className="py-12 text-center text-sm text-muted-foreground">
+        {tc("loading")}
+      </div>
     );
   }
 
   if (!detail || !bulk) {
     return (
       <div className="py-12 text-center text-sm text-muted-foreground">
-        Specialization not found.
+        {t("specializationNotFound")}
       </div>
     );
   }
@@ -94,7 +101,7 @@ export default function SpecializationMatrixPage() {
             data-testid="matrix-page-back-to-position"
             className="text-xs text-muted-foreground hover:underline"
           >
-            ← Back to position
+            {t("backToPosition")}
           </Link>
         ) : (
           <Link
@@ -104,12 +111,14 @@ export default function SpecializationMatrixPage() {
             ← {detail.title}
           </Link>
         )}
-        <h1 className="text-2xl font-semibold tracking-tight">Competence matrix</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {t("competenceMatrix")}
+        </h1>
         <p
           data-testid="matrix-no-grades"
           className="rounded-lg border bg-muted/30 py-12 text-center text-sm text-muted-foreground"
         >
-          Add at least one Spec×Grade chain before editing the matrix.
+          {t("matrixNoGrades")}
         </p>
       </div>
     );
@@ -124,7 +133,7 @@ export default function SpecializationMatrixPage() {
             data-testid="matrix-page-back-to-position"
             className="text-xs text-muted-foreground hover:underline"
           >
-            ← Back to position
+            {t("backToPosition")}
           </Link>
         ) : (
           <Link
@@ -138,13 +147,9 @@ export default function SpecializationMatrixPage() {
           data-testid="matrix-page-title"
           className="text-2xl font-semibold tracking-tight"
         >
-          Competence matrix
+          {t("competenceMatrix")}
         </h1>
-        <p className="text-sm text-muted-foreground">
-          Levels cascade up the career ladder: setting a level on a lower grade
-          inherits to higher grades; lowering a higher grade caps the lower
-          ones. Hover ⓘ for indicators (includes prior levels).
-        </p>
+        <p className="text-sm text-muted-foreground">{t("matrixPageHint")}</p>
       </div>
 
       <MatrixEditor

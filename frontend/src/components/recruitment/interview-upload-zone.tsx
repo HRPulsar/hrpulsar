@@ -7,6 +7,7 @@ import {
   useState,
   type DragEvent,
 } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, Pause, Play, Upload, X } from "lucide-react";
@@ -29,8 +30,10 @@ import {
   MEDIA_MAX_BYTES,
   TRANSCRIPT_MAX_BYTES,
   UPLOAD_ACCEPT_ATTR,
+  UploadError,
   detectKind,
   effectiveMime,
+  putChunk,
 } from "@/lib/interview-upload";
 
 interface ChunkResult {
@@ -54,36 +57,13 @@ function storageKey(interviewId: string): string {
   return `hrp202-upload:${interviewId}`;
 }
 
-async function putChunk(
-  url: string,
-  chunk: Blob,
-  attempt = 0,
-): Promise<string> {
-  try {
-    const res = await fetch(url, { method: "PUT", body: chunk });
-    if (!res.ok) {
-      throw new Error(`S3 PUT failed (HTTP ${res.status})`);
-    }
-    const etag = res.headers.get("ETag") || res.headers.get("etag");
-    if (!etag) {
-      throw new Error("S3 did not return an ETag");
-    }
-    return etag.replace(/"/g, "");
-  } catch (err) {
-    if (attempt < 2) {
-      await new Promise((r) => setTimeout(r, 500 * Math.pow(3, attempt)));
-      return putChunk(url, chunk, attempt + 1);
-    }
-    throw err;
-  }
-}
-
 export function InterviewUploadZone({
   interviewId,
   consentSigned,
   onUploaded,
   onConsentMissing,
 }: InterviewUploadZoneProps) {
+  const t = useTranslations("recruitment");
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -181,7 +161,7 @@ export function InterviewUploadZone({
             await new Promise((r) => setTimeout(r, 250));
           }
           if (stateRef.current.cancelled) {
-            throw new Error("Upload cancelled");
+            throw new Error(t("interviewUploadCancelledError"));
           }
           const start = (n - 1) * partSize;
           const end = Math.min(start + partSize, file.size);
@@ -251,7 +231,7 @@ export function InterviewUploadZone({
         );
         setProgress(100);
         clearPersisted();
-        toast.success("Recording uploaded");
+        toast.success(t("interviewUploadToastSuccess"));
         onUploaded?.(interview);
       } catch (err) {
         if (!stateRef.current.cancelled) {
@@ -265,31 +245,43 @@ export function InterviewUploadZone({
           }
         }
         clearPersisted();
-        toast.error(err instanceof Error ? err.message : "Upload failed");
+        // UploadError carries a stable code — surface the localized text
+        // instead of the technical English message it keeps for logs.
+        toast.error(
+          err instanceof UploadError
+            ? err.code === "s3PutFailed"
+              ? t("uploadS3PutFailed", { status: err.status ?? 0 })
+              : t("uploadS3NoEtag")
+            : err instanceof Error
+              ? err.message
+              : t("interviewUploadFailed"),
+        );
       } finally {
         reset();
       }
     },
-    [interviewId, persist, clearPersisted, onUploaded, reset, autoProcess],
+    [interviewId, persist, clearPersisted, onUploaded, reset, autoProcess, t],
   );
 
   const onFile = useCallback(
     async (file: File) => {
       if (!consentSigned) {
         onConsentMissing?.();
-        toast.error("Get the candidate's recording consent first");
+        toast.error(t("interviewUploadConsentFirst"));
         return;
       }
       const kind = detectKind(file);
       if (kind === null) {
-        toast.error("Unsupported file type");
+        toast.error(t("interviewUploadUnsupportedType"));
         return;
       }
       const limit =
         kind === "text_transcript" ? TRANSCRIPT_MAX_BYTES : MEDIA_MAX_BYTES;
       if (file.size > limit) {
         toast.error(
-          `File is larger than ${Math.floor(limit / (1024 * 1024))} MB`,
+          t("interviewUploadTooLarge", {
+            limit: String(Math.floor(limit / (1024 * 1024))),
+          }),
         );
         return;
       }
@@ -318,12 +310,12 @@ export function InterviewUploadZone({
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           onConsentMissing?.();
-          toast.error(
-            "Candidate consent is not signed (ConsentRequired). Send consent and retry.",
-          );
+          toast.error(t("interviewUploadConsentNotSigned"));
         } else {
           toast.error(
-            err instanceof Error ? err.message : "Failed to start upload",
+            err instanceof Error
+              ? err.message
+              : t("interviewUploadStartFailed"),
           );
         }
         reset();
@@ -332,7 +324,7 @@ export function InterviewUploadZone({
 
       await runUpload(file, init, kind, mimeType, []);
     },
-    [consentSigned, interviewId, onConsentMissing, reset, runUpload],
+    [consentSigned, interviewId, onConsentMissing, reset, runUpload, t],
   );
 
   function onCancel() {
@@ -352,7 +344,7 @@ export function InterviewUploadZone({
       );
     }
     clearPersisted();
-    toast.message("Cancelling upload…");
+    toast.message(t("interviewUploadCancelling"));
   }
 
   function onTogglePause() {
@@ -366,7 +358,7 @@ export function InterviewUploadZone({
     const handle = inputRef.current;
     if (!handle) return;
     handle.click();
-    toast.message("Select the same file to resume the upload");
+    toast.message(t("interviewUploadResumeHint"));
   }
 
   function onDragOver(e: DragEvent<HTMLDivElement>) {
@@ -418,10 +410,9 @@ export function InterviewUploadZone({
         >
           <Upload className="size-6 opacity-60" aria-hidden />
           <p className="text-center text-xs">
-            Drop the file here or click the button below.
+            {t("interviewUploadDropHint")}
             <br />
-            Audio (mp3, wav, m4a) / Video (mp4, webm, mov, avi) up to 500 MB,
-            PDF / TXT up to 10 MB.
+            {t("interviewUploadFormatsHint")}
           </p>
           <label className="flex items-center gap-2 text-xs">
             <Checkbox
@@ -429,7 +420,7 @@ export function InterviewUploadZone({
               onCheckedChange={(checked) => setAutoProcess(Boolean(checked))}
               data-testid="recruitment-interview-auto-process"
             />
-            Transcribe and analyze automatically after upload
+            {t("interviewUploadAutoProcess")}
           </label>
           <Button
             variant="outline"
@@ -439,7 +430,9 @@ export function InterviewUploadZone({
             data-testid="recruitment-interview-btn-upload"
           >
             <Upload className="size-4" />
-            {consentSigned ? "Upload recording" : "Consent required"}
+            {consentSigned
+              ? t("interviewUploadButton")
+              : t("interviewUploadConsentRequired")}
           </Button>
           {resumable && (
             <Button
@@ -449,7 +442,7 @@ export function InterviewUploadZone({
               data-testid="recruitment-interview-btn-resume-after-reload"
             >
               <Play className="size-3.5" />
-              Resume &ldquo;{resumable.fileName}&rdquo;
+              {t("interviewUploadResumeFile", { name: resumable.fileName })}
             </Button>
           )}
         </div>
@@ -464,7 +457,12 @@ export function InterviewUploadZone({
                 <span>· {speedMbps.toFixed(2)} MB/s</span>
               )}
               {etaSec != null && Number.isFinite(etaSec) && (
-                <span>· ETA {Math.max(1, Math.round(etaSec))} s</span>
+                <span>
+                  ·{" "}
+                  {t("interviewUploadEta", {
+                    seconds: String(Math.max(1, Math.round(etaSec))),
+                  })}
+                </span>
               )}
             </span>
             <div className="flex items-center gap-1">
@@ -473,7 +471,9 @@ export function InterviewUploadZone({
                 size="icon-sm"
                 onClick={onTogglePause}
                 data-testid="recruitment-interview-btn-pause"
-                aria-label={paused ? "Resume" : "Pause"}
+                aria-label={
+                  paused ? t("interviewUploadResume") : t("interviewUploadPause")
+                }
               >
                 {paused ? (
                   <Play className="size-3.5" />
@@ -486,7 +486,7 @@ export function InterviewUploadZone({
                 size="icon-sm"
                 onClick={onCancel}
                 data-testid="recruitment-interview-btn-cancel"
-                aria-label="Cancel upload"
+                aria-label={t("interviewUploadCancelAria")}
               >
                 <X className="size-3.5" />
               </Button>

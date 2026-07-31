@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   getWsState,
   onWsStateChange,
@@ -52,6 +53,7 @@ interface Props {
 }
 
 export function AIGenerateProgress({ sessionId, scope }: Props) {
+  const t = useTranslations("company");
   // Parent resets us via `key={sessionId}` when the session id changes,
   // so this state survives only the current session — no setState in effect.
   const [state, setState] = useState<State>(initial);
@@ -102,7 +104,7 @@ export function AIGenerateProgress({ sessionId, scope }: Props) {
       className="space-y-1 text-sm"
     >
       <Step
-        label="Model is thinking…"
+        label={t("progressThinking")}
         status={
           state.thinkingDone
             ? "done"
@@ -116,8 +118,8 @@ export function AIGenerateProgress({ sessionId, scope }: Props) {
         <Step
           label={
             state.grades.total > 0
-              ? `Grades determined (${state.grades.total})`
-              : "Grades determined"
+              ? t("progressGradesWithTotal", { total: state.grades.total })
+              : t("progressGrades")
           }
           status={state.grades.complete ? "done" : "pending"}
           testId="ai-generate-progress-grades"
@@ -127,8 +129,10 @@ export function AIGenerateProgress({ sessionId, scope }: Props) {
         <Step
           label={
             state.competences.total > 0
-              ? `Competences generated (${state.competences.total})`
-              : "Competences generated"
+              ? t("progressCompetencesWithTotal", {
+                  total: state.competences.total,
+                })
+              : t("progressCompetences")
           }
           status={state.competences.complete ? "done" : "pending"}
           testId="ai-generate-progress-competences"
@@ -138,9 +142,12 @@ export function AIGenerateProgress({ sessionId, scope }: Props) {
         label={
           state.indicators.total > 0
             ? state.indicators.complete
-              ? `Indicators by level (${state.indicators.total}/${state.indicators.total})`
-              : `Indicators by level… ${state.indicators.current}/${state.indicators.total}`
-            : "Indicators by level"
+              ? t("progressIndicatorsDone", { total: state.indicators.total })
+              : t("progressIndicatorsRunning", {
+                  current: state.indicators.current,
+                  total: state.indicators.total,
+                })
+            : t("progressIndicators")
         }
         status={
           state.indicators.complete
@@ -153,7 +160,7 @@ export function AIGenerateProgress({ sessionId, scope }: Props) {
       />
       {isMatrix && (
         <Step
-          label="Grade-level matrix"
+          label={t("progressMatrix")}
           status={state.matrix.complete ? "done" : "pending"}
           testId="ai-generate-progress-matrix"
         />
@@ -163,7 +170,7 @@ export function AIGenerateProgress({ sessionId, scope }: Props) {
           data-testid="ai-generate-progress-ws-fallback"
           className="pt-2 text-xs text-muted-foreground"
         >
-          Live progress paused — refreshing the session every few seconds.
+          {t("progressWsFallback")}
         </li>
       )}
     </ul>

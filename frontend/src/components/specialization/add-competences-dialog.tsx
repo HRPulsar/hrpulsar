@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import {
   CheckSquare,
   ChevronDown,
@@ -55,6 +56,8 @@ export function AddCompetencesDialog({
   alreadyInMatrix,
   onConfirm,
 }: Props) {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
 
@@ -128,11 +131,9 @@ export function AddCompetencesDialog({
         className="sm:max-w-2xl"
       >
         <DialogHeader>
-          <DialogTitle>Add competences to the matrix</DialogTitle>
+          <DialogTitle>{t("addCompetencesTitle")}</DialogTitle>
           <DialogDescription>
-            Tick competences or whole groups; saved levels are not affected
-            until you press Save in the matrix editor. Use the search to
-            narrow the tree.
+            {t("addCompetencesDescription")}
           </DialogDescription>
         </DialogHeader>
 
@@ -145,7 +146,7 @@ export function AddCompetencesDialog({
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search groups or competences..."
+                placeholder={t("searchGroupsOrCompetencesPlaceholder")}
                 className="h-7 border-0 p-0 focus-visible:ring-0"
               />
             </label>
@@ -167,7 +168,7 @@ export function AddCompetencesDialog({
                 data-testid="matrix-add-competences-empty"
                 className="px-3 py-6 text-center text-sm text-muted-foreground"
               >
-                No competences match this filter.
+                {t("noCompetencesMatchFilter")}
               </p>
             ) : (
               <ul className="divide-y">
@@ -203,7 +204,11 @@ export function AddCompetencesDialog({
                           onClick={() => toggleExpand(node.groupId)}
                           disabled={hasQuery}
                           data-testid={`matrix-add-group-${node.groupId}-toggle`}
-                          aria-label={branchOpen ? `Collapse ${node.groupTitle}` : `Expand ${node.groupTitle}`}
+                          aria-label={
+                            branchOpen
+                              ? t("collapseGroup", { group: node.groupTitle })
+                              : t("expandGroup", { group: node.groupTitle })
+                          }
                           aria-expanded={branchOpen}
                           className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                         >
@@ -227,7 +232,9 @@ export function AddCompetencesDialog({
                           role="checkbox"
                           disabled={groupDisabled}
                           onClick={() => toggleGroup(idx, nextState)}
-                          aria-label={`Toggle every competence under ${node.groupTitle}`}
+                          aria-label={t("toggleGroupCompetences", {
+                            group: node.groupTitle,
+                          })}
                           className={
                             "inline-flex items-center text-primary transition disabled:cursor-not-allowed disabled:opacity-50 " +
                             (state === "empty"
@@ -248,7 +255,7 @@ export function AddCompetencesDialog({
                             data-testid={`matrix-add-group-${node.groupId}-mixed`}
                             className="text-[0.7rem] text-muted-foreground"
                           >
-                            partial
+                            {t("partial")}
                           </span>
                         )}
                       </div>
@@ -289,7 +296,7 @@ export function AddCompetencesDialog({
                                   rel="noopener noreferrer"
                                   data-testid={`matrix-add-comp-${comp.id}-open`}
                                   className="text-muted-foreground hover:text-foreground"
-                                  title="Open competence in a new tab"
+                                  title={t("openCompetenceNewTab")}
                                 >
                                   <ExternalLink className="h-3.5 w-3.5" />
                                 </Link>
@@ -310,7 +317,7 @@ export function AddCompetencesDialog({
               data-testid="matrix-add-competences-counter"
               className="text-muted-foreground"
             >
-              {newSelectionCount} new selected
+              {t("newSelectedCount", { count: newSelectionCount })}
             </span>
             <Link
               href="/competences"
@@ -320,7 +327,7 @@ export function AddCompetencesDialog({
               className="inline-flex items-center gap-1 text-primary hover:underline"
             >
               <Plus className="h-3.5 w-3.5" />
-              Create new in /competences
+              {t("createNewInCompetences")}
               <ExternalLink className="h-3 w-3" />
             </Link>
           </div>
@@ -332,14 +339,16 @@ export function AddCompetencesDialog({
             onClick={handleCancel}
             data-testid="matrix-add-competences-cancel"
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={handleSave}
             disabled={newSelectionCount === 0}
             data-testid="matrix-add-competences-save"
           >
-            Add {newSelectionCount > 0 ? `(${newSelectionCount})` : ""}
+            {newSelectionCount > 0
+              ? t("addWithCount", { count: newSelectionCount })
+              : t("add")}
           </Button>
         </DialogFooter>
       </DialogContent>

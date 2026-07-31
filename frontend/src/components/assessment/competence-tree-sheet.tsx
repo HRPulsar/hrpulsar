@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Search } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { useCompetenceTree } from "@/hooks/use-competence-tree";
 import { useTreeExpansion } from "@/hooks/use-tree-expansion";
@@ -39,6 +40,7 @@ interface RenderProps {
   selected: Set<string>;
   toggleNode: (compIds: string[]) => void;
   search: string;
+  t: (key: string) => string;
 }
 
 function matchesSearch(g: CompetenceGroupTree, query: string): boolean {
@@ -50,7 +52,7 @@ function matchesSearch(g: CompetenceGroupTree, query: string): boolean {
 }
 
 function renderTree(props: RenderProps): React.ReactNode {
-  const { groups, depth, isExpanded, toggleExpand, selected, toggleNode, search } = props;
+  const { groups, depth, isExpanded, toggleExpand, selected, toggleNode, search, t } = props;
   const elements: React.ReactNode[] = [];
   for (const g of groups) {
     if (!matchesSearch(g, search)) continue;
@@ -74,7 +76,7 @@ function renderTree(props: RenderProps): React.ReactNode {
             type="button"
             onClick={() => toggleExpand(g.id)}
             className="flex size-5 items-center justify-center rounded hover:bg-accent"
-            aria-label={isOpen ? "Collapse" : "Expand"}
+            aria-label={isOpen ? t("collapse") : t("expand")}
           >
             {isOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
           </button>
@@ -111,6 +113,8 @@ function renderTree(props: RenderProps): React.ReactNode {
 }
 
 function CompetenceTreeBody({ initialIds, onClose, onSave }: { initialIds: string[]; onClose: () => void; onSave: (selected: SelectedCompetence[]) => void }) {
+  const t = useTranslations("assessments");
+  const tc = useTranslations("common");
   const { tree, loading } = useCompetenceTree();
   const [selected, setSelected] = useState<Set<string>>(() => new Set(initialIds));
   const [search, setSearch] = useState("");
@@ -156,13 +160,15 @@ function CompetenceTreeBody({ initialIds, onClose, onSave }: { initialIds: strin
   return (
     <SheetContent className="max-w-xl">
       <SheetHeader>
-        <SheetTitle>Select competences for assessment</SheetTitle>
-        <p className="text-sm text-muted-foreground">Selected competences: {flatCount}</p>
+        <SheetTitle>{t("selectCompetencesTitle")}</SheetTitle>
+        <p className="text-sm text-muted-foreground">
+          {t("selectedCompetencesCount", { count: flatCount })}
+        </p>
       </SheetHeader>
       <div className="relative">
         <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
-          placeholder="Group or competence title"
+          placeholder={t("competenceSearchPlaceholder")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-9"
@@ -185,9 +191,13 @@ function CompetenceTreeBody({ initialIds, onClose, onSave }: { initialIds: strin
       )}
       <div className="-mx-1 flex-1 overflow-y-auto">
         {loading ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            {t("loadingEllipsis")}
+          </p>
         ) : tree.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">No published competences</p>
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            {t("noPublishedCompetences")}
+          </p>
         ) : (
           renderTree({
             groups: tree,
@@ -198,12 +208,13 @@ function CompetenceTreeBody({ initialIds, onClose, onSave }: { initialIds: strin
             selected,
             toggleNode,
             search,
+            t,
           })
         )}
       </div>
       <SheetFooter>
         <Button variant="outline" onClick={onClose}>
-          Cancel
+          {tc("cancel")}
         </Button>
         <Button
           data-testid="competence-tree-save"
@@ -217,7 +228,7 @@ function CompetenceTreeBody({ initialIds, onClose, onSave }: { initialIds: strin
             onClose();
           }}
         >
-          Save
+          {t("save")}
         </Button>
       </SheetFooter>
     </SheetContent>

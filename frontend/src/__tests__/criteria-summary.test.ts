@@ -6,35 +6,39 @@ import {
   shouldShowCurrentPositionsHint,
 } from "@/components/assessment/criteria-summary";
 
+// HRP-476: the helper composes translated labels — tests pin the i18n keys
+// and the composition, the wording itself lives in messages/*.json.
+const t = (key: string) => key;
+
 describe("formatCriteriaTypeValue (HRP-98)", () => {
   it("returns the bare label for current_positions", () => {
-    expect(formatCriteriaTypeValue("current_positions", null, null, null)).toBe(
-      "Employees' current positions",
+    expect(formatCriteriaTypeValue(t, "current_positions", null, null, null)).toBe(
+      "criteriaTypeCurrentPositions",
     );
   });
 
   it("returns the bare label for individual competences", () => {
-    expect(formatCriteriaTypeValue("competences", null, null, null)).toBe(
-      "Individual competences",
+    expect(formatCriteriaTypeValue(t, "competences", null, null, null)).toBe(
+      "criteriaTypeCompetences",
     );
   });
 
   it("inlines Specialization + Grade into the Type line for target_position", () => {
     expect(
-      formatCriteriaTypeValue("target_position", "Backend Engineer", "Senior", "grade-id"),
-    ).toBe("Target position: Backend Engineer - Senior");
+      formatCriteriaTypeValue(t, "target_position", "Backend Engineer", "Senior", "grade-id"),
+    ).toBe("criteriaTypeTargetPosition: Backend Engineer - Senior");
   });
 
-  it("falls back to 'All grades' when no grade is selected", () => {
+  it("falls back to the All grades label when no grade is selected", () => {
     expect(
-      formatCriteriaTypeValue("target_position", "QA", null, null),
-    ).toBe("Target position: QA - All grades");
+      formatCriteriaTypeValue(t, "target_position", "QA", null, null),
+    ).toBe("criteriaTypeTargetPosition: QA - allGrades");
   });
 
   it("omits the suffix entirely when both Specialization and Grade are missing", () => {
     expect(
-      formatCriteriaTypeValue("target_position", null, null, "grade-id"),
-    ).toBe("Target position");
+      formatCriteriaTypeValue(t, "target_position", null, null, "grade-id"),
+    ).toBe("criteriaTypeTargetPosition");
   });
 });
 

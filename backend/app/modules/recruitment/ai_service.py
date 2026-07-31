@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.modules.ai.llm_client import LLMOutputTruncatedError, generate_json
+from app.modules.ai.providers import GenerationTarget
 from app.modules.recruitment.prompts import (
     GENERATE_PROFILE,
     GENERATE_QUESTIONS,
@@ -49,7 +50,9 @@ def _as_dict(value: dict | list | BaseModel) -> dict[str, Any]:
     return value
 
 
-async def parse_resume_text(text: str) -> dict:
+async def parse_resume_text(
+    text: str, credentials: GenerationTarget | None = None
+) -> dict:
     """Parse resume text into structured data via LLM.
 
     Returns dict with: first_name, last_name, contacts, experience,
@@ -64,6 +67,7 @@ async def parse_resume_text(text: str) -> dict:
         system=SYSTEM_RECRUITER,
         temperature=0.2,
         max_tokens=RECRUITMENT_MAX_TOKENS,
+        credentials=credentials,
     )
     payload = _as_dict(result)
     _normalise_resume_payload(payload)
@@ -147,7 +151,9 @@ def _split_period(period: str) -> list[str]:
     return [period]
 
 
-async def generate_vacancy_profile(vacancy_data: dict) -> dict:
+async def generate_vacancy_profile(
+    vacancy_data: dict, credentials: GenerationTarget | None = None
+) -> dict:
     """Generate competency profile for a vacancy via LLM.
 
     Input: dict with title, specialization, grade, description,
@@ -208,6 +214,7 @@ async def generate_vacancy_profile(vacancy_data: dict) -> dict:
             system=SYSTEM_RECRUITER,
             temperature=0.3,
             max_tokens=RECRUITMENT_MAX_TOKENS,
+            credentials=credentials,
         )
     except LLMOutputTruncatedError:
         # Even the raised budget can overflow on providers with a lower
@@ -228,6 +235,7 @@ async def generate_vacancy_profile(vacancy_data: dict) -> dict:
             system=SYSTEM_RECRUITER,
             temperature=0.3,
             max_tokens=RECRUITMENT_MAX_TOKENS,
+            credentials=credentials,
         )
     return _as_dict(result)
 
@@ -237,6 +245,7 @@ async def generate_individual_questions(
     profile_data: dict,
     vacancy_title: str,
     language: str = "en",
+    credentials: GenerationTarget | None = None,
 ) -> list[dict]:
     """Generate individual interview questions for a candidate.
 
@@ -257,6 +266,7 @@ async def generate_individual_questions(
         system=SYSTEM_RECRUITER,
         temperature=0.3,
         max_tokens=RECRUITMENT_MAX_TOKENS,
+        credentials=credentials,
     )
     if isinstance(result, dict):
         result = result.get("questions", [result])

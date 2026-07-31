@@ -289,6 +289,59 @@ async def test_evaluate_email_links_to_assessment_detail_page(
 
 
 @pytest.mark.asyncio
+async def test_evaluate_emails_render_in_each_recipient_locale(
+    db, tenant, user, employee, assessment_statuses, assessment_types, monkeypatch
+):
+    """i18n F4 (HRP-478): a lifecycle batch renders per recipient, not per
+    sender — the assessee's own ``User.language`` wins over the tenant
+    default, while a participant without a preference inherits it."""
+    from unittest.mock import patch
+
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "available_locales", "de,en")
+    monkeypatch.setattr(settings, "default_locale", "en")
+
+    peer_user, peer_emp = await _make_user_employee(db, tenant, "locale")
+    tenant.default_locale = "de"
+    user.language = "en"
+    await db.commit()
+
+    created = await service.create_assessment(
+        db,
+        tenant.id,
+        user.id,
+        AssessmentCreate(title="Locale", employee_id=employee.id, type_code="360"),
+    )
+    await seed_send_prereqs(db, tenant.id, created["id"])
+    await service.add_participant(
+        db,
+        tenant.id,
+        created["id"],
+        ParticipantAdd(employee_id=peer_emp.id, role="peer"),
+    )
+
+    captured: dict[str, str] = {}
+
+    def fake_enqueue(to, subject, body, **kwargs):
+        captured[to] = body
+
+    import app.core.email as email_mod
+
+    with patch.object(email_mod, "enqueue_email", fake_enqueue):
+        await service.change_status(db, tenant.id, created["id"], "sent")
+
+    assert '<html lang="en">' in captured[user.email], (
+        "User.language must beat the tenant default for the assessee's "
+        "own email"
+    )
+    assert '<html lang="de">' in captured[peer_user.email], (
+        "A participant without a language preference falls back to the "
+        "tenant default"
+    )
+
+
+@pytest.mark.asyncio
 async def test_cancelled_dispatches_to_peer_when_pending(
     db, tenant, user, employee, assessment_statuses, assessment_types
 ):

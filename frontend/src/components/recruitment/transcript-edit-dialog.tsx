@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Dialog,
   DialogContent,
@@ -30,6 +31,8 @@ export function TranscriptEditDialog({
   interview,
   onUpdated,
 }: TranscriptEditDialogProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [text, setText] = useState<string>(interview.transcript || "");
   const [submitting, setSubmitting] = useState(false);
 
@@ -44,12 +47,12 @@ export function TranscriptEditDialog({
         `/recruitment/interviews/${interview.id}/transcript`,
         { transcript: text },
       );
-      toast.success("Transcript saved (PII automatically masked)");
+      toast.success(t("transcriptEditToastSaved"));
       onUpdated?.(updated);
       onOpenChange(false);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save transcript",
+        err instanceof Error ? err.message : t("transcriptEditSaveFailed"),
       );
     } finally {
       setSubmitting(false);
@@ -63,18 +66,13 @@ export function TranscriptEditDialog({
         data-testid="recruitment-transcript-edit-dialog"
       >
         <DialogHeader>
-          <DialogTitle>Edit transcript</DialogTitle>
-          <DialogDescription>
-            Free-form editing of the entire transcript. After saving, the
-            text is run through the PII filter (ID numbers and personal
-            identifiers are masked automatically).
-          </DialogDescription>
+          <DialogTitle>{t("transcriptEditTitle")}</DialogTitle>
+          <DialogDescription>{t("transcriptEditDescription")}</DialogDescription>
         </DialogHeader>
         <div className={`rounded-md border p-2 text-xs ${ALERT_TONE.amber}`}>
           <span className="flex items-start gap-1.5">
             <ShieldAlert className="mt-0.5 size-3.5" />
-            Do not paste document numbers or contacts by hand — the system
-            will mask them, but it is safer not to add them at all.
+            {t("transcriptEditPiiWarning")}
           </span>
         </div>
         <Textarea
@@ -90,7 +88,7 @@ export function TranscriptEditDialog({
             onClick={() => onOpenChange(false)}
             disabled={submitting}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={handleSave}
@@ -102,7 +100,7 @@ export function TranscriptEditDialog({
             ) : (
               <Save className="size-4" />
             )}
-            Save
+            {t("save")}
           </Button>
         </DialogFooter>
       </DialogContent>

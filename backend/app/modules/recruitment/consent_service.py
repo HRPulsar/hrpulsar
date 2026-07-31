@@ -10,13 +10,18 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.recruitment import audit_service
-from app.modules.recruitment.common import _get_candidate, _publish_event
+from app.modules.recruitment.common import (
+    _get_candidate,
+    _publish_event,
+    candidate_display_name,
+)
 from app.modules.recruitment.models import (
     Candidate,
     CandidateVacancy,
@@ -74,9 +79,9 @@ async def create_consent_template(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(
+        raise AppError(
+            "consent_template_created_concurrently",
             status.HTTP_409_CONFLICT,
-            "Another active consent template was created concurrently",
         ) from None
     await db.refresh(template)
     return _consent_template_to_read(template)
@@ -99,8 +104,8 @@ async def update_consent_template(
         )
     ).scalar_one_or_none()
     if not template:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Consent template not found"
+        raise AppError(
+            "consent_template_not_found", status.HTTP_404_NOT_FOUND
         )
 
     if data.is_active and not template.is_active:
@@ -122,9 +127,9 @@ async def update_consent_template(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(
+        raise AppError(
+            "consent_template_created_concurrently",
             status.HTTP_409_CONFLICT,
-            "Another active consent template was created concurrently",
         ) from None
     await db.refresh(template)
     return _consent_template_to_read(template)
@@ -200,9 +205,9 @@ async def send_consent_request(
         ).scalar_one_or_none()
 
     if not template:
-        raise HTTPException(
+        raise AppError(
+            "no_active_consent_template",
             status.HTTP_409_CONFLICT,
-            "No active consent template; create one first",
         )
 
     token = secrets.token_urlsafe(32)
@@ -239,18 +244,28 @@ async def send_consent_request(
     try:
         from app.core.email import enqueue_email
         from app.core.email_templates import render_recruitment_consent_email
+        from app.core.i18n import resolve_locale, translate
+        from app.modules.company.models import Tenant
 
-        person = candidate.person if candidate else None
-        candidate_name = (
-            f"{person.first_name} {person.last_name}".strip()
-            if person
-            else "(unnamed)"
+        # i18n F4: the candidate has no account. ConsentTemplate.language
+        # is a free-form tag (String(10), defaults to "en") naming the
+        # language of the consent body, so the wrapper email follows it
+        # when it names a supported interface locale and otherwise falls
+        # through to the tenant default.
+        tenant = await db.get(Tenant, tenant_id)
+        locale = resolve_locale(
+            user_language=template.language,
+            tenant_default=tenant.default_locale if tenant else None,
+        )
+        candidate_name = candidate_display_name(
+            candidate, fallback=translate("email.fallback.unnamed", locale)
         )
         subject, html_body = render_recruitment_consent_email(
             token,
             candidate_name,
             template.body,
             expires_in_days=data.expires_in_days,
+            locale=locale,
         )
         enqueue_email(
             data.email,
@@ -288,11 +303,13 @@ async def get_consent_by_token(
     ).scalar_one_or_none()
 
     person = candidate.person if candidate else None
+    # i18n F7: no English "(unnamed)" on the wire — the public consent
+    # page localizes the empty-name fallback itself.
     candidate_name = (
         f"{(person.first_name or '').strip()} {(person.last_name or '').strip()}".strip()
         if person
         else ""
-    ) or "(unnamed)"
+    )
 
     return {
         "candidate_id": request.candidate_id,
@@ -329,9 +346,7 @@ async def sign_consent(
         )
     ).scalar_one_or_none()
     if not request:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Consent link not found"
-        )
+        raise AppError("consent_link_not_found", status.HTTP_404_NOT_FOUND)
     if request.status == "signed":
         return {"signed_at": request.signed_at, "status": "signed"}
     if request.status == "expired" or request.expires_at < datetime.now(
@@ -339,9 +354,7 @@ async def sign_consent(
     ):
         request.status = "expired"
         await db.commit()
-        raise HTTPException(
-            status.HTTP_410_GONE, "Consent link has expired"
-        )
+        raise AppError("consent_link_expired", status.HTTP_410_GONE)
 
     now = datetime.now(timezone.utc)
     request.status = "signed"
@@ -433,9 +446,7 @@ async def _resolve_consent_request(
         )
     ).scalar_one_or_none()
     if not request:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Consent link not found"
-        )
+        raise AppError("consent_link_not_found", status.HTTP_404_NOT_FOUND)
     return request
 
 

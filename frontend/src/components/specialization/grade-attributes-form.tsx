@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { SpecializationGrade } from "@/lib/api/specializations";
@@ -17,6 +18,7 @@ type Props = {
 };
 
 export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
+  const t = useTranslations("company");
   const [description, setDescription] = useState(grade.description ?? "");
   const [requirements, setRequirements] = useState(grade.requirements ?? "");
   const [salaryMin, setSalaryMin] = useState(
@@ -44,10 +46,10 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
         `/grade-system/chains/${grade.id}`,
         payload,
       );
-      toast.success("Saved");
+      toast.success(t("toastSaved"));
       onSaved?.(next);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
+      toast.error(err instanceof Error ? err.message : t("toastSaveFailedShort"));
     } finally {
       setSaving(false);
     }
@@ -69,44 +71,44 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
               data-testid={`specialization-grade-form-${grade.id}-inactive`}
               className="ml-2 inline-flex items-center rounded-full bg-muted px-2 py-0.5 align-middle text-xs font-medium text-muted-foreground"
             >
-              Inactive
+              {t("inactive")}
             </span>
           )}
         </h3>
         <span className="text-xs text-muted-foreground">
           {grade.matrix_status === "configured"
-            ? `${grade.competence_count} competences in matrix`
-            : "Matrix not configured"}
+            ? t("matrixCompetenceCount", { count: grade.competence_count })
+            : t("matrixNotConfigured")}
         </span>
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor={`desc-${grade.id}`}>Description</Label>
+        <Label htmlFor={`desc-${grade.id}`}>{t("description")}</Label>
         <Textarea
           id={`desc-${grade.id}`}
           data-testid={`specialization-grade-form-${grade.id}-description`}
           rows={3}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="What this grade looks like at this specialization"
+          placeholder={t("gradeDescriptionPlaceholder")}
         />
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor={`req-${grade.id}`}>Requirements</Label>
+        <Label htmlFor={`req-${grade.id}`}>{t("requirements")}</Label>
         <Textarea
           id={`req-${grade.id}`}
           data-testid={`specialization-grade-form-${grade.id}-requirements`}
           rows={4}
           value={requirements}
           onChange={(e) => setRequirements(e.target.value)}
-          placeholder="Skills, experience, mandatory tooling, certifications..."
+          placeholder={t("gradeRequirementsPlaceholder")}
         />
       </div>
 
       <div className="grid grid-cols-3 gap-3">
         <div className="space-y-2">
-          <Label htmlFor={`smin-${grade.id}`}>Salary, min</Label>
+          <Label htmlFor={`smin-${grade.id}`}>{t("salaryMin")}</Label>
           <Input
             id={`smin-${grade.id}`}
             data-testid={`specialization-grade-form-${grade.id}-salary-min`}
@@ -117,7 +119,7 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor={`smax-${grade.id}`}>Salary, max</Label>
+          <Label htmlFor={`smax-${grade.id}`}>{t("salaryMax")}</Label>
           <Input
             id={`smax-${grade.id}`}
             data-testid={`specialization-grade-form-${grade.id}-salary-max`}
@@ -128,7 +130,7 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor={`scur-${grade.id}`}>Currency</Label>
+          <Label htmlFor={`scur-${grade.id}`}>{t("currency")}</Label>
           <Input
             id={`scur-${grade.id}`}
             data-testid={`specialization-grade-form-${grade.id}-salary-currency`}
@@ -148,7 +150,7 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
             data-testid={`specialization-grade-form-${grade.id}-link-matrix`}
             className="text-sm text-primary hover:underline"
           >
-            Edit matrix →
+            {t("editMatrixLink")}
           </Link>
         ) : (
           <span />
@@ -159,7 +161,7 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
           onClick={handleSave}
           disabled={saving}
         >
-          {saving ? "Saving..." : "Save"}
+          {saving ? t("saving") : t("save")}
         </Button>
       </div>
     </div>

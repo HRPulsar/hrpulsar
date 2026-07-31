@@ -77,10 +77,16 @@ describe("levelHueClass (HRP-157 REDO)", () => {
   });
 });
 
+// HRP-476: the wording lives in the `company` i18n catalog — the identity
+// translator makes the assertions pin the key the helper picks, not the
+// English sentence.
+const tKey = (key: string) => key;
+
 describe("coverageGapMessage", () => {
   it("returns null when both flags are clear", () => {
     expect(
       coverageGapMessage(
+        tKey,
         comp({ has_uncovered_indicators: false, has_uncovered_materials: false }),
       ),
     ).toBeNull();
@@ -89,31 +95,33 @@ describe("coverageGapMessage", () => {
   it("returns null when levels_completion is null (no signal yet)", () => {
     // Backend omits the field on origin / unused competences — we don't
     // want false positives on rows the operator hasn't even touched.
-    expect(coverageGapMessage(comp(null))).toBeNull();
+    expect(coverageGapMessage(tKey, comp(null))).toBeNull();
   });
 
-  it("reports only indicators when materials are covered", () => {
-    const msg = coverageGapMessage(
-      comp({ has_uncovered_indicators: true, has_uncovered_materials: false }),
-    );
-    expect(msg).toContain("indicators");
-    expect(msg).not.toContain("development materials");
+  it("picks the indicators-only key when materials are covered", () => {
+    expect(
+      coverageGapMessage(
+        tKey,
+        comp({ has_uncovered_indicators: true, has_uncovered_materials: false }),
+      ),
+    ).toBe("coverageGapIndicators");
   });
 
-  it("reports only materials when indicators are covered", () => {
-    const msg = coverageGapMessage(
-      comp({ has_uncovered_indicators: false, has_uncovered_materials: true }),
-    );
-    expect(msg).toContain("development materials");
-    expect(msg).not.toMatch(/^Missing indicators/);
+  it("picks the materials-only key when indicators are covered", () => {
+    expect(
+      coverageGapMessage(
+        tKey,
+        comp({ has_uncovered_indicators: false, has_uncovered_materials: true }),
+      ),
+    ).toBe("coverageGapMaterials");
   });
 
-  it("joins both gaps with 'and' when neither indicators nor materials are covered", () => {
-    const msg = coverageGapMessage(
-      comp({ has_uncovered_indicators: true, has_uncovered_materials: true }),
-    );
-    expect(msg).toBe(
-      "Missing indicators and development materials at one or more grade levels. Click the title to add them.",
-    );
+  it("picks the combined key when neither indicators nor materials are covered", () => {
+    expect(
+      coverageGapMessage(
+        tKey,
+        comp({ has_uncovered_indicators: true, has_uncovered_materials: true }),
+      ),
+    ).toBe("coverageGapBoth");
   });
 });

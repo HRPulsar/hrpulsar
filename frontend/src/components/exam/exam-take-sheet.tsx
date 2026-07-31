@@ -6,6 +6,7 @@
 // saved draft, and Submit stays locked until every question is answered.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -72,6 +73,7 @@ export function ExamTakeSheet({
    * behind the sheet refreshes statuses/scores. */
   onFinished: () => void;
 }) {
+  const t = useTranslations("exams");
   const [payload, setPayload] = useState<TakePayload | null>(null);
   const [answers, setAnswers] = useState<Record<string, DraftAnswer>>({});
   const [loading, setLoading] = useState(false);
@@ -100,11 +102,11 @@ export function ExamTakeSheet({
       return true;
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to load the exam",
+        err instanceof Error ? err.message : t("errorLoadExam"),
       );
       return false;
     }
-  }, [examId]);
+  }, [examId, t]);
 
   useEffect(() => {
     if (!open || !examId) return;
@@ -134,7 +136,7 @@ export function ExamTakeSheet({
           });
         } catch (err) {
           toast.error(
-            err instanceof Error ? err.message : "Failed to save the answer",
+            err instanceof Error ? err.message : t("errorSaveAnswer"),
           );
         }
       })();
@@ -142,7 +144,7 @@ export function ExamTakeSheet({
       void request.finally(() => inflightSaves.current.delete(request));
       return request;
     },
-    [examId],
+    [examId, t],
   );
 
   function setChoice(questionId: string, optionIds: string[]) {
@@ -192,15 +194,18 @@ export function ExamTakeSheet({
         passed: boolean;
       }>(`/exams/${examId}/finish`, {});
       toast.success(
-        `Results submitted — score ${result.score}${
-          result.max_score != null ? ` / ${result.max_score}` : ""
-        }`,
+        result.max_score != null
+          ? t("toastResultsSubmittedWithMax", {
+              score: result.score,
+              max: result.max_score,
+            })
+          : t("toastResultsSubmitted", { score: result.score }),
       );
       onOpenChange(false);
       onFinished();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to submit results",
+        err instanceof Error ? err.message : t("errorSubmitResults"),
       );
       // A failed autosave can leave the local draft ahead of the server
       // (submit then 400s with "answer all questions") — re-sync so the
@@ -227,13 +232,13 @@ export function ExamTakeSheet({
         <SheetHeader>
           <SheetTitle>
             {payload?.mass_exam_title
-              ? `Take this exam — ${payload.mass_exam_title}`
-              : "Take this exam"}
+              ? t("takeExamNamed", { title: payload.mass_exam_title })
+              : t("takeExam")}
           </SheetTitle>
         </SheetHeader>
         {loading ? (
           <div className="flex-1 py-8 text-center text-sm text-muted-foreground">
-            Loading questions...
+            {t("loadingQuestions")}
           </div>
         ) : (
           <div className="flex-1 space-y-4 overflow-y-auto pr-1">
@@ -241,7 +246,10 @@ export function ExamTakeSheet({
               className="text-xs text-muted-foreground"
               data-testid="exam-take-progress"
             >
-              {answeredCount} / {questions.length} questions answered
+              {t("takeProgress", {
+                answered: answeredCount,
+                total: questions.length,
+              })}
             </p>
             {questions.map((q, idx) => {
               const draft = answers[q.id];
@@ -265,7 +273,7 @@ export function ExamTakeSheet({
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={q.image_url}
-                      alt="Question illustration"
+                      alt={t("questionIllustrationAlt")}
                       className="mb-2 max-h-48 max-w-full rounded-md border"
                     />
                   )}
@@ -275,7 +283,7 @@ export function ExamTakeSheet({
                       onValueChange={(value) =>
                         setChoice(q.id, [value as string])
                       }
-                      aria-label={`Answer for ${q.title}`}
+                      aria-label={t("answerForQuestion", { title: q.title })}
                     >
                       {q.options.map((opt) => (
                         <label
@@ -325,7 +333,7 @@ export function ExamTakeSheet({
                   )}
                   {q.question_type === "essay" && (
                     <Textarea
-                      placeholder="Your answer"
+                      placeholder={t("essayPlaceholder")}
                       value={draft?.text ?? ""}
                       onChange={(e) => setEssay(q.id, e.target.value)}
                       onBlur={flushEssaySaves}
@@ -339,18 +347,14 @@ export function ExamTakeSheet({
             <div className="sticky bottom-0 border-t bg-background py-3">
               {/* Disabled buttons swallow hover — the hint lives on the span. */}
               <span
-                title={
-                  allAnswered
-                    ? undefined
-                    : "Answer all questions to submit the results"
-                }
+                title={allAnswered ? undefined : t("submitHint")}
               >
                 <Button
                   onClick={submit}
                   disabled={!allAnswered || submitting}
                   data-testid="exam-take-submit"
                 >
-                  {submitting ? "Submitting..." : "Submit results"}
+                  {submitting ? t("submitting") : t("submitResults")}
                 </Button>
               </span>
             </div>
@@ -405,6 +409,7 @@ export function ExamReviewSheet({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useTranslations("exams");
   const [payload, setPayload] = useState<ReviewPayload | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -420,7 +425,7 @@ export function ExamReviewSheet({
       } catch (err) {
         if (!cancelled) {
           toast.error(
-            err instanceof Error ? err.message : "Failed to load results",
+            err instanceof Error ? err.message : t("errorLoadResults"),
           );
           onOpenChange(false);
         }
@@ -443,18 +448,18 @@ export function ExamReviewSheet({
         <SheetHeader>
           <SheetTitle>
             {payload?.mass_exam_title
-              ? `Results — ${payload.mass_exam_title}`
-              : "Results"}
+              ? t("resultsNamed", { title: payload.mass_exam_title })
+              : t("results")}
           </SheetTitle>
         </SheetHeader>
         {loading || !payload ? (
           <div className="flex-1 py-8 text-center text-sm text-muted-foreground">
-            Loading results...
+            {t("loadingResults")}
           </div>
         ) : (
           <div className="flex-1 space-y-4 overflow-y-auto pr-1">
             <p className="text-sm" data-testid="exam-review-score">
-              Score:{" "}
+              {t("reviewScoreLabel")}{" "}
               <span className="font-semibold">
                 {payload.score ?? 0}
                 {payload.max_score != null ? ` / ${payload.max_score}` : ""}
@@ -482,7 +487,7 @@ export function ExamReviewSheet({
                         }
                         data-testid={`exam-review-verdict-${q.id}`}
                       >
-                        {q.answer.is_correct ? "Correct" : "Incorrect"}
+                        {q.answer.is_correct ? t("verdictCorrect") : t("verdictIncorrect")}
                       </Badge>
                     )}
                   </div>
@@ -490,7 +495,7 @@ export function ExamReviewSheet({
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={q.image_url}
-                      alt="Question illustration"
+                      alt={t("questionIllustrationAlt")}
                       className="mb-2 max-h-48 max-w-full rounded-md border"
                     />
                   )}
@@ -523,7 +528,7 @@ export function ExamReviewSheet({
                             <span>{opt.title}</span>
                             {isSelected && (
                               <span className="ml-auto text-xs text-muted-foreground">
-                                your answer
+                                {t("yourAnswer")}
                               </span>
                             )}
                           </div>

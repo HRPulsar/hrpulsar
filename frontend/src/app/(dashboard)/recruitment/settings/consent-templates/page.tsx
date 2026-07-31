@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { ConsentTemplate } from "@/lib/types";
 import { BADGE_COLOR } from "@/lib/badge-tones";
@@ -14,21 +15,19 @@ import { Loader2, Plus, Save, Star } from "lucide-react";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
 
-const DEFAULT_BODY = `I consent to the processing of my personal data and audio recording of the interview as part of the hiring process.
-
-Purpose of processing: assessment of fit for the position.
-Retention period: 6 months from the date of signing.
-
-By signing this consent, I confirm that I have read the data processing policy and may withdraw my consent by writing to hr@example.com.`;
-
 export default function ConsentTemplatesPage() {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
+  // HRP-476: the seeded consent body is candidate-facing copy, so it comes
+  // from the `recruitment` i18n namespace.
+  const defaultBody = t("consentDefaultBody");
   const [templates, setTemplates] = useState<ConsentTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState({
     name: "",
-    body: DEFAULT_BODY,
+    body: defaultBody,
     language: "en",
   });
 
@@ -52,7 +51,7 @@ export default function ConsentTemplatesPage() {
 
   async function handleCreate() {
     if (!draft.name.trim() || !draft.body.trim()) {
-      toast.error("Fill in the template name and body");
+      toast.error(t("consentFillRequired"));
       return;
     }
     setCreating(true);
@@ -63,29 +62,32 @@ export default function ConsentTemplatesPage() {
         language: draft.language,
         is_active: true,
       });
-      toast.success("Template created and set as active");
-      setDraft({ name: "", body: DEFAULT_BODY, language: "en" });
+      toast.success(t("consentToastCreated"));
+      setDraft({ name: "", body: defaultBody, language: "en" });
       void load();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to create template",
+        err instanceof Error ? err.message : t("templateCreateFailed"),
       );
     } finally {
       setCreating(false);
     }
   }
 
-  async function handleUpdate(t: ConsentTemplate, patch: Partial<ConsentTemplate>) {
-    setSavingId(t.id);
+  async function handleUpdate(
+    row: ConsentTemplate,
+    patch: Partial<ConsentTemplate>,
+  ) {
+    setSavingId(row.id);
     try {
       await api.put<ConsentTemplate>(
-        `/recruitment/consent-templates/${t.id}`,
+        `/recruitment/consent-templates/${row.id}`,
         patch,
       );
       void load();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to update template",
+        err instanceof Error ? err.message : t("templateUpdateFailed"),
       );
     } finally {
       setSavingId(null);
@@ -96,40 +98,41 @@ export default function ConsentTemplatesPage() {
     <div data-testid="recruitment-consent-templates" className="space-y-5">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Settings", href: "/recruitment/settings" },
-          { label: "Consent templates" },
+          { label: tc("settings"), href: "/recruitment/settings" },
+          { label: t("consentTitle") },
         ]}
       />
       <header>
         <h1 className="text-xl font-semibold tracking-tight">
-          Consent templates
+          {t("consentTitle")}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          The active template is sent to a candidate when consent is requested.
-          Only one template can be active at any given time.
+          {t("consentDescription")}
         </p>
       </header>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Create a new template</CardTitle>
+          <CardTitle className="text-base">
+            {t("consentCreateCardTitle")}
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1">
-            <Label htmlFor="tpl-name">Name</Label>
+            <Label htmlFor="tpl-name">{t("fieldName")}</Label>
             <Input
               id="tpl-name"
               value={draft.name}
               onChange={(e) =>
                 setDraft((d) => ({ ...d, name: e.target.value }))
               }
-              placeholder='For example, "Consent 2026"'
+              placeholder={t("consentNamePlaceholder")}
               data-testid="consent-tpl-input-name"
             />
           </div>
           <div className="grid gap-3 sm:grid-cols-[1fr_8rem]">
             <div className="space-y-1">
-              <Label htmlFor="tpl-body">Consent text</Label>
+              <Label htmlFor="tpl-body">{t("consentBodyLabel")}</Label>
               <Textarea
                 id="tpl-body"
                 rows={10}
@@ -141,7 +144,7 @@ export default function ConsentTemplatesPage() {
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="tpl-lang">Language</Label>
+              <Label htmlFor="tpl-lang">{t("consentLanguageLabel")}</Label>
               <select
                 id="tpl-lang"
                 value={draft.language}
@@ -150,7 +153,7 @@ export default function ConsentTemplatesPage() {
                 }
                 className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
               >
-                <option value="en">English</option>
+                <option value="en">{t("consentLanguageEnglish")}</option>
               </select>
             </div>
           </div>
@@ -165,22 +168,22 @@ export default function ConsentTemplatesPage() {
               ) : (
                 <Plus className="size-4" />
               )}
-              Create as active
+              {t("consentCreateButton")}
             </Button>
           </div>
         </CardContent>
       </Card>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-medium">Existing templates</h2>
+        <h2 className="text-sm font-medium">{t("templatesExistingTitle")}</h2>
         {loading ? (
           <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
             <Loader2 className="mr-2 size-4 animate-spin" />
-            Loading…
+            {t("loading")}
           </div>
         ) : templates.length === 0 ? (
           <div className="rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">
-            No templates yet. Create your first one above.
+            {t("templatesEmpty")}
           </div>
         ) : (
           <ul className="space-y-2">
@@ -215,6 +218,7 @@ function TemplateRow({
     patch: Partial<ConsentTemplate>,
   ) => Promise<void>;
 }) {
+  const t = useTranslations("recruitment");
   // The row is keyed on (id, version, is_active) by the parent — when the
   // server-side template changes, React remounts this row and these
   // useState calls re-seed from the fresh prop. That avoids a sync-in-effect
@@ -237,9 +241,9 @@ function TemplateRow({
             className="h-7 max-w-xs"
           />
           {template.is_active ? (
-            <Badge className={BADGE_COLOR.emerald}>Active</Badge>
+            <Badge className={BADGE_COLOR.emerald}>{t("statusActive")}</Badge>
           ) : (
-            <Badge variant="outline">Inactive</Badge>
+            <Badge variant="outline">{t("statusInactive")}</Badge>
           )}
           <span className="text-[11px] text-muted-foreground">
             v{template.version}
@@ -255,7 +259,7 @@ function TemplateRow({
               data-testid={`consent-tpl-btn-activate-${template.id}`}
             >
               <Star className="size-3.5" />
-              Set as active
+              {t("consentSetActive")}
             </Button>
           )}
           <Button
@@ -270,7 +274,7 @@ function TemplateRow({
             ) : (
               <Save className="size-3.5" />
             )}
-            Save
+            {t("save")}
           </Button>
         </div>
       </div>

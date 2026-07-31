@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link2, Loader2, Search, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { skillLevelLabel } from "@/lib/reference-labels";
 import type { Material, SkillLevel } from "@/lib/types";
 
 /**
@@ -106,6 +108,9 @@ export function MaterialsAIDialog({
   skillLevels,
   onSaved,
 }: MaterialsAIDialogProps) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [phase, setPhase] = useState<"brief" | "review">("brief");
   const [options, setOptions] = useState<MaterialsContextOptions | null>(null);
   const [optionsLoading, setOptionsLoading] = useState(false);
@@ -177,7 +182,7 @@ export function MaterialsAIDialog({
       .catch((err) => {
         if (!cancelled) {
           toast.error(
-            err instanceof Error ? err.message : "Failed to load context options",
+            err instanceof Error ? err.message : t("errorLoadContextOptions"),
           );
         }
       })
@@ -190,17 +195,23 @@ export function MaterialsAIDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, competenceId]);
 
+  // HRP-479: the title↔id map stays on the RAW stored titles — the model
+  // echoes back the level names it was given in the prompt (which come from
+  // the DB), and the matched id is what ends up in the save payload. Never
+  // key this map by a localized label.
   const levelIdByTitle = useMemo(() => {
     const map = new Map<string, string>();
     skillLevels.forEach((l) => map.set(l.title.toLowerCase(), l.id));
     return map;
   }, [skillLevels]);
 
-  const levelTitleById = useMemo(() => {
+  // Display-only counterpart: id → localized label (origin levels resolve
+  // through the catalog, tenant levels fall back to their stored title).
+  const levelLabelById = useMemo(() => {
     const map = new Map<string, string>();
-    skillLevels.forEach((l) => map.set(l.id, l.title));
+    skillLevels.forEach((l) => map.set(l.id, skillLevelLabel(tRef, l)));
     return map;
-  }, [skillLevels]);
+  }, [skillLevels, tRef]);
 
   const indicatorsByLevel = useMemo(() => {
     const map = new Map<string, ContextIndicator[]>();
@@ -223,7 +234,8 @@ export function MaterialsAIDialog({
     });
   }
 
-  const competenceName = options?.competence.title ?? "competence";
+  const competenceName =
+    options?.competence.title ?? t("matAiCompetenceFallback");
   const materialsTotal =
     selectedLevelIds.size > 0 ? selectedLevelIds.size * countPerLevel : 0;
   const minimalContext =
@@ -235,7 +247,7 @@ export function MaterialsAIDialog({
 
   async function handleGenerate() {
     if (selectedLevelIds.size === 0) {
-      toast.error("Pick at least one skill level.");
+      toast.error(t("errorPickSkillLevel"));
       return;
     }
     setGenerating(true);
@@ -268,7 +280,7 @@ export function MaterialsAIDialog({
           ? err.detail || err.message
           : err instanceof Error
             ? err.message
-            : "Generation failed";
+            : t("errorGenerationFailed");
       toast.error(String(msg));
     } finally {
       setGenerating(false);
@@ -305,7 +317,7 @@ export function MaterialsAIDialog({
       .filter((x): x is NonNullable<typeof x> => x !== null);
 
     if (rows.length === 0) {
-      toast.error("Pick at least one material to save.");
+      toast.error(t("errorPickMaterial"));
       return;
     }
 
@@ -315,7 +327,7 @@ export function MaterialsAIDialog({
         `/competences/${competenceId}/materials/bulk`,
         { materials: rows },
       );
-      toast.success(`Saved ${created.length} material${created.length === 1 ? "" : "s"}.`);
+      toast.success(t("toastMaterialsSaved", { count: created.length }));
       onSaved(created.map((m) => m.id));
       onOpenChange(false);
     } catch (err) {
@@ -324,7 +336,7 @@ export function MaterialsAIDialog({
           ? err.detail || err.message
           : err instanceof Error
             ? err.message
-            : "Failed to save";
+            : t("errorSave");
       toast.error(String(msg));
     } finally {
       setSaving(false);
@@ -340,7 +352,7 @@ export function MaterialsAIDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
-            Generate materials with AI for &ldquo;{competenceName}&rdquo;
+            {t("matAiTitle", { name: competenceName })}
           </DialogTitle>
         </DialogHeader>
 
@@ -352,13 +364,15 @@ export function MaterialsAIDialog({
               className="space-y-4"
             >
               <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Skill levels</Label>
+                <Label className="text-xs font-medium">
+                  {t("matAiSkillLevels")}
+                </Label>
                 <p className="text-xs text-muted-foreground">
-                  The model generates materials separately for every selected level.
+                  {t("matAiSkillLevelsHint")}
                 </p>
                 {skillLevels.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
-                    No skill levels configured yet.
+                    {t("matAiNoSkillLevels")}
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
@@ -381,7 +395,7 @@ export function MaterialsAIDialog({
                               toggleSet(setSelectedLevelIds, lvl.id)
                             }
                           />
-                          <span>{lvl.title}</span>
+                          <span>{skillLevelLabel(tRef, lvl)}</span>
                         </label>
                       );
                     })}
@@ -394,10 +408,10 @@ export function MaterialsAIDialog({
                   htmlFor="materials-gen-per-level-input"
                   className="text-xs font-medium"
                 >
-                  Materials per skill level
+                  {t("matAiPerLevel")}
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  Recommended: 3–5.
+                  {t("matAiPerLevelHint")}
                 </p>
                 <input
                   id="materials-gen-per-level-input"
@@ -422,16 +436,17 @@ export function MaterialsAIDialog({
               className="space-y-4 rounded-md border border-dashed p-4"
             >
               <header className="space-y-0.5">
-                <h3 className="text-sm font-semibold">Context for the AI</h3>
+                <h3 className="text-sm font-semibold">
+                  {t("matAiContextTitle")}
+                </h3>
                 <p className="text-xs text-muted-foreground">
-                  Tick the items you want AI to use as context. Linked items
-                  are pre-selected.
+                  {t("matAiContextHint")}
                 </p>
               </header>
 
               {optionsLoading || !options ? (
                 <p className="text-xs text-muted-foreground">
-                  Loading context options…
+                  {t("matAiLoadingContext")}
                 </p>
               ) : (
                 <>
@@ -440,7 +455,7 @@ export function MaterialsAIDialog({
                   <IndicatorsSection
                     indicators={options.indicators}
                     indicatorsByLevel={indicatorsByLevel}
-                    levelTitleById={levelTitleById}
+                    levelLabelById={levelLabelById}
                     selectedLevelIds={selectedLevelIds}
                     selectedIndicatorIds={selectedIndicatorIds}
                     onToggle={(id) =>
@@ -450,20 +465,20 @@ export function MaterialsAIDialog({
 
                   <LinkedAwareSection
                     sectionId="specializations"
-                    title="Specializations"
+                    title={t("sectionSpecializations")}
                     items={options.specializations}
                     selectedIds={selectedSpecIds}
                     onToggle={(id) => toggleSet(setSelectedSpecIds, id)}
-                    linkedTooltip="Linked through this competence"
+                    linkedTooltip={t("matAiLinkedThroughCompetence")}
                   />
 
                   <LinkedAwareSection
                     sectionId="divisions"
-                    title="Divisions"
+                    title={t("sectionDivisions")}
                     items={options.divisions}
                     selectedIds={selectedDivisionIds}
                     onToggle={(id) => toggleSet(setSelectedDivisionIds, id)}
-                    linkedTooltip="Linked through specializations and positions"
+                    linkedTooltip={t("matAiLinkedThroughSpecsPositions")}
                   />
 
                   {options.sibling_competences.length > 0 ? (
@@ -489,7 +504,7 @@ export function MaterialsAIDialog({
                       />
                       <span className="text-sm">
                         <span className="font-medium">
-                          Include company description
+                          {t("matAiIncludeCompanyDescription")}
                         </span>
                         <span className="block text-xs text-muted-foreground">
                           {options.company_description}
@@ -507,7 +522,7 @@ export function MaterialsAIDialog({
                 htmlFor="materials-gen-refinement"
                 className="text-xs font-medium"
               >
-                Refinement (optional)
+                {t("matAiRefinement")}
               </Label>
               <Textarea
                 id="materials-gen-refinement"
@@ -515,7 +530,7 @@ export function MaterialsAIDialog({
                 value={refinement}
                 onChange={(e) => setRefinement(e.target.value)}
                 rows={3}
-                placeholder="e.g. Prefer free online resources; bias towards books and articles."
+                placeholder={t("matAiRefinementPlaceholder")}
               />
             </div>
 
@@ -525,27 +540,32 @@ export function MaterialsAIDialog({
               aria-live="polite"
               className="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
             >
-              Generating {materialsTotal} material{materialsTotal === 1 ? "" : "s"} for{" "}
-              <span className="font-medium text-foreground">
-                {competenceName}
-              </span>{" "}
-              · {selectedLevelIds.size} level
-              {selectedLevelIds.size === 1 ? "" : "s"} × {countPerLevel}.
+              {t.rich("matAiSummaryLine", {
+                total: materialsTotal,
+                levels: selectedLevelIds.size,
+                perLevel: countPerLevel,
+                name: (chunks) => (
+                  <span className="font-medium text-foreground">{chunks}</span>
+                ),
+                competence: competenceName,
+              })}
               <br />
-              Context: {selectedIndicatorIds.size} indicator
-              {selectedIndicatorIds.size === 1 ? "" : "s"}, {selectedSpecIds.size}{" "}
-              specialization{selectedSpecIds.size === 1 ? "" : "s"},{" "}
-              {selectedDivisionIds.size} division
-              {selectedDivisionIds.size === 1 ? "" : "s"}, {selectedSiblingIds.size}{" "}
-              sibling{selectedSiblingIds.size === 1 ? "" : "s"}
               {includeCompanyDesc && options?.company_description
-                ? ", company description"
-                : ""}
-              .
+                ? t("matAiSummaryContextWithCompany", {
+                    indicators: selectedIndicatorIds.size,
+                    specializations: selectedSpecIds.size,
+                    divisions: selectedDivisionIds.size,
+                    siblings: selectedSiblingIds.size,
+                  })
+                : t("matAiSummaryContext", {
+                    indicators: selectedIndicatorIds.size,
+                    specializations: selectedSpecIds.size,
+                    divisions: selectedDivisionIds.size,
+                    siblings: selectedSiblingIds.size,
+                  })}
               {minimalContext ? (
                 <span className="mt-1 block text-amber-700 dark:text-amber-300">
-                  Generating with minimal context may produce generic
-                  results.
+                  {t("matAiMinimalContext")}
                 </span>
               ) : null}
             </div>
@@ -556,8 +576,11 @@ export function MaterialsAIDialog({
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
               {items.length === 0
-                ? "The model returned no items — adjust the brief and try again."
-                : `Untick anything you don't want saved. ${items.filter((_, idx) => kept.has(idx)).length} of ${items.length} kept.`}
+                ? t("matAiNoItems")
+                : t("matAiReviewHint", {
+                    kept: items.filter((_, idx) => kept.has(idx)).length,
+                    total: items.length,
+                  })}
             </p>
             <div className="max-h-[480px] space-y-2 overflow-y-auto pr-1">
               {items.map((it, idx) => {
@@ -585,7 +608,7 @@ export function MaterialsAIDialog({
                           {it.material_type}
                         </span>
                         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                          {levelTitleById.get(
+                          {levelLabelById.get(
                             levelIdByTitle.get(it.skill_level.toLowerCase()) ?? "",
                           ) ?? it.skill_level}
                         </span>
@@ -601,7 +624,9 @@ export function MaterialsAIDialog({
                             rel="noreferrer"
                             className="text-primary underline"
                           >
+                            {/* eslint-disable react/jsx-no-literals -- accepted F2 debt (HRP-476) */}
                             link
+                            {/* eslint-enable react/jsx-no-literals */}
                           </a>
                         )}
                       </div>
@@ -622,7 +647,7 @@ export function MaterialsAIDialog({
                 disabled={generating}
                 data-testid="materials-gen-cancel"
               >
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button
                 data-testid="materials-gen-submit"
@@ -637,12 +662,12 @@ export function MaterialsAIDialog({
                 {generating ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Generating…
+                    {t("matAiGenerating")}
                   </>
                 ) : (
                   <>
                     <Sparkles className="mr-2 h-4 w-4" />
-                    Generate
+                    {t("matAiGenerate")}
                   </>
                 )}
               </Button>
@@ -656,7 +681,7 @@ export function MaterialsAIDialog({
                 disabled={saving}
               >
                 <X className="mr-2 h-4 w-4" />
-                Back to brief
+                {t("matAiBackToBrief")}
               </Button>
               <Button
                 data-testid="materials-gen-save"
@@ -664,8 +689,8 @@ export function MaterialsAIDialog({
                 disabled={saving || kept.size === 0}
               >
                 {saving
-                  ? "Saving…"
-                  : `Save ${kept.size} material${kept.size === 1 ? "" : "s"}`}
+                  ? t("savingEllipsis")
+                  : t("matAiSaveCount", { count: kept.size })}
               </Button>
             </>
           )}
@@ -682,6 +707,7 @@ function CompetenceInfoBlock({
 }: {
   competence: ContextCompetence;
 }) {
+  const t = useTranslations("competences");
   return (
     <section
       data-testid="materials-gen-section-competence_info"
@@ -690,12 +716,14 @@ function CompetenceInfoBlock({
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium">{competence.title}</span>
         <span className="text-[10px] uppercase text-muted-foreground">
-          Always included
+          {t("matAiAlwaysIncluded")}
         </span>
       </div>
       <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
         {competence.type ? <span>{competence.type}</span> : null}
-        {competence.group ? <span>Group: {competence.group.title}</span> : null}
+        {competence.group ? (
+          <span>{t("matAiGroupPrefix", { title: competence.group.title })}</span>
+        ) : null}
       </div>
       {competence.description ? (
         <p className="text-xs text-muted-foreground">{competence.description}</p>
@@ -707,18 +735,19 @@ function CompetenceInfoBlock({
 function IndicatorsSection({
   indicators,
   indicatorsByLevel,
-  levelTitleById,
+  levelLabelById,
   selectedLevelIds,
   selectedIndicatorIds,
   onToggle,
 }: {
   indicators: ContextIndicator[];
   indicatorsByLevel: Map<string, ContextIndicator[]>;
-  levelTitleById: Map<string, string>;
+  levelLabelById: Map<string, string>;
   selectedLevelIds: Set<string>;
   selectedIndicatorIds: Set<string>;
   onToggle: (id: string) => void;
 }) {
+  const t = useTranslations("competences");
   if (indicators.length === 0) {
     return (
       <section
@@ -726,10 +755,12 @@ function IndicatorsSection({
         className="space-y-1.5"
       >
         <header className="flex items-baseline justify-between">
-          <Label className="text-xs font-medium">Indicators</Label>
+          <Label className="text-xs font-medium">
+            {t("sectionIndicators")}
+          </Label>
         </header>
         <p className="text-xs text-muted-foreground">
-          This competence has no indicators yet.
+          {t("matAiNoIndicators")}
         </p>
       </section>
     );
@@ -742,15 +773,20 @@ function IndicatorsSection({
     >
       <header className="flex items-baseline justify-between">
         <Label className="text-xs font-medium">
-          Indicators ({selectedIndicatorIds.size} of {indicators.length} selected)
+          {t("matAiIndicatorsCounter", {
+            selected: selectedIndicatorIds.size,
+            total: indicators.length,
+          })}
         </Label>
       </header>
       <div className="space-y-2">
         {Array.from(indicatorsByLevel.entries()).map(([levelKey, list]) => {
+          // `skill_level_title` is a flat string denormalized into the
+          // context payload (no i18n_key) — it stays verbatim.
           const levelTitle =
-            levelTitleById.get(levelKey) ??
+            levelLabelById.get(levelKey) ??
             list[0]?.skill_level_title ??
-            "Other";
+            t("matAiLevelOther");
           const levelActive =
             levelKey === "_unknown" || selectedLevelIds.has(levelKey);
           return (
@@ -799,8 +835,7 @@ function IndicatorsSection({
         })}
       </div>
       <p className="text-[11px] text-muted-foreground">
-        Indicators for unselected levels are dimmed but still count as
-        context if you keep them ticked.
+        {t("matAiIndicatorsHint")}
       </p>
     </section>
   );
@@ -821,6 +856,7 @@ function LinkedAwareSection({
   onToggle: (id: string) => void;
   linkedTooltip: string;
 }) {
+  const t = useTranslations("competences");
   const [search, setSearch] = useState("");
   const [linkedOnly, setLinkedOnly] = useState(false);
 
@@ -842,8 +878,17 @@ function LinkedAwareSection({
     >
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <Label className="text-xs font-medium">
-          {title} ({selectedIds.size} of {items.length} selected
-          {linkedCount > 0 ? `, ${linkedCount} linked` : ""})
+          {title}{" "}
+          {linkedCount > 0
+            ? t("contextCounterLinked", {
+                selected: selectedIds.size,
+                total: items.length,
+                linked: linkedCount,
+              })
+            : t("contextCounter", {
+                selected: selectedIds.size,
+                total: items.length,
+              })}
         </Label>
         {showControls ? (
           <div className="flex items-center gap-2">
@@ -855,14 +900,14 @@ function LinkedAwareSection({
                 checked={linkedOnly}
                 onCheckedChange={(v) => setLinkedOnly(Boolean(v))}
               />
-              <span>Show linked only</span>
+              <span>{t("contextShowLinkedOnly")}</span>
             </label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search…"
+                placeholder={t("searchShort")}
                 className="h-7 w-44 pl-7 text-xs"
                 data-testid={`materials-gen-context-${sectionId}-search`}
               />
@@ -879,8 +924,10 @@ function LinkedAwareSection({
       {visible.length === 0 ? (
         <p className="text-xs text-muted-foreground">
           {items.length === 0
-            ? `No ${title.toLowerCase()} configured.`
-            : "Nothing matches the current filter."}
+            ? sectionId === "specializations"
+              ? t("matAiNoSpecializationsConfigured")
+              : t("matAiNoDivisionsConfigured")
+            : t("contextNothingMatchesFilter")}
         </p>
       ) : (
         <div className="flex flex-wrap gap-2">
@@ -939,6 +986,7 @@ function SiblingCompetencesSection({
   selectedIds: Set<string>;
   onToggle: (id: string) => void;
 }) {
+  const t = useTranslations("competences");
   return (
     <section
       data-testid="materials-gen-section-sibling_competences"
@@ -946,12 +994,14 @@ function SiblingCompetencesSection({
     >
       <header className="flex items-baseline justify-between">
         <Label className="text-xs font-medium">
-          Sibling competences ({selectedIds.size} of {items.length} selected)
+          {t("matAiSiblingsCounter", {
+            selected: selectedIds.size,
+            total: items.length,
+          })}
         </Label>
       </header>
       <p className="text-[11px] text-muted-foreground">
-        Other competences in the same group. Off by default — tick the ones
-        the AI should weave into the materials.
+        {t("matAiSiblingsHint")}
       </p>
       <div className="flex flex-wrap gap-2">
         {items.map((it) => {

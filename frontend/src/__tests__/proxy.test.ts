@@ -4,6 +4,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 let redirectTarget: string | URL = "";
 let redirectStatus: number | undefined;
 let nextHeaders: Map<string, string> = new Map();
+// i18n (F1): response cookies set by withLocaleCookie
+let setCookies: Map<string, string> = new Map();
+let setCookieOptions: Map<string, unknown> = new Map();
+
+function mockCookies() {
+  return {
+    set: (name: string, value: string, options?: unknown) => {
+      setCookies.set(name, value);
+      setCookieOptions.set(name, options);
+    },
+    get: (name: string) =>
+      setCookies.has(name) ? { name, value: setCookies.get(name) } : undefined,
+  };
+}
 
 vi.mock("next/server", () => ({
   NextRequest: class {},
@@ -20,6 +34,7 @@ vi.mock("next/server", () => ({
           set: (k: string, v: string) => headers.set(k, v),
           get: (k: string) => headers.get(k),
         },
+        cookies: mockCookies(),
       };
     },
     next() {
@@ -27,6 +42,7 @@ vi.mock("next/server", () => ({
       return {
         type: "next",
         headers: { set: (k: string, v: string) => nextHeaders.set(k, v), get: (k: string) => nextHeaders.get(k) },
+        cookies: mockCookies(),
       };
     },
   },
@@ -34,19 +50,29 @@ vi.mock("next/server", () => ({
 
 function makeRequest(
   path: string,
-  opts: { host?: string; hasToken?: boolean; demoSession?: boolean } = {},
+  opts: {
+    host?: string;
+    hasToken?: boolean;
+    demoSession?: boolean;
+    localeCookie?: string;
+    acceptLanguage?: string;
+  } = {},
 ) {
   const host = opts.host || "app.hrpulsar.com";
   const url = `https://${host}${path}`;
+  const headerInit: Record<string, string> = { host };
+  if (opts.acceptLanguage) headerInit["accept-language"] = opts.acceptLanguage;
   return {
     nextUrl: { pathname: path, search: "" },
     // A real Headers instance — publicAssessmentResponse clones it via
     // `new Headers(request.headers)` for the nonce'd CSP path.
-    headers: new Headers({ host }),
+    headers: new Headers(headerInit),
     cookies: {
       get(name: string) {
         if (name === "has_token" && opts.hasToken) return { value: "1" };
         if (name === "demo_session" && opts.demoSession) return { value: "1" };
+        if (name === "NEXT_LOCALE" && opts.localeCookie)
+          return { value: opts.localeCookie };
         return undefined;
       },
     },
@@ -61,6 +87,8 @@ beforeEach(async () => {
   redirectTarget = "";
   redirectStatus = undefined;
   nextHeaders = new Map();
+  setCookies = new Map();
+  setCookieOptions = new Map();
   vi.stubEnv("NEXT_PUBLIC_MARKETING_DOMAIN", "hrpulsar.com");
   vi.stubEnv("NEXT_PUBLIC_APP_DOMAIN", "app.hrpulsar.com");
   const mod = await import("../proxy");
@@ -329,5 +357,77 @@ describe("local dev (*.local domains)", () => {
     proxy(makeRequest("/pricing", { host: "app.hrpulsar.local:3000" }));
     expect(redirectTarget).toBe("http://hrpulsar.local:3000/pricing");
     expect(redirectStatus).toBe(307);
+  });
+});
+
+// ─── i18n locale cookie (F1, HRP-475) ───────────────────────
+
+describe("NEXT_LOCALE cookie", () => {
+  const host = "app.hrpulsar.com";
+
+  it("sets the deployment default on first visit", () => {
+    proxy(makeRequest("/login", { host }));
+    expect(setCookies.get("NEXT_LOCALE")).toBe("en");
+    expect(setCookieOptions.get("NEXT_LOCALE")).toEqual({
+      path: "/",
+      maxAge: 31536000,
+      sameSite: "lax",
+    });
+  });
+
+  it("resolves from Accept-Language when the locale is available", async () => {
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_AVAILABLE_LOCALES", "de,en");
+    const mod = await import("../proxy");
+    const localizedProxy = mod.proxy as typeof proxy;
+    localizedProxy(
+      makeRequest("/login", { host, acceptLanguage: "de-DE,de;q=0.9" }),
+    );
+    expect(setCookies.get("NEXT_LOCALE")).toBe("de");
+    vi.unstubAllEnvs();
+  });
+
+  it("ignores Accept-Language locales outside AVAILABLE_LOCALES", () => {
+    proxy(makeRequest("/login", { host, acceptLanguage: "de-DE,fr;q=0.9" }));
+    expect(setCookies.get("NEXT_LOCALE")).toBe("en");
+  });
+
+  it("keeps an existing valid cookie", () => {
+    proxy(makeRequest("/login", { host, localeCookie: "en" }));
+    expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+  });
+
+  it("re-resolves an invalid cookie value", () => {
+    proxy(makeRequest("/login", { host, localeCookie: "fr" }));
+    expect(setCookies.get("NEXT_LOCALE")).toBe("en");
+  });
+
+  it("sets the cookie on the authenticated app path too", () => {
+    proxy(makeRequest("/dashboard", { host, hasToken: true }));
+    expect(setCookies.get("NEXT_LOCALE")).toBe("en");
+  });
+
+  it("does not touch RSC prefetch responses", () => {
+    const request = makeRequest("/dashboard", { host, hasToken: true });
+    request.headers.set("rsc", "1");
+    proxy(request);
+    expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+  });
+
+  it("does not touch the hardened public-assessment response", () => {
+    proxy(makeRequest("/public/assessments/some-token", { host }));
+    expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+  });
+
+  it("does not set the cookie on the marketing bounce or robots.txt", () => {
+    proxy(makeRequest("/pricing", { host }));
+    expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+    proxy(makeRequest("/robots.txt", { host }));
+    expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+  });
+
+  it("skips the authed auth-page redirect (self-heals on the next request)", () => {
+    proxy(makeRequest("/login", { host, hasToken: true }));
+    expect(setCookies.has("NEXT_LOCALE")).toBe(false);
   });
 });

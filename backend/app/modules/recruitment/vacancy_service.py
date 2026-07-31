@@ -11,13 +11,14 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import HTTPException, UploadFile, status
+from fastapi import UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.core import rbac_hooks
+from app.core.errors import AppError
 from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Division
 from app.modules.position.models import Position
@@ -153,9 +154,9 @@ async def _load_position_for_vacancy(
         )
     ).scalar_one_or_none()
     if pos is None:
-        raise HTTPException(
+        raise AppError(
+            "position_id_wrong_tenant",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "position_id does not reference a position in this tenant.",
         )
     return pos
 
@@ -173,9 +174,9 @@ async def _validate_division_for_vacancy(
         )
     ).scalar_one_or_none()
     if exists is None:
-        raise HTTPException(
+        raise AppError(
+            "division_id_wrong_tenant",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "division_id does not reference a division in this tenant.",
         )
 
 
@@ -202,16 +203,16 @@ def _validate_spec_grade_against_position(
     if specialization_ids:
         for spec_id in specialization_ids:
             if spec_id not in allowed_specs:
-                raise HTTPException(
+                raise AppError(
+                    "specialization_ids_not_in_position",
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    "specialization_ids must belong to the selected position.",
                 )
     if grade_ids:
         for grade_id in grade_ids:
             if grade_id not in allowed_grades:
-                raise HTTPException(
+                raise AppError(
+                    "grade_ids_not_in_position",
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    "grade_ids must belong to the selected position.",
                 )
 
 
@@ -305,9 +306,9 @@ async def _validate_hiring_manager(
     """HRP-360: reject a hiring manager who is not an active admin-tier
     user of this tenant."""
     if not await _is_hiring_manager_eligible(db, tenant_id, user_id):
-        raise HTTPException(
+        raise AppError(
+            "hiring_manager_invalid",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Hiring manager must be an active admin user of this company.",
         )
 
 
@@ -392,9 +393,9 @@ async def create_vacancy(
         # No position chosen → reject any non-empty multi-select. The
         # form disables the controls in this state, so a real caller
         # never hits this branch.
-        raise HTTPException(
+        raise AppError(
+            "spec_grade_require_position",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "specialization_ids / grade_ids require a position_id.",
         )
 
     vacancy = Vacancy(
@@ -796,14 +797,16 @@ async def upload_vacancy_attachment(
     await _get_vacancy(db, tenant_id, vacancy_id)
 
     if file.size is not None and file.size > MAX_ATTACHMENT_BYTES:
-        raise HTTPException(
+        raise AppError(
+            "vacancy_attachment_too_large",
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"Attachment exceeds {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB limit.",
+            max_mb=MAX_ATTACHMENT_BYTES // (1024 * 1024),
         )
     if file.content_type and file.content_type not in ALLOWED_ATTACHMENT_MIMES:
-        raise HTTPException(
+        raise AppError(
+            "vacancy_attachment_unsupported_type",
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            f"Unsupported attachment type: {file.content_type}",
+            content_type=file.content_type,
         )
 
     existing_count = (
@@ -815,17 +818,19 @@ async def upload_vacancy_attachment(
         )
     ).scalar() or 0
     if existing_count >= MAX_ATTACHMENTS_PER_VACANCY:
-        raise HTTPException(
+        raise AppError(
+            "vacancy_attachment_limit_reached",
             status.HTTP_409_CONFLICT,
-            f"Vacancy already has {MAX_ATTACHMENTS_PER_VACANCY} attachments.",
+            max_attachments=MAX_ATTACHMENTS_PER_VACANCY,
         )
 
     contents = await file.read()
     size = len(contents)
     if size > MAX_ATTACHMENT_BYTES:
-        raise HTTPException(
+        raise AppError(
+            "vacancy_attachment_too_large",
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"Attachment exceeds {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB limit.",
+            max_mb=MAX_ATTACHMENT_BYTES // (1024 * 1024),
         )
 
     file_id: uuid.UUID | None = None
@@ -898,7 +903,7 @@ async def delete_vacancy_attachment(
         )
     ).scalar_one_or_none()
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Attachment not found")
+        raise AppError("vacancy_attachment_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(row)
     await db.commit()
 
@@ -1094,16 +1099,16 @@ async def update_vacancy(
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
 
     if vacancy.archived_at is not None:
-        raise HTTPException(
+        raise AppError(
+            "vacancy_archived_readonly",
             status.HTTP_409_CONFLICT,
-            "Vacancy is archived. Restore it before editing.",
         )
 
     current_etag = vacancy_etag(vacancy)
     if if_match is not None and if_match != current_etag:
-        raise HTTPException(
+        raise AppError(
+            "vacancy_etag_mismatch",
             status.HTTP_412_PRECONDITION_FAILED,
-            "Vacancy was modified by someone else. Reload and try again.",
         )
 
     updates = data.model_dump(exclude_unset=True)
@@ -1143,9 +1148,9 @@ async def update_vacancy(
     ):
         # Vacancy is not linked to a position — only an empty list is
         # acceptable (mirrors the form, which disables the multi-selects).
-        raise HTTPException(
+        raise AppError(
+            "spec_grade_require_position",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "specialization_ids / grade_ids require a position_id.",
         )
 
     # HRP-338: an explicit division change must stay inside the tenant.
@@ -1211,7 +1216,7 @@ async def archive_vacancy(
     """Soft-delete a vacancy and deactivate its pending reviewer invites."""
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
     if vacancy.archived_at is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Vacancy is already archived.")
+        raise AppError("vacancy_already_archived", status.HTTP_409_CONFLICT)
 
     vacancy.archived_at = datetime.now(timezone.utc)
     vacancy.archived_by = user_id
@@ -1254,7 +1259,7 @@ async def restore_vacancy(
     """Restore a previously archived vacancy."""
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
     if vacancy.archived_at is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Vacancy is not archived.")
+        raise AppError("vacancy_not_archived", status.HTTP_409_CONFLICT)
 
     vacancy.archived_at = None
     vacancy.archived_by = None
@@ -1280,20 +1285,20 @@ async def delete_vacancy(
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
 
     if vacancy.status != "draft":
-        raise HTTPException(
+        raise AppError(
+            "vacancy_delete_requires_draft",
             status.HTTP_409_CONFLICT,
-            "Only draft vacancies can be deleted permanently.",
         )
     if vacancy.candidates:
-        raise HTTPException(
+        raise AppError(
+            "vacancy_delete_has_candidates",
             status.HTTP_409_CONFLICT,
-            "Vacancy has candidates attached. Archive it instead.",
         )
     has_profile, _ = await _vacancy_extras(db, vacancy)
     if has_profile:
-        raise HTTPException(
+        raise AppError(
+            "vacancy_delete_has_profile",
             status.HTTP_409_CONFLICT,
-            "Vacancy has a generated profile. Archive it instead.",
         )
 
     await db.delete(vacancy)
@@ -1469,7 +1474,7 @@ async def update_stage(
     )
     stage = result.scalar_one_or_none()
     if not stage:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Stage not found")
+        raise AppError("vacancy_stage_not_found", status.HTTP_404_NOT_FOUND)
 
     updates = data.model_dump(exclude_unset=True)
     for field, value in updates.items():
@@ -1495,12 +1500,12 @@ async def delete_stage(
     result = await db.execute(select(VacancyStage).where(VacancyStage.id == stage_id))
     stage = result.scalar_one_or_none()
     if not stage:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Stage not found")
+        raise AppError("vacancy_stage_not_found", status.HTTP_404_NOT_FOUND)
 
     if stage.tenant_id is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot delete system stages")
+        raise AppError("vacancy_stage_system_delete_forbidden", status.HTTP_403_FORBIDDEN)
     if stage.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Stage not found")
+        raise AppError("vacancy_stage_not_found", status.HTTP_404_NOT_FOUND)
 
     await db.delete(stage)
     await db.commit()
@@ -1621,21 +1626,21 @@ async def replace_vacancy_stages_override(
     # ``_first_non_terminal_stage_id`` returns None), or duplicate codes
     # that silently coexist on the same vacancy.
     if not data.stages:
-        raise HTTPException(
+        raise AppError(
+            "vacancy_funnel_empty",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Vacancy funnel must contain at least one stage.",
         )
     active_count = sum(1 for item in data.stages if item.stage_type == "active")
     if active_count == 0:
-        raise HTTPException(
+        raise AppError(
+            "vacancy_funnel_no_active_stage",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Vacancy funnel must contain at least one active (non-terminal) stage.",
         )
     submitted_codes = [item.code for item in data.stages]
     if len(set(submitted_codes)) != len(submitted_codes):
-        raise HTTPException(
+        raise AppError(
+            "vacancy_stage_codes_not_unique",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Stage codes must be unique within a vacancy funnel.",
         )
 
     existing = (
@@ -1671,14 +1676,10 @@ async def replace_vacancy_stages_override(
         ).all()
         if affected:
             total = sum(count for _, count in affected)
-            raise HTTPException(
+            raise AppError(
+                "stage_has_candidates",
                 status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "stage_has_candidates",
-                    "message": (
-                        "Cannot delete stages that still have candidates "
-                        "attached. Move the candidates first."
-                    ),
+                detail_extra={
                     "affected_candidate_count": int(total),
                     "stage_ids": [str(stage_id) for stage_id, _ in affected],
                 },

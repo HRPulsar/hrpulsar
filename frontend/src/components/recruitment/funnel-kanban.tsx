@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import type { FunnelStage, CandidateVacancy } from "@/lib/types";
@@ -39,11 +40,12 @@ function CandidateCard({
   stages: FunnelStage[];
   onStatusChange?: FunnelKanbanProps["onStatusChange"];
 }) {
+  const t = useTranslations("recruitment");
   return (
     <Card size="sm" data-testid="kanban-card">
       <CardContent className="space-y-2">
         <p className="text-sm font-medium">
-          {cv.candidate_name || "Unknown candidate"}
+          {cv.candidate_name || t("funnelUnknownCandidate")}
         </p>
         <div className="flex items-center gap-1.5">
           <span
@@ -60,7 +62,7 @@ function CandidateCard({
           </span>
           {cv.ranking_score != null && (
             <span className="text-xs text-muted-foreground">
-              Score: {cv.ranking_score}
+              {t("funnelScore", { score: cv.ranking_score })}
             </span>
           )}
         </div>
@@ -76,7 +78,7 @@ function CandidateCard({
             data-testid="kanban-stage-select"
           >
             <option value="" disabled>
-              Move to...
+              {t("funnelMoveTo")}
             </option>
             {stages.map((s) => (
               <option key={s.id} value={s.id} disabled={s.id === cv.stage_id}>
@@ -95,6 +97,7 @@ export function FunnelKanban({
   candidates,
   onStatusChange,
 }: FunnelKanbanProps) {
+  const t = useTranslations("recruitment");
   const sortedStages = useMemo(
     () => [...stages].sort((a, b) => a.sort_order - b.sort_order),
     [stages],
@@ -121,7 +124,7 @@ export function FunnelKanban({
         data-testid="recruitment-kanban"
         className="flex items-center justify-center rounded-lg border border-dashed p-8 text-sm text-muted-foreground"
       >
-        No funnel stages configured.
+        {t("funnelNoStages")}
       </div>
     );
   }
@@ -160,7 +163,7 @@ export function FunnelKanban({
               <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-2">
                 {cards.length === 0 && (
                   <p className="py-4 text-center text-xs text-muted-foreground">
-                    No candidates
+                    {t("funnelNoCandidates")}
                   </p>
                 )}
                 {cards.map((cv) => (
@@ -181,7 +184,9 @@ export function FunnelKanban({
           <div className="flex w-[280px] shrink-0 flex-col rounded-xl border bg-muted/30">
             <div className="flex items-center gap-2 border-b px-3 py-2.5">
               <span className="size-2.5 shrink-0 rounded-full bg-muted-foreground/40" />
-              <span className="text-sm font-semibold">Unassigned</span>
+              <span className="text-sm font-semibold">
+                {t("funnelUnassigned")}
+              </span>
               <span className="ml-auto text-xs text-muted-foreground">
                 {unassigned.length}
               </span>

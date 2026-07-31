@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, Star } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import type { AssessmentRecommendation, GradeRecommendationItem } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +30,8 @@ function ProgressBar({ percent, passed }: { percent: number; passed: boolean }) 
 }
 
 function GradeRow({ item }: { item: GradeRecommendationItem }) {
+  const t = useTranslations("assessments");
+
   if (item.excluded) {
     return (
       <div
@@ -36,7 +39,7 @@ function GradeRow({ item }: { item: GradeRecommendationItem }) {
         data-testid={`assessment-recommendation-grade-${item.grade_id}`}
       >
         <span className="font-medium text-foreground">{item.grade_title ?? "—"}</span>
-        <span className="text-xs">no requirements to evaluate</span>
+        <span className="text-xs">{t("recNoRequirements")}</span>
       </div>
     );
   }
@@ -51,13 +54,13 @@ function GradeRow({ item }: { item: GradeRecommendationItem }) {
         <span className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="font-mono text-foreground">{formatPercent(item.percent)}</span>
           {item.passed ? (
-            <span className="text-green-600">✓ confirmed</span>
+            <span className="text-green-600">{t("recConfirmedShort")}</span>
           ) : item.missing_percent != null ? (
             <span className="text-red-600">
-              ✗ short by {formatPercent(item.missing_percent)}
+              {t("recShortBy", { percent: formatPercent(item.missing_percent) })}
             </span>
           ) : (
-            <span className="text-red-600">✗ not confirmed</span>
+            <span className="text-red-600">{t("recNotConfirmedShort")}</span>
           )}
         </span>
       </div>
@@ -69,6 +72,7 @@ function GradeRow({ item }: { item: GradeRecommendationItem }) {
 export function AssessmentRecommendationCard({
   recommendation,
 }: AssessmentRecommendationCardProps) {
+  const t = useTranslations("assessments");
   const items = [...recommendation.grades].sort((a, b) => a.sort_index - b.sort_index);
   const evaluable = items.filter((g) => !g.excluded);
   const recommended = items.find(
@@ -82,7 +86,7 @@ export function AssessmentRecommendationCard({
     return (
       <Card data-testid="assessment-recommendation-card">
         <CardHeader>
-          <CardTitle className="text-base">Grade match</CardTitle>
+          <CardTitle className="text-base">{t("gradeMatch")}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-2">
@@ -91,7 +95,7 @@ export function AssessmentRecommendationCard({
                 {recommended.grade_title ?? "—"}
               </span>
               <span className="text-sm text-muted-foreground">
-                Match{" "}
+                {t("matchLabel")}{" "}
                 <span className="font-mono text-foreground">
                   {formatPercent(recommended.percent)}
                 </span>
@@ -102,8 +106,8 @@ export function AssessmentRecommendationCard({
               data-testid="assessment-recommendation-status"
             >
               {passed
-                ? `Confirmed (threshold ${threshold ?? "—"}%)`
-                : `Not confirmed (threshold ${threshold ?? "—"}%)`}
+                ? t("recConfirmed", { threshold: threshold ?? "—" })
+                : t("recNotConfirmed", { threshold: threshold ?? "—" })}
             </p>
             <ProgressBar percent={recommended.percent} passed={passed} />
           </div>
@@ -115,7 +119,7 @@ export function AssessmentRecommendationCard({
   return (
     <Card data-testid="assessment-recommendation-card">
       <CardHeader>
-        <CardTitle className="text-base">Recommended grade</CardTitle>
+        <CardTitle className="text-base">{t("recommendedGrade")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {recommended && !recommended.excluded ? (
@@ -131,7 +135,7 @@ export function AssessmentRecommendationCard({
                   {recommended.grade_title ?? "—"}
                 </span>
                 <span className="text-sm text-muted-foreground">
-                  Match{" "}
+                  {t("matchLabel")}{" "}
                   <span className="font-mono text-foreground">
                     {formatPercent(recommended.percent)}
                   </span>
@@ -142,12 +146,13 @@ export function AssessmentRecommendationCard({
                 data-testid="assessment-recommendation-status"
               >
                 {passed
-                  ? `Confirmed (threshold ${threshold ?? "—"}%)`
+                  ? t("recConfirmed", { threshold: threshold ?? "—" })
                   : recommended.missing_percent != null
-                    ? `Closest to the threshold ${threshold ?? "—"}% — short by ${formatPercent(
-                        recommended.missing_percent,
-                      )}`
-                    : `Not confirmed (threshold ${threshold ?? "—"}%)`}
+                    ? t("recClosest", {
+                        threshold: threshold ?? "—",
+                        missing: formatPercent(recommended.missing_percent),
+                      })
+                    : t("recNotConfirmed", { threshold: threshold ?? "—" })}
               </p>
             </div>
           </div>
@@ -156,18 +161,17 @@ export function AssessmentRecommendationCard({
             className="text-sm text-muted-foreground"
             data-testid="assessment-recommendation-status"
           >
-            Couldn&apos;t determine a recommended grade: no grade has requirements
-            or evaluable answers.
+            {t("recUndetermined")}
           </p>
         )}
 
         {items.length > 0 && (
           <div className="space-y-3 border-t pt-3">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>All grades in specialization</span>
+              <span>{t("allGradesInSpecialization")}</span>
               {threshold != null && (
                 <Badge variant="outline" className="text-[10px]">
-                  threshold {threshold}%
+                  {t("thresholdBadge", { threshold })}
                 </Badge>
               )}
             </div>

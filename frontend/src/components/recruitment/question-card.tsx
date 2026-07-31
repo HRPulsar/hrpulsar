@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import type { CandidateQuestion, QuestionPriority } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
@@ -14,10 +15,11 @@ const priorityClasses: Record<QuestionPriority, string> = {
     "bg-[color-mix(in_oklch,var(--rec-data-missing)_15%,transparent)] text-[var(--rec-data-missing)]",
 };
 
-const priorityLabels: Record<QuestionPriority, string> = {
-  must: "Must",
-  should: "Should",
-  nice_to_ask: "Nice to ask",
+/** Priority code → key in the `recruitment` i18n namespace. */
+const priorityLabelKeys: Record<QuestionPriority, string> = {
+  must: "questionCardPriorityMust",
+  should: "questionCardPriorityShould",
+  nice_to_ask: "questionCardPriorityNiceToAsk",
 };
 
 interface QuestionCardProps {
@@ -41,6 +43,8 @@ export function QuestionCard({
   onAskedToggle,
   asked = false,
 }: QuestionCardProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const priority = question.priority;
   return (
     <div
@@ -70,7 +74,7 @@ export function QuestionCard({
             variant="secondary"
             className={cn("text-[10px]", priorityClasses[priority])}
           >
-            {priorityLabels[priority]}
+            {t(priorityLabelKeys[priority])}
           </Badge>
           {onAskedToggle && priority === "must" && (
             <input
@@ -78,7 +82,7 @@ export function QuestionCard({
               checked={asked}
               onChange={(e) => onAskedToggle(question, e.target.checked)}
               className="size-3.5 cursor-pointer"
-              aria-label="Mark as asked"
+              aria-label={t("questionCardMarkAsked")}
               data-testid={`question-asked-${question.id}`}
             />
           )}
@@ -106,7 +110,7 @@ export function QuestionCard({
               size="sm"
               onClick={() => onRegenerate(question)}
               data-testid={`question-regenerate-${question.id}`}
-              aria-label="Regenerate"
+              aria-label={t("questionCardRegenerateAria")}
             >
               <RefreshCw className="size-3.5" />
             </Button>
@@ -117,7 +121,7 @@ export function QuestionCard({
               size="sm"
               onClick={() => onEdit(question)}
               data-testid={`question-edit-${question.id}`}
-              aria-label="Edit"
+              aria-label={t("actionEdit")}
             >
               <Pencil className="size-3.5" />
             </Button>
@@ -128,7 +132,7 @@ export function QuestionCard({
               size="sm"
               onClick={() => onDelete(question)}
               data-testid={`question-delete-${question.id}`}
-              aria-label="Delete"
+              aria-label={tc("delete")}
             >
               <Trash2 className="size-3.5" />
             </Button>

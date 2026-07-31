@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Search } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { useTreeExpansion } from "@/hooks/use-tree-expansion";
 import type { Competence, CompetenceGroupTree } from "@/lib/types";
@@ -25,6 +26,9 @@ interface RenderProps {
   toggleNode: (compIds: string[]) => void;
   search: string;
   testIdPrefix: string;
+  /** `renderTree` is a plain function, not a component — it cannot call
+   *  hooks, so the translator travels with the props. */
+  t: (key: string) => string;
 }
 
 function matchesSearch(g: CompetenceGroupTree, query: string): boolean {
@@ -46,6 +50,7 @@ function renderTree(props: RenderProps): React.ReactNode {
     toggleNode,
     search,
     testIdPrefix,
+    t,
   } = props;
   const elements: React.ReactNode[] = [];
   for (const g of groups) {
@@ -81,7 +86,7 @@ function renderTree(props: RenderProps): React.ReactNode {
             type="button"
             onClick={() => toggleExpand(g.id)}
             className="flex size-5 items-center justify-center rounded hover:bg-accent"
-            aria-label={isOpen ? "Collapse" : "Expand"}
+            aria-label={isOpen ? t("collapse") : t("expand")}
             data-testid={`${testIdPrefix}-group-toggle-${g.id}`}
           >
             {isOpen ? (
@@ -146,6 +151,7 @@ export function CompetenceTreePicker({
   onChange,
   testIdPrefix = "competence-tree-picker",
 }: CompetenceTreePickerProps) {
+  const t = useTranslations("competences");
   const [search, setSearch] = useState("");
 
   const allGroupIds = useMemo(() => {
@@ -182,7 +188,7 @@ export function CompetenceTreePicker({
       <div className="relative">
         <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
-          placeholder="Group or competence title"
+          placeholder={t("pickerSearchPlaceholder")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-9"
@@ -203,7 +209,7 @@ export function CompetenceTreePicker({
       <div className="max-h-[50vh] -mx-1 overflow-y-auto rounded-md border">
         {tree.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted-foreground">
-            No published competences
+            {t("pickerNoPublished")}
           </p>
         ) : (
           renderTree({
@@ -215,11 +221,12 @@ export function CompetenceTreePicker({
             toggleNode,
             search,
             testIdPrefix,
+            t,
           })
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        {selectedIds.size} selected
+        {t("pickerSelectedCount", { count: selectedIds.size })}
       </p>
     </div>
   );

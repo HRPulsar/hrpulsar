@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.client_ip import client_ip
+from app.core.errors import AppError
 from app.core.security import decode_token
 from app.database import get_db
 from app.modules.auth import service
@@ -126,6 +127,9 @@ def _require_dev_endpoint() -> None:
     """
     env = (settings.sentry_environment or "").lower()
     if not settings.e2e_mode or env in {"production", "staging"}:
+        # Deliberately a bare HTTPException, not AppError: the response must
+        # stay indistinguishable from a nonexistent route — an error code
+        # would fingerprint the hidden dev surface.
         raise HTTPException(status_code=404, detail="Not found")
 
 
@@ -137,7 +141,9 @@ router = APIRouter(tags=["auth"])
 async def register(
     request: Request, data: RegisterRequest, db: AsyncSession = Depends(get_db)
 ):
-    return await service.register(db, data)
+    return await service.register(
+        db, data, accept_language=request.headers.get("accept-language")
+    )
 
 
 @router.post("/auth/verify-email", response_model=VerifyEmailResponse)
@@ -152,7 +158,9 @@ async def resend_verification(
     data: ResendVerificationRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    await service.resend_verification(db, data.email)
+    await service.resend_verification(
+        db, data.email, accept_language=request.headers.get("accept-language")
+    )
     return {
         "message": "If this email exists and is unverified, a verification link has been sent"
     }
@@ -217,9 +225,9 @@ async def refresh(
         user_id = payload.get("sub")
         token_type = payload.get("type")
         if not user_id or token_type != "refresh":
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
+            raise AppError("invalid_refresh_token", status.HTTP_401_UNAUTHORIZED)
     except JWTError:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
+        raise AppError("invalid_refresh_token", status.HTTP_401_UNAUTHORIZED)
 
     return await service.refresh_tokens(db, uuid.UUID(user_id), payload.get("ver", 0))
 
@@ -276,13 +284,16 @@ async def forgot_password(
     data: ForgotPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    token = await service.request_password_reset(db, data.email)
+    issued = await service.request_password_reset(
+        db, data.email, accept_language=request.headers.get("accept-language")
+    )
     # Always return success to prevent email enumeration
-    if token:
+    if issued:
+        token, locale = issued
         try:
             from app.core.email import send_password_reset_email
 
-            send_password_reset_email(data.email, token)
+            send_password_reset_email(data.email, token, locale=locale)
         except Exception:  # noqa: BLE001 - must not leak email existence
             logger.warning("Password reset email delivery failed", exc_info=True)
     return {"message": "If this email exists, a reset link has been sent"}
@@ -333,7 +344,7 @@ async def dev_get_invitation_token(
         await db.execute(select(Invitation).where(Invitation.id == invitation_id))
     ).scalar_one_or_none()
     if inv is None:
-        raise HTTPException(status_code=404, detail="Invitation not found")
+        raise AppError("invitation_not_found", 404)
     return {"token": inv.token}
 
 
@@ -355,6 +366,9 @@ async def dev_seed_origin_group(
     _require_dev_endpoint()
     title = payload.get("title")
     if not isinstance(title, str) or not title.strip():
+        # Bare HTTPException on purpose: an AppError catalog key for a
+        # dev-only endpoint would fingerprint the hidden surface via the
+        # shipped en/de.json (same rationale as the 404 guard above).
         raise HTTPException(status_code=400, detail="title is required")
     group = CompetenceGroup(
         title=title.strip(),

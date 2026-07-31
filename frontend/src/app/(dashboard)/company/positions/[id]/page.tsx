@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useLocale, useTranslations } from "next-intl";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -48,7 +49,7 @@ import { TreeExpandControls } from "@/components/ui/tree-expand-controls";
 import {
   PositionStatusBadge,
   POSITION_LIFECYCLE_FLOW,
-  POSITION_LIFECYCLE_LABEL,
+  POSITION_LIFECYCLE_LABEL_KEY,
 } from "@/components/positions/PositionStatusBadge";
 import { PositionAIGenerationCard } from "@/components/positions/PositionAIGenerationCard";
 import { PositionEditDialog } from "@/components/positions/PositionEditDialog";
@@ -76,6 +77,7 @@ interface MatrixGroupBucket {
 
 function bucketByGroup(
   competences: PositionMatrixCompetence[],
+  ungroupedLabel: string,
 ): MatrixGroupBucket[] {
   const map = new Map<string, MatrixGroupBucket>();
   for (const c of competences) {
@@ -85,7 +87,7 @@ function bucketByGroup(
     } else {
       map.set(c.group_id, {
         groupId: c.group_id,
-        groupTitle: c.group_title ?? "Ungrouped",
+        groupTitle: c.group_title ?? ungroupedLabel,
         competences: [c],
       });
     }
@@ -102,7 +104,11 @@ function MatrixTree({
   activeSessionsMap: Map<string, ActiveAiSession[]>;
   onOpenActiveSession: (sessionId: string) => void;
 }) {
-  const buckets = useMemo(() => bucketByGroup(competences), [competences]);
+  const t = useTranslations("company");
+  const buckets = useMemo(
+    () => bucketByGroup(competences, t("ungrouped")),
+    [competences, t],
+  );
   const groupIds = useMemo(() => buckets.map((b) => b.groupId), [buckets]);
   const competenceIds = useMemo(
     () => competences.map((c) => c.competence_id),
@@ -148,8 +154,7 @@ function MatrixTree({
               />
               <span className="text-sm font-medium">{bucket.groupTitle}</span>
               <span className="ml-auto text-xs text-muted-foreground">
-                {bucket.competences.length} competence
-                {bucket.competences.length === 1 ? "" : "s"}
+                {t("competenceCount", { count: bucket.competences.length })}
               </span>
             </button>
             {groupOpen ? (
@@ -209,7 +214,7 @@ function MatrixTree({
                             </Badge>
                           ) : (
                             <span className="text-[11px] text-muted-foreground">
-                              No level
+                              {t("noLevel")}
                             </span>
                           )}
                         </span>
@@ -266,6 +271,7 @@ function HeadcountDots({
   assigned: number;
   headcount: number;
 }) {
+  const t = useTranslations("company");
   const cap = 12;
   const total = Math.min(headcount, cap);
   const filled = Math.min(assigned, total);
@@ -273,7 +279,7 @@ function HeadcountDots({
   return (
     <span
       data-testid="position-detail-headcount-dots"
-      aria-label={`${assigned} of ${headcount} assigned`}
+      aria-label={t("headcountDotsAria", { assigned, headcount })}
       className="inline-flex items-center gap-0.5 text-xs leading-none"
     >
       {Array.from({ length: total }).map((_, i) => (
@@ -299,16 +305,23 @@ function formatSalaryRange(
   min: number | null,
   max: number | null,
   currency: string | null,
+  t: (key: string, values?: Record<string, string | number>) => string,
+  locale: string,
 ): string | null {
   if (min == null && max == null) return null;
-  const fmt = (n: number) => n.toLocaleString("en-US");
+  const fmt = (n: number) => n.toLocaleString(locale);
   const cur = currency ?? "RUB";
-  if (min != null && max != null) return `${fmt(min)} – ${fmt(max)} ${cur}`;
-  if (min != null) return `from ${fmt(min)} ${cur}`;
-  return `up to ${fmt(max!)} ${cur}`;
+  if (min != null && max != null) {
+    return `${fmt(min)} – ${fmt(max)} ${cur}`;
+  }
+  if (min != null) return t("salaryFrom", { amount: fmt(min), currency: cur });
+  return t("salaryUpTo", { amount: fmt(max!), currency: cur });
 }
 
 export default function PositionDetailPage() {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
+  const locale = useLocale();
   const { id } = useParams<{ id: string }>();
   const { canManage } = usePermissions();
   const [state, setState] = useState<DetailState>(initialState);
@@ -350,11 +363,13 @@ export default function PositionDetailPage() {
       ]);
       setState({ position, matrix, employees });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load position");
+      setError(
+        err instanceof Error ? err.message : t("toastPositionLoadFailed"),
+      );
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     void load();
@@ -372,9 +387,9 @@ export default function PositionDetailPage() {
     try {
       await api.put(`/positions/${state.position.id}`, patch);
       await load();
-      toast.success("Saved");
+      toast.success(t("toastSaved"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("toastSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -388,10 +403,14 @@ export default function PositionDetailPage() {
         lifecycle_status: next,
       });
       await load();
-      toast.success(`Status changed to ${POSITION_LIFECYCLE_LABEL[next]}`);
+      toast.success(
+        t("toastStatusChanged", {
+          status: t(POSITION_LIFECYCLE_LABEL_KEY[next]),
+        }),
+      );
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to update status",
+        err instanceof Error ? err.message : t("toastStatusUpdateFailed"),
       );
     } finally {
       setSaving(false);
@@ -404,7 +423,7 @@ export default function PositionDetailPage() {
         data-testid="position-detail-loading"
         className="py-10 text-center text-sm text-muted-foreground"
       >
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -418,13 +437,13 @@ export default function PositionDetailPage() {
           render={<Link href="/company/positions" />}
         >
           <ArrowLeft className="mr-1 h-4 w-4" />
-          Back
+          {t("back")}
         </Button>
         <p
           data-testid="position-detail-error"
           className="text-sm text-destructive"
         >
-          {error ?? "Position not found"}
+          {error ?? t("positionNotFound")}
         </p>
       </div>
     );
@@ -451,11 +470,13 @@ export default function PositionDetailPage() {
   const matrixDescribed =
     position.specialization_title && position.grade_title
       ? `${position.specialization_title} / ${position.grade_title}`
-      : "this profile";
+      : t("thisProfile");
   const salaryLabel = formatSalaryRange(
     position.salary_min,
     position.salary_max,
     position.salary_currency,
+    t,
+    locale,
   );
 
   return (
@@ -496,7 +517,7 @@ export default function PositionDetailPage() {
               <Button
                 size="icon-sm"
                 variant="ghost"
-                aria-label="Save title"
+                aria-label={t("saveTitle")}
                 data-testid="position-detail-title-save"
                 disabled={saving || !titleEdit.draft.trim()}
                 onClick={commitTitle}
@@ -506,7 +527,7 @@ export default function PositionDetailPage() {
               <Button
                 size="icon-sm"
                 variant="ghost"
-                aria-label="Cancel title edit"
+                aria-label={t("cancelTitleEdit")}
                 data-testid="position-detail-title-cancel"
                 disabled={saving}
                 onClick={titleEdit.cancel}
@@ -525,7 +546,7 @@ export default function PositionDetailPage() {
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  aria-label="Edit title"
+                  aria-label={t("editTitle")}
                   data-testid="position-detail-title-edit"
                   className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                   onClick={() => titleEdit.start(position.title)}
@@ -549,7 +570,7 @@ export default function PositionDetailPage() {
               render={
                 <button
                   type="button"
-                  aria-label="Change status"
+                  aria-label={t("changeStatus")}
                   className="rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 >
                   <PositionStatusBadge
@@ -567,7 +588,9 @@ export default function PositionDetailPage() {
                   data-testid={`position-detail-status-set-${next}`}
                   onClick={() => void setStatus(next)}
                 >
-                  Set status: {POSITION_LIFECYCLE_LABEL[next]}
+                  {t("setStatusTo", {
+                    status: t(POSITION_LIFECYCLE_LABEL_KEY[next]),
+                  })}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
@@ -587,12 +610,12 @@ export default function PositionDetailPage() {
             disabled={position.lifecycle_status === "closed"}
             title={
               position.lifecycle_status === "closed"
-                ? "Closed positions are read-only — reopen to edit"
-                : "Edit Specialization, Grade, Division, Salary…"
+                ? t("closedReadOnlyHint")
+                : t("editFieldsHint")
             }
           >
             <Pencil className="mr-1 h-4 w-4" />
-            Edit
+            {t("edit")}
           </Button>
         ) : null}
       </div>
@@ -616,10 +639,10 @@ export default function PositionDetailPage() {
           >
             <CheckCircle2 className="h-4 w-4 text-emerald-700 dark:text-emerald-300" />
             <span className="font-medium text-emerald-900 dark:text-emerald-200">
-              Matrix configured
+              {t("matrixConfigured")}
             </span>
             <span className="text-emerald-800 dark:text-emerald-300">
-              · {competenceCount} competence{competenceCount === 1 ? "" : "s"}
+              {t("matrixCompetenceCountSuffix", { count: competenceCount })}
             </span>
             {salaryLabel ? (
               <span className="text-emerald-800 dark:text-emerald-300">
@@ -634,10 +657,10 @@ export default function PositionDetailPage() {
           >
             <p className="flex items-center gap-2 font-medium text-amber-900 dark:text-amber-200">
               <AlertTriangle className="h-4 w-4" />
-              Matrix not configured for {matrixDescribed}
+              {t("matrixNotConfiguredFor", { profile: matrixDescribed })}
             </p>
             <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
-              Without a matrix, assessments and PDPs cannot run on this position.
+              {t("matrixMissingHint")}
             </p>
             {matrixHref ? (
               <Link
@@ -645,7 +668,7 @@ export default function PositionDetailPage() {
                 data-testid="position-detail-matrix-banner-configure"
                 className="mt-2 inline-block text-sm font-medium text-amber-900 underline underline-offset-2 dark:text-amber-200"
               >
-                Configure matrix →
+                {t("configureMatrixLink")}
               </Link>
             ) : null}
           </div>
@@ -654,7 +677,7 @@ export default function PositionDetailPage() {
 
       <Card>
         <CardHeader className="flex-row items-center justify-between gap-4">
-          <CardTitle className="text-base">Overview</CardTitle>
+          <CardTitle className="text-base">{t("overview")}</CardTitle>
           {/* HRP-54: Edit button attached directly to the Overview card so
               the operator doesn't have to scan the page top for the global
               Edit button. Same dialog covers spec/grade/division/salary —
@@ -667,14 +690,14 @@ export default function PositionDetailPage() {
               onClick={() => setEditOpen(true)}
             >
               <Pencil className="mr-1 h-4 w-4" />
-              Edit
+              {t("edit")}
             </Button>
           ) : null}
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
             <div>
-              <dt className="text-muted-foreground">Specialization</dt>
+              <dt className="text-muted-foreground">{t("specialization")}</dt>
               <dd
                 data-testid="position-detail-specialization"
                 className="font-medium"
@@ -698,7 +721,7 @@ export default function PositionDetailPage() {
                     onClick={() => setEditOpen(true)}
                   >
                     <Plus className="mr-1 h-3 w-3" />
-                    Set specialization
+                    {t("setSpecialization")}
                   </Button>
                 ) : (
                   (position.specialization_title ?? "—")
@@ -706,7 +729,7 @@ export default function PositionDetailPage() {
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Grade</dt>
+              <dt className="text-muted-foreground">{t("grade")}</dt>
               <dd data-testid="position-detail-grade" className="font-medium">
                 {position.specialization_id &&
                 position.grade_id &&
@@ -727,7 +750,7 @@ export default function PositionDetailPage() {
                     onClick={() => setEditOpen(true)}
                   >
                     <Plus className="mr-1 h-3 w-3" />
-                    Set grade
+                    {t("setGrade")}
                   </Button>
                 ) : (
                   (position.grade_title ?? "—")
@@ -735,7 +758,7 @@ export default function PositionDetailPage() {
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Division</dt>
+              <dt className="text-muted-foreground">{t("division")}</dt>
               <dd
                 data-testid="position-detail-division"
                 className="font-medium"
@@ -744,7 +767,7 @@ export default function PositionDetailPage() {
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Headcount</dt>
+              <dt className="text-muted-foreground">{t("headcount")}</dt>
               <dd
                 data-testid="position-detail-headcount"
                 className="font-medium"
@@ -754,7 +777,7 @@ export default function PositionDetailPage() {
                     const raw = headcountEdit.draft.trim();
                     const parsed = raw === "" ? null : Number(raw);
                     if (parsed != null && (Number.isNaN(parsed) || parsed < 0)) {
-                      toast.error("Headcount must be ≥ 0");
+                      toast.error(t("errorHeadcountNegative"));
                       return;
                     }
                     void savePatch({ headcount: parsed }).then(headcountEdit.close);
@@ -778,7 +801,7 @@ export default function PositionDetailPage() {
                     <Button
                       size="icon-sm"
                       variant="ghost"
-                      aria-label="Save headcount"
+                      aria-label={t("saveHeadcount")}
                       data-testid="position-detail-headcount-save"
                       disabled={saving}
                       onClick={commitHeadcount}
@@ -788,7 +811,7 @@ export default function PositionDetailPage() {
                     <Button
                       size="icon-sm"
                       variant="ghost"
-                      aria-label="Cancel headcount edit"
+                      aria-label={t("cancelHeadcountEdit")}
                       data-testid="position-detail-headcount-cancel"
                       disabled={saving}
                       onClick={headcountEdit.cancel}
@@ -813,15 +836,14 @@ export default function PositionDetailPage() {
                         className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-200"
                       >
                         <AlertTriangle className="h-3 w-3" />
-                        {position.vacancy_count} vacanc
-                        {position.vacancy_count === 1 ? "y" : "ies"}
+                        {t("vacancyCount", { count: position.vacancy_count })}
                       </span>
                     ) : null}
                     {canManage && position.lifecycle_status !== "closed" ? (
                       <Button
                         size="icon-sm"
                         variant="ghost"
-                        aria-label="Edit headcount"
+                        aria-label={t("editHeadcount")}
                         data-testid="position-detail-headcount-edit"
                         className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                         onClick={() =>
@@ -841,18 +863,18 @@ export default function PositionDetailPage() {
             </div>
             {salaryLabel ? (
               <div>
-                <dt className="text-muted-foreground">Salary</dt>
+                <dt className="text-muted-foreground">{t("salary")}</dt>
                 <dd
                   data-testid="position-detail-salary"
                   className="font-medium"
-                  title="Inherited from the (specialization, grade) profile — edit on the Specialization page."
+                  title={t("salaryInheritedHint")}
                 >
                   {salaryLabel}
                 </dd>
               </div>
             ) : null}
             <div>
-              <dt className="text-muted-foreground">Source</dt>
+              <dt className="text-muted-foreground">{t("colSource")}</dt>
               <dd className="font-medium capitalize">
                 {position.source.replace("_", " ")}
               </dd>
@@ -861,7 +883,7 @@ export default function PositionDetailPage() {
           <div className="mt-4">
             <div className="flex items-center justify-between">
               <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                Description override
+                {t("descriptionOverride")}
               </p>
               {!descEdit.editing &&
               canManage &&
@@ -869,7 +891,7 @@ export default function PositionDetailPage() {
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  aria-label="Edit description"
+                  aria-label={t("editDescription")}
                   data-testid="position-detail-description-edit"
                   onClick={() => descEdit.start(position.description ?? "")}
                 >
@@ -894,7 +916,7 @@ export default function PositionDetailPage() {
                     disabled={saving}
                     onClick={descEdit.cancel}
                   >
-                    Cancel
+                    {tc("cancel")}
                   </Button>
                   <Button
                     size="sm"
@@ -907,7 +929,7 @@ export default function PositionDetailPage() {
                       }).then(descEdit.close);
                     }}
                   >
-                    Save
+                    {t("save")}
                   </Button>
                 </div>
               </div>
@@ -923,7 +945,7 @@ export default function PositionDetailPage() {
                 data-testid="position-detail-description-empty"
                 className="mt-1 text-sm italic text-muted-foreground"
               >
-                No description override.
+                {t("noDescriptionOverride")}
               </p>
             )}
           </div>
@@ -933,10 +955,11 @@ export default function PositionDetailPage() {
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <div>
-            <CardTitle className="text-base">Competences & indicators</CardTitle>
+            <CardTitle className="text-base">
+              {t("competencesAndIndicators")}
+            </CardTitle>
             <CardDescription>
-              Group → competence with the required skill level for the grade.
-              Expand a competence to see its indicators.
+              {t("competencesAndIndicatorsHint")}
             </CardDescription>
           </div>
           {matrixHref ? (
@@ -947,7 +970,7 @@ export default function PositionDetailPage() {
               render={<Link href={matrixHref} />}
             >
               <Settings2 className="mr-1 h-4 w-4" />
-              Configure matrix
+              {t("configureMatrix")}
               <ExternalLink className="ml-1 h-3 w-3" />
             </Button>
           ) : null}
@@ -967,10 +990,7 @@ export default function PositionDetailPage() {
                   data-testid="position-detail-matrix-empty-no-spec"
                   className="space-y-2"
                 >
-                  <p>
-                    No specialization is set on this position, so there is no
-                    matrix to resolve competences against.
-                  </p>
+                  <p>{t("matrixEmptyNoSpec")}</p>
                   {canManage ? (
                     <Button
                       size="sm"
@@ -978,7 +998,7 @@ export default function PositionDetailPage() {
                       onClick={() => setEditOpen(true)}
                     >
                       <Plus className="mr-1 h-4 w-4" />
-                      Pick specialization & grade
+                      {t("pickSpecializationAndGrade")}
                     </Button>
                   ) : null}
                 </div>
@@ -987,12 +1007,7 @@ export default function PositionDetailPage() {
                   data-testid="position-detail-matrix-empty-no-grade"
                   className="space-y-2"
                 >
-                  <p>
-                    The matrix is keyed off (specialization, grade). This
-                    position has a specialization but no grade — pick a grade,
-                    or open the specialization to view the saved matrix
-                    directly.
-                  </p>
+                  <p>{t("matrixEmptyNoGrade")}</p>
                   <div className="flex flex-wrap gap-2">
                     {canManage ? (
                       <Button
@@ -1001,7 +1016,7 @@ export default function PositionDetailPage() {
                         onClick={() => setEditOpen(true)}
                       >
                         <Plus className="mr-1 h-4 w-4" />
-                        Pick grade
+                        {t("pickGrade")}
                       </Button>
                     ) : null}
                     {specHref ? (
@@ -1011,7 +1026,7 @@ export default function PositionDetailPage() {
                         data-testid="position-detail-matrix-empty-spec-link"
                         render={<Link href={specHref} />}
                       >
-                        Open specialization
+                        {t("openSpecialization")}
                         <ExternalLink className="ml-1 h-3 w-3" />
                       </Button>
                     ) : null}
@@ -1022,10 +1037,7 @@ export default function PositionDetailPage() {
                   data-testid="position-detail-matrix-empty-no-links"
                   className="space-y-2"
                 >
-                  <p>
-                    No competences are linked to this (specialization, grade)
-                    pair yet. Open the matrix builder to configure them.
-                  </p>
+                  <p>{t("matrixEmptyNoLinks")}</p>
                   {matrixHref ? (
                     <Button
                       size="sm"
@@ -1033,7 +1045,7 @@ export default function PositionDetailPage() {
                       render={<Link href={matrixHref} />}
                     >
                       <Settings2 className="mr-1 h-4 w-4" />
-                      Configure matrix
+                      {t("configureMatrix")}
                       <ExternalLink className="ml-1 h-3 w-3" />
                     </Button>
                   ) : null}
@@ -1053,10 +1065,8 @@ export default function PositionDetailPage() {
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <div>
-            <CardTitle className="text-base">Employees</CardTitle>
-            <CardDescription>
-              Name, position, division, status, hire date.
-            </CardDescription>
+            <CardTitle className="text-base">{t("employees")}</CardTitle>
+            <CardDescription>{t("employeesColumnsHint")}</CardDescription>
           </div>
           <span className="text-sm text-muted-foreground">
             {headcountLabel}
@@ -1068,7 +1078,7 @@ export default function PositionDetailPage() {
               data-testid="position-detail-employees-empty"
               className="py-3 text-sm text-muted-foreground"
             >
-              No employees assigned to this position.
+              {t("positionNoEmployees")}
             </p>
           ) : (
             /* HRP-175: use the unified EmployeeList wrapper so the position

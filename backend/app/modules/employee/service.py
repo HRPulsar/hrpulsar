@@ -12,6 +12,7 @@ from app.core.access_scope import (
     assert_employee_write_scope,
     assert_not_self_edit_via_employees,
 )
+from app.core.errors import AppError
 from app.core.s3 import get_presigned_url
 
 # Accepted cross-module coupling (review item [35]): this service reads other
@@ -133,7 +134,7 @@ async def _get_employee(
 ) -> Employee:
     emp = await db.get(Employee, employee_id)
     if not emp or emp.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found")
+        raise AppError("employee_not_found", status.HTTP_404_NOT_FOUND)
     return emp
 
 
@@ -230,7 +231,7 @@ async def create_employee(
     # Validate user belongs to tenant
     user = await db.get(User, data.user_id)
     if not user or user.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid user")
+        raise AppError("employee_invalid_user", status.HTTP_400_BAD_REQUEST)
 
     # Check not already an employee
     existing = await db.execute(
@@ -239,14 +240,14 @@ async def create_employee(
         )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(status.HTTP_409_CONFLICT, "User is already an employee")
+        raise AppError("user_already_employee", status.HTTP_409_CONFLICT)
 
     # Resolve position_title from position_id
     fields = data.model_dump()
     if data.position_id:
         pos = await db.get(Position, data.position_id)
         if not pos or pos.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid position_id")
+            raise AppError("invalid_position_id", status.HTTP_400_BAD_REQUEST)
         fields["position_title"] = pos.title
 
     # HRP-246: stamp ``status_changed_at`` at create time so the Status
@@ -437,16 +438,17 @@ async def update_employee(
                 continue
             trimmed = value.strip()
             if not trimmed:
-                raise HTTPException(
+                raise AppError(
+                    "employee_name_field_empty",
                     status.HTTP_400_BAD_REQUEST,
-                    f"{field} must not be empty",
+                    field=field,
                 )
             user_updates[field] = trimmed
     if user_updates:
         if emp.user is None:
             # Employee.user_id is FK NOT NULL; a missing user means broken
             # invariant, not "no name to update". Surface it.
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+            raise AppError("user_not_found", status.HTTP_404_NOT_FOUND)
         before = {"first_name": emp.user.first_name, "last_name": emp.user.last_name}
         for field, value in user_updates.items():
             setattr(emp.user, field, value)
@@ -488,7 +490,7 @@ async def update_employee(
         if updates["position_id"]:
             pos = await db.get(Position, updates["position_id"])
             if not pos or pos.tenant_id != tenant_id:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid position_id")
+                raise AppError("invalid_position_id", status.HTTP_400_BAD_REQUEST)
             updates["position_title"] = pos.title
         else:
             updates["position_title"] = None
@@ -586,15 +588,13 @@ async def delete_employee(
         first = (emp.user.first_name if emp.user else None) or ""
         last = (emp.user.last_name if emp.user else None) or ""
         full_name = f"{first} {last}".strip() or "Employee"
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error_code": "has_connections",
-                "message": (
-                    f"{full_name} has connections with other objects. "
-                    "Action is not possible"
-                ),
-            },
+        raise AppError(
+            "employee_has_connections",
+            status.HTTP_409_CONFLICT,
+            detail_extra={},
+            detail_code_key="error_code",
+            detail_code="has_connections",
+            full_name=full_name,
         )
 
     snapshot = _employee_to_read(emp)
@@ -745,7 +745,9 @@ async def _get_child(
 ) -> Any:
     item = await db.get(model, item_id)
     if not item or item.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found")
+        raise AppError(
+            "employee_child_not_found", status.HTTP_404_NOT_FOUND, label=label
+        )
     return item
 
 
@@ -934,11 +936,11 @@ async def _resolve_employment_refs(
     if division_id is not None:
         division = await db.get(Division, division_id)
         if not division or division.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid division_id")
+            raise AppError("invalid_division_id", status.HTTP_400_BAD_REQUEST)
     if position_id is not None:
         position = await db.get(Position, position_id)
         if not position or position.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid position_id")
+            raise AppError("invalid_position_id", status.HTTP_400_BAD_REQUEST)
     return division, position
 
 
@@ -1316,9 +1318,9 @@ async def update_compensation(
     )
     end = data.end_date if "end_date" in data.model_fields_set else old.end_date
     if end is not None and end < effective:
-        raise HTTPException(
+        raise AppError(
+            "compensation_end_date_before_effective_date",
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "end_date must be on or after effective_date",
         )
     result = await _update_child(
         db, Compensation, tenant_id, item_id, data, "Compensation", current_user

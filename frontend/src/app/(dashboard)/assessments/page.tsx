@@ -1,7 +1,12 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import {
+  assessmentStatusTitle,
+  assessmentTypeTitle,
+} from "@/lib/reference-labels";
 import type {
   Assessment,
   AssessmentGroupDetail,
@@ -51,7 +56,7 @@ import { isPastDeadline, todayLocalISO } from "@/lib/deadline";
 import { formatDate } from "@/lib/date-format";
 import {
   ASSESSMENT_MANUAL_FORBIDDEN_STATUSES,
-  ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP,
+  ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP_KEY,
   ASSESSMENT_STATUS_COLORS as statusColors,
   ASSESSMENT_STATUS_OPTIONS,
   ASSESSMENT_TERMINAL_STATUSES as TERMINAL_STATUSES,
@@ -59,21 +64,13 @@ import {
   assessmentStatusLabel,
 } from "@/lib/assessment-status";
 
-const typeOptions = [
-  { value: "self", label: "Self assessment" },
-  { value: "180", label: "180°" },
-  { value: "360", label: "360°" },
+const TYPE_OPTION_KEYS = [
+  { value: "self", labelKey: "typeSelf" },
+  { value: "180", labelKey: "type180" },
+  { value: "360", labelKey: "type360" },
 ];
 
 const statusOptions = ASSESSMENT_STATUS_OPTIONS;
-// HRP-194 REDO: Base UI's <SelectValue/> shows the raw value (status code)
-// unless the Select root receives a value->label map. Build it once from
-// the same constants the dropdown items use so the trigger renders e.g.
-// "On review" instead of "on_review" once the user picks an option.
-const statusItems = ASSESSMENT_STATUS_OPTIONS.map((value) => ({
-  value,
-  label: assessmentStatusLabel(value),
-}));
 
 const PAGE_SIZE = 20;
 const emptyForm = { title: "", employee_id: "", type_code: "self", ended_at: "" };
@@ -84,6 +81,8 @@ const emptyForm = { title: "", employee_id: "", type_code: "self", ended_at: "" 
 // can fire, and swallow pointer/click events so they don't bubble up to
 // the Select primitive that would treat them as a re-select.
 function ManualForbiddenHint({ testId }: { testId: string }) {
+  const t = useTranslations("assessments");
+  const tooltip = t(ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP_KEY);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -91,7 +90,7 @@ function ManualForbiddenHint({ testId }: { testId: string }) {
           <span
             tabIndex={-1}
             data-testid={testId}
-            aria-label={ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP}
+            aria-label={tooltip}
             className="ml-1 inline-flex cursor-help text-muted-foreground pointer-events-auto"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
@@ -100,20 +99,26 @@ function ManualForbiddenHint({ testId }: { testId: string }) {
           </span>
         }
       />
-      <TooltipContent>{ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP}</TooltipContent>
+      <TooltipContent>{tooltip}</TooltipContent>
     </Tooltip>
   );
 }
 
-function statusSummaryText(summary: Record<string, number>): string {
+function statusSummaryText(
+  t: (key: string, values?: Record<string, string | number>) => string,
+  summary: Record<string, number>,
+): string {
   const total = Object.values(summary).reduce((a, b) => a + b, 0);
   const done = summary["done"] || 0;
-  if (total === 0) return "0 assessments";
-  if (done === total) return `${total} done`;
-  return `${done}/${total} done`;
+  if (total === 0) return t("groupSummaryEmpty");
+  if (done === total) return t("groupSummaryAllDone", { total });
+  return t("groupSummaryPartial", { done, total });
 }
 
 export default function AssessmentsPage() {
+  const t = useTranslations("assessments");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [items, setItems] = useState<GroupedAssessmentListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -147,6 +152,25 @@ export default function AssessmentsPage() {
   const [groupChildren, setGroupChildren] = useState<Record<string, Assessment[]>>({});
 
   const { canManage } = usePermissions();
+
+  const typeOptions = useMemo(
+    () => TYPE_OPTION_KEYS.map(({ value, labelKey }) => ({
+      value,
+      label: t(labelKey),
+    })),
+    [t],
+  );
+  // HRP-194 REDO: Base UI's <SelectValue/> shows the raw value (status code)
+  // unless the Select root receives a value->label map. Build it from the
+  // same constants the dropdown items use so the trigger renders e.g.
+  // "On review" instead of "on_review" once the user picks an option.
+  const statusItems = useMemo(
+    () => ASSESSMENT_STATUS_OPTIONS.map((value) => ({
+      value,
+      label: assessmentStatusLabel(t, value),
+    })),
+    [t],
+  );
 
   const loadData = useCallback(
     async (
@@ -252,7 +276,7 @@ export default function AssessmentsPage() {
 
   async function handleCreateSingle() {
     if (isPastDeadline(form.ended_at)) {
-      toast.error("Deadline cannot be in the past");
+      toast.error(t("errorDeadlineInPast"));
       return;
     }
     setSaving(true);
@@ -261,14 +285,14 @@ export default function AssessmentsPage() {
         ...form,
         ended_at: form.ended_at || null,
       });
-      toast.success("Assessment created");
+      toast.success(t("toastCreated"));
       setCreateOpen(false);
       setForm(emptyForm);
       setCreateMode("select");
       setPage(1);
       await loadData(1, { search: searchQuery, types: filterTypes, statuses: filterStatuses });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create");
+      toast.error(err instanceof Error ? err.message : t("errorCreateFailed"));
     } finally {
       setSaving(false);
     }
@@ -288,7 +312,7 @@ export default function AssessmentsPage() {
       await api.post(`/assessments/${statusTarget.id}/status`, {
         status_code: newStatus,
       });
-      toast.success("Status updated");
+      toast.success(t("toastStatusUpdated"));
       setStatusOpen(false);
       await loadData(page, { search: searchQuery, types: filterTypes, statuses: filterStatuses });
       // Refresh expanded group if the assessment belongs to one
@@ -302,7 +326,7 @@ export default function AssessmentsPage() {
         }));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update status");
+      toast.error(err instanceof Error ? err.message : t("errorStatusUpdateFailed"));
     } finally {
       setSaving(false);
     }
@@ -340,17 +364,27 @@ export default function AssessmentsPage() {
       if (result.skipped > 0) {
         const reasons = result.skipped_reasons ?? {};
         const parts: string[] = [];
-        if (reasons.terminal) parts.push(`${reasons.terminal} already in terminal status`);
+        if (reasons.terminal)
+          parts.push(t("bulkSkipTerminal", { count: reasons.terminal }));
         if (reasons.same_or_lower_status)
-          parts.push(`${reasons.same_or_lower_status} already in ${assessmentStatusLabel(bulkNewStatus).toLowerCase()}`);
+          parts.push(
+            t("bulkSkipSameStatus", {
+              count: reasons.same_or_lower_status,
+              status: assessmentStatusLabel(t, bulkNewStatus).toLowerCase(),
+            }),
+          );
         if (reasons.already_cancelled)
-          parts.push(`${reasons.already_cancelled} already cancelled`);
+          parts.push(t("bulkSkipCancelled", { count: reasons.already_cancelled }));
         if (reasons.missing_criteria_or_scale)
-          parts.push(`${reasons.missing_criteria_or_scale} missing criteria or scale`);
+          parts.push(
+            t("bulkSkipMissingCriteria", {
+              count: reasons.missing_criteria_or_scale,
+            }),
+          );
         if (reasons.deadline_in_past)
-          parts.push(`${reasons.deadline_in_past} deadline in the past`);
+          parts.push(t("bulkSkipDeadlinePast", { count: reasons.deadline_in_past }));
         if (reasons.manual_in_progress_not_allowed)
-          parts.push("manual transition to In progress is not allowed");
+          parts.push(t("bulkSkipManualInProgress"));
         const tail = parts.length > 0 ? ` (${parts.join(", ")})` : "";
         // HRP-83: when no child advanced (e.g. every deadline is in the past)
         // this is a failed launch, not a partial success — surface it as an
@@ -375,19 +409,29 @@ export default function AssessmentsPage() {
             !reasons.missing_criteria_or_scale &&
             !reasons.deadline_in_past;
           if (onlyDeadline) {
-            toast.error("Deadline is in the past");
+            toast.error(t("errorDeadlineIsInPast"));
           } else if (onlyManualInProgress) {
-            toast.error("Manual transition is not allowed");
+            toast.error(t(ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP_KEY));
           } else {
-            toast.error(`No assessments updated${tail}`);
+            toast.error(t("bulkNoneUpdated", { tail }));
           }
         } else {
           toast.success(
-            `Updated ${result.changed} of ${result.total} assessments${tail}`
+            t("bulkUpdated", {
+              changed: result.changed,
+              total: result.total,
+              tail,
+            }),
           );
         }
       } else {
-        toast.success(`Updated ${result.changed} of ${result.total} assessments`);
+        toast.success(
+          t("bulkUpdated", {
+            changed: result.changed,
+            total: result.total,
+            tail: "",
+          }),
+        );
       }
       setBulkStatusOpen(false);
       await loadData(page, { search: searchQuery, types: filterTypes, statuses: filterStatuses });
@@ -402,13 +446,18 @@ export default function AssessmentsPage() {
         }));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update");
+      toast.error(err instanceof Error ? err.message : t("errorUpdateFailed"));
     } finally {
       setSaving(false);
     }
   }
 
-  if (loading) return <div className="py-12 text-center text-muted-foreground">Loading...</div>;
+  if (loading)
+    return (
+      <div className="py-12 text-center text-muted-foreground">
+        {tc("loading")}
+      </div>
+    );
 
   // HRP-193: filtering is now server-side — `items` is already the filtered
   // slice, so the render path uses it directly and pagination math (X-Y of N)
@@ -419,15 +468,15 @@ export default function AssessmentsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight" data-testid="assessments-heading">Assessments</h1>
+          <h1 className="text-2xl font-semibold tracking-tight" data-testid="assessments-heading">{t("title")}</h1>
           <p className="text-sm text-muted-foreground">
-            {total} item{total !== 1 ? "s" : ""}
+            {t("itemsCount", { count: total })}
           </p>
         </div>
         {canManage && (
           <Button data-testid="assessments-btn-create" size="sm" onClick={openCreate}>
             <Plus className="mr-1 h-4 w-4" />
-            Create assessment
+            {t("createAssessment")}
           </Button>
         )}
       </div>
@@ -438,7 +487,7 @@ export default function AssessmentsPage() {
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             data-testid="assessments-input-search"
-            placeholder="Search by title..."
+            placeholder={t("searchPlaceholder")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8"
@@ -449,21 +498,24 @@ export default function AssessmentsPage() {
           options={typeOptions}
           value={filterTypes}
           onChange={setFilterTypes}
-          placeholder="All types"
+          placeholder={t("allTypes")}
           className="w-36"
         />
         <MultiSelectFilter
           data-testid="assessments-multi-statuses"
-          options={statusOptions.map((s) => ({ value: s, label: assessmentStatusLabel(s) }))}
+          options={statusOptions.map((s) => ({
+            value: s,
+            label: assessmentStatusLabel(t, s),
+          }))}
           value={filterStatuses}
           onChange={setFilterStatuses}
-          placeholder="All statuses"
+          placeholder={t("allStatuses")}
           className="w-36"
         />
         {(searchQuery || filterTypes.length > 0 || filterStatuses.length > 0) && (
           <Button data-testid="assessments-btn-clear-filters" variant="ghost" size="sm" onClick={() => { setSearchQuery(""); setFilterTypes([]); setFilterStatuses([]); setPage(1); }}>
             <X className="mr-1 h-3 w-3" />
-            Clear
+            {t("clear")}
           </Button>
         )}
       </div>
@@ -471,8 +523,8 @@ export default function AssessmentsPage() {
       {filtered.length === 0 ? (
         <div data-testid="assessments-empty" className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
           {(searchQuery || filterTypes.length > 0 || filterStatuses.length > 0)
-            ? "No assessments match the filters"
-            : "No assessments yet"}
+            ? t("emptyFiltered")
+            : t("empty")}
         </div>
       ) : (
         <div className="rounded-lg border">
@@ -480,9 +532,9 @@ export default function AssessmentsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-8" />
-                <TableHead>Title</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>{t("fieldTitle")}</TableHead>
+                <TableHead>{t("fieldType")}</TableHead>
+                <TableHead>{t("status")}</TableHead>
                 <TableHead />
                 <TableHead className="w-10" />
               </TableRow>
@@ -496,7 +548,7 @@ export default function AssessmentsPage() {
                       <TableCell />
                       <TableCell className="font-medium">
                         <Link href={`/assessments/${a.id}`} className="hover:underline">
-                          {a.title || "Untitled"}
+                          {a.title || tc("untitled")}
                         </Link>
                         {/* HRP-333: shared employee summary — name, current
                             position and a status chip when not active. */}
@@ -513,16 +565,23 @@ export default function AssessmentsPage() {
                           />
                         )}
                       </TableCell>
-                      <TableCell><Badge variant="secondary">{a.type_title}</Badge></TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">
+                          {assessmentTypeTitle(tRef, a)}
+                        </Badge>
+                      </TableCell>
                       <TableCell>
                         <Badge data-testid={`assessments-row-${a.id}-status`} variant="secondary" className={statusColors[a.status_code] || ""}>
-                          {a.status_title}
+                          {assessmentStatusTitle(tRef, a)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {(() => {
                           const d = assessmentRowDate(a);
-                          return `${d.label}: ${formatDate(d.iso)}`;
+                          return t("rowDateLabeled", {
+                            label: t(d.labelKey),
+                            date: formatDate(d.iso),
+                          });
                         })()}
                       </TableCell>
                       <TableCell>
@@ -533,7 +592,7 @@ export default function AssessmentsPage() {
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" data-testid={`assessments-row-${a.id}-actions-content`}>
                               <DropdownMenuItem onClick={() => openStatus(a)}>
-                                Change status
+                                {t("changeStatus")}
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
@@ -574,22 +633,30 @@ export default function AssessmentsPage() {
                               {g.title}
                             </Link>
                             <Badge variant="outline" className="text-xs">
-                              {g.assessment_count} employee{g.assessment_count !== 1 ? "s" : ""}
+                              {t("employeesCount", { count: g.assessment_count })}
                             </Badge>
                           </div>
                         </TableCell>
                         <TableCell>
-                          {g.type_title && (
-                            <Badge variant="secondary">{g.type_title}</Badge>
+                          {g.type_code && g.type_title && (
+                            <Badge variant="secondary">
+                              {assessmentTypeTitle(tRef, {
+                                type_code: g.type_code,
+                                type_title: g.type_title,
+                              })}
+                            </Badge>
                           )}
                         </TableCell>
                         <TableCell>
                           <span className="text-sm text-muted-foreground">
-                            {statusSummaryText(g.status_summary)}
+                            {statusSummaryText(t, g.status_summary)}
                           </span>
                         </TableCell>
                         <TableCell className="text-muted-foreground">
-                          Created: {formatDate(g.created_at)}
+                          {t("rowDateLabeled", {
+                            label: t("dateCreated"),
+                            date: formatDate(g.created_at),
+                          })}
                         </TableCell>
                         <TableCell>
                           {canManage && (
@@ -599,7 +666,7 @@ export default function AssessmentsPage() {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuItem onClick={() => openBulkStatus(g.id)}>
-                                  Change status (all)
+                                  {t("changeStatusAll")}
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
@@ -612,7 +679,7 @@ export default function AssessmentsPage() {
                             <TableCell />
                             <TableCell className="font-medium pl-10">
                               <Link href={`/assessments/${a.id}`} className="hover:underline">
-                                {a.employee_name || a.title || "Untitled"}
+                                {a.employee_name || a.title || tc("untitled")}
                               </Link>
                               {/* HRP-333: position + status chip under the
                                   employee link (name already rendered). */}
@@ -626,16 +693,23 @@ export default function AssessmentsPage() {
                                 data-testid={`assessments-row-${a.id}-employee`}
                               />
                             </TableCell>
-                            <TableCell><Badge variant="secondary">{a.type_title}</Badge></TableCell>
+                            <TableCell>
+                        <Badge variant="secondary">
+                          {assessmentTypeTitle(tRef, a)}
+                        </Badge>
+                      </TableCell>
                             <TableCell>
                               <Badge data-testid={`assessments-row-${a.id}-status`} variant="secondary" className={statusColors[a.status_code] || ""}>
-                                {a.status_title}
+                                {assessmentStatusTitle(tRef, a)}
                               </Badge>
                             </TableCell>
                             <TableCell className="text-muted-foreground">
                               {(() => {
                                 const d = assessmentRowDate(a);
-                                return `${d.label}: ${formatDate(d.iso)}`;
+                                return t("rowDateLabeled", {
+                                  label: t(d.labelKey),
+                                  date: formatDate(d.iso),
+                                });
                               })()}
                             </TableCell>
                             <TableCell>
@@ -646,7 +720,7 @@ export default function AssessmentsPage() {
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end" data-testid={`assessments-row-${a.id}-actions-content`}>
                                     <DropdownMenuItem onClick={() => openStatus(a)}>
-                                      Change status
+                                      {t("changeStatus")}
                                     </DropdownMenuItem>
                                   </DropdownMenuContent>
                                 </DropdownMenu>
@@ -677,7 +751,7 @@ export default function AssessmentsPage() {
         <DialogContent data-testid={createMode === "select" ? "assessments-modal-mode" : "assessments-modal-create"}>
           {createMode === "select" && (
             <>
-              <DialogHeader><DialogTitle>Create assessment</DialogTitle></DialogHeader>
+              <DialogHeader><DialogTitle>{t("createAssessment")}</DialogTitle></DialogHeader>
               <div className="grid grid-cols-2 gap-3">
                 <button
                   data-testid="assessments-modal-mode-btn-single"
@@ -685,8 +759,8 @@ export default function AssessmentsPage() {
                   onClick={() => setCreateMode("single")}
                 >
                   <User className="h-8 w-8 text-muted-foreground" />
-                  <span className="text-sm font-medium">Single employee</span>
-                  <span className="text-xs text-muted-foreground">Create one assessment</span>
+                  <span className="text-sm font-medium">{t("modeSingle")}</span>
+                  <span className="text-xs text-muted-foreground">{t("modeSingleHint")}</span>
                 </button>
                 <button
                   data-testid="assessments-modal-mode-btn-mass"
@@ -698,8 +772,8 @@ export default function AssessmentsPage() {
                   }}
                 >
                   <Users className="h-8 w-8 text-muted-foreground" />
-                  <span className="text-sm font-medium">Multiple employees</span>
-                  <span className="text-xs text-muted-foreground">Mass assessment</span>
+                  <span className="text-sm font-medium">{t("modeMass")}</span>
+                  <span className="text-xs text-muted-foreground">{t("modeMassHint")}</span>
                 </button>
               </div>
             </>
@@ -707,17 +781,17 @@ export default function AssessmentsPage() {
 
           {createMode === "single" && (
             <>
-              <DialogHeader><DialogTitle>Create assessment</DialogTitle></DialogHeader>
+              <DialogHeader><DialogTitle>{t("createAssessment")}</DialogTitle></DialogHeader>
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label>Title</Label>
+                  <Label>{t("fieldTitle")}</Label>
                   <Input data-testid="assessments-modal-create-input-title" maxLength={100} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
                 </div>
                 <div className="space-y-2">
-                  <Label>Employee</Label>
+                  <Label>{tc("employee")}</Label>
                   <Select value={form.employee_id} onValueChange={(val) => setForm({ ...form, employee_id: val ?? "" })}>
                     <SelectTrigger className="w-full" data-testid="assessments-modal-create-select-employee">
-                      <SelectValue placeholder="Select employee">
+                      <SelectValue placeholder={t("selectEmployee")}>
                         {(() => { const emp = employees.find((e) => e.id === form.employee_id); return emp ? (emp.user_name?.trim() || emp.user_email || emp.position_title) : undefined; })()}
                       </SelectValue>
                     </SelectTrigger>
@@ -729,7 +803,7 @@ export default function AssessmentsPage() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Type</Label>
+                  <Label>{t("fieldType")}</Label>
                   <Select value={form.type_code} onValueChange={(val) => setForm({ ...form, type_code: val ?? "" })}>
                     <SelectTrigger className="w-full" data-testid="assessments-modal-create-select-type">
                       <SelectValue>
@@ -744,7 +818,7 @@ export default function AssessmentsPage() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>End date</Label>
+                  <Label>{t("fieldEndDate")}</Label>
                   {/* HRP-335: shared DatePicker (HRP-152) instead of the
                       native date input. */}
                   <DatePicker
@@ -754,13 +828,13 @@ export default function AssessmentsPage() {
                     onChange={(value) => setForm({ ...form, ended_at: value })}
                   />
                   {isPastDeadline(form.ended_at) && (
-                    <p className="text-xs text-destructive">Deadline cannot be in the past</p>
+                    <p className="text-xs text-destructive">{t("errorDeadlineInPast")}</p>
                   )}
                 </div>
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setCreateMode("select")} disabled={saving}>Back</Button>
-                <Button data-testid="assessments-modal-create-btn-submit" onClick={handleCreateSingle} disabled={saving}>{saving ? "Creating..." : "Create"}</Button>
+                <Button variant="outline" onClick={() => setCreateMode("select")} disabled={saving}>{t("back")}</Button>
+                <Button data-testid="assessments-modal-create-btn-submit" onClick={handleCreateSingle} disabled={saving}>{saving ? t("creating") : t("createShort")}</Button>
               </DialogFooter>
             </>
           )}
@@ -780,9 +854,9 @@ export default function AssessmentsPage() {
       {/* Status dialog (single) */}
       <Dialog open={statusOpen} onOpenChange={setStatusOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Change status</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t("changeStatus")}</DialogTitle></DialogHeader>
           <div className="space-y-2">
-            <Label>New status</Label>
+            <Label>{t("newStatus")}</Label>
             <Select value={newStatus} items={statusItems} onValueChange={setNewStatus}>
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -795,7 +869,7 @@ export default function AssessmentsPage() {
                       disabled={forbidden}
                       data-testid={`assessments-status-option-${s}`}
                     >
-                      {assessmentStatusLabel(s)}
+                      {assessmentStatusLabel(t, s)}
                       {forbidden && (
                         <ManualForbiddenHint testId={`assessments-status-option-${s}-hint`} />
                       )}
@@ -806,8 +880,8 @@ export default function AssessmentsPage() {
             </Select>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setStatusOpen(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={handleStatus} disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
+            <Button variant="outline" onClick={() => setStatusOpen(false)} disabled={saving}>{tc("cancel")}</Button>
+            <Button onClick={handleStatus} disabled={saving}>{saving ? t("saving") : t("save")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -815,9 +889,9 @@ export default function AssessmentsPage() {
       {/* Bulk status dialog (group) */}
       <Dialog open={bulkStatusOpen} onOpenChange={setBulkStatusOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Change status (all in group)</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t("changeStatusAllTitle")}</DialogTitle></DialogHeader>
           <div className="space-y-2">
-            <Label>New status for all assessments</Label>
+            <Label>{t("newStatusAll")}</Label>
             <Select value={bulkNewStatus} items={statusItems} onValueChange={setBulkNewStatus}>
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -830,7 +904,7 @@ export default function AssessmentsPage() {
                       disabled={forbidden}
                       data-testid={`assessments-bulk-status-option-${s}`}
                     >
-                      {assessmentStatusLabel(s)}
+                      {assessmentStatusLabel(t, s)}
                       {forbidden && (
                         <ManualForbiddenHint testId={`assessments-bulk-status-option-${s}-hint`} />
                       )}
@@ -841,8 +915,8 @@ export default function AssessmentsPage() {
             </Select>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setBulkStatusOpen(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={handleBulkStatus} disabled={saving}>{saving ? "Saving..." : "Apply to all"}</Button>
+            <Button variant="outline" onClick={() => setBulkStatusOpen(false)} disabled={saving}>{tc("cancel")}</Button>
+            <Button onClick={handleBulkStatus} disabled={saving}>{saving ? t("saving") : t("applyToAll")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

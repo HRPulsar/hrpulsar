@@ -1,9 +1,10 @@
 import uuid
 
-from fastapi import HTTPException, UploadFile, status
+from fastapi import UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.errors import AppError
 from app.core.s3 import delete_file, get_presigned_url, upload_file
 from app.core.upload_validation import validate_upload
 from app.modules.storage.models import File
@@ -67,7 +68,7 @@ async def upload(
 async def get_file(db: AsyncSession, tenant_id: uuid.UUID, file_id: uuid.UUID) -> dict:
     f = await db.get(File, file_id)
     if not f or f.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found")
+        raise AppError("storage_file_not_found", status.HTTP_404_NOT_FOUND)
 
     url = get_presigned_url(f.path)
 
@@ -86,7 +87,7 @@ async def get_file(db: AsyncSession, tenant_id: uuid.UUID, file_id: uuid.UUID) -
 async def delete(db: AsyncSession, tenant_id: uuid.UUID, file_id: uuid.UUID) -> None:
     f = await db.get(File, file_id)
     if not f or f.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found")
+        raise AppError("storage_file_not_found", status.HTTP_404_NOT_FOUND)
 
     delete_file(f.path)
     await db.delete(f)

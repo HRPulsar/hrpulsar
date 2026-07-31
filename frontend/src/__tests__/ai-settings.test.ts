@@ -18,7 +18,7 @@ const baseSettings: AISettings = {
   temperature: 0.3,
   max_retries: 5,
   company_context: null,
-  effective_model: "claude-sonnet-4-6",
+  effective_model: "claude-sonnet-5",
   effective_provider: "anthropic",
   effective_temperature: 0.3,
   effective_max_retries: 5,
@@ -55,11 +55,11 @@ describe("buildPatchDiff", () => {
     const next = {
       ...baseForm,
       effort_level: "custom" as const,
-      llm_model: "claude-opus-4-7",
+      llm_model: "claude-opus-4-8",
     };
     expect(buildPatchDiff(baseForm, next)).toEqual({
       effort_level: "custom",
-      llm_model: "claude-opus-4-7",
+      llm_model: "claude-opus-4-8",
     });
   });
 
@@ -67,7 +67,7 @@ describe("buildPatchDiff", () => {
     const baseWithModel: AISettingsFormState = {
       ...baseForm,
       effort_level: "custom",
-      llm_model: "claude-opus-4-7",
+      llm_model: "claude-opus-4-8",
     };
     const next = { ...baseWithModel, llm_model: null };
     expect(buildPatchDiff(baseWithModel, next)).toEqual({ llm_model: null });

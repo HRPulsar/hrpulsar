@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
   REPORT_SECTION_CODES,
-  REPORT_SECTION_LABELS,
+  reportSectionLabel,
   type ReportSectionCode,
   type ReportTemplate,
   type ReportTemplateCreate,
@@ -28,6 +29,8 @@ const DEFAULT_SECTIONS: ReportSectionCode[] = [
 ];
 
 export default function ReportTemplatesPage() {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [templates, setTemplates] = useState<ReportTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -71,11 +74,11 @@ export default function ReportTemplatesPage() {
 
   async function handleCreate() {
     if (!draft.name.trim()) {
-      toast.error("Provide a template name");
+      toast.error(t("reportTemplateNameRequired"));
       return;
     }
     if (draft.sections.length === 0) {
-      toast.error("Select at least one section");
+      toast.error(t("reportTemplateSectionRequired"));
       return;
     }
     setCreating(true);
@@ -87,60 +90,60 @@ export default function ReportTemplatesPage() {
         is_active: true,
       };
       await api.post<ReportTemplate>("/recruitment/report-templates", body);
-      toast.success("Template created");
+      toast.success(t("reportTemplateToastCreated"));
       setDraft({ name: "", sections: DEFAULT_SECTIONS, is_default: false });
       void load();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to create template",
+        err instanceof Error ? err.message : t("templateCreateFailed"),
       );
     } finally {
       setCreating(false);
     }
   }
 
-  async function handleToggleActive(t: ReportTemplate) {
-    setSavingId(t.id);
+  async function handleToggleActive(row: ReportTemplate) {
+    setSavingId(row.id);
     try {
-      await api.put<ReportTemplate>(`/recruitment/report-templates/${t.id}`, {
-        is_active: !t.is_active,
+      await api.put<ReportTemplate>(`/recruitment/report-templates/${row.id}`, {
+        is_active: !row.is_active,
       });
       void load();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to update template",
+        err instanceof Error ? err.message : t("templateUpdateFailed"),
       );
     } finally {
       setSavingId(null);
     }
   }
 
-  async function handleSetDefault(t: ReportTemplate) {
-    setSavingId(t.id);
+  async function handleSetDefault(row: ReportTemplate) {
+    setSavingId(row.id);
     try {
-      await api.put<ReportTemplate>(`/recruitment/report-templates/${t.id}`, {
+      await api.put<ReportTemplate>(`/recruitment/report-templates/${row.id}`, {
         is_default: true,
       });
-      toast.success(`"${t.name}" is now the default template`);
+      toast.success(t("reportTemplateToastDefault", { name: row.name }));
       void load();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to update template",
+        err instanceof Error ? err.message : t("templateUpdateFailed"),
       );
     } finally {
       setSavingId(null);
     }
   }
 
-  async function handleDelete(t: ReportTemplate) {
-    if (!confirm(`Delete template "${t.name}"?`)) return;
-    setSavingId(t.id);
+  async function handleDelete(row: ReportTemplate) {
+    if (!confirm(t("reportTemplateDeleteConfirm", { name: row.name }))) return;
+    setSavingId(row.id);
     try {
-      await api.delete(`/recruitment/report-templates/${t.id}`);
+      await api.delete(`/recruitment/report-templates/${row.id}`);
       void load();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to delete template",
+        err instanceof Error ? err.message : t("templateDeleteFailed"),
       );
     } finally {
       setSavingId(null);
@@ -151,40 +154,39 @@ export default function ReportTemplatesPage() {
     <div className="space-y-6" data-testid="recruitment-report-templates-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Settings", href: "/recruitment/settings" },
-          { label: "Report templates" },
+          { label: tc("settings"), href: "/recruitment/settings" },
+          { label: t("reportTemplatesTitle") },
         ]}
       />
 
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">
-          Report templates
+          {t("reportTemplatesTitle")}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          A template defines which sections appear in the XLSX. One of them can
-          be marked &ldquo;default&rdquo; — it will be pre-selected in the wizard.
+          {t("reportTemplatesDescription")}
         </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Create template</CardTitle>
+          <CardTitle>{t("reportTemplateCreateCardTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1">
-            <Label htmlFor="rt-name">Name</Label>
+            <Label htmlFor="rt-name">{t("fieldName")}</Label>
             <Input
               id="rt-name"
               value={draft.name}
               onChange={(e) =>
                 setDraft((prev) => ({ ...prev, name: e.target.value }))
               }
-              placeholder="Standard hiring report"
+              placeholder={t("reportTemplateNamePlaceholder")}
               data-testid="recruitment-report-template-name"
             />
           </div>
           <div className="space-y-2">
-            <Label>Sections</Label>
+            <Label>{t("reportTemplateSectionsLabel")}</Label>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {REPORT_SECTION_CODES.map((code) => {
                 const checked = draft.sections.includes(code);
@@ -198,7 +200,7 @@ export default function ReportTemplatesPage() {
                       onCheckedChange={() => toggleDraftSection(code)}
                       data-testid={`recruitment-report-template-section-${code}`}
                     />
-                    <span>{REPORT_SECTION_LABELS[code]}</span>
+                    <span>{reportSectionLabel(t, code)}</span>
                   </label>
                 );
               })}
@@ -211,7 +213,7 @@ export default function ReportTemplatesPage() {
                 setDraft((prev) => ({ ...prev, is_default: Boolean(v) }))
               }
             />
-            Set as default template
+            {t("reportTemplateSetDefaultCheckbox")}
           </label>
           <div>
             <Button
@@ -224,79 +226,81 @@ export default function ReportTemplatesPage() {
               ) : (
                 <Plus className="size-4" />
               )}
-              Create
+              {t("actionCreate")}
             </Button>
           </div>
         </CardContent>
       </Card>
 
       <div className="space-y-3">
-        <h2 className="text-lg font-semibold">Existing templates</h2>
+        <h2 className="text-lg font-semibold">{t("templatesExistingTitle")}</h2>
         {loading ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            Loading…
+            {t("loading")}
           </div>
         ) : templates.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No templates yet. Create your first one above.
-          </p>
+          <p className="text-sm text-muted-foreground">{t("templatesEmpty")}</p>
         ) : (
           <div className="grid gap-3">
-            {templates.map((t) => (
-              <Card key={t.id}>
+            {templates.map((row) => (
+              <Card key={row.id}>
                 <CardContent className="space-y-3 pt-6">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-base font-semibold">{t.name}</h3>
-                      {t.is_default && (
+                      <h3 className="text-base font-semibold">{row.name}</h3>
+                      {row.is_default && (
                         <Badge variant="default" className="gap-1">
-                          <Star className="size-3" /> default
+                          <Star className="size-3" />{" "}
+                          {t("reportTemplateBadgeDefault")}
                         </Badge>
                       )}
-                      {!t.is_active && (
-                        <Badge variant="secondary">inactive</Badge>
+                      {!row.is_active && (
+                        <Badge variant="secondary">
+                          {t("reportTemplateBadgeInactive")}
+                        </Badge>
                       )}
                     </div>
                     <div className="flex items-center gap-1">
-                      {!t.is_default && (
+                      {!row.is_default && (
                         <Button
                           size="sm"
                           variant="outline"
-                          disabled={savingId === t.id}
-                          onClick={() => handleSetDefault(t)}
+                          disabled={savingId === row.id}
+                          onClick={() => handleSetDefault(row)}
                         >
-                          <Star className="size-4" /> Default
+                          <Star className="size-4" />{" "}
+                          {t("reportTemplateMakeDefault")}
                         </Button>
                       )}
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={savingId === t.id}
-                        onClick={() => handleToggleActive(t)}
+                        disabled={savingId === row.id}
+                        onClick={() => handleToggleActive(row)}
                       >
                         <Save className="size-4" />
-                        {t.is_active ? "Disable" : "Enable"}
+                        {row.is_active ? t("actionDisable") : t("actionEnable")}
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
-                        disabled={savingId === t.id}
-                        onClick={() => handleDelete(t)}
+                        disabled={savingId === row.id}
+                        onClick={() => handleDelete(row)}
                       >
                         <Trash2 className="size-4" />
                       </Button>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1">
-                    {t.sections.length === 0 ? (
+                    {row.sections.length === 0 ? (
                       <span className="text-xs text-muted-foreground">
-                        No sections
+                        {t("reportTemplateNoSections")}
                       </span>
                     ) : (
-                      t.sections.map((s) => (
+                      row.sections.map((s) => (
                         <Badge key={s} variant="secondary" className="text-xs">
-                          {REPORT_SECTION_LABELS[s] || s}
+                          {reportSectionLabel(t, s)}
                         </Badge>
                       ))
                     )}

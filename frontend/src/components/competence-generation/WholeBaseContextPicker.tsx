@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Link2, Plus, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -74,6 +75,7 @@ export function WholeBaseContextPicker({
   onChange,
   hideExistingSubtree = false,
 }: ContextPickerProps) {
+  const t = useTranslations("competences");
   const [data, setData] = useState<ContextOptions | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -95,9 +97,7 @@ export function WholeBaseContextPicker({
         if (!cancelled) setData(res);
       } catch (err) {
         if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load context",
-          );
+          setError(err instanceof Error ? err.message : t("errorLoadContext"));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -107,7 +107,7 @@ export function WholeBaseContextPicker({
     return () => {
       cancelled = true;
     };
-  }, [scope, targetId]);
+  }, [scope, targetId, t]);
 
   useEffect(() => {
     // HRP-114 re-spec: seed `excludes` with the unlinked items once the
@@ -171,7 +171,7 @@ export function WholeBaseContextPicker({
         data-testid="compgen-confirm-context-loading"
         className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground"
       >
-        Loading available context…
+        {t("contextLoading")}
       </div>
     );
   }
@@ -181,7 +181,7 @@ export function WholeBaseContextPicker({
         data-testid="compgen-confirm-context-error"
         className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive"
       >
-        {error || "No context available."}
+        {error || t("contextUnavailable")}
       </div>
     );
   }
@@ -215,14 +215,14 @@ export function WholeBaseContextPicker({
     >
       <div className="flex items-center justify-between">
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Context sent to the model
+          {t("contextSentToModel")}
         </Label>
       </div>
 
       {!scopeHasLinkage && relatedSpecs.length > 0 && (
         <ContextSection
-          title="Related specializations"
-          subtitle="Specializations whose matrix already references competences in this scope."
+          title={t("sectionRelatedSpecializations")}
+          subtitle={t("contextRelatedSpecializationsSubtitle")}
           items={relatedSpecs.map((s) => ({
             key: `related_specialization:${s.id}`,
             label: s.title,
@@ -233,14 +233,14 @@ export function WholeBaseContextPicker({
           onBulk={(include) =>
             setBulk([...allRelatedKeys, "related_specializations"], include)
           }
-          emptyHint="No matrix links found."
+          emptyHint={t("contextRelatedSpecializationsEmpty")}
         />
       )}
 
       {scopeHasLinkage ? (
         <LinkedAwareSection
-          title="Specializations"
-          subtitle="Linked specs are pre-checked. Add others manually to broaden the context."
+          title={t("sectionSpecializations")}
+          subtitle={t("contextSpecializationsSubtitle")}
           categoryKey="specializations"
           items={data.specializations.map((s) => ({
             key: `specialization:${s.id}`,
@@ -250,19 +250,19 @@ export function WholeBaseContextPicker({
             kind: "specialization",
             linkedTooltip:
               scope === "group"
-                ? "Linked via competence(s) in this group"
-                : "Linked to this competence",
+                ? t("contextLinkedViaGroup")
+                : t("contextLinkedToCompetence"),
           }))}
           excludes={excludes}
           onToggle={toggle}
           onBulkSetSelection={(keys, include) =>
             setBulk([...keys, "specializations"], include)
           }
-          emptyHint="No specializations in the dictionary yet."
+          emptyHint={t("contextSpecializationsEmpty")}
         />
       ) : (
         <ContextSection
-          title="Specializations"
+          title={t("sectionSpecializations")}
           items={data.specializations.map((s) => ({
             key: `specialization:${s.id}`,
             label: s.title,
@@ -273,14 +273,14 @@ export function WholeBaseContextPicker({
           onBulk={(include) =>
             setBulk([...allSpecKeys, "specializations"], include)
           }
-          emptyHint="No specializations in the dictionary yet."
+          emptyHint={t("contextSpecializationsEmpty")}
         />
       )}
 
       {scopeHasLinkage ? (
         <LinkedAwareSection
-          title="Divisions"
-          subtitle="Divisions reachable via the linked specs' positions. Tick others to add."
+          title={t("sectionDivisions")}
+          subtitle={t("contextDivisionsSubtitle")}
           categoryKey="divisions"
           items={data.divisions.map((d) => ({
             key: `division:${d.id}`,
@@ -288,18 +288,18 @@ export function WholeBaseContextPicker({
             label: d.name,
             isLinked: d.is_linked === true,
             kind: "division",
-            linkedTooltip: "Linked via competences and positions",
+            linkedTooltip: t("contextLinkedViaCompetencesPositions"),
           }))}
           excludes={excludes}
           onToggle={toggle}
           onBulkSetSelection={(keys, include) =>
             setBulk([...keys, "divisions"], include)
           }
-          emptyHint="No divisions configured for this tenant."
+          emptyHint={t("contextDivisionsEmpty")}
         />
       ) : (
         <ContextSection
-          title="Divisions"
+          title={t("sectionDivisions")}
           items={data.divisions.map((d) => ({
             key: `division:${d.id}`,
             label: d.name,
@@ -310,7 +310,7 @@ export function WholeBaseContextPicker({
           onBulk={(include) =>
             setBulk([...allDivisionKeys, "divisions"], include)
           }
-          emptyHint="No divisions configured for this tenant."
+          emptyHint={t("contextDivisionsEmpty")}
         />
       )}
 
@@ -322,7 +322,7 @@ export function WholeBaseContextPicker({
 
       {scope === "whole_base" && !hideExistingSubtree && (
         <SourceTreeSection
-          title="Existing library tree"
+          title={t("sectionExistingLibraryTree")}
           tree={data.source_tree}
           categoryKey="source_tree"
           excludes={excludes}
@@ -330,17 +330,15 @@ export function WholeBaseContextPicker({
           onBulkGroups={(include) =>
             setBulk([...treeGroupKeys, "source_tree"], include)
           }
-          emptyHint="Library is empty — no existing groups or competences to share."
-          droppedHint={(count) =>
-            `Tree dropped — model starts from scratch (${count} groups hidden).`
-          }
+          emptyHint={t("contextSourceTreeEmpty")}
+          droppedHint={(count) => t("contextSourceTreeDropped", { count })}
         />
       )}
 
       {scope === "group" && ancestors.length > 0 && (
         <ContextSection
-          title="Ancestor groups"
-          subtitle="Parent groups above the target group (root → leaf)."
+          title={t("sectionAncestorGroups")}
+          subtitle={t("contextAncestorsSubtitle")}
           items={ancestors.map((a) => ({
             key: `ancestor:${a.id}`,
             label: a.title,
@@ -351,13 +349,13 @@ export function WholeBaseContextPicker({
           onBulk={(include) =>
             setBulk([...ancestorKeys, "ancestors"], include)
           }
-          emptyHint="Target is at the root."
+          emptyHint={t("contextAncestorsEmpty")}
         />
       )}
 
       {scope === "group" && descendants.length > 0 && !hideExistingSubtree && (
         <SourceTreeSection
-          title="Descendant subgroups"
+          title={t("sectionDescendantSubgroups")}
           tree={descendants}
           categoryKey="descendants"
           excludes={excludes}
@@ -365,17 +363,15 @@ export function WholeBaseContextPicker({
           onBulkGroups={(include) =>
             setBulk([...descendantKeys, "descendants"], include)
           }
-          emptyHint="No subgroups below the target."
-          droppedHint={(count) =>
-            `Subtree dropped (${count} groups hidden).`
-          }
+          emptyHint={t("contextDescendantsEmpty")}
+          droppedHint={(count) => t("contextDescendantsDropped", { count })}
         />
       )}
 
       {scope === "competence_indicators" && siblings.length > 0 && (
         <ContextSection
-          title="Sibling competences"
-          subtitle="Other competences in the same group as the target."
+          title={t("sectionSiblingCompetences")}
+          subtitle={t("contextSiblingsSubtitle")}
           items={siblings.map((s) => ({
             key: `competence:${s.id}`,
             label: s.title,
@@ -386,7 +382,7 @@ export function WholeBaseContextPicker({
           onBulk={(include) =>
             setBulk([...siblingKeys, "sibling_competences"], include)
           }
-          emptyHint="No siblings — competence stands alone in its group."
+          emptyHint={t("contextSiblingsEmpty")}
         />
       )}
 
@@ -426,6 +422,7 @@ function ContextSection({
   onBulk,
   emptyHint,
 }: ContextSectionProps) {
+  const t = useTranslations("competences");
   const categoryDropped = excludes.has(categoryKey);
   const active = items.filter((i) => !categoryDropped && !excludes.has(i.key));
   const removed = items.filter(
@@ -453,7 +450,9 @@ function ContextSection({
             className="h-6 px-2 text-xs"
             onClick={() => onBulk(categoryDropped || active.length === 0)}
           >
-            {categoryDropped || active.length === 0 ? "Add all back" : "Remove all"}
+            {categoryDropped || active.length === 0
+              ? t("contextAddAllBack")
+              : t("contextRemoveAll")}
           </Button>
         )}
       </div>
@@ -461,7 +460,7 @@ function ContextSection({
         <span className="text-xs text-muted-foreground">{emptyHint}</span>
       ) : categoryDropped ? (
         <span className="text-xs text-muted-foreground">
-          Category dropped. Use “Add all back” to include items again.
+          {t("contextCategoryDropped")}
         </span>
       ) : (
         <>
@@ -471,7 +470,7 @@ function ContextSection({
                 data-testid={`compgen-context-empty-${categoryKey}`}
                 className="text-xs text-muted-foreground"
               >
-                All items removed.
+                {t("contextAllItemsRemoved")}
               </span>
             )}
             {active.map((item) => (
@@ -481,7 +480,7 @@ function ContextSection({
                 data-testid={`compgen-context-chip-${item.key}`}
                 onClick={() => onToggle(item.key)}
                 className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-foreground hover:bg-destructive/10 hover:border-destructive/40"
-                title="Remove from context"
+                title={t("contextRemoveFromContext")}
               >
                 {item.label}
                 <X className="h-3 w-3" />
@@ -490,7 +489,9 @@ function ContextSection({
           </div>
           {removed.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 pt-1">
-              <span className="text-xs text-muted-foreground">Add back:</span>
+              <span className="text-xs text-muted-foreground">
+                {t("contextAddBack")}
+              </span>
               {removed.map((item) => (
                 <button
                   key={item.key}
@@ -520,14 +521,15 @@ function CompanyDescriptionSection({
   excluded: boolean;
   onToggle: () => void;
 }) {
+  const t = useTranslations("competences");
   if (!description) {
     return (
       <div className="space-y-1.5">
         <Label className="text-xs font-medium text-foreground">
-          Company description
+          {t("sectionCompanyDescription")}
         </Label>
         <span className="text-xs text-muted-foreground">
-          No description set on the tenant profile.
+          {t("contextNoCompanyDescription")}
         </span>
       </div>
     );
@@ -538,7 +540,7 @@ function CompanyDescriptionSection({
       className="space-y-1.5"
     >
       <Label className="text-xs font-medium text-foreground">
-        Company description
+        {t("sectionCompanyDescription")}
       </Label>
       {excluded ? (
         <button
@@ -548,7 +550,7 @@ function CompanyDescriptionSection({
           className="inline-flex items-center gap-1 rounded-md border border-dashed bg-background px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <Plus className="h-3 w-3" />
-          Add company description
+          {t("contextAddCompanyDescription")}
         </button>
       ) : (
         <button
@@ -556,7 +558,7 @@ function CompanyDescriptionSection({
           data-testid="compgen-context-chip-company"
           onClick={onToggle}
           className="group flex w-full items-start gap-2 rounded-md border bg-background px-2 py-1.5 text-left text-xs text-foreground hover:bg-destructive/10 hover:border-destructive/40"
-          title="Remove from context"
+          title={t("contextRemoveFromContext")}
         >
           <span className="flex-1 leading-snug">{description}</span>
           <X className="mt-0.5 h-3 w-3 shrink-0" />
@@ -587,6 +589,7 @@ function SourceTreeSection({
   emptyHint,
   droppedHint,
 }: SourceTreeSectionProps) {
+  const t = useTranslations("competences");
   const treeDropped = excludes.has(categoryKey);
   const totalNodes = useMemo(() => flattenTreeGroupIds(tree).length, [tree]);
   // HRP-114: descendants/ancestors trees use different key prefixes; the
@@ -610,7 +613,7 @@ function SourceTreeSection({
             className="h-6 px-2 text-xs"
             onClick={() => onBulkGroups(treeDropped)}
           >
-            {treeDropped ? "Add all back" : "Remove all"}
+            {treeDropped ? t("contextAddAllBack") : t("contextRemoveAll")}
           </Button>
         )}
       </div>
@@ -651,6 +654,7 @@ function TreeNode({
   onToggle: (key: string) => void;
   groupPrefix: string;
 }) {
+  const t = useTranslations("competences");
   const [expanded, setExpanded] = useState(depth === 0);
   const groupKey = `${groupPrefix}:${node.id}`;
   const dropped = excludes.has(groupKey);
@@ -668,7 +672,7 @@ function TreeNode({
             type="button"
             className="text-muted-foreground hover:text-foreground"
             onClick={() => setExpanded((v) => !v)}
-            aria-label={expanded ? "Collapse" : "Expand"}
+            aria-label={expanded ? t("collapse") : t("expand")}
           >
             {expanded ? (
               <ChevronDown className="h-3 w-3" />
@@ -693,7 +697,7 @@ function TreeNode({
             data-testid={`compgen-context-chip-${groupKey}`}
             onClick={() => onToggle(groupKey)}
             className="inline-flex items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-xs text-foreground hover:bg-destructive/10 hover:border-destructive/40"
-            title="Remove group from context"
+            title={t("contextRemoveGroupFromContext")}
           >
             {node.title}
             <X className="h-3 w-3" />
@@ -762,13 +766,14 @@ function ExistingIndicatorsToggle({
   excluded: boolean;
   onToggle: () => void;
 }) {
+  const t = useTranslations("competences");
   return (
     <div
       data-testid="compgen-context-section-existing_indicators"
       className="space-y-1.5"
     >
       <Label className="text-xs font-medium text-foreground">
-        Existing indicators of this competence
+        {t("contextExistingIndicatorsLabel")}
       </Label>
       {excluded ? (
         <button
@@ -778,7 +783,7 @@ function ExistingIndicatorsToggle({
           className="inline-flex items-center gap-1 rounded-md border border-dashed bg-background px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <Plus className="h-3 w-3" />
-          Include existing indicators
+          {t("contextIncludeExistingIndicators")}
         </button>
       ) : (
         <button
@@ -786,9 +791,9 @@ function ExistingIndicatorsToggle({
           data-testid="compgen-context-chip-existing_indicators"
           onClick={onToggle}
           className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-foreground hover:bg-destructive/10 hover:border-destructive/40"
-          title="Remove existing indicators from context"
+          title={t("contextRemoveExistingIndicators")}
         >
-          Included — generation avoids duplicates
+          {t("contextExistingIndicatorsIncluded")}
           <X className="h-3 w-3" />
         </button>
       )}
@@ -832,6 +837,7 @@ function LinkedAwareSection({
   onBulkSetSelection,
   emptyHint,
 }: LinkedAwareSectionProps) {
+  const t = useTranslations("competences");
   const [search, setSearch] = useState("");
   const [showLinkedOnly, setShowLinkedOnly] = useState(false);
 
@@ -864,8 +870,16 @@ function LinkedAwareSection({
               data-testid={`compgen-context-${categoryKey}-counter`}
               className="font-normal text-muted-foreground"
             >
-              ({selectedCount} of {items.length} selected
-              {linkedCount > 0 ? `, ${linkedCount} linked` : ""})
+              {linkedCount > 0
+                ? t("contextCounterLinked", {
+                    selected: selectedCount,
+                    total: items.length,
+                    linked: linkedCount,
+                  })
+                : t("contextCounter", {
+                    selected: selectedCount,
+                    total: items.length,
+                  })}
             </span>
           </Label>
           <span className="text-[11px] text-muted-foreground">{subtitle}</span>
@@ -882,8 +896,8 @@ function LinkedAwareSection({
             }
           >
             {selectedCount === items.length && !categoryDropped
-              ? "Clear all"
-              : "Select all"}
+              ? t("contextClearAll")
+              : t("selectAll")}
           </Button>
         )}
       </div>
@@ -897,7 +911,11 @@ function LinkedAwareSection({
                 data-testid={`compgen-context-${categoryKey}-search`}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder={`Search ${title.toLowerCase()}…`}
+                placeholder={
+                  categoryKey === "specializations"
+                    ? t("contextSearchSpecializations")
+                    : t("contextSearchDivisions")
+                }
                 className="h-7 flex-1 text-xs"
               />
               <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -907,14 +925,14 @@ function LinkedAwareSection({
                   onCheckedChange={(v) => setShowLinkedOnly(Boolean(v))}
                   className="h-3.5 w-3.5"
                 />
-                Show linked only
+                {t("contextShowLinkedOnly")}
               </label>
             </div>
           )}
           <div className="flex flex-wrap gap-1.5">
             {filtered.length === 0 && (
               <span className="text-xs text-muted-foreground">
-                No items match the current filter.
+                {t("contextNoMatch")}
               </span>
             )}
             <TooltipProvider>

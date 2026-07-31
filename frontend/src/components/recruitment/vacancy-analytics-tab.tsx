@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { VacancyAnalytics } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,15 +11,28 @@ interface Props {
   vacancyId: string;
 }
 
-function formatDuration(seconds: number | null): string {
+/** The unit suffixes live in the `recruitment` namespace — the caller hands
+ *  in its own translator so this stays a pure helper. */
+function formatDuration(
+  t: (key: string, values?: Record<string, string | number>) => string,
+  seconds: number | null,
+): string {
   if (seconds == null) return "—";
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)} h`;
-  return `${(seconds / 86400).toFixed(1)} d`;
+  if (seconds < 60)
+    return t("analyticsTabDurationSeconds", { value: Math.round(seconds) });
+  if (seconds < 3600)
+    return t("analyticsTabDurationMinutes", {
+      value: Math.round(seconds / 60),
+    });
+  if (seconds < 86400)
+    return t("analyticsTabDurationHours", {
+      value: (seconds / 3600).toFixed(1),
+    });
+  return t("analyticsTabDurationDays", { value: (seconds / 86400).toFixed(1) });
 }
 
 export function VacancyAnalyticsTab({ vacancyId }: Props) {
+  const t = useTranslations("recruitment");
   const [data, setData] = useState<VacancyAnalytics | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
@@ -54,7 +68,11 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
     );
   }
   if (!data) {
-    return <p className="text-sm text-muted-foreground">Failed to load analytics.</p>;
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t("analyticsTabLoadFailed")}
+      </p>
+    );
   }
 
   return (
@@ -62,25 +80,33 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
       <div className="grid gap-4 sm:grid-cols-4">
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Total candidates</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">
+              {t("analyticsTabTotalCandidates")}
+            </CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">{data.total_candidates}</CardContent>
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Hired</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">
+              {t("analyticsTabHired")}
+            </CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold text-green-700">{data.win_loss.hired}</CardContent>
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Rejected</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">
+              {t("analyticsTabRejected")}
+            </CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold text-red-700">{data.win_loss.rejected}</CardContent>
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">In progress</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">
+              {t("analyticsTabInProgress")}
+            </CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">{data.win_loss.in_progress}</CardContent>
         </Card>
@@ -88,16 +114,20 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Funnel</CardTitle>
+          <CardTitle>{t("analyticsTabFunnel")}</CardTitle>
         </CardHeader>
         <CardContent>
           {data.funnel.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No stages configured.</p>
+            <p className="text-sm text-muted-foreground">
+              {t("analyticsTabNoStages")}
+            </p>
           ) : (
             <ul className="space-y-2">
               {data.funnel.map((stage) => (
                 <li key={String(stage.stage_id)} className="flex items-center gap-3">
-                  <span className="w-32 truncate text-sm">{stage.stage_name ?? "Unnamed"}</span>
+                  <span className="w-32 truncate text-sm">
+                    {stage.stage_name ?? t("analyticsTabUnnamedStage")}
+                  </span>
                   <div className="relative h-6 flex-1 overflow-hidden rounded bg-muted">
                     <div
                       className="h-full bg-primary/70"
@@ -108,7 +138,7 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
                     </span>
                   </div>
                   <span className="w-20 text-right text-xs text-muted-foreground">
-                    {formatDuration(stage.median_seconds_in_stage)}
+                    {formatDuration(t, stage.median_seconds_in_stage)}
                   </span>
                 </li>
               ))}

@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type {
   Position,
@@ -44,7 +45,7 @@ import { CompanyTabs } from "@/components/company/company-tabs";
 import {
   PositionStatusBadge,
   POSITION_LIFECYCLE_FLOW,
-  POSITION_LIFECYCLE_LABEL,
+  POSITION_LIFECYCLE_LABEL_KEY,
 } from "@/components/positions/PositionStatusBadge";
 import { PositionOccupancyDrilldown } from "@/components/positions/PositionOccupancyDrilldown";
 import { PositionEditDialog } from "@/components/positions/PositionEditDialog";
@@ -81,6 +82,8 @@ type LifecycleFilter = PositionLifecycleStatus | "all";
 type GroupBy = "none" | "division" | "specialization";
 
 export default function PositionsPage() {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -139,7 +142,7 @@ export default function PositionsPage() {
       const data = await api.get<PositionList>(`/positions?${params}`);
       setPositions(data.items);
     } catch {
-      toast.error("Failed to load positions");
+      toast.error(t("toastPositionsLoadFailed"));
     } finally {
       setLoading(false);
     }
@@ -169,9 +172,7 @@ export default function PositionsPage() {
 
   function openEdit(pos: Position) {
     if (pos.lifecycle_status === "closed") {
-      toast.error(
-        "Position is closed; reopen it via the status menu before editing.",
-      );
+      toast.error(t("errorPositionClosed"));
       return;
     }
     setEditingPosition(pos);
@@ -186,10 +187,14 @@ export default function PositionsPage() {
       await api.post(`/positions/${pos.id}/status`, {
         lifecycle_status: next,
       });
-      toast.success(`Status changed to ${POSITION_LIFECYCLE_LABEL[next]}`);
+      toast.success(
+        t("toastStatusChanged", { status: t(POSITION_LIFECYCLE_LABEL_KEY[next]) }),
+      );
       await loadPositions();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update status");
+      toast.error(
+        err instanceof Error ? err.message : t("toastStatusUpdateFailed"),
+      );
     }
   }
 
@@ -204,11 +209,11 @@ export default function PositionsPage() {
     setSaving(true);
     try {
       await api.delete(`/positions/${deletingPos.id}`);
-      toast.success("Position deleted");
+      toast.success(t("toastPositionDeleted"));
       setDeleteOpen(false);
       await loadPositions();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(err instanceof Error ? err.message : t("toastDeleteFailed"));
     } finally {
       setSaving(false);
     }
@@ -216,17 +221,17 @@ export default function PositionsPage() {
 
   const aiGenerateConfirm = useCostConfirmationDialog(
     "ai.generate_positions",
-    "AI position generation",
+    t("aiPositionGeneration"),
   );
 
   async function runAIGenerate() {
     setGenerating(true);
     try {
       await api.postAndWait("/ai/generate-positions");
-      toast.success("AI positions generated");
+      toast.success(t("toastAiPositionsGenerated"));
       await loadPositions();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "AI generation failed");
+      toast.error(err instanceof Error ? err.message : t("toastAiGenerateFailed"));
     } finally {
       setGenerating(false);
     }
@@ -250,11 +255,13 @@ export default function PositionsPage() {
     try {
       await api.post("/positions/bulk-action", { ids: draftIds, action });
       toast.success(
-        action === "approve" ? "All drafts approved" : "All drafts rejected",
+        action === "approve"
+          ? t("toastDraftsApproved")
+          : t("toastDraftsRejected"),
       );
       await loadPositions();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Action failed");
+      toast.error(err instanceof Error ? err.message : t("toastActionFailed"));
     } finally {
       setActionLoading(false);
     }
@@ -267,10 +274,10 @@ export default function PositionsPage() {
         ids: [id],
         action: "approve",
       });
-      toast.success("Position approved");
+      toast.success(t("toastPositionApproved"));
       await loadPositions();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to approve");
+      toast.error(err instanceof Error ? err.message : t("toastApproveFailed"));
     } finally {
       setActionLoading(false);
     }
@@ -283,10 +290,10 @@ export default function PositionsPage() {
         ids: [id],
         action: "reject",
       });
-      toast.success("Position rejected");
+      toast.success(t("toastPositionRejected"));
       await loadPositions();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to reject");
+      toast.error(err instanceof Error ? err.message : t("toastRejectFailed"));
     } finally {
       setActionLoading(false);
     }
@@ -306,8 +313,8 @@ export default function PositionsPage() {
     for (const pos of approved) {
       const label =
         groupBy === "division"
-          ? pos.division_name ?? "Unassigned"
-          : pos.specialization_title ?? "No specialization";
+          ? pos.division_name ?? t("unassigned")
+          : pos.specialization_title ?? t("noSpecialization");
       const bucket = buckets.get(label) ?? { label, rows: [] };
       bucket.rows.push(pos);
       buckets.set(label, bucket);
@@ -327,7 +334,7 @@ export default function PositionsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -336,10 +343,8 @@ export default function PositionsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Company</h1>
-          <p className="text-sm text-muted-foreground">
-            Organization structure
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
       </div>
 
@@ -349,7 +354,7 @@ export default function PositionsPage() {
       <div className="flex items-center justify-between">
         <Input
           data-testid="positions-search"
-          placeholder="Search positions..."
+          placeholder={t("searchPositionsPlaceholder")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-xs"
@@ -364,7 +369,7 @@ export default function PositionsPage() {
               disabled={generating}
             >
               <Sparkles className="mr-1 h-4 w-4" />
-              {generating ? "Generating..." : "AI Generate"}
+              {generating ? t("generating") : t("aiGenerate")}
             </Button>
             <Button
               data-testid="positions-btn-create"
@@ -372,7 +377,7 @@ export default function PositionsPage() {
               onClick={openCreate}
             >
               <Plus className="mr-1 h-4 w-4" />
-              Add Position
+              {t("addPosition")}
             </Button>
           </div>
         )}
@@ -387,7 +392,7 @@ export default function PositionsPage() {
         >
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
             <CardTitle className="text-base">
-              {drafts.length} AI suggestion{drafts.length > 1 ? "s" : ""} awaiting review
+              {t("draftsAwaitingReview", { count: drafts.length })}
             </CardTitle>
             <div className="flex gap-2">
               <Button
@@ -398,7 +403,7 @@ export default function PositionsPage() {
                 disabled={actionLoading}
               >
                 <Check className="mr-1 h-4 w-4" />
-                Approve All
+                {t("approveAll")}
               </Button>
               <Button
                 data-testid="positions-btn-reject-all"
@@ -408,7 +413,7 @@ export default function PositionsPage() {
                 disabled={actionLoading}
               >
                 <X className="mr-1 h-4 w-4" />
-                Reject All
+                {t("rejectAllDrafts")}
               </Button>
             </div>
           </CardHeader>
@@ -417,11 +422,11 @@ export default function PositionsPage() {
               <Table data-testid="positions-draft-table">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Title</TableHead>
-                    <TableHead>Specialization</TableHead>
-                    <TableHead>Grade</TableHead>
-                    <TableHead>Division</TableHead>
-                    <TableHead>Filled / Plan</TableHead>
+                    <TableHead>{t("colPositionTitle")}</TableHead>
+                    <TableHead>{t("specialization")}</TableHead>
+                    <TableHead>{t("grade")}</TableHead>
+                    <TableHead>{t("division")}</TableHead>
+                    <TableHead>{t("colFilledPlan")}</TableHead>
                     <TableHead className="w-32" />
                   </TableRow>
                 </TableHeader>
@@ -448,8 +453,8 @@ export default function PositionsPage() {
                             variant="ghost"
                             size="icon-xs"
                             onClick={() => handleApprove(pos.id)}
-                            title="Approve"
-                            aria-label="Approve"
+                            title={t("approve")}
+                            aria-label={t("approve")}
                             disabled={actionLoading}
                           >
                             <Check className="h-4 w-4 text-green-600" />
@@ -459,8 +464,8 @@ export default function PositionsPage() {
                             variant="ghost"
                             size="icon-xs"
                             onClick={() => handleReject(pos.id)}
-                            title="Reject"
-                            aria-label="Reject"
+                            title={t("reject")}
+                            aria-label={t("reject")}
                             disabled={actionLoading}
                           >
                             <X className="h-4 w-4 text-red-600" />
@@ -469,8 +474,8 @@ export default function PositionsPage() {
                             variant="ghost"
                             size="icon-xs"
                             onClick={() => openEdit(pos)}
-                            title="Edit before approving"
-                            aria-label="Edit before approving"
+                            title={t("editBeforeApproving")}
+                            aria-label={t("editBeforeApproving")}
                           >
                             <Pencil className="h-4 w-4" />
                           </Button>
@@ -501,15 +506,15 @@ export default function PositionsPage() {
           >
             <SelectValue>
               {lifecycleFilter === "all"
-                ? "All statuses"
-                : POSITION_LIFECYCLE_LABEL[lifecycleFilter]}
+                ? t("allStatuses")
+                : t(POSITION_LIFECYCLE_LABEL_KEY[lifecycleFilter])}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            {LIFECYCLE_OPTIONS.map((s) => (
-              <SelectItem key={s} value={s}>
-                {POSITION_LIFECYCLE_LABEL[s]}
+            <SelectItem value="all">{t("allStatuses")}</SelectItem>
+            {LIFECYCLE_OPTIONS.map((status) => (
+              <SelectItem key={status} value={status}>
+                {t(POSITION_LIFECYCLE_LABEL_KEY[status])}
               </SelectItem>
             ))}
           </SelectContent>
@@ -522,7 +527,7 @@ export default function PositionsPage() {
           onClick={() => setHasVacancies((v) => !v)}
         >
           <AlertTriangle className="mr-1 h-4 w-4" />
-          Has vacancies
+          {t("hasVacancies")}
         </Button>
 
         <Button
@@ -532,7 +537,7 @@ export default function PositionsPage() {
           onClick={() => setMatrixUnconfigured((v) => !v)}
         >
           <AlertTriangle className="mr-1 h-4 w-4" />
-          Matrix not configured
+          {t("matrixNotConfigured")}
         </Button>
 
         {filtersActive ? (
@@ -543,12 +548,12 @@ export default function PositionsPage() {
             onClick={clearFilters}
           >
             <X className="mr-1 h-4 w-4" />
-            Clear
+            {t("clear")}
           </Button>
         ) : null}
 
         <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-          <span>Group by:</span>
+          <span>{t("groupBy")}</span>
           {(["none", "division", "specialization"] as GroupBy[]).map((g) => (
             <Button
               key={g}
@@ -558,10 +563,10 @@ export default function PositionsPage() {
               onClick={() => setGroupBy(g)}
             >
               {g === "none"
-                ? "None"
+                ? t("none")
                 : g === "division"
-                  ? "Division"
-                  : "Specialization"}
+                  ? t("division")
+                  : t("specialization")}
             </Button>
           ))}
         </div>
@@ -571,14 +576,14 @@ export default function PositionsPage() {
       <Table data-testid="positions-table">
         <TableHeader>
           <TableRow>
-            <TableHead>Title</TableHead>
-            <TableHead>Specialization</TableHead>
-            <TableHead>Grade</TableHead>
-            <TableHead>Division</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Filled / Plan</TableHead>
-            <TableHead>Matrix</TableHead>
-            <TableHead>Source</TableHead>
+            <TableHead>{t("colPositionTitle")}</TableHead>
+            <TableHead>{t("specialization")}</TableHead>
+            <TableHead>{t("grade")}</TableHead>
+            <TableHead>{t("division")}</TableHead>
+            <TableHead>{t("status")}</TableHead>
+            <TableHead>{t("colFilledPlan")}</TableHead>
+            <TableHead>{t("colMatrix")}</TableHead>
+            <TableHead>{t("colSource")}</TableHead>
             <TableHead className="w-12" />
           </TableRow>
         </TableHeader>
@@ -666,7 +671,7 @@ export default function PositionsPage() {
                         onClick={() => openEdit(pos)}
                       >
                         <Plus className="mr-1 h-3 w-3" />
-                        Set specialization
+                        {t("setSpecialization")}
                       </Button>
                     ) : (
                       "—"
@@ -694,7 +699,7 @@ export default function PositionsPage() {
                         onClick={() => openEdit(pos)}
                       >
                         <Plus className="mr-1 h-3 w-3" />
-                        Set grade
+                        {t("setGrade")}
                       </Button>
                     ) : (
                       "—"
@@ -726,14 +731,14 @@ export default function PositionsPage() {
                       pos.matrix_configured ? (
                         <span
                           className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"
-                          title="Matrix configured"
+                          title={t("matrixConfigured")}
                         >
                           <CheckCircle2 className="h-4 w-4" />
                         </span>
                       ) : (
                         <span
                           className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
-                          title="Matrix not configured for this profile"
+                          title={t("matrixNotConfiguredProfile")}
                         >
                           <AlertTriangle className="h-4 w-4" />
                         </span>
@@ -744,7 +749,7 @@ export default function PositionsPage() {
                   </TableCell>
               <TableCell>
                 <Badge variant="outline">
-                  {pos.source === "ai_approved" ? "AI" : "Manual"}
+                  {pos.source === "ai_approved" ? t("sourceAi") : t("sourceManual")}
                 </Badge>
               </TableCell>
               <TableCell>
@@ -763,7 +768,7 @@ export default function PositionsPage() {
                         data-testid={`positions-row-${pos.id}-btn-edit`}
                       >
                         <Pencil className="mr-2 h-4 w-4" />
-                        Edit
+                        {t("edit")}
                       </DropdownMenuItem>
                       {POSITION_LIFECYCLE_FLOW[pos.lifecycle_status].map(
                         (next) => (
@@ -772,7 +777,9 @@ export default function PositionsPage() {
                             onClick={() => handleSetStatus(pos, next)}
                             data-testid={`positions-row-${pos.id}-btn-status-${next}`}
                           >
-                            Set status: {POSITION_LIFECYCLE_LABEL[next]}
+                            {t("setStatusTo", {
+                              status: t(POSITION_LIFECYCLE_LABEL_KEY[next]),
+                            })}
                           </DropdownMenuItem>
                         ),
                       )}
@@ -782,7 +789,7 @@ export default function PositionsPage() {
                           onClick={() => openDelete(pos)}
                         >
                           <Trash2 className="mr-2 h-4 w-4" />
-                          Delete
+                          {tc("delete")}
                         </DropdownMenuItem>
                       )}
                     </DropdownMenuContent>
@@ -801,8 +808,8 @@ export default function PositionsPage() {
                 className="py-8 text-center text-muted-foreground"
               >
                 {filtersActive
-                  ? "No positions match the current filters."
-                  : "No positions yet. Add one manually or use AI Generate."}
+                  ? t("positionsNoMatches")
+                  : t("positionsEmpty")}
               </TableCell>
             </TableRow>
           )}
@@ -822,8 +829,10 @@ export default function PositionsPage() {
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title="Delete position"
-        description={`Are you sure you want to delete "${deletingPos?.title}"? This action cannot be undone.`}
+        title={t("deletePosition")}
+        description={t("deletePositionConfirm", {
+          title: deletingPos?.title ?? "",
+        })}
         onConfirm={confirmDelete}
         loading={saving}
       />

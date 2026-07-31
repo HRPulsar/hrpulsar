@@ -1,10 +1,11 @@
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.company.models import SpecializationDivision
 from app.modules.grade_system.models import GradeCompetenceLink, GradeSpecialization
 from app.modules.grade_system.schemas import (
@@ -104,7 +105,7 @@ async def list_grades_for_specialization(
         .order_by(DictionaryItem.sort_index, DictionaryItem.title)
     )
     items = (await db.execute(items_q)).scalars().all()
-    return [{"id": d.id, "title": d.title} for d in items]
+    return [{"id": d.id, "title": d.title, "i18n_key": d.i18n_key} for d in items]
 
 
 async def list_by_division(
@@ -145,20 +146,14 @@ async def create_chain(
         )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Grade-specialization chain already exists",
-        )
+        raise AppError("grade_chain_already_exists", status.HTTP_409_CONFLICT)
 
     if (
         data.salary_min is not None
         and data.salary_max is not None
         and data.salary_min > data.salary_max
     ):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "salary_min must be less than or equal to salary_max",
-        )
+        raise AppError("salary_min_greater_than_max", status.HTTP_400_BAD_REQUEST)
 
     gs = GradeSpecialization(
         tenant_id=tenant_id,
@@ -203,16 +198,13 @@ async def update_chain(
 ) -> dict:
     gs = await db.get(GradeSpecialization, chain_id)
     if not gs or gs.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chain not found")
+        raise AppError("grade_chain_not_found", status.HTTP_404_NOT_FOUND)
 
     updates = data.model_dump(exclude_unset=True)
     new_min = updates.get("salary_min", gs.salary_min)
     new_max = updates.get("salary_max", gs.salary_max)
     if new_min is not None and new_max is not None and new_min > new_max:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "salary_min must be less than or equal to salary_max",
-        )
+        raise AppError("salary_min_greater_than_max", status.HTTP_400_BAD_REQUEST)
 
     for field, value in updates.items():
         setattr(gs, field, value)
@@ -231,7 +223,7 @@ async def delete_chain(
 ) -> None:
     gs = await db.get(GradeSpecialization, chain_id)
     if not gs or gs.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chain not found")
+        raise AppError("grade_chain_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(gs)
     await db.commit()
 
@@ -244,7 +236,7 @@ async def add_competence_link(
 ) -> dict:
     gs = await db.get(GradeSpecialization, chain_id)
     if not gs or gs.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chain not found")
+        raise AppError("grade_chain_not_found", status.HTTP_404_NOT_FOUND)
 
     link = GradeCompetenceLink(
         grade_specialization_id=chain_id,
@@ -268,11 +260,11 @@ async def remove_competence_link(
 ) -> None:
     link = await db.get(GradeCompetenceLink, link_id)
     if not link:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Link not found")
+        raise AppError("grade_competence_link_not_found", status.HTTP_404_NOT_FOUND)
 
     gs = await db.get(GradeSpecialization, link.grade_specialization_id)
     if not gs or gs.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Link not found")
+        raise AppError("grade_competence_link_not_found", status.HTTP_404_NOT_FOUND)
 
     await db.delete(link)
     await db.commit()

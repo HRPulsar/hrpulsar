@@ -21,6 +21,8 @@ class SpecializationGradeRead(BaseModel):
     id: uuid.UUID  # GradeSpecialization.id (Spec×Grade pair)
     grade_id: uuid.UUID
     grade_title: str
+    # HRP-479: origin grades localize via reference.dictionary.grade.*.
+    grade_i18n_key: str | None = None
     description: str | None = None
     requirements: str | None = None
     salary_min: int | None = None

@@ -90,9 +90,7 @@ async def db():
             await conn.run_sync(Base.metadata.create_all)
             # HRP-305: mirror prod DELETE guards on tenants/users so tests
             # exercise the same row-level barrier as production.
-            await conn.execute(
-                text(
-                    """
+            await conn.execute(text("""
                     CREATE OR REPLACE FUNCTION prevent_non_demo_tenant_delete()
                     RETURNS TRIGGER AS $$
                     BEGIN
@@ -104,12 +102,8 @@ async def db():
                         RETURN OLD;
                     END;
                     $$ LANGUAGE plpgsql;
-                    """
-                )
-            )
-            await conn.execute(
-                text(
-                    """
+                    """))
+            await conn.execute(text("""
                     CREATE OR REPLACE FUNCTION prevent_non_demo_user_delete()
                     RETURNS TRIGGER AS $$
                     DECLARE
@@ -135,9 +129,7 @@ async def db():
                         RETURN OLD;
                     END;
                     $$ LANGUAGE plpgsql;
-                    """
-                )
-            )
+                    """))
             await conn.execute(
                 text(
                     "CREATE TRIGGER prevent_non_demo_tenant_delete_trg "
@@ -538,7 +530,13 @@ async def notification_templates(db: AsyncSession):
     for code, subject in rows:
         existing = (
             await db.execute(
-                select(NotificationTemplate).where(NotificationTemplate.code == code)
+                select(NotificationTemplate).where(
+                    NotificationTemplate.code == code,
+                    # Templates are per-locale rows (i18n F4); without the
+                    # filter a de row added by any test breaks this probe
+                    # with MultipleResultsFound for the rest of the session.
+                    NotificationTemplate.locale == "en",
+                )
             )
         ).scalar_one_or_none()
         if existing is None:

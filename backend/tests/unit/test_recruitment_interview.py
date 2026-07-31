@@ -108,7 +108,7 @@ class TestInterviewService:
                 ),
             )
         assert exc.value.status_code == 409
-        assert "Consent" in str(exc.value.detail)
+        assert "consent" in str(exc.value.detail).lower()
 
     async def test_complete_upload_requires_consent(
         self, db: AsyncSession, tenant, user

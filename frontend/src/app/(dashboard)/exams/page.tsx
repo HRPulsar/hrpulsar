@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { MassExam } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
@@ -34,7 +35,6 @@ import { isPastDeadline, todayLocalISO } from "@/lib/deadline";
 import { formatDate } from "@/lib/date-format";
 import {
   STATUS_CHIP_COLOR,
-  STATUS_LABELS,
   STATUS_TRANSITIONS,
   isTerminalStatus,
   statusLabel,
@@ -70,6 +70,8 @@ export default function ExamsPage() {
 }
 
 function ManagerExamsView() {
+  const t = useTranslations("exams");
+  const tc = useTranslations("common");
   const [exams, setExams] = useState<MassExam[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -103,11 +105,11 @@ function ManagerExamsView() {
 
   async function handleCreate() {
     if (!titleTrimmed) {
-      toast.error("Title is required");
+      toast.error(t("errorTitleRequired"));
       return;
     }
     if (isPastDeadline(form.ended_at)) {
-      toast.error("Deadline cannot be in the past");
+      toast.error(t("errorDeadlineInPast"));
       return;
     }
     setSaving(true);
@@ -117,12 +119,12 @@ function ManagerExamsView() {
         description: form.description || null,
         ended_at: form.ended_at || null,
       });
-      toast.success("Exam created");
+      toast.success(t("toastExamCreated"));
       setCreateOpen(false);
       setForm(emptyForm);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create");
+      toast.error(err instanceof Error ? err.message : t("errorCreateFailed"));
     } finally {
       setSaving(false);
     }
@@ -139,17 +141,19 @@ function ManagerExamsView() {
     setSaving(true);
     try {
       await api.post(`/mass-exams/${statusTarget.id}/status`, { status_code: newStatus });
-      toast.success("Status updated");
+      toast.success(t("toastStatusUpdated"));
       setStatusOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update status");
+      toast.error(
+        err instanceof Error ? err.message : t("errorStatusUpdateFailed"),
+      );
     } finally {
       setSaving(false);
     }
   }
 
-  if (loading) return <div className="py-12 text-center text-muted-foreground">Loading...</div>;
+  if (loading) return <div className="py-12 text-center text-muted-foreground">{tc("loading")}</div>;
 
   const allowedNextStatuses = statusTarget
     ? STATUS_TRANSITIONS[statusTarget.status] ?? []
@@ -164,15 +168,15 @@ function ManagerExamsView() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight" data-testid="exams-heading">Exams</h1>
+          <h1 className="text-2xl font-semibold tracking-tight" data-testid="exams-heading">{t("title")}</h1>
           {/* HRP-290: counter respects active filters (Assessments parity). */}
           <p className="text-sm text-muted-foreground" data-testid="exams-count">
-            {filtered.length} exam{filtered.length !== 1 ? "s" : ""}
+            {t("examsCount", { count: filtered.length })}
           </p>
         </div>
         <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="exams-btn-create">
           <Plus className="mr-1 h-4 w-4" />
-          Create exam
+          {t("createExam")}
         </Button>
       </div>
 
@@ -182,7 +186,7 @@ function ManagerExamsView() {
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             data-testid="exams-input-search"
-            placeholder="Search by title..."
+            placeholder={t("searchPlaceholder")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8"
@@ -190,10 +194,13 @@ function ManagerExamsView() {
         </div>
         <MultiSelectFilter
           data-testid="exams-multi-statuses"
-          options={FILTERABLE_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] ?? s }))}
+          options={FILTERABLE_STATUSES.map((s) => ({
+            value: s,
+            label: statusLabel(t, s),
+          }))}
           value={filterStatuses}
           onChange={setFilterStatuses}
-          placeholder="All statuses"
+          placeholder={t("allStatuses")}
           className="w-40"
         />
         {filtersActive && (
@@ -204,22 +211,22 @@ function ManagerExamsView() {
             onClick={() => { setSearchQuery(""); setFilterStatuses([]); }}
           >
             <X className="mr-1 h-3 w-3" />
-            Clear
+            {t("clear")}
           </Button>
         )}
       </div>
 
       {exams.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="exams-empty">No exams yet</div>
+        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="exams-empty">{t("empty")}</div>
       ) : filtered.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="exams-empty-filtered">No exams match the filters</div>
+        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="exams-empty-filtered">{t("emptyFiltered")}</div>
       ) : (
         <div className="rounded-lg border">
           <Table data-testid="exams-table">
             <TableHeader>
               <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>{t("colTitle")}</TableHead>
+                <TableHead>{t("colStatus")}</TableHead>
                 {/* HRP-233: no header — the per-row label changes with status. */}
                 <TableHead />
                 <TableHead className="w-10" />
@@ -235,11 +242,16 @@ function ManagerExamsView() {
                     </TableCell>
                     <TableCell>
                       <Badge variant="secondary" className={STATUS_CHIP_COLOR[e.status] || ""} data-testid={`exams-row-${e.id}-status`}>
-                        {statusLabel(e.status)}
+                        {statusLabel(t, e.status)}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground" data-testid={`exams-row-${e.id}-timestamp`}>
-                      {ts ? `${ts.label}: ${formatDate(ts.iso)}` : "—"}
+                      {ts
+                        ? t("rowDateLabeled", {
+                            label: t(ts.labelKey),
+                            date: formatDate(ts.iso),
+                          })
+                        : "—"}
                     </TableCell>
                     <TableCell>
                       {!isTerminalStatus(e.status) && (
@@ -248,7 +260,7 @@ function ManagerExamsView() {
                             <MoreHorizontal className="h-4 w-4" />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => openStatus(e)}>Change status</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => openStatus(e)}>{t("changeStatus")}</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       )}
@@ -264,11 +276,11 @@ function ManagerExamsView() {
       {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent data-testid="exams-modal-create">
-          <DialogHeader><DialogTitle>Create exam</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t("createExam")}</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>
-                Title <span className="text-destructive">*</span>
+                {t("fieldTitle")} <span className="text-destructive">*</span>
               </Label>
               {/* HRP-230 redo: no red highlight on the pristine field — the
                   asterisk plus the disabled Create button carry the
@@ -281,11 +293,11 @@ function ManagerExamsView() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Description</Label>
+              <Label>{t("fieldDescription")}</Label>
               <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} data-testid="exams-modal-create-input-description" maxLength={250} />
             </div>
             <div className="space-y-2">
-              <Label>Deadline</Label>
+              <Label>{t("fieldDeadline")}</Label>
               {/* HRP-335: shared DatePicker (HRP-152) instead of the
                   native date input. */}
               <DatePicker
@@ -295,18 +307,18 @@ function ManagerExamsView() {
                 data-testid="exams-modal-create-input-end-date"
               />
               {isPastDeadline(form.ended_at) && (
-                <p className="text-xs text-destructive">Deadline cannot be in the past</p>
+                <p className="text-xs text-destructive">{t("errorDeadlineInPast")}</p>
               )}
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button
               onClick={handleCreate}
               disabled={saving || !canCreate}
               data-testid="exams-modal-create-btn-submit"
             >
-              {saving ? "Creating..." : "Create"}
+              {saving ? t("creating") : t("create")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -315,29 +327,29 @@ function ManagerExamsView() {
       {/* Status dialog */}
       <Dialog open={statusOpen} onOpenChange={setStatusOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Change status</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t("changeStatus")}</DialogTitle></DialogHeader>
           <div className="space-y-2">
-            <Label>New status</Label>
+            <Label>{t("newStatus")}</Label>
             <Select value={newStatus} onValueChange={setNewStatus}>
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select a status" />
+                <SelectValue placeholder={t("selectStatus")} />
               </SelectTrigger>
               <SelectContent>
                 {allowedNextStatuses.length === 0 ? (
                   <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                    No further transitions available
+                    {t("noTransitions")}
                   </div>
                 ) : (
                   allowedNextStatuses.map((s) => (
-                    <SelectItem key={s} value={s}>{STATUS_LABELS[s] ?? s}</SelectItem>
+                    <SelectItem key={s} value={s}>{statusLabel(t, s)}</SelectItem>
                   ))
                 )}
               </SelectContent>
             </Select>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setStatusOpen(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={handleStatus} disabled={saving || !newStatus}>{saving ? "Saving..." : "Save"}</Button>
+            <Button variant="outline" onClick={() => setStatusOpen(false)} disabled={saving}>{tc("cancel")}</Button>
+            <Button onClick={handleStatus} disabled={saving || !newStatus}>{saving ? t("saving") : t("save")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -346,6 +358,8 @@ function ManagerExamsView() {
 }
 
 function EmployeeExamsView() {
+  const t = useTranslations("exams");
+  const tc = useTranslations("common");
   const [exams, setExams] = useState<EmployeeExamRow[]>([]);
   const [loading, setLoading] = useState(true);
   // HRP-328: take/review side sheets. The icon of the row whose sheet is
@@ -358,46 +372,46 @@ function EmployeeExamsView() {
   // newer list (load() is also fired from sheet callbacks).
   const loadSeq = useRef(0);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const seq = ++loadSeq.current;
     try {
       const rows = await api.get<EmployeeExamRow[]>("/exams");
       if (seq === loadSeq.current) setExams(rows);
     } catch {
-      if (seq === loadSeq.current) toast.error("Failed to load exams");
+      if (seq === loadSeq.current) toast.error(t("errorLoadExams"));
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
-  };
+  }, [t]);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   if (loading) {
-    return <div className="py-12 text-center text-muted-foreground">Loading...</div>;
+    return <div className="py-12 text-center text-muted-foreground">{tc("loading")}</div>;
   }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight" data-testid="exams-heading">Exams</h1>
+        <h1 className="text-2xl font-semibold tracking-tight" data-testid="exams-heading">{t("title")}</h1>
         <p className="text-sm text-muted-foreground">
-          {exams.length} exam{exams.length !== 1 ? "s" : ""}
+          {t("examsCount", { count: exams.length })}
         </p>
       </div>
 
       {exams.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="exams-empty">No exams yet</div>
+        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="exams-empty">{t("empty")}</div>
       ) : (
         <div className="rounded-lg border">
           <Table data-testid="exams-table">
             <TableHeader>
               <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Score</TableHead>
-                <TableHead>Assigned</TableHead>
+                <TableHead>{t("colTitle")}</TableHead>
+                <TableHead>{t("colStatus")}</TableHead>
+                <TableHead>{t("colScore")}</TableHead>
+                <TableHead>{t("colAssigned")}</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
@@ -408,11 +422,11 @@ function EmployeeExamsView() {
                 return (
                   <TableRow key={e.id} data-testid={`exams-row-${e.id}`}>
                     <TableCell className="font-medium">
-                      {e.mass_exam_title ?? "Untitled"}
+                      {e.mass_exam_title ?? tc("untitled")}
                     </TableCell>
                     <TableCell>
                       <Badge variant="secondary" className={STATUS_CHIP_COLOR[e.status] || ""}>
-                        {statusLabel(e.status)}
+                        {statusLabel(t, e.status)}
                       </Badge>
                     </TableCell>
                     <TableCell data-testid={`exams-row-${e.id}-score`}>
@@ -427,7 +441,7 @@ function EmployeeExamsView() {
                           variant="ghost"
                           size="icon-xs"
                           className={takeActive ? "bg-accent text-accent-foreground" : ""}
-                          title="Take this exam"
+                          title={t("takeExam")}
                           onClick={() => {
                             setTakeExamId(e.id);
                             setTakeOpen(true);
@@ -445,7 +459,7 @@ function EmployeeExamsView() {
                           variant="ghost"
                           size="icon-xs"
                           className={reviewActive ? "bg-accent text-accent-foreground" : ""}
-                          title="View submitted results"
+                          title={t("viewResults")}
                           onClick={() => {
                             setReviewExamId(e.id);
                             setReviewOpen(true);

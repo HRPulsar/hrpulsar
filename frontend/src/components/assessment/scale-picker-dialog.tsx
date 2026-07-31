@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { MoreHorizontal, Plus, Sparkles } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
@@ -9,6 +10,10 @@ import type {
   AnswerScaleDeleteResult,
   AnswerScaleDetail,
 } from "@/lib/types";
+import {
+  answerScaleDescription,
+  scaleOptionLabel,
+} from "@/lib/reference-labels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -51,6 +56,9 @@ export function ScalePickerDialog({
   canManage = false,
   testIdPrefix = "scale-picker",
 }: ScalePickerDialogProps) {
+  const t = useTranslations("assessments");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [scales, setScales] = useState<AnswerScaleDetail[]>([]);
   const [pick, setPick] = useState<string>("");
   const [saving, setSaving] = useState(false);
@@ -69,8 +77,8 @@ export function ScalePickerDialog({
     api
       .get<AnswerScaleDetail[]>("/answer-scales")
       .then(setScales)
-      .catch(() => toast.error("Failed to load scales"));
-  }, [open, currentScaleId]);
+      .catch(() => toast.error(t("errorLoadScales")));
+  }, [open, currentScaleId, t]);
 
   async function reloadScales(): Promise<AnswerScaleDetail[]> {
     const fresh = await api.get<AnswerScaleDetail[]>("/answer-scales");
@@ -99,15 +107,17 @@ export function ScalePickerDialog({
       );
       toast.success(
         result.reassigned_drafts > 0
-          ? `Scale deleted. Drafts reassigned: ${result.reassigned_drafts}`
-          : "Scale deleted",
+          ? t("toastScaleDeletedReassigned", {
+              count: result.reassigned_drafts,
+            })
+          : t("toastScaleDeleted"),
       );
       const fresh = await reloadScales();
       if (pick === deleteId) {
         setPick(fresh.find((s) => s.is_default)?.id ?? "");
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete scale");
+      toast.error(err instanceof Error ? err.message : t("errorScaleDeleteFailed"));
     } finally {
       setDeleteOpen(false);
       setDeleteId(null);
@@ -132,11 +142,11 @@ export function ScalePickerDialog({
           className="sm:max-w-xl"
         >
           <DialogHeader>
-            <DialogTitle>Rating scale</DialogTitle>
+            <DialogTitle>{t("ratingScale")}</DialogTitle>
           </DialogHeader>
           {scales.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              No scales available
+              {t("noScalesAvailable")}
             </p>
           ) : (
             <RadioGroup
@@ -147,6 +157,10 @@ export function ScalePickerDialog({
               {[...scales]
                 .sort((a, b) => {
                   if (a.is_default !== b.is_default) return a.is_default ? -1 : 1;
+                  // Raw-title sort is safe: these lists exclude snapshots
+                  // and tenant scales always have i18n_key NULL, so only
+                  // the default scale localizes — and it sorts first via
+                  // is_default above (HRP-479).
                   return a.title.localeCompare(b.title);
                 })
                 .map((s) => (
@@ -160,7 +174,7 @@ export function ScalePickerDialog({
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">
-                            {s.is_default ? "Default answer scale" : s.title}
+                            {s.is_default ? t("defaultAnswerScale") : s.title}
                           </span>
                           {s.is_default && (
                             <Badge
@@ -168,15 +182,18 @@ export function ScalePickerDialog({
                               className="border-primary/40 text-primary"
                             >
                               <Sparkles className="mr-1 h-3 w-3" />
-                              System
+                              {t("systemBadge")}
                             </Badge>
                           )}
                         </div>
-                        {s.description && (
-                          <p className="mt-0.5 text-xs text-muted-foreground">
-                            {s.description}
-                          </p>
-                        )}
+                        {(() => {
+                          const description = answerScaleDescription(tRef, s);
+                          return description ? (
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {description}
+                            </p>
+                          ) : null;
+                        })()}
                         <div className="mt-1.5 flex flex-wrap gap-1">
                           {[...s.options]
                             .sort((a, b) => a.sort_index - b.sort_index)
@@ -186,7 +203,7 @@ export function ScalePickerDialog({
                                 variant="secondary"
                                 className="text-xs"
                               >
-                                {opt.title}
+                                {scaleOptionLabel(tRef, opt)}
                                 {!opt.is_neutral && opt.weight !== null && (
                                   <span className="ml-1 text-muted-foreground">
                                     ({opt.weight})
@@ -217,7 +234,7 @@ export function ScalePickerDialog({
                           }}
                           data-testid={`${testIdPrefix}-modal-item-${s.id}-menu-preview`}
                         >
-                          Preview
+                          {t("preview")}
                         </DropdownMenuItem>
                         {canManage && !s.is_default && (
                           <>
@@ -229,7 +246,7 @@ export function ScalePickerDialog({
                               }}
                               data-testid={`${testIdPrefix}-modal-item-${s.id}-menu-edit`}
                             >
-                              Edit
+                              {t("edit")}
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               variant="destructive"
@@ -239,7 +256,7 @@ export function ScalePickerDialog({
                               }}
                               data-testid={`${testIdPrefix}-modal-item-${s.id}-menu-delete`}
                             >
-                              Delete
+                              {tc("delete")}
                             </DropdownMenuItem>
                           </>
                         )}
@@ -261,7 +278,7 @@ export function ScalePickerDialog({
               data-testid={`${testIdPrefix}-modal-btn-create`}
             >
               <Plus className="mr-1 h-4 w-4" />
-              Create scale
+              {t("createScale")}
             </Button>
           )}
           <DialogFooter>
@@ -270,14 +287,14 @@ export function ScalePickerDialog({
               onClick={() => onOpenChange(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               data-testid={`${testIdPrefix}-modal-btn-save`}
               onClick={handleSave}
               disabled={saving || !pick || pick === (currentScaleId ?? "")}
             >
-              {saving ? "Saving…" : "Save"}
+              {saving ? t("savingEllipsis") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -300,9 +317,9 @@ export function ScalePickerDialog({
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title="Delete this scale?"
-        description="Drafts using this scale will be reassigned to the system default."
-        confirmLabel="Delete"
+        title={t("deleteScaleTitle")}
+        description={t("deleteScaleDescription")}
+        confirmLabel={tc("delete")}
         destructive
         onConfirm={confirmDelete}
       />

@@ -252,6 +252,8 @@ class CandidateBreakdownCompetenceRow(BaseModel):
     competence_title: str
     required_skill_level_id: uuid.UUID | None
     required_skill_level_title: str | None
+    # HRP-479: origin reference rows localize via reference.* keys.
+    required_skill_level_i18n_key: str | None = None
     card_match_percent: int
     actual_percent: int | None
     qualifies: bool
@@ -260,8 +262,10 @@ class CandidateBreakdownCompetenceRow(BaseModel):
 class CandidateBreakdownSpecRow(BaseModel):
     specialization_id: uuid.UUID
     specialization_title: str
+    specialization_i18n_key: str | None = None
     grade_id: uuid.UUID | None
     grade_title: str | None
+    grade_i18n_key: str | None = None
     required_years: int | None
     actual_months: int | None
     qualifies: bool

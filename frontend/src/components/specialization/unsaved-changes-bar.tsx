@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { Button } from "@/components/ui/button";
 
 type Props = {
@@ -17,6 +19,8 @@ export function UnsavedChangesBar({
   onCancel,
   diffCount,
 }: Props) {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   if (!hasChanges) return null;
   return (
     <div
@@ -24,7 +28,7 @@ export function UnsavedChangesBar({
       className="sticky bottom-4 z-20 mx-auto flex max-w-3xl items-center justify-between gap-4 rounded-lg border bg-background/95 p-3 shadow-md backdrop-blur"
     >
       <div className="text-sm">
-        <span className="font-medium">Unsaved changes:</span>{" "}
+        <span className="font-medium">{t("unsavedChanges")}</span>{" "}
         <span data-testid="matrix-unsaved-bar-count" className="text-muted-foreground">
           {diffCount}
         </span>
@@ -37,7 +41,7 @@ export function UnsavedChangesBar({
           onClick={onCancel}
           disabled={saving}
         >
-          Cancel
+          {tc("cancel")}
         </Button>
         <Button
           data-testid="matrix-unsaved-bar-btn-save"
@@ -45,7 +49,7 @@ export function UnsavedChangesBar({
           onClick={onSave}
           disabled={saving}
         >
-          {saving ? "Saving..." : "Save"}
+          {saving ? t("saving") : t("save")}
         </Button>
       </div>
     </div>

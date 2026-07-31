@@ -15,6 +15,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import billing_hooks
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.ai import file_parsing
 from app.modules.ai_competence_generation import service
@@ -476,9 +477,9 @@ async def create_matrix_session(
     """
 
     if target_id is None and position_id is None:
-        raise HTTPException(
+        raise AppError(
+            "compgen_target_or_position_required",
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Either target_id or position_id must be provided.",
         )
 
     parsed_grade_ids: list[uuid.UUID] = []
@@ -486,21 +487,21 @@ async def create_matrix_session(
         try:
             raw = json.loads(grade_ids)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(
+            raise AppError(
+                "compgen_grade_ids_invalid",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "grade_ids must be a JSON array of UUIDs",
             ) from exc
         if not isinstance(raw, list):
-            raise HTTPException(
+            raise AppError(
+                "compgen_grade_ids_invalid",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "grade_ids must be a JSON array of UUIDs",
             )
         try:
             parsed_grade_ids = [uuid.UUID(str(v)) for v in raw]
         except (TypeError, ValueError) as exc:
-            raise HTTPException(
+            raise AppError(
+                "compgen_grade_ids_invalid",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "grade_ids must be a JSON array of UUIDs",
             ) from exc
 
     parsed_context_excludes: list[str] = []
@@ -508,16 +509,16 @@ async def create_matrix_session(
         try:
             raw_ex = json.loads(context_excludes)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(
+            raise AppError(
+                "compgen_context_excludes_invalid",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "context_excludes must be a JSON array of strings",
             ) from exc
         if not isinstance(raw_ex, list) or not all(
             isinstance(v, str) for v in raw_ex
         ):
-            raise HTTPException(
+            raise AppError(
+                "compgen_context_excludes_invalid",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "context_excludes must be a JSON array of strings",
             )
         parsed_context_excludes = list(raw_ex)
 
@@ -525,17 +526,14 @@ async def create_matrix_session(
     if position_id is not None:
         position = await db.get(Position, position_id)
         if position is None or position.tenant_id != current_user.tenant_id:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Position not found")
+            raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
         if position.specialization_id is None:
-            raise HTTPException(
+            raise AppError(
+                "insufficient_data_no_position_specialization",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail={
-                    "error_code": "insufficient_data",
-                    "message": (
-                        "Position has no specialization. Set one before "
-                        "running AI matrix generation."
-                    ),
-                },
+                detail_extra={},
+                detail_code_key="error_code",
+                detail_code="insufficient_data",
             )
         if target_id is None:
             target_id = position.specialization_id
@@ -543,9 +541,9 @@ async def create_matrix_session(
             # Caller sent both fields but they disagree — refuse rather than
             # silently honour `target_id` and add the position's grade to a
             # different specialization.
-            raise HTTPException(
+            raise AppError(
+                "compgen_target_id_position_mismatch",
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "target_id does not match position.specialization_id",
             )
         # Position page: cover the position's own grade by default so the
         # active role is guaranteed a matrix slot even if the user shipped

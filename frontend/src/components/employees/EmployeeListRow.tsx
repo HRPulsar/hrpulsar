@@ -2,8 +2,10 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { employeeStatusLabel } from "@/components/employees/employee-status";
 import {
   Tooltip,
   TooltipContent,
@@ -158,6 +160,7 @@ export function EmployeeListHeader({
 }: {
   testIdPrefix?: string;
 }) {
+  const t = useTranslations("employees");
   const cellClass = "text-xs font-medium uppercase tracking-wide text-muted-foreground";
   return (
     <li
@@ -171,49 +174,49 @@ export function EmployeeListHeader({
         data-testid={`${testIdPrefix}-column-name`}
         className={cellClass}
       >
-        Name
+        {t("name")}
       </span>
       <span
         role="columnheader"
         data-testid={`${testIdPrefix}-column-position`}
         className={cellClass}
       >
-        Position
+        {t("position")}
       </span>
       <span
         role="columnheader"
         data-testid={`${testIdPrefix}-column-specialization`}
         className={cellClass}
       >
-        Specialization
+        {t("specialization")}
       </span>
       <span
         role="columnheader"
         data-testid={`${testIdPrefix}-column-grade`}
         className={cellClass}
       >
-        Grade
+        {t("grade")}
       </span>
       <span
         role="columnheader"
         data-testid={`${testIdPrefix}-column-division`}
         className={cellClass}
       >
-        Division
+        {t("division")}
       </span>
       <span
         role="columnheader"
         data-testid={`${testIdPrefix}-column-status`}
         className={cellClass}
       >
-        Status
+        {t("status")}
       </span>
       <span
         role="columnheader"
         data-testid={`${testIdPrefix}-column-hire_date`}
         className={cn(cellClass, "text-right")}
       >
-        Hire Date
+        {t("hireDateColumn")}
       </span>
     </li>
   );
@@ -236,6 +239,7 @@ export function EmployeeListRow({
   href,
   testIdPrefix = "employee-list-row",
 }: EmployeeListRowProps) {
+  const t = useTranslations("employees");
   const displayName =
     employee.user_name?.trim() ||
     employee.user_email ||
@@ -355,7 +359,7 @@ export function EmployeeListRow({
               statusBadgeClass(employee.status),
             )}
           >
-            {employee.status.replace(/_/g, " ")}
+            {employeeStatusLabel(t, employee.status)}
           </Badge>
         ) : (
           <span

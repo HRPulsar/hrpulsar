@@ -312,7 +312,7 @@ class TestLLMClientSchemaParam:
     async def test_schema_appended_to_system_and_validated(self) -> None:
         captured: dict = {}
 
-        async def fake_anthropic(prompt, system, model, temperature, max_tokens):
+        async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             captured["system"] = system
             return json.dumps({"groups": []})
 
@@ -320,7 +320,7 @@ class TestLLMClientSchemaParam:
             result = await llm_client.generate_json(
                 "test",
                 system="base",
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-5",
                 schema=GeneratedTreeSchema,
             )
 
@@ -331,7 +331,7 @@ class TestLLMClientSchemaParam:
     async def test_schema_validation_error_propagates(self) -> None:
         from pydantic import ValidationError
 
-        async def fake_anthropic(prompt, system, model, temperature, max_tokens):
+        async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             return json.dumps({"groups": [{"foo": "bar"}]})  # bad shape
 
         with (
@@ -340,12 +340,12 @@ class TestLLMClientSchemaParam:
         ):
             await llm_client.generate_json(
                 "test",
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-5",
                 schema=GeneratedTreeSchema,
             )
 
     async def test_indicators_schema_validates_round_trip(self) -> None:
-        async def fake_anthropic(prompt, system, model, temperature, max_tokens):
+        async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             return json.dumps(
                 {"indicators": [{"title": "Knows the spec", "skill_level": "basic"}]}
             )
@@ -353,16 +353,16 @@ class TestLLMClientSchemaParam:
         with patch.object(llm_client, "_generate_anthropic", new=fake_anthropic):
             result = await llm_client.generate_json(
                 "test",
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-5",
                 schema=GeneratedIndicatorsSchema,
             )
         assert isinstance(result, GeneratedIndicatorsSchema)
         assert result.indicators[0].title == "Knows the spec"
 
     async def test_no_schema_returns_raw_dict(self) -> None:
-        async def fake_anthropic(prompt, system, model, temperature, max_tokens):
+        async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             return json.dumps([{"a": 1}])
 
         with patch.object(llm_client, "_generate_anthropic", new=fake_anthropic):
-            result = await llm_client.generate_json("test", model="claude-sonnet-4-6")
+            result = await llm_client.generate_json("test", model="claude-sonnet-5")
         assert result == [{"a": 1}]

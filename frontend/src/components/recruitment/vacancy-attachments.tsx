@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Paperclip, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -49,6 +50,7 @@ interface Props {
 }
 
 export function VacancyAttachments({ vacancyId, canEdit }: Props) {
+  const t = useTranslations("recruitment");
   const [items, setItems] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -86,22 +88,30 @@ export function VacancyAttachments({ vacancyId, canEdit }: Props) {
     const files = Array.from(filesList);
     const room = MAX_FILES - items.length;
     if (room <= 0) {
-      toast.error(`At most ${MAX_FILES} files per vacancy`);
+      toast.error(t("attachmentsTooMany", { max: MAX_FILES }));
       return;
     }
     const accepted = files.slice(0, room);
     const skipped = files.length - accepted.length;
     if (skipped > 0) {
-      toast.warning(`Only the first ${accepted.length} of ${files.length} attached — limit is ${MAX_FILES}`);
+      toast.warning(
+        t("attachmentsPartialUpload", {
+          accepted: accepted.length,
+          total: files.length,
+          max: MAX_FILES,
+        }),
+      );
     }
     setBusy(true);
     for (const f of accepted) {
       if (f.size > MAX_BYTES) {
-        toast.error(`${f.name}: too large (max 25 MB)`);
+        toast.error(t("attachmentsFileTooLarge", { name: f.name }));
         continue;
       }
       if (f.type && !MIME_ALLOW.includes(f.type)) {
-        toast.error(`${f.name}: unsupported type (${f.type})`);
+        toast.error(
+          t("attachmentsUnsupportedType", { name: f.name, type: f.type }),
+        );
         continue;
       }
       try {
@@ -111,7 +121,9 @@ export function VacancyAttachments({ vacancyId, canEdit }: Props) {
         );
       } catch (err) {
         toast.error(
-          err instanceof Error ? `${f.name}: ${err.message}` : `${f.name}: failed to upload`,
+          err instanceof Error
+            ? `${f.name}: ${err.message}`
+            : t("attachmentsUploadFailed", { name: f.name }),
         );
       }
     }
@@ -121,15 +133,17 @@ export function VacancyAttachments({ vacancyId, canEdit }: Props) {
   }
 
   async function handleDelete(id: string, name: string) {
-    if (!confirm(`Delete ${name}?`)) return;
+    if (!confirm(t("attachmentsDeleteConfirm", { name }))) return;
     try {
       await api.delete(
         `/recruitment/vacancies/${vacancyId}/attachments/${id}`,
       );
-      toast.success("Attachment removed");
+      toast.success(t("attachmentsToastRemoved"));
       setItems((prev) => prev.filter((a) => a.id !== id));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(
+        err instanceof Error ? err.message : t("attachmentsDeleteFailed"),
+      );
     }
   }
 
@@ -141,9 +155,13 @@ export function VacancyAttachments({ vacancyId, canEdit }: Props) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Paperclip className="h-4 w-4 text-muted-foreground" />
-          <h3 className="text-sm font-medium">Attachments</h3>
+          <h3 className="text-sm font-medium">{t("attachmentsTitle")}</h3>
           <span className="text-xs text-muted-foreground">
-            {items.length}/{MAX_FILES} • {formatSize(MAX_BYTES)} max each
+            {t("attachmentsCounter", {
+              count: items.length,
+              max: MAX_FILES,
+              size: formatSize(MAX_BYTES),
+            })}
           </span>
         </div>
         {canEdit && (
@@ -165,15 +183,14 @@ export function VacancyAttachments({ vacancyId, canEdit }: Props) {
               data-testid="vacancy-attachments-upload-btn"
             >
               <Upload className="mr-1 h-3 w-3" />
-              Upload
+              {t("attachmentsUploadButton")}
             </Button>
           </>
         )}
       </div>
       {items.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          No files attached yet. Upload PDF / DOCX / images and the AI
-          profile generator will read them too.
+          {t("attachmentsEmpty")}
         </p>
       ) : (
         <ul className="divide-y text-sm">
@@ -186,7 +203,8 @@ export function VacancyAttachments({ vacancyId, canEdit }: Props) {
               <div className="flex min-w-0 flex-col">
                 <span className="truncate font-medium">{a.filename}</span>
                 <span className="text-xs text-muted-foreground">
-                  {a.mime_type ?? "unknown"} • {formatSize(a.size_bytes)}
+                  {a.mime_type ?? t("attachmentsMimeUnknown")} •{" "}
+                  {formatSize(a.size_bytes)}
                 </span>
               </div>
               {canEdit && (

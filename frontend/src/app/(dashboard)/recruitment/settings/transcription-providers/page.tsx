@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,14 +23,18 @@ type Provider = {
   updated_at: string;
 };
 
+// HRP-476: labels live in the `recruitment` i18n namespace; this map only
+// owns the API code → key relation.
 const PROVIDERS = [
-  { value: "whisper", label: "OpenAI Whisper" },
-  { value: "deepgram", label: "Deepgram" },
-  { value: "assemblyai", label: "AssemblyAI" },
-  { value: "faster_whisper", label: "faster-whisper (self-hosted)" },
+  { value: "whisper", labelKey: "sttProviderWhisper" },
+  { value: "deepgram", labelKey: "sttProviderDeepgram" },
+  { value: "assemblyai", labelKey: "sttProviderAssemblyai" },
+  { value: "faster_whisper", labelKey: "sttProviderFasterWhisper" },
 ];
 
 export default function STTProvidersPage() {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [rows, setRows] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -62,11 +67,11 @@ export default function STTProvidersPage() {
         api_key: draft.api_key || null,
         is_active: true,
       });
-      toast.success("Provider added");
+      toast.success(t("sttToastAdded"));
       setDraft({ provider: "deepgram", api_key: "" });
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
+      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setCreating(false);
     }
@@ -81,14 +86,14 @@ export default function STTProvidersPage() {
       );
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
+      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setSavingId(null);
     }
   }
 
   async function handleDelete(p: Provider) {
-    if (!confirm(`Delete provider ${p.provider}?`)) return;
+    if (!confirm(t("sttDeleteConfirm", { provider: p.provider }))) return;
     setSavingId(p.id);
     try {
       await api.delete(
@@ -96,7 +101,7 @@ export default function STTProvidersPage() {
       );
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
+      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setSavingId(null);
     }
@@ -106,29 +111,27 @@ export default function STTProvidersPage() {
     <div className="space-y-5" data-testid="recruitment-stt-providers-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Settings", href: "/recruitment/settings" },
-          { label: "Transcription" },
+          { label: tc("settings"), href: "/recruitment/settings" },
+          { label: t("sttBreadcrumb") },
         ]}
       />
       <header>
         <h1 className="text-xl font-semibold tracking-tight">
-          Transcription providers
+          {t("sttTitle")}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Connect Deepgram, Whisper or AssemblyAI to transcribe interview
-          recordings. faster-whisper is a local self-hosted option that does not
-          require an API key.
+          {t("sttDescription")}
         </p>
       </header>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Add provider</CardTitle>
+          <CardTitle className="text-base">{t("sttAddCardTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label htmlFor="stt-provider">Provider</Label>
+              <Label htmlFor="stt-provider">{t("llmProviderLabel")}</Label>
               <select
                 id="stt-provider"
                 value={draft.provider}
@@ -140,13 +143,13 @@ export default function STTProvidersPage() {
               >
                 {PROVIDERS.map((p) => (
                   <option key={p.value} value={p.value}>
-                    {p.label}
+                    {t(p.labelKey)}
                   </option>
                 ))}
               </select>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="stt-key">API key</Label>
+              <Label htmlFor="stt-key">{t("llmApiKeyLabel")}</Label>
               <Input
                 id="stt-key"
                 type="password"
@@ -170,23 +173,22 @@ export default function STTProvidersPage() {
               ) : (
                 <Plus className="size-4" />
               )}
-              Add
+              {t("llmAddButton")}
             </Button>
           </div>
         </CardContent>
       </Card>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-medium">Connected providers</h2>
+        <h2 className="text-sm font-medium">{t("llmConnectedTitle")}</h2>
         {loading ? (
           <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
             <Loader2 className="mr-2 size-4 animate-spin" />
-            Loading…
+            {t("loading")}
           </div>
         ) : rows.length === 0 ? (
           <div className="rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">
-            No providers connected. The default from environment variables will
-            be used.
+            {t("sttEmpty")}
           </div>
         ) : (
           <ul className="space-y-2">
@@ -203,15 +205,15 @@ export default function STTProvidersPage() {
                     </span>
                     {p.is_active ? (
                       <Badge className={BADGE_COLOR.emerald}>
-                        Active
+                        {t("statusActive")}
                       </Badge>
                     ) : (
-                      <Badge variant="outline">Disabled</Badge>
+                      <Badge variant="outline">{t("statusDisabled")}</Badge>
                     )}
                   </div>
                   <span className="flex items-center gap-1 text-xs text-muted-foreground">
                     <KeyRound className="size-3" />
-                    {p.api_key_masked || "key not set"}
+                    {p.api_key_masked || t("providerKeyNotSet")}
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
@@ -223,7 +225,7 @@ export default function STTProvidersPage() {
                     data-testid={`stt-btn-toggle-${p.id}`}
                   >
                     <Save className="size-3.5" />
-                    {p.is_active ? "Disable" : "Enable"}
+                    {p.is_active ? t("actionDisable") : t("actionEnable")}
                   </Button>
                   <Button
                     size="sm"

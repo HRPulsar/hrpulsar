@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { aiSettingsApi, type AISettings } from "@/lib/api/ai-settings";
 
 export function AISettingsBanner() {
+  const t = useTranslations("company");
   const [settings, setSettings] = useState<AISettings | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +31,7 @@ export function AISettingsBanner() {
         data-testid="ai-settings-banner-error"
         className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
       >
-        Failed to load AI settings: {error}
+        {t("aiSettingsLoadFailed", { error })}
       </div>
     );
   }
@@ -40,7 +42,7 @@ export function AISettingsBanner() {
         data-testid="ai-settings-banner-loading"
         className="rounded-md border bg-muted px-4 py-3 text-sm text-muted-foreground"
       >
-        Loading AI settings…
+        {t("aiSettingsLoading")}
       </div>
     );
   }
@@ -51,24 +53,34 @@ export function AISettingsBanner() {
       className="flex items-center justify-between rounded-md border bg-muted/40 px-4 py-3 text-sm"
     >
       <span className="text-muted-foreground">
-        Generation runs with{" "}
-        <strong className="text-foreground" data-testid="ai-settings-banner-model">
-          {settings.effective_model}
-        </strong>
-        {" · "}
-        effort{" "}
-        <strong className="text-foreground" data-testid="ai-settings-banner-effort">
-          {settings.effort_level}
-        </strong>
-        {" · "}
-        temperature {settings.effective_temperature.toFixed(2)}
+        {t.rich("aiSettingsBannerSummary", {
+          model: settings.effective_model,
+          effort: settings.effort_level,
+          temperature: settings.effective_temperature.toFixed(2),
+          modelValue: (chunks) => (
+            <strong
+              className="text-foreground"
+              data-testid="ai-settings-banner-model"
+            >
+              {chunks}
+            </strong>
+          ),
+          effortValue: (chunks) => (
+            <strong
+              className="text-foreground"
+              data-testid="ai-settings-banner-effort"
+            >
+              {chunks}
+            </strong>
+          ),
+        })}
       </span>
       <Link
         href="/settings/ai"
         data-testid="ai-settings-banner-link"
         className="text-primary hover:underline"
       >
-        Adjust AI settings →
+        {t("adjustAiSettings")}
       </Link>
     </div>
   );

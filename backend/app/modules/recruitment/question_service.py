@@ -32,10 +32,11 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.ai.llm_client import generate_json
 from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
 from app.modules.recruitment.common import _publish_event, normalize_competence_id
@@ -175,7 +176,7 @@ async def get_question_set(
         )
     ).scalar_one_or_none()
     if qs is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Question set not found")
+        raise AppError("question_set_not_found", status.HTTP_404_NOT_FOUND)
     return qs
 
 
@@ -193,7 +194,7 @@ async def _load_candidate_vacancy(
         )
     ).scalar_one_or_none()
     if cv is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate-vacancy not found")
+        raise AppError("candidate_vacancy_not_found", status.HTTP_404_NOT_FOUND)
     return cv
 
 
@@ -429,14 +430,17 @@ def _validate_question_count(generated: GeneratedQuestionSet) -> None:
     """FR-12: 8-15 questions. Anything outside the window is a failure."""
     n = len(generated.questions)
     if not 8 <= n <= 15:
-        raise HTTPException(
+        raise AppError(
+            "question_count_out_of_range",
             status.HTTP_502_BAD_GATEWAY,
-            f"AI returned {n} questions; expected 8-15.",
+            count=n,
         )
 
 
 async def _call_llm(
     *,
+    db: AsyncSession | None = None,
+    tenant_id: uuid.UUID | None = None,
     vacancy: Vacancy,
     profile_competences: list[dict],
     resume_data: dict,
@@ -461,6 +465,8 @@ async def _call_llm(
         temperature=0.3,
         max_tokens=RECRUITMENT_MAX_TOKENS,
         schema=GeneratedQuestionSet,
+        db=db,
+        tenant_id=tenant_id,
     )
     if isinstance(raw, GeneratedQuestionSet):
         return raw
@@ -486,28 +492,21 @@ async def generate_question_set(
     candidate = await db.get(Candidate, cv.candidate_id)
     vacancy = await db.get(Vacancy, cv.vacancy_id)
     if candidate is None or vacancy is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate or vacancy missing")
+        raise AppError("candidate_or_vacancy_missing", status.HTTP_404_NOT_FOUND)
 
     resume_data = await _load_parsed_resume(db, tenant_id, cv.candidate_id)
     if resume_data is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Parsed resume required before generating questions.",
-        )
+        raise AppError("parsed_resume_required", status.HTTP_409_CONFLICT)
 
     profile_competences = await _load_profile_competences(db, tenant_id, cv.vacancy_id)
 
     if data.mode == "regenerated":
         if data.target_set_id is None:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "target_set_id required for regenerated mode",
-            )
+            raise AppError("target_set_id_required", status.HTTP_400_BAD_REQUEST)
         target = await get_question_set(db, tenant_id, data.target_set_id)
         if target.candidate_vacancy_id != cv.id:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "target_set_id does not belong to this candidate-vacancy",
+            raise AppError(
+                "target_set_not_in_candidate_vacancy", status.HTTP_400_BAD_REQUEST
             )
         previous_questions = await _previous_sets_payload(
             db, tenant_id, cv.id, exclude_set_id=target.id
@@ -539,6 +538,8 @@ async def generate_question_set(
     }
     try:
         generated = await _call_llm(
+            db=db,
+            tenant_id=tenant_id,
             vacancy=vacancy,
             profile_competences=profile_competences,
             resume_data=resume_data,
@@ -551,7 +552,7 @@ async def generate_question_set(
     except Exception:
         # HRP-205 REDO: N-question_set_failed with a deep link back to the
         # candidate page so the requester can retry. Published before the
-        # HTTPException propagates to the client.
+        # error propagates to the client.
         await _publish_event("recruitment.question_set.failed", notify_ctx)
         raise
 
@@ -757,7 +758,7 @@ async def _get_question(
         )
     ).scalar_one_or_none()
     if q is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
+        raise AppError("question_not_found", status.HTTP_404_NOT_FOUND)
     return q
 
 
@@ -792,9 +793,8 @@ async def update_question_v2(
     if move_to is not None:
         target = await get_question_set(db, tenant_id, move_to)
         if target.candidate_vacancy_id != q.question_set.candidate_vacancy_id:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "Cannot move a question to a set belonging to a different candidate-vacancy",
+            raise AppError(
+                "question_move_cross_candidate_vacancy", status.HTTP_400_BAD_REQUEST
             )
         q.question_set_id = target.id
 

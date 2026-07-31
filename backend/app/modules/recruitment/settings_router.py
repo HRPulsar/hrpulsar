@@ -5,10 +5,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
@@ -545,9 +546,9 @@ async def gdpr_erase(
     current_user: User = Depends(require_role("admin", "hrd")),
 ):
     if not data.confirm:
-        raise HTTPException(
+        raise AppError(
+            "gdpr_erasure_requires_confirm",
             status.HTTP_400_BAD_REQUEST,
-            "Erasure requires confirm=true",
         )
     log_row = await gdpr_service.gdpr_erase(
         db, current_user.tenant_id, current_user.id, data.candidate_id

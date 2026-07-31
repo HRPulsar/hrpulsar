@@ -16,9 +16,12 @@ const SOURCE = readFileSync(
 );
 
 describe("Change status trigger label (HRP-194 REDO)", () => {
+  // HRP-476: the labels come from the `assessments` i18n namespace, so the
+  // map is built inside the component (memoised on `t`) instead of at module
+  // scope — the derivation itself is unchanged.
   it("derives statusItems from ASSESSMENT_STATUS_OPTIONS + assessmentStatusLabel", () => {
     expect(SOURCE).toMatch(
-      /const statusItems = ASSESSMENT_STATUS_OPTIONS\.map\(\(value\) => \(\{\s*value,\s*label: assessmentStatusLabel\(value\),?\s*\}\)\);/,
+      /const statusItems = useMemo\(\s*\(\) => ASSESSMENT_STATUS_OPTIONS\.map\(\(value\) => \(\{\s*value,\s*label: assessmentStatusLabel\(t, value\),?\s*\}\)\),\s*\[t\],\s*\);/,
     );
   });
 

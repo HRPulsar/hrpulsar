@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Vacancy, VacancyList } from "@/lib/types";
 import { formatDate } from "@/lib/date-format";
@@ -29,22 +30,19 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { RecruitmentBreadcrumbs, RecruitmentTabs } from "@/components/recruitment";
 import { Briefcase, Plus, Search, X } from "lucide-react";
 import { VacancyActionsMenu } from "./_components/VacancyActionsMenu";
-import { BADGE_COLOR } from "@/lib/badge-tones";
+import {
+  VACANCY_STATUS_COLORS,
+  VACANCY_STATUS_OPTIONS,
+  vacancyStatusBadgeLabel,
+  vacancyStatusOptionLabel,
+} from "@/lib/vacancy-status";
 
 const PAGE_SIZE = 25;
 
-const statusColors: Record<string, string> = {
-  draft: BADGE_COLOR.neutral,
-  open: BADGE_COLOR.green,
-  paused: BADGE_COLOR.yellow,
-  closed: BADGE_COLOR.red,
-  cancelled: BADGE_COLOR.neutral,
-};
-
-const statusOptions = ["draft", "open", "paused", "closed", "cancelled"];
-
 export default function VacancyListPage() {
   const router = useRouter();
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [vacancies, setVacancies] = useState<Vacancy[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -113,24 +111,26 @@ export default function VacancyListPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
 
   return (
     <div data-testid="recruitment-vacancy-list" className="space-y-6">
-      <RecruitmentBreadcrumbs segments={[{ label: "Vacancies" }]} />
+      <RecruitmentBreadcrumbs segments={[{ label: t("vacanciesTitle") }]} />
       <RecruitmentTabs />
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Vacancies</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("vacanciesTitle")}
+          </h1>
           {/* HRP-290: counter respects active filters (Assessments parity). */}
           <p
             className="text-sm text-muted-foreground"
             data-testid="recruitment-vacancy-count"
           >
-            {displayCount} vacanc{displayCount !== 1 ? "ies" : "y"}
+            {t("vacancyCount", { count: displayCount })}
           </p>
         </div>
         {canManage && (
@@ -140,7 +140,7 @@ export default function VacancyListPage() {
             onClick={() => router.push("/recruitment/requisitions/new")}
           >
             <Plus className="mr-1 h-4 w-4" />
-            Create Vacancy
+            {t("vacancyCreateButton")}
           </Button>
         )}
       </div>
@@ -151,7 +151,7 @@ export default function VacancyListPage() {
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             data-testid="recruitment-vacancy-input-search"
-            placeholder="Search by title or position..."
+            placeholder={t("vacancySearchPlaceholder")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8"
@@ -162,28 +162,28 @@ export default function VacancyListPage() {
             className="w-36"
             data-testid="vacancy-status-filter"
           >
-            <SelectValue placeholder="All statuses">
+            <SelectValue placeholder={t("filterAllStatuses")}>
               {filterStatus === "__archived__"
-                ? "Archived"
+                ? t("statusArchived")
                 : filterStatus
-                  ? filterStatus.charAt(0).toUpperCase() + filterStatus.slice(1)
-                  : "All statuses"}
+                  ? vacancyStatusOptionLabel(t, filterStatus)
+                  : t("filterAllStatuses")}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All statuses</SelectItem>
-            {statusOptions.map((s) => (
+            <SelectItem value="">{t("filterAllStatuses")}</SelectItem>
+            {VACANCY_STATUS_OPTIONS.map((s) => (
               <SelectItem key={s} value={s}>
-                {s.charAt(0).toUpperCase() + s.slice(1)}
+                {vacancyStatusOptionLabel(t, s)}
               </SelectItem>
             ))}
-            <SelectItem value="__archived__">Archived</SelectItem>
+            <SelectItem value="__archived__">{t("statusArchived")}</SelectItem>
           </SelectContent>
         </Select>
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="mr-1 h-3 w-3" />
-            Clear
+            {t("actionClear")}
           </Button>
         )}
       </div>
@@ -196,15 +196,13 @@ export default function VacancyListPage() {
           <Briefcase className="mx-auto mb-3 h-10 w-10 opacity-40" />
           <p className="text-sm font-medium">
             {isArchivedView
-              ? "No archived vacancies"
+              ? t("vacanciesEmptyArchived")
               : hasFilters
-                ? "No vacancies match the filters"
-                : "No vacancies yet"}
+                ? t("vacanciesEmptyFiltered")
+                : t("vacanciesEmpty")}
           </p>
           {!hasFilters && canManage && (
-            <p className="mt-1 text-xs">
-              Create your first vacancy to start the recruitment process.
-            </p>
+            <p className="mt-1 text-xs">{t("vacanciesEmptyHint")}</p>
           )}
         </div>
       ) : (
@@ -213,13 +211,13 @@ export default function VacancyListPage() {
             <Table data-testid="recruitment-vacancy-table">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Title</TableHead>
-                  <TableHead>Position</TableHead>
-                  <TableHead>Division</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Candidates</TableHead>
-                  <TableHead>Owner</TableHead>
-                  <TableHead>Created</TableHead>
+                  <TableHead>{t("columnTitle")}</TableHead>
+                  <TableHead>{t("columnPosition")}</TableHead>
+                  <TableHead>{t("columnDivision")}</TableHead>
+                  <TableHead>{t("columnStatus")}</TableHead>
+                  <TableHead>{t("candidatesTitle")}</TableHead>
+                  <TableHead>{t("columnOwner")}</TableHead>
+                  <TableHead>{t("columnCreated")}</TableHead>
                   <TableHead className="w-12 text-right"></TableHead>
                 </TableRow>
               </TableHeader>
@@ -253,10 +251,12 @@ export default function VacancyListPage() {
                           className={
                             isArchived
                               ? "bg-muted text-muted-foreground"
-                              : statusColors[vacancy.status] || ""
+                              : VACANCY_STATUS_COLORS[vacancy.status] || ""
                           }
                         >
-                          {isArchived ? "archived" : vacancy.status}
+                          {isArchived
+                            ? t("vacancyBadgeArchived")
+                            : vacancyStatusBadgeLabel(t, vacancy.status)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground">

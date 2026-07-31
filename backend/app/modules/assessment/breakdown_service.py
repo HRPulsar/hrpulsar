@@ -310,6 +310,8 @@ def _compute_breakdown_for_assessment(
                 {
                     "skill_level_id": sl.id,
                     "skill_level_title": sl.title,
+                    # HRP-479: origin levels localize on the frontend.
+                    "skill_level_i18n_key": sl.i18n_key,
                     "sort_index": sl.sort_index,
                     "percent": round(sum(role_pcts) / len(role_pcts)),
                 }

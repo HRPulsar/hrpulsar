@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AlertCircle, Loader2, Sparkles } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import {
@@ -42,6 +43,7 @@ export function GenerationStatusButton({
   onCreated,
   onOpenDrawer,
 }: GenerationStatusButtonProps) {
+  const t = useTranslations("competences");
   const [prereq, setPrereq] = useState<Prerequisites | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [preflightOpen, setPreflightOpen] = useState(false);
@@ -91,9 +93,9 @@ export function GenerationStatusButton({
   const prereqHint = !prereq
     ? null
     : !prereq.hasSpecializations
-      ? "Add at least one specialization"
+      ? t("prereqNoSpecializations")
       : !prereq.hasSkillLevels
-        ? "Create skill levels first"
+        ? t("prereqNoSkillLevels")
         : null;
 
   async function handleClick() {
@@ -159,34 +161,34 @@ export function GenerationStatusButton({
   let buttonState: "loading" | "idle" | "active-session" | "error";
 
   if (showLoading) {
-    label = "Checking session…";
+    label = t("genCheckingSession");
     testId = "compgen-btn-checking";
     icon = <Loader2 className="mr-1 h-4 w-4 animate-spin" />;
     variant = "outline";
     buttonState = "loading";
   } else if (running) {
-    label = "AI generation in progress";
+    label = t("genInProgress");
     testId = "compgen-btn-running";
     icon = <Loader2 className="mr-1 h-4 w-4 animate-spin" />;
     variant = "outline";
     buttonState = "active-session";
   } else if (ready) {
-    label = "Open active AI session";
+    label = t("genOpenActiveSession");
     testId = "compgen-btn-active-session";
     buttonState = "active-session";
   } else if (errored) {
-    label = "Generation error";
+    label = t("genErrorButton");
     testId = "compgen-btn-error";
     icon = <AlertCircle className="mr-1 h-4 w-4" />;
     variant = "destructive";
     buttonState = "error";
   } else if (totalCompetences > 0) {
-    label = "Extend library with AI";
+    label = t("genExtendLibrary");
     testId = "compgen-btn-extend-base";
     variant = "outline";
     buttonState = "idle";
   } else {
-    label = "Generate library with AI";
+    label = t("genGenerateLibrary");
     testId = "compgen-btn-generate-base";
     buttonState = "idle";
   }
@@ -232,7 +234,7 @@ export function GenerationStatusButton({
       {creating && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
           <div className="rounded-md bg-background px-4 py-3 text-sm shadow">
-            Starting AI generation…
+            {t("genStarting")}
           </div>
         </div>
       )}

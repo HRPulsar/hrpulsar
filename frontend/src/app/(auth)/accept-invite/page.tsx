@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { acceptInvitation } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +20,8 @@ export default function AcceptInvitePage() {
 }
 
 function AcceptInviteContent() {
+  const t = useTranslations("auth");
+  const tc = useTranslations("common");
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token") || "";
@@ -33,9 +36,9 @@ function AcceptInviteContent() {
 
   useEffect(() => {
     if (!token) {
-      setError("Invalid invitation link. Please check the link and try again.");
+      setError(t("invalidInviteLink"));
     }
-  }, [token]);
+  }, [token, t]);
 
   function update(field: string, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -51,7 +54,9 @@ function AcceptInviteContent() {
       await acceptInvitation({ token, ...form });
       router.push("/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to accept invitation");
+      setError(
+        err instanceof Error ? err.message : t("acceptInviteFailed"),
+      );
     } finally {
       setLoading(false);
     }
@@ -62,7 +67,9 @@ function AcceptInviteContent() {
       <AuthLogo />
       <Card className="w-full max-w-sm border-white/10 bg-black/40 backdrop-blur-xl">
         <CardHeader className="text-center">
-          <CardTitle className="text-xl text-white">Accept invitation</CardTitle>
+          <CardTitle className="text-xl text-white">
+            {t("acceptInvitation")}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -72,12 +79,12 @@ function AcceptInviteContent() {
               </div>
             )}
             <p className="text-center text-sm text-white/50">
-              Set up your account to join your team on {getBrandName()}.
+              {t("joinTeamOn", { brand: getBrandName() })}
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label htmlFor="first_name" className="text-white/70">
-                  First name
+                  {t("firstName")}
                 </Label>
                 <Input
                   id="first_name"
@@ -89,7 +96,7 @@ function AcceptInviteContent() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="last_name" className="text-white/70">
-                  Last name
+                  {t("lastName")}
                 </Label>
                 <Input
                   id="last_name"
@@ -102,7 +109,7 @@ function AcceptInviteContent() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="password" className="text-white/70">
-                Password
+                {t("password")}
               </Label>
               <Input
                 id="password"
@@ -115,13 +122,13 @@ function AcceptInviteContent() {
               />
             </div>
             <Button type="submit" className="w-full" disabled={loading || !token}>
-              {loading ? "Setting up account..." : "Accept & join"}
+              {loading ? t("settingUpAccount") : t("acceptAndJoin")}
             </Button>
           </form>
           <p className="mt-4 text-center text-sm text-white/50">
-            Already have an account?{" "}
+            {t("haveAccount")}{" "}
             <a href="/login" className="text-brand hover:underline">
-              Sign in
+              {tc("signIn")}
             </a>
           </p>
         </CardContent>

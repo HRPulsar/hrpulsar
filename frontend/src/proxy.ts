@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  LOCALE_COOKIE_MAX_AGE,
+  NEXT_LOCALE_COOKIE,
+  normalizeLocale,
+  resolveRequestLocale,
+} from "@/i18n/config";
+
 const MARKETING_DOMAIN = process.env.NEXT_PUBLIC_MARKETING_DOMAIN || "";
 
 // HRP-389: the marketing site is a standalone app (marketing/). The product
@@ -140,6 +147,30 @@ function crossDomainRedirect(target: string) {
   return safeRedirect(target);
 }
 
+// i18n (F1): make the resolved locale sticky on the first visit so SSR
+// (src/i18n/request.ts), the client and subsequent requests agree before
+// the user makes any explicit choice. An existing valid cookie is left
+// untouched — it carries the last explicit choice on this device (set by
+// the LanguageSwitcher / profile / locale-sync effect). An invalid one
+// (e.g. a locale removed from AVAILABLE_LOCALES) is re-resolved.
+function withLocaleCookie<T extends NextResponse>(
+  request: NextRequest,
+  response: T,
+): T {
+  const current = request.cookies.get(NEXT_LOCALE_COOKIE)?.value;
+  if (normalizeLocale(current)) return response;
+  const locale = resolveRequestLocale(
+    current,
+    request.headers.get("accept-language"),
+  );
+  response.cookies.set(NEXT_LOCALE_COOKIE, locale, {
+    path: "/",
+    maxAge: LOCALE_COOKIE_MAX_AGE,
+    sameSite: "lax",
+  });
+  return response;
+}
+
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const host =
@@ -181,8 +212,9 @@ export function proxy(request: NextRequest) {
   // Root → dashboard or login (src/app/page.tsx duplicates this for RSC
   // navigations; the proxy answers full document loads without rendering).
   if (pathname === "/") {
-    return safeRedirect(
-      new URL(hasToken ? "/dashboard" : "/login", request.url),
+    return withLocaleCookie(
+      request,
+      safeRedirect(new URL(hasToken ? "/dashboard" : "/login", request.url)),
     );
   }
 
@@ -212,16 +244,18 @@ export function proxy(request: NextRequest) {
     if (hasToken && !demoSession && !pathname.startsWith("/accept-invite")) {
       return safeRedirect(new URL("/dashboard", request.url));
     }
-    return NextResponse.next();
+    return withLocaleCookie(request, NextResponse.next());
   }
 
   // Public and token-gated public paths (company profiles, recruiting
   // evaluator invite, demo handoff, etc.)
   if (isPublicCompanyPath(pathname) || isTokenPublicPath(pathname)) {
     if (isPublicAssessmentPath(pathname)) {
+      // Hardened CSP path — left untouched (locale cookie is not needed
+      // for the token-gated public assessment shell).
       return publicAssessmentResponse(request);
     }
-    return NextResponse.next();
+    return withLocaleCookie(request, NextResponse.next());
   }
 
   // All other paths (app routes) — require auth.
@@ -229,12 +263,12 @@ export function proxy(request: NextRequest) {
   // participant who clicked an email link lands on the assessment
   // page right after signing in.
   if (!hasToken) {
-    return safeRedirect(loginRedirectFor(request));
+    return withLocaleCookie(request, safeRedirect(loginRedirectFor(request)));
   }
 
   const response = NextResponse.next();
   response.headers.set("X-Robots-Tag", "noindex, nofollow");
-  return response;
+  return withLocaleCookie(request, response);
 }
 
 // HRP-84 REDO: build the /login URL preserving the original destination

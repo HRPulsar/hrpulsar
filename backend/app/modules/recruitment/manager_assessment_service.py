@@ -25,10 +25,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.recruitment import audit_service
 from app.modules.recruitment.common import candidate_display_name
 from app.modules.recruitment.manager_assessment_models import (
@@ -258,7 +259,7 @@ async def update_scale(
 ) -> dict[str, Any]:
     scale = await _load_scale(db, tenant_id, scale_id)
     if scale.archived_at is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Archived scales are read-only")
+        raise AppError("archived_scales_read_only", status.HTTP_409_CONFLICT)
 
     if payload.is_default is True:
         await _clear_default(db, tenant_id, except_id=scale.id)
@@ -275,10 +276,7 @@ async def update_scale(
 
     if payload.levels is not None:
         if await _scale_in_use(db, tenant_id, scale.id):
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "Scale levels are locked once any vacancy snapshots it",
-            )
+            raise AppError("scale_levels_locked", status.HTTP_409_CONFLICT)
         await db.execute(
             delete(AssessmentScaleLevel).where(
                 AssessmentScaleLevel.scale_id == scale.id
@@ -358,10 +356,7 @@ async def delete_scale(
 ) -> None:
     scale = await _load_scale(db, tenant_id, scale_id)
     if await _scale_in_use(db, tenant_id, scale.id):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Scales with recorded assessments can only be archived",
-        )
+        raise AppError("scale_in_use_archive_only", status.HTTP_409_CONFLICT)
     await db.execute(
         delete(AssessmentScaleLevel).where(AssessmentScaleLevel.scale_id == scale.id)
     )
@@ -391,10 +386,7 @@ async def set_vacancy_scale(
 ) -> dict[str, Any]:
     vacancy = await _load_vacancy(db, tenant_id, vacancy_id)
     if vacancy.assessment_scale_snapshot is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Scale is frozen once the vacancy has any assessment scores",
-        )
+        raise AppError("vacancy_scale_frozen", status.HTTP_409_CONFLICT)
     scale = await _load_scale(db, tenant_id, scale_id)
     vacancy.assessment_scale_id = scale.id
     await db.commit()
@@ -500,13 +492,11 @@ async def create_round(
 
     if payload.type == "pre_interview":
         if any(r.type == "pre_interview" for r in existing):
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, "pre_interview round already exists"
-            )
+            raise AppError("pre_interview_round_exists", status.HTTP_409_CONFLICT)
         round_number = None
     elif payload.type == "final":
         if any(r.type == "final" for r in existing):
-            raise HTTPException(status.HTTP_409_CONFLICT, "final round already exists")
+            raise AppError("final_round_exists", status.HTTP_409_CONFLICT)
         round_number = None
     else:
         existing_iv = [r for r in existing if r.type == "interview"]
@@ -545,7 +535,7 @@ async def update_round_status(
     archived_reason: str | None = None,
 ) -> dict[str, Any]:
     if new_status not in {"in_progress", "complete", "archived"}:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid round status")
+        raise AppError("invalid_round_status", status.HTTP_400_BAD_REQUEST)
     rd = await _load_round(db, tenant_id, round_id)
     rd.status = new_status
     if new_status == "complete":
@@ -635,10 +625,7 @@ async def _assert_pre_interview_slot_free(
     other_sheet = await db.execute(sheet_q)
 
     if other_evaluator.first() is not None or other_sheet.first() is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "pre_interview round allows a single evaluator",
-        )
+        raise AppError("pre_interview_single_evaluator", status.HTTP_409_CONFLICT)
 
 
 async def add_evaluator(
@@ -693,10 +680,7 @@ async def get_or_create_assessment(
     evaluator_display_name: str | None = None,
 ) -> RecruitmentAssessment:
     if evaluator_user_id is None and evaluator_invite_id is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Either user or invite evaluator is required",
-        )
+        raise AppError("evaluator_user_or_invite_required", status.HTTP_400_BAD_REQUEST)
     rd = await _load_round(db, tenant_id, round_id)
     # Take the scale snapshot lazily — on the first sheet creation.
     cv = await db.get(CandidateVacancy, rd.candidate_vacancy_id)
@@ -791,10 +775,7 @@ async def set_competence_score(
         and user_id is not None
         and a.evaluator_user_id != user_id
     ):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Only the owning evaluator can edit this sheet",
-        )
+        raise AppError("assessment_sheet_owner_only", status.HTTP_403_FORBIDDEN)
     result = await db.execute(
         select(AssessmentCompetenceScore).where(
             AssessmentCompetenceScore.assessment_id == a.id,
@@ -854,10 +835,7 @@ async def set_indicator_score(
         and user_id is not None
         and a.evaluator_user_id != user_id
     ):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Only the owning evaluator can edit this sheet",
-        )
+        raise AppError("assessment_sheet_owner_only", status.HTTP_403_FORBIDDEN)
     result = await db.execute(
         select(AssessmentIndicatorScore).where(
             AssessmentIndicatorScore.assessment_id == a.id,
@@ -1103,12 +1081,6 @@ async def round_aggregate(
 # ---------------------------------------------------------------------------
 
 
-NO_PROFILE_COMPETENCES_ERROR = (
-    "Vacancy profile has no competences yet. Open the vacancy profile to "
-    "add them, then come back here to invite external evaluator."
-)
-
-
 async def list_vacancy_profile_competences(
     db: AsyncSession, tenant_id: uuid.UUID, vacancy_id: uuid.UUID
 ) -> list[dict[str, Any]]:
@@ -1158,9 +1130,8 @@ async def create_invites(
     if round_id is not None:
         rd = await _load_round(db, tenant_id, round_id)
         if rd.candidate_vacancy_id != cv.id:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "round_id does not belong to this candidate-vacancy",
+            raise AppError(
+                "round_id_candidate_vacancy_mismatch", status.HTTP_400_BAD_REQUEST
             )
         if rd.type == "pre_interview":
             # HRP-369: refuse upfront instead of letting the evaluator
@@ -1168,9 +1139,8 @@ async def create_invites(
             # (submitted, or active and unexpired) also holds the slot;
             # expired/revoked/declined ones can be replaced.
             if len(payload.invitees) > 1:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    "pre_interview round allows a single evaluator",
+                raise AppError(
+                    "pre_interview_single_evaluator", status.HTTP_409_CONFLICT
                 )
             await _assert_pre_interview_slot_free(db, rd)
             live_invite = await db.execute(
@@ -1186,20 +1156,29 @@ async def create_invites(
                 )
             )
             if live_invite.first() is not None:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    "pre_interview round allows a single evaluator",
+                raise AppError(
+                    "pre_interview_single_evaluator", status.HTTP_409_CONFLICT
                 )
     # HRP-352: an invite without a filled vacancy profile would land the
     # evaluator on an empty sheet — refuse upfront with an actionable error.
     if not await list_vacancy_profile_competences(db, tenant_id, cv.vacancy_id):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, NO_PROFILE_COMPETENCES_ERROR)
+        raise AppError("vacancy_profile_no_competences", status.HTTP_400_BAD_REQUEST)
     expires_at = datetime.now(timezone.utc) + timedelta(days=payload.expires_in_days)
 
     candidate = await db.get(Candidate, cv.candidate_id)
     vacancy = await db.get(Vacancy, cv.vacancy_id)
-    candidate_name = candidate_display_name(candidate, fallback="(unnamed)")
     vacancy_title = vacancy.title if vacancy else None
+
+    # i18n F4: invitees are external evaluators without an account, so
+    # every invite email of this batch uses the tenant default locale.
+    from app.core.i18n import resolve_locale, translate
+    from app.modules.company.models import Tenant
+
+    tenant = await db.get(Tenant, tenant_id)
+    locale = resolve_locale(tenant_default=tenant.default_locale if tenant else None)
+    candidate_name = candidate_display_name(
+        candidate, fallback=translate("email.fallback.unnamed", locale)
+    )
 
     results: list[dict[str, Any]] = []
     for invitee in payload.invitees:
@@ -1237,6 +1216,7 @@ async def create_invites(
                 evaluator_name=invitee.name,
                 personal_message=payload.personal_message,
                 expires_in_days=payload.expires_in_days,
+                locale=locale,
             )
             enqueue_email(
                 invitee.email,
@@ -1322,10 +1302,7 @@ async def extend_invite(
     # HRP-359: declined is terminal — the token is dead, so extending the
     # expiry would silently succeed while the link stays invalid forever.
     if inv.revoked_at is not None or inv.status in ("submitted", "declined"):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Cannot extend a revoked, submitted or declined invite",
-        )
+        raise AppError("invite_extend_terminal_status", status.HTTP_409_CONFLICT)
     new_exp = inv.expires_at + timedelta(days=additional_days)
     # Cap at 30 days from creation.
     max_exp = inv.created_at + timedelta(days=30)
@@ -1358,7 +1335,7 @@ async def _load_scale(
 ) -> AssessmentScale:
     scale = await db.get(AssessmentScale, scale_id)
     if scale is None or scale.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Scale not found")
+        raise AppError("scale_not_found", status.HTTP_404_NOT_FOUND)
     return scale
 
 
@@ -1430,7 +1407,7 @@ async def _load_vacancy(
 ) -> Vacancy:
     v = await db.get(Vacancy, vacancy_id)
     if v is None or v.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Vacancy not found")
+        raise AppError("vacancy_not_found", status.HTTP_404_NOT_FOUND)
     return v
 
 
@@ -1439,7 +1416,7 @@ async def _load_cv(
 ) -> CandidateVacancy:
     cv = await db.get(CandidateVacancy, cv_id)
     if cv is None or cv.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate-vacancy not found")
+        raise AppError("candidate_vacancy_not_found", status.HTTP_404_NOT_FOUND)
     return cv
 
 
@@ -1448,7 +1425,7 @@ async def _load_round(
 ) -> AssessmentRound:
     rd = await db.get(AssessmentRound, round_id)
     if rd is None or rd.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Round not found")
+        raise AppError("assessment_round_not_found", status.HTTP_404_NOT_FOUND)
     return rd
 
 
@@ -1457,7 +1434,7 @@ async def _load_assessment(
 ) -> RecruitmentAssessment:
     a = await db.get(RecruitmentAssessment, assessment_id)
     if a is None or a.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
     return a
 
 
@@ -1466,7 +1443,7 @@ async def _load_invite(
 ) -> AssessmentInvite:
     inv = await db.get(AssessmentInvite, invite_id)
     if inv is None or inv.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invite not found")
+        raise AppError("invite_not_found", status.HTTP_404_NOT_FOUND)
     return inv
 
 
@@ -1675,5 +1652,4 @@ __all__ = [
     "list_vacancy_profile_competences",
     "effective_invite_status",
     "INVITE_ACTIVE_STATUSES",
-    "NO_PROFILE_COMPETENCES_ERROR",
 ]

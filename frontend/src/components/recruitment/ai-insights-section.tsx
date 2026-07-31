@@ -28,12 +28,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { useLocale, useTranslations } from "next-intl";
 import { useAuth } from "@/context/auth-context";
 import { ApiError, api } from "@/lib/api";
 import {
   AI_ANALYSIS_PRICING,
   AI_ANALYSIS_STAGES,
-  AI_ANALYSIS_STAGE_LABELS,
+  aiAnalysisStageLabel,
   extractResumeExcerpts,
 } from "@/lib/recruitment-types";
 import { ALERT_TONE, BADGE_COLOR } from "@/lib/badge-tones";
@@ -77,6 +78,7 @@ export function AiInsightsSection({
   vacancyApplications,
   initialVacancyId,
 }: Props) {
+  const t = useTranslations("recruitment");
   // Credit pricing copy is SaaS-only; on-prem (community) builds have no
   // billing, so they must not render dead "N cr" labels. See project-review #24.
   const { user } = useAuth();
@@ -133,12 +135,12 @@ export function AiInsightsSection({
       setEligibility(eligRes);
     } catch (err) {
       toast.error(
-        err instanceof ApiError ? err.message : "Failed to load AI analyses",
+        err instanceof ApiError ? err.message : t("aiInsightsLoadFailed"),
       );
     } finally {
       setLoading(false);
     }
-  }, [selectedCvId]);
+  }, [selectedCvId, t]);
 
   useEffect(() => {
     void refresh();
@@ -182,29 +184,45 @@ export function AiInsightsSection({
         // creating an AIAnalysisRun row. A "queued (40 cr)" toast
         // would lie in that case — branch on the response.
         const cached = mode === "full" && res?.status === "completed";
-        const cr = (n: number, plus = false) =>
-          showCredits ? ` (${plus ? "+" : ""}${n} cr)` : "";
         const queuedMessage = cached
           ? showCredits
-            ? "Full analysis served from cache (no credits charged)"
-            : "Full analysis served from cache"
+            ? t("aiInsightsCacheCredits")
+            : t("aiInsightsCache")
           : mode === "resume_only"
-            ? `Resume-only analysis queued${cr(AI_ANALYSIS_PRICING.resume_only)}`
+            ? showCredits
+              ? t("aiInsightsQueuedResumeOnlyCr", {
+                  cost: AI_ANALYSIS_PRICING.resume_only,
+                })
+              : t("aiInsightsQueuedResumeOnly")
             : mode === "topup_to_full"
-              ? `Top-up to full queued${cr(AI_ANALYSIS_PRICING.topup_to_full, true)}`
-              : `Full analysis queued${cr(AI_ANALYSIS_PRICING.full)}`;
+              ? showCredits
+                ? t("aiInsightsQueuedTopupCr", {
+                    cost: AI_ANALYSIS_PRICING.topup_to_full,
+                  })
+                : t("aiInsightsQueuedTopup")
+              : showCredits
+                ? t("aiInsightsQueuedFullCr", {
+                    cost: AI_ANALYSIS_PRICING.full,
+                  })
+                : t("aiInsightsQueuedFull");
         toast.success(queuedMessage);
         await refresh();
       } catch (err) {
         toast.error(
-          err instanceof ApiError ? err.message : "Failed to start analysis",
+          err instanceof ApiError ? err.message : t("aiInsightsStartFailed"),
         );
       } finally {
         busyLatchRef.current = false;
         setBusy(false);
       }
     },
-    [eligibility?.transcribed_interview_id, refresh, selectedCvId, showCredits],
+    [
+      eligibility?.transcribed_interview_id,
+      refresh,
+      selectedCvId,
+      showCredits,
+      t,
+    ],
   );
 
   // HRP-270: while a run is in flight, poll the eligibility +
@@ -230,21 +248,21 @@ export function AiInsightsSection({
       }>(`/recruitment/ai-analyses/${inFlightRun.id}/cancel`, {});
       toast.success(
         !showCredits
-          ? "Analysis cancelled"
+          ? t("aiInsightsCancelled")
           : res.refunded > 0
-            ? `Analysis cancelled — ${res.refunded} cr refunded`
-            : "Analysis cancelled — no refund (LLM call already billed)",
+            ? t("aiInsightsCancelledRefunded", { credits: res.refunded })
+            : t("aiInsightsCancelledNoRefund"),
       );
       setConfirmCancelOpen(false);
       await refresh();
     } catch (err) {
       toast.error(
-        err instanceof ApiError ? err.message : "Failed to cancel analysis",
+        err instanceof ApiError ? err.message : t("aiInsightsCancelFailed"),
       );
     } finally {
       setCancelling(false);
     }
-  }, [cancelling, inFlightRun, refresh, showCredits]);
+  }, [cancelling, inFlightRun, refresh, showCredits, t]);
 
   if (vacancyApplications.length === 0) {
     return null;
@@ -255,7 +273,7 @@ export function AiInsightsSection({
       <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-amber-600" />
-          <CardTitle className="text-base">AI Insights</CardTitle>
+          <CardTitle className="text-base">{t("aiInsightsTitle")}</CardTitle>
         </div>
         <div className="flex items-center gap-2">
           {vacancyApplications.length > 1 && (
@@ -277,7 +295,7 @@ export function AiInsightsSection({
             size="sm"
             onClick={() => setHistoryOpen(true)}
             disabled={runs.length === 0}
-            aria-label="View analysis history"
+            aria-label={t("aiInsightsHistoryAria")}
             data-testid="ai-analysis-history-btn"
           >
             <History className="size-4" aria-hidden />
@@ -287,7 +305,7 @@ export function AiInsightsSection({
             size="sm"
             onClick={() => void refresh()}
             disabled={loading}
-            aria-label="Refresh"
+            aria-label={t("actionRefresh")}
           >
             <RefreshCw
               className={cn("size-4", loading && "animate-spin")}
@@ -321,10 +339,13 @@ export function AiInsightsSection({
         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
           <p className="text-xs text-muted-foreground">
             {activeRun
-              ? "Run a fresh resume-only screening or upgrade above."
+              ? t("aiInsightsFooterActive")
               : showCredits
-                ? `${AI_ANALYSIS_PRICING.resume_only} credits for resume-only, ${AI_ANALYSIS_PRICING.full} credits if interview is available.`
-                : "Run a resume-only screening, or a full resume + interview analysis."}
+                ? t("aiInsightsFooterCredits", {
+                    resumeOnly: AI_ANALYSIS_PRICING.resume_only,
+                    full: AI_ANALYSIS_PRICING.full,
+                  })
+                : t("aiInsightsFooterNoCredits")}
           </p>
           <AnalyzeSplitButton
             disabled={!selectedCvId || busy || !!inFlightRun}
@@ -358,12 +379,12 @@ export function AiInsightsSection({
           data-testid="ai-analysis-cancel-modal"
         >
           <DialogTitle className="text-base font-semibold">
-            Cancel analysis?
+            {t("aiInsightsCancelTitle")}
           </DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
             {showCredits
-              ? "The pipeline stops at the current stage. You get a full refund if the run never reached the first LLM call; otherwise no credits are returned because the model has already been billed."
-              : "The pipeline stops at the current stage."}
+              ? t("aiInsightsCancelDescriptionCredits")
+              : t("aiInsightsCancelDescription")}
           </DialogDescription>
           <div className="mt-4 flex justify-end gap-2">
             <DialogClose
@@ -374,7 +395,7 @@ export function AiInsightsSection({
                   disabled={cancelling}
                   data-testid="ai-analysis-cancel-modal-keep"
                 >
-                  Keep running
+                  {t("aiInsightsKeepRunning")}
                 </Button>
               }
             />
@@ -389,7 +410,7 @@ export function AiInsightsSection({
               {cancelling ? (
                 <Loader2 className="size-3.5 animate-spin" aria-hidden />
               ) : null}
-              <span className="ml-1">Cancel analysis</span>
+              <span className="ml-1">{t("aiInsightsCancelAction")}</span>
             </Button>
           </div>
         </DialogContent>
@@ -403,15 +424,19 @@ export function AiInsightsSection({
 // ---------------------------------------------------------------------------
 
 function EmptyState() {
+  const t = useTranslations("recruitment");
   return (
     <div
       className="rounded-md border border-dashed bg-muted/40 p-4 text-center text-sm text-muted-foreground"
       data-testid="candidate-section-ai-insights-empty-state"
     >
-      <p className="font-medium text-foreground">No analysis yet.</p>
+      <p className="font-medium text-foreground">
+        {t("aiInsightsEmptyTitle")}
+      </p>
       <p className="mt-1">
-        Click <span className="font-medium">Analyze</span> to get an AI-based
-        assessment.
+        {t.rich("aiInsightsEmptyHint", {
+          strong: (chunks) => <span className="font-medium">{chunks}</span>,
+        })}
       </p>
     </div>
   );
@@ -426,6 +451,9 @@ function InFlightCard({
   onCancel: () => void;
   cancelling: boolean;
 }) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
+  const locale = useLocale();
   // HRP-270: render all six pipeline stages so a recruiter sees which
   // ones the resume-only mode skips and how far the worker has got.
   // Stages are derived from a static list to match the backend tax-
@@ -450,11 +478,14 @@ function InFlightCard({
           />
           <div>
             <p className="font-medium">
-              Analysis in progress (
-              {run.mode === "resume_only" ? "resume-only" : "full"})
+              {run.mode === "resume_only"
+                ? t("aiInsightsInProgressResumeOnly")
+                : t("aiInsightsInProgressFull")}
             </p>
             <p className="text-xs text-amber-800">
-              Started {new Date(run.created_at).toLocaleString()}
+              {t("aiInsightsStarted", {
+                date: new Date(run.created_at).toLocaleString(locale),
+              })}
             </p>
           </div>
         </div>
@@ -470,7 +501,7 @@ function InFlightCard({
           ) : (
             <X className="size-3.5" aria-hidden />
           )}
-          <span className="ml-1">Cancel</span>
+          <span className="ml-1">{tc("cancel")}</span>
         </Button>
       </div>
       <ol
@@ -509,9 +540,9 @@ function InFlightCard({
               title={
                 skipped
                   ? s === "citations"
-                    ? "Skipped — no transcript"
-                    : "Skipped — no interview"
-                  : AI_ANALYSIS_STAGE_LABELS[s]
+                    ? t("aiInsightsSkippedNoTranscript")
+                    : t("aiInsightsSkippedNoInterview")
+                  : aiAnalysisStageLabel(t, s)
               }
             >
               {skipped ? (
@@ -532,7 +563,7 @@ function InFlightCard({
                   aria-hidden
                 />
               )}
-              <span>{AI_ANALYSIS_STAGE_LABELS[s]}</span>
+              <span>{aiAnalysisStageLabel(t, s)}</span>
             </li>
           );
         })}
@@ -560,6 +591,8 @@ function ActiveRunCard({
   busy: boolean;
   inFlight: boolean;
 }) {
+  const t = useTranslations("recruitment");
+  const locale = useLocale();
   const isResumeOnly = run.mode === "resume_only";
   // HRP-271: resume-only runs ship per-competence ``resume_excerpts``
   // pre-flattened by the backend. Each renders as a click-to-locate
@@ -591,11 +624,13 @@ function ActiveRunCard({
         <ModeBadge mode={run.mode} />
         {run.data_completeness && (
           <Badge variant="outline" className="text-[10px]">
-            data: {run.data_completeness}
+            {t("aiInsightsDataCompleteness", {
+              value: run.data_completeness,
+            })}
           </Badge>
         )}
         <span className="ml-auto text-xs text-muted-foreground">
-          {new Date(run.created_at).toLocaleDateString()}
+          {new Date(run.created_at).toLocaleDateString(locale)}
         </span>
       </div>
       {run.verdict_summary && (
@@ -604,25 +639,25 @@ function ActiveRunCard({
       <dl className="grid gap-2 text-xs sm:grid-cols-2">
         {run.key_strength && (
           <div>
-            <dt className="font-medium">Key strength</dt>
+            <dt className="font-medium">{t("aiInsightsKeyStrength")}</dt>
             <dd className="text-muted-foreground">{run.key_strength}</dd>
           </div>
         )}
         {run.key_risk && (
           <div>
-            <dt className="font-medium">Key risk</dt>
+            <dt className="font-medium">{t("aiInsightsKeyRisk")}</dt>
             <dd className="text-muted-foreground">{run.key_risk}</dd>
           </div>
         )}
         {run.risk_mitigation && (
           <div className="sm:col-span-2">
-            <dt className="font-medium">Mitigation</dt>
+            <dt className="font-medium">{t("aiInsightsMitigation")}</dt>
             <dd className="text-muted-foreground">{run.risk_mitigation}</dd>
           </div>
         )}
         {run.recommendation_for_next_step && (
           <div className="sm:col-span-2">
-            <dt className="font-medium">Next step</dt>
+            <dt className="font-medium">{t("aiInsightsNextStep")}</dt>
             <dd className="text-muted-foreground capitalize">
               {run.recommendation_for_next_step.replaceAll("_", " ")}
             </dd>
@@ -661,6 +696,7 @@ function OutdatedResumeBanner({
   showCredits: boolean;
   busy: boolean;
 }) {
+  const t = useTranslations("recruitment");
   return (
     <div
       className={`flex flex-wrap items-center justify-between gap-3 rounded-md p-3 text-sm ${ALERT_TONE.amber}`}
@@ -672,9 +708,9 @@ function OutdatedResumeBanner({
           aria-hidden
         />
         <p>
-          <span className="font-medium">Resume updated.</span> This
-          analysis was run against an older version of the
-          candidate&apos;s resume.
+          {t.rich("aiInsightsOutdatedBanner", {
+            strong: (chunks) => <span className="font-medium">{chunks}</span>,
+          })}
         </p>
       </div>
       <Button
@@ -690,8 +726,10 @@ function OutdatedResumeBanner({
         )}
         <span className="ml-1">
           {showCredits
-            ? `Re-analyze (${AI_ANALYSIS_PRICING.resume_only} cr)`
-            : "Re-analyze"}
+            ? t("aiInsightsReanalyzeCr", {
+                cost: AI_ANALYSIS_PRICING.resume_only,
+              })
+            : t("aiInsightsReanalyze")}
         </span>
       </Button>
     </div>
@@ -701,12 +739,15 @@ function OutdatedResumeBanner({
 // HRP-271 — resume_excerpts grouped by section. Each excerpt is a
 // button: click → dispatch the focus event that ParsedResumeEditor
 // listens for (auto-expand + scroll + 2 s ring highlight).
-const SECTION_LABELS: Record<ResumeExcerptSection, string> = {
-  experience: "Experience",
-  education: "Education",
-  skills: "Skills",
-  projects: "Projects",
-  summary: "Summary",
+//
+// HRP-476: the map owns the section → i18n key relation; the wording
+// lives in the `recruitment` namespace and is resolved by the component.
+const SECTION_LABEL_KEYS: Record<ResumeExcerptSection, string> = {
+  experience: "aiInsightsSectionExperience",
+  education: "aiInsightsSectionEducation",
+  skills: "aiInsightsSectionSkills",
+  projects: "aiInsightsSectionProjects",
+  summary: "aiInsightsSectionSummary",
 };
 const SECTION_ORDER: ResumeExcerptSection[] = [
   "experience",
@@ -723,6 +764,7 @@ function ResumeExcerptList({
   candidateId: string;
   excerpts: ResumeExcerpt[];
 }) {
+  const t = useTranslations("recruitment");
   const groups = useMemo(() => {
     const map = new Map<ResumeExcerptSection, ResumeExcerpt[]>();
     for (const e of excerpts) {
@@ -742,13 +784,13 @@ function ResumeExcerptList({
       data-testid="ai-analysis-resume-excerpts"
     >
       <p className="text-xs font-medium text-muted-foreground">
-        Resume citations
+        {t("aiInsightsResumeCitations")}
       </p>
       <div className="space-y-2">
         {groups.map(({ section, items }) => (
           <div key={section} className="space-y-1">
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              {SECTION_LABELS[section]}
+              {t(SECTION_LABEL_KEYS[section])}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {items.map((e, idx) => (
@@ -767,7 +809,7 @@ function ResumeExcerptList({
                       ? [e.source_company, e.source_period]
                           .filter(Boolean)
                           .join(" · ")
-                      : "Focus in parsed resume"
+                      : t("aiInsightsFocusInResume")
                   }
                   data-testid={`ai-analysis-resume-excerpt-${section}-${idx}`}
                 >
@@ -793,6 +835,7 @@ function TopupCallout({
   showCredits: boolean;
   busy: boolean;
 }) {
+  const t = useTranslations("recruitment");
   if (eligibility.eligible) {
     return (
       <div className={`flex items-center justify-between gap-3 rounded-md p-3 text-sm ${ALERT_TONE.emerald}`}>
@@ -801,9 +844,7 @@ function TopupCallout({
             className="size-4 text-emerald-700 dark:text-emerald-300"
             aria-hidden
           />
-          <p>
-            Interview transcript available — upgrade for full assessment.
-          </p>
+          <p>{t("aiInsightsTopupAvailable")}</p>
         </div>
         <Button
           size="sm"
@@ -812,8 +853,10 @@ function TopupCallout({
           data-testid="ai-analysis-upgrade-to-full-btn"
         >
           {showCredits
-            ? `Upgrade to full (+${AI_ANALYSIS_PRICING.topup_to_full} cr)`
-            : "Upgrade to full"}
+            ? t("aiInsightsUpgradeToFullCr", {
+                cost: AI_ANALYSIS_PRICING.topup_to_full,
+              })
+            : t("aiInsightsUpgradeToFull")}
         </Button>
       </div>
     );
@@ -823,12 +866,12 @@ function TopupCallout({
   // so the recruiter knows whether the answer is "schedule an
   // interview", "rerun from scratch" or "wait for a profile freeze".
   const reasonMap: Record<string, string> = {
-    no_transcribed_interview:
-      "Upload and transcribe an interview to enable a full top-up.",
-    resume_only_too_old: `This resume-only run is older than ${eligibility.window_days ?? 30} days — top-up window expired.`,
-    profile_changed:
-      "Vacancy competence profile changed since the prior run — rerun a fresh full analysis.",
-    profile_missing: "Vacancy competence profile is missing.",
+    no_transcribed_interview: t("aiInsightsReasonNoInterview"),
+    resume_only_too_old: t("aiInsightsReasonTooOld", {
+      days: eligibility.window_days ?? 30,
+    }),
+    profile_changed: t("aiInsightsReasonProfileChanged"),
+    profile_missing: t("aiInsightsReasonProfileMissing"),
     no_active_resume_only_run: "",
   };
   const text = reasonMap[eligibility.reason ?? ""] ?? "";
@@ -873,6 +916,7 @@ function VerdictPill({
 }
 
 function ModeBadge({ mode }: { mode: AiAnalysisRun["mode"] }) {
+  const t = useTranslations("recruitment");
   const isResumeOnly = mode === "resume_only";
   return (
     <Badge
@@ -886,11 +930,13 @@ function ModeBadge({ mode }: { mode: AiAnalysisRun["mode"] }) {
       data-testid={`ai-analysis-mode-badge-${mode}`}
       title={
         isResumeOnly
-          ? "Based on resume only — interview required for full assessment"
-          : "Based on resume and interview transcript"
+          ? t("aiInsightsModeBadgeResumeOnlyTitle")
+          : t("aiInsightsModeBadgeFullTitle")
       }
     >
-      {isResumeOnly ? "resume only" : "full"}
+      {isResumeOnly
+        ? t("aiInsightsModeBadgeResumeOnly")
+        : t("aiInsightsModeBadgeFull")}
     </Badge>
   );
 }
@@ -912,7 +958,7 @@ function AnalyzeSplitButton({
   onResumeOnly: () => void;
   onFullMode: () => void;
 }) {
-  const cr = (n: number) => (showCredits ? ` (${n} cr)` : "");
+  const t = useTranslations("recruitment");
   // HRP-269: split-button — primary fires resume-only as before, the
   // chevron dropdown exposes ``Resume + interview`` (full mode, 40 cr).
   // The full-mode item stays visible even without a transcribed
@@ -926,12 +972,17 @@ function AnalyzeSplitButton({
   // of paying full price here.
   const fullModeBlocked = !hasTranscribedInterview || topupEligible;
   const fullModeReason = !hasTranscribedInterview
-    ? "Upload and transcribe an interview to enable full analysis"
+    ? t("aiInsightsFullBlockedNoInterview")
     : topupEligible
       ? showCredits
-        ? `Use the +${AI_ANALYSIS_PRICING.topup_to_full}-cr upgrade above — full analysis here would charge ${AI_ANALYSIS_PRICING.full} cr`
-        : "Use the upgrade above instead of a fresh full analysis here"
-      : `Run resume + interview analysis${cr(AI_ANALYSIS_PRICING.full)}`;
+        ? t("aiInsightsFullBlockedTopupCr", {
+            topup: AI_ANALYSIS_PRICING.topup_to_full,
+            full: AI_ANALYSIS_PRICING.full,
+          })
+        : t("aiInsightsFullBlockedTopup")
+      : showCredits
+        ? t("aiInsightsFullReasonCr", { cost: AI_ANALYSIS_PRICING.full })
+        : t("aiInsightsFullReason");
 
   return (
     <div className="inline-flex items-stretch">
@@ -939,7 +990,13 @@ function AnalyzeSplitButton({
         size="sm"
         onClick={onResumeOnly}
         disabled={disabled}
-        title={`Resume-only analysis${cr(AI_ANALYSIS_PRICING.resume_only)}`}
+        title={
+          showCredits
+            ? t("aiInsightsResumeOnlyTitleCr", {
+                cost: AI_ANALYSIS_PRICING.resume_only,
+              })
+            : t("aiInsightsResumeOnlyTitle")
+        }
         className="rounded-r-none"
         data-testid="candidate-section-ai-insights-analyze-resume-only"
       >
@@ -948,7 +1005,13 @@ function AnalyzeSplitButton({
         ) : (
           <Sparkles className="size-3.5" aria-hidden />
         )}
-        <span className="ml-1">Resume only{cr(AI_ANALYSIS_PRICING.resume_only)}</span>
+        <span className="ml-1">
+          {showCredits
+            ? t("aiInsightsResumeOnlyBtnCr", {
+                cost: AI_ANALYSIS_PRICING.resume_only,
+              })
+            : t("aiInsightsResumeOnlyBtn")}
+        </span>
       </Button>
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -958,7 +1021,7 @@ function AnalyzeSplitButton({
               size="sm"
               disabled={disabled}
               className="rounded-l-none border-l border-l-primary-foreground/20 px-2"
-              aria-label="More analysis options"
+              aria-label={t("aiInsightsMoreOptionsAria")}
               data-testid="candidate-section-ai-insights-analyze-menu-trigger"
             />
           }
@@ -979,7 +1042,11 @@ function AnalyzeSplitButton({
             data-testid="candidate-section-ai-insights-analyze-full"
           >
             <Sparkles className="mr-2 size-3.5" aria-hidden />
-            <span>Resume + interview{cr(AI_ANALYSIS_PRICING.full)}</span>
+            <span>
+              {showCredits
+                ? t("aiInsightsFullBtnCr", { cost: AI_ANALYSIS_PRICING.full })
+                : t("aiInsightsFullBtn")}
+            </span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -996,6 +1063,8 @@ function HistoryDialog({
   onOpenChange: (next: boolean) => void;
   runs: AiAnalysisRun[];
 }) {
+  const t = useTranslations("recruitment");
+  const locale = useLocale();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -1003,15 +1072,16 @@ function HistoryDialog({
         data-testid="ai-analysis-history-modal"
       >
         <DialogTitle className="text-base font-semibold">
-          Analysis history
+          {t("aiInsightsHistoryTitle")}
         </DialogTitle>
         <DialogDescription className="text-xs text-muted-foreground">
-          Older runs are archived but kept for audit. Resume-only and full
-          runs are interleaved by timestamp.
+          {t("aiInsightsHistoryDescription")}
         </DialogDescription>
         <div className="mt-3 max-h-[60vh] space-y-2 overflow-y-auto">
           {runs.length === 0 && (
-            <p className="text-sm text-muted-foreground">No runs yet.</p>
+            <p className="text-sm text-muted-foreground">
+              {t("aiInsightsHistoryEmpty")}
+            </p>
           )}
           {runs.map((r) => (
             <div
@@ -1027,11 +1097,11 @@ function HistoryDialog({
                 <span className="font-medium">{r.verdict ?? "—"}</span>
                 {r.archived_at && (
                   <span className="text-[10px] uppercase tracking-wide opacity-70">
-                    archived
+                    {t("aiInsightsArchived")}
                   </span>
                 )}
                 <span className="ml-auto">
-                  {new Date(r.created_at).toLocaleString()}
+                  {new Date(r.created_at).toLocaleString(locale)}
                 </span>
               </div>
               {r.verdict_summary && <p className="mt-1">{r.verdict_summary}</p>}
@@ -1042,7 +1112,7 @@ function HistoryDialog({
           <DialogClose
             render={
               <Button variant="outline" size="sm">
-                Close
+                {t("aiInsightsClose")}
               </Button>
             }
           />

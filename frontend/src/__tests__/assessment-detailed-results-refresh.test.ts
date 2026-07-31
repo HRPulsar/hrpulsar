@@ -26,8 +26,10 @@ describe("Detailed results — calibration refresh (HRP-185 REDO #3)", () => {
   });
 
   it("includes refreshKey in the fetch effect deps", () => {
+    // HRP-476: `t` joined the deps when the fallback error copy moved into
+    // the `assessments` namespace; refreshKey must still be listed.
     expect(SOURCE).toMatch(
-      /\[assessmentId, visible, calibrationInProgress, refreshKey\]/,
+      /\[assessmentId, visible, calibrationInProgress, refreshKey(, t)?\]/,
     );
   });
 

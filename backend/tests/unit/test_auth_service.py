@@ -384,20 +384,25 @@ class TestChangePasswordEdgeCases:
 
 class TestPasswordReset:
     async def test_request_reset_existing_email(self, db: AsyncSession, user):
-        token = await service.request_password_reset(db, user.email)
-        assert token is not None
+        # i18n F4: returns (token, recipient locale) — the locale is
+        # resolved here so the router doesn't re-look-up the user.
+        issued = await service.request_password_reset(db, user.email)
+        assert issued is not None
+        token, locale = issued
+        assert locale in settings.available_locales_list
         # Token should be a valid JWT
         payload = decode_token(token)
         assert payload["type"] == "reset"
         assert payload["sub"] == str(user.id)
 
     async def test_request_reset_nonexistent_email(self, db: AsyncSession):
-        token = await service.request_password_reset(db, "nobody@nowhere.com")
-        assert token is None
+        issued = await service.request_password_reset(db, "nobody@nowhere.com")
+        assert issued is None
 
     async def test_reset_password_success(self, db: AsyncSession, user):
-        token = await service.request_password_reset(db, user.email)
-        assert token is not None
+        issued = await service.request_password_reset(db, user.email)
+        assert issued is not None
+        token, _ = issued
 
         await service.reset_password(db, token, "brandnew123")
 

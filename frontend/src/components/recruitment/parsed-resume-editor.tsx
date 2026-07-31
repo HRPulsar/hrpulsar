@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { useTranslations } from "next-intl";
 import {
   Award,
   ChevronDown,
@@ -178,6 +179,7 @@ function findGenericTarget(
 }
 
 export function ParsedResumeEditor({ card, etag, onSaved }: Props) {
+  const t = useTranslations("recruitment");
   const parsed = card.parsed_resume_jsonb ?? null;
   const candidateId = card.id;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -306,21 +308,20 @@ export function ParsedResumeEditor({ card, etag, onSaved }: Props) {
     }
     const data = (await res.json()) as CandidateCanonical;
     onSaved(data, res.headers.get("ETag"));
-    toast.success("Resume section updated");
+    toast.success(t("resumeEditorToastSectionUpdated"));
   }
 
   return (
     <Card data-testid="candidate-card-section-resume" ref={containerRef}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-sm">
-          <Sparkles className="size-4 text-primary" /> Parsed resume
+          <Sparkles className="size-4 text-primary" /> {t("resumeEditorTitle")}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6 text-sm">
         {!parsed && (
           <p className="text-muted-foreground">
-            No parsed resume yet. Upload one from the vacancy page to populate
-            this card.
+            {t("resumeEditorNoParsedResume")}
           </p>
         )}
         <SummaryEditor
@@ -394,6 +395,8 @@ function SectionHeader({
   onSave,
   saveDisabled,
 }: SectionHeaderProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   // HRP-271 (review): keep the heading element for screen-reader
   // outline navigation. The disclosure button lives inside the <h3>
   // (standard ARIA disclosure pattern) so "H" jumps still land on
@@ -427,7 +430,7 @@ function SectionHeader({
             disabled={busy}
             data-testid={`${testId}-cancel`}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             size="sm"
@@ -435,7 +438,7 @@ function SectionHeader({
             disabled={busy || saveDisabled}
             data-testid={`${testId}-save`}
           >
-            {busy ? "Saving..." : "Save"}
+            {busy ? t("actionSaving") : t("save")}
           </Button>
         </div>
       ) : (
@@ -445,7 +448,7 @@ function SectionHeader({
           onClick={onEdit}
           data-testid={`${testId}-edit`}
         >
-          Edit
+          {t("actionEdit")}
         </Button>
       )}
     </div>
@@ -479,7 +482,10 @@ function useEditState<T>(value: T) {
   return { editing, setEditing, draft, setDraft, busy, setBusy };
 }
 
+// HRP-476: module-scope helper, so the caller hands its own ``t`` in
+// rather than calling ``useTranslations`` outside a component.
 async function runSave(
+  t: (key: string) => string,
   setBusy: (b: boolean) => void,
   setEditing: (b: boolean) => void,
   fn: () => Promise<void>,
@@ -490,9 +496,11 @@ async function runSave(
     setEditing(false);
   } catch (err) {
     if (err instanceof ApiError && err.status === 412) {
-      toast.error("Card changed since load. Reload to retry.");
+      toast.error(t("resumeEditorConflictReload"));
     } else {
-      toast.error(err instanceof Error ? err.message : "Save failed");
+      toast.error(
+        err instanceof Error ? err.message : t("resumeEditorSaveFailed"),
+      );
     }
   } finally {
     setBusy(false);
@@ -514,6 +522,7 @@ function SummaryEditor({
   onToggleCollapsed: () => void;
   onSave: (v: string | null) => Promise<void>;
 }) {
+  const t = useTranslations("recruitment");
   const { editing, setEditing, draft, setDraft, busy, setBusy } =
     useEditState<string | null>(value);
 
@@ -524,7 +533,7 @@ function SummaryEditor({
       data-resume-section="summary"
     >
       <SectionHeader
-        title="Summary"
+        title={t("resumeEditorSectionSummary")}
         testId="candidate-card-edit-summary"
         editing={editing}
         busy={busy}
@@ -532,7 +541,7 @@ function SummaryEditor({
         onToggleCollapsed={onToggleCollapsed}
         onEdit={() => startEditing(collapsed, onToggleCollapsed, setEditing)}
         onCancel={() => setEditing(false)}
-        onSave={() => runSave(setBusy, setEditing, () => onSave(draft))}
+        onSave={() => runSave(t, setBusy, setEditing, () => onSave(draft))}
       />
       {!collapsed &&
         (editing ? (
@@ -540,13 +549,15 @@ function SummaryEditor({
             rows={4}
             value={draft ?? ""}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="Short candidate summary"
+            placeholder={t("resumeEditorSummaryPlaceholder")}
             data-testid="candidate-card-edit-summary-input"
           />
         ) : value ? (
           <p className="whitespace-pre-line text-foreground/90">{value}</p>
         ) : (
-          <p className="text-xs text-muted-foreground">No summary yet.</p>
+          <p className="text-xs text-muted-foreground">
+            {t("resumeEditorSummaryEmpty")}
+          </p>
         ))}
     </section>
   );
@@ -567,6 +578,7 @@ function SkillsEditor({
   onToggleCollapsed: () => void;
   onSave: (v: string[]) => Promise<void>;
 }) {
+  const t = useTranslations("recruitment");
   const { editing, setEditing, draft, setDraft, busy, setBusy } =
     useEditState<string[]>(value);
   const [pending, setPending] = useState("");
@@ -587,7 +599,7 @@ function SkillsEditor({
       data-resume-section="skills"
     >
       <SectionHeader
-        title="Skills"
+        title={t("resumeEditorSectionSkills")}
         testId="candidate-card-edit-skills"
         editing={editing}
         busy={busy}
@@ -595,7 +607,7 @@ function SkillsEditor({
         onToggleCollapsed={onToggleCollapsed}
         onEdit={() => startEditing(collapsed, onToggleCollapsed, setEditing)}
         onCancel={() => setEditing(false)}
-        onSave={() => runSave(setBusy, setEditing, () => onSave(draft))}
+        onSave={() => runSave(t, setBusy, setEditing, () => onSave(draft))}
       />
       {!collapsed &&
         (editing ? (
@@ -619,7 +631,7 @@ function SkillsEditor({
             <Input
               value={pending}
               onChange={(e) => setPending(e.target.value)}
-              placeholder="Type a skill and press Enter"
+              placeholder={t("resumeEditorSkillsPlaceholder")}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === ",") {
                   e.preventDefault();
@@ -644,7 +656,9 @@ function SkillsEditor({
             ))}
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">No skills listed.</p>
+          <p className="text-xs text-muted-foreground">
+            {t("resumeEditorSkillsEmpty")}
+          </p>
         ))}
     </section>
   );
@@ -665,6 +679,7 @@ function ExperienceEditor({
   onToggleCollapsed: () => void;
   onSave: (v: ParsedResumeExperience[]) => Promise<void>;
 }) {
+  const t = useTranslations("recruitment");
   const { editing, setEditing, draft, setDraft, busy, setBusy } =
     useEditState<ParsedResumeExperience[]>(value);
 
@@ -681,7 +696,7 @@ function ExperienceEditor({
       data-resume-section="experience"
     >
       <SectionHeader
-        title="Experience"
+        title={t("resumeEditorSectionExperience")}
         testId="candidate-card-edit-experience"
         editing={editing}
         busy={busy}
@@ -689,7 +704,7 @@ function ExperienceEditor({
         onToggleCollapsed={onToggleCollapsed}
         onEdit={() => startEditing(collapsed, onToggleCollapsed, setEditing)}
         onCancel={() => setEditing(false)}
-        onSave={() => runSave(setBusy, setEditing, () => onSave(draft))}
+        onSave={() => runSave(t, setBusy, setEditing, () => onSave(draft))}
       />
       {!collapsed && (editing ? (
         <div className="space-y-3">
@@ -706,7 +721,7 @@ function ExperienceEditor({
             >
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <FieldInput
-                  label="Position"
+                  label={t("resumeEditorFieldPosition")}
                   value={exp.position ?? exp.title ?? exp.role ?? ""}
                   onChange={(v) =>
                     patchItem(i, { position: v, role: v, title: v })
@@ -714,26 +729,28 @@ function ExperienceEditor({
                   testId={`candidate-card-edit-experience-${i}-title`}
                 />
                 <FieldInput
-                  label="Company"
+                  label={t("resumeEditorFieldCompany")}
                   value={exp.company ?? ""}
                   onChange={(v) => patchItem(i, { company: v })}
                   testId={`candidate-card-edit-experience-${i}-company`}
                 />
                 <FieldInput
-                  label="Start date"
+                  label={t("resumeEditorFieldStartDate")}
                   value={exp.start_date ?? ""}
                   onChange={(v) => patchItem(i, { start_date: v })}
                   testId={`candidate-card-edit-experience-${i}-start`}
                 />
                 <FieldInput
-                  label="End date"
+                  label={t("resumeEditorFieldEndDate")}
                   value={exp.end_date ?? ""}
                   onChange={(v) => patchItem(i, { end_date: v })}
                   testId={`candidate-card-edit-experience-${i}-end`}
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Description</Label>
+                <Label className="text-xs">
+                  {t("resumeEditorFieldDescription")}
+                </Label>
                 <Textarea
                   rows={3}
                   value={exp.description ?? ""}
@@ -751,7 +768,7 @@ function ExperienceEditor({
                 }
                 data-testid={`candidate-card-edit-experience-${i}-remove`}
               >
-                <Trash2 className="mr-1 size-3" /> Remove
+                <Trash2 className="mr-1 size-3" /> {t("resumeEditorRemove")}
               </Button>
             </div>
           ))}
@@ -761,11 +778,13 @@ function ExperienceEditor({
             onClick={() => setDraft((prev) => [...prev, emptyExperience()])}
             data-testid="candidate-card-edit-experience-add"
           >
-            <Plus className="mr-1 size-3" /> Add experience
+            <Plus className="mr-1 size-3" /> {t("resumeEditorAddExperience")}
           </Button>
         </div>
       ) : value.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No experience listed.</p>
+        <p className="text-xs text-muted-foreground">
+          {t("resumeEditorExperienceEmpty")}
+        </p>
       ) : (
         <ul className="space-y-3">
           {value.map((exp, i) => {
@@ -781,7 +800,10 @@ function ExperienceEditor({
                 data-resume-period={period}
               >
                 <p className="font-medium">
-                  {exp.position || exp.title || exp.role || "Role"}
+                  {exp.position ||
+                    exp.title ||
+                    exp.role ||
+                    t("resumeEditorRoleFallback")}
                   {exp.company ? ` @ ${exp.company}` : ""}
                 </p>
                 <p className="text-xs text-muted-foreground">{period}</p>
@@ -814,6 +836,7 @@ function EducationEditor({
   onToggleCollapsed: () => void;
   onSave: (v: ParsedResumeEducation[]) => Promise<void>;
 }) {
+  const t = useTranslations("recruitment");
   const { editing, setEditing, draft, setDraft, busy, setBusy } =
     useEditState<ParsedResumeEducation[]>(value);
 
@@ -830,7 +853,7 @@ function EducationEditor({
       data-resume-section="education"
     >
       <SectionHeader
-        title="Education"
+        title={t("resumeEditorSectionEducation")}
         testId="candidate-card-edit-education"
         editing={editing}
         busy={busy}
@@ -838,7 +861,7 @@ function EducationEditor({
         onToggleCollapsed={onToggleCollapsed}
         onEdit={() => startEditing(collapsed, onToggleCollapsed, setEditing)}
         onCancel={() => setEditing(false)}
-        onSave={() => runSave(setBusy, setEditing, () => onSave(draft))}
+        onSave={() => runSave(t, setBusy, setEditing, () => onSave(draft))}
       />
       {!collapsed && (editing ? (
         <div className="space-y-3">
@@ -851,32 +874,32 @@ function EducationEditor({
             >
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <FieldInput
-                  label="Institution"
+                  label={t("resumeEditorFieldInstitution")}
                   value={edu.institution ?? ""}
                   onChange={(v) => patchItem(i, { institution: v })}
                   testId={`candidate-card-edit-education-${i}-institution`}
                 />
                 <FieldInput
-                  label="Degree"
+                  label={t("resumeEditorFieldDegree")}
                   value={edu.degree ?? ""}
                   onChange={(v) => patchItem(i, { degree: v })}
                   testId={`candidate-card-edit-education-${i}-degree`}
                 />
                 <FieldInput
-                  label="Field"
+                  label={t("resumeEditorFieldField")}
                   value={edu.field ?? ""}
                   onChange={(v) => patchItem(i, { field: v })}
                   testId={`candidate-card-edit-education-${i}-field`}
                 />
                 <div className="grid grid-cols-2 gap-2">
                   <FieldInput
-                    label="Start"
+                    label={t("resumeEditorFieldStart")}
                     value={edu.start_date ?? ""}
                     onChange={(v) => patchItem(i, { start_date: v })}
                     testId={`candidate-card-edit-education-${i}-start`}
                   />
                   <FieldInput
-                    label="End"
+                    label={t("resumeEditorFieldEnd")}
                     value={edu.end_date ?? ""}
                     onChange={(v) => patchItem(i, { end_date: v })}
                     testId={`candidate-card-edit-education-${i}-end`}
@@ -891,7 +914,7 @@ function EducationEditor({
                 }
                 data-testid={`candidate-card-edit-education-${i}-remove`}
               >
-                <Trash2 className="mr-1 size-3" /> Remove
+                <Trash2 className="mr-1 size-3" /> {t("resumeEditorRemove")}
               </Button>
             </div>
           ))}
@@ -901,11 +924,13 @@ function EducationEditor({
             onClick={() => setDraft((prev) => [...prev, emptyEducation()])}
             data-testid="candidate-card-edit-education-add"
           >
-            <Plus className="mr-1 size-3" /> Add education
+            <Plus className="mr-1 size-3" /> {t("resumeEditorAddEducation")}
           </Button>
         </div>
       ) : value.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No education listed.</p>
+        <p className="text-xs text-muted-foreground">
+          {t("resumeEditorEducationEmpty")}
+        </p>
       ) : (
         <ul className="space-y-2">
           {value.map((edu, i) => (
@@ -917,7 +942,7 @@ function EducationEditor({
               <GraduationCap className="mt-0.5 size-4 text-muted-foreground" />
               <div>
                 <p className="font-medium">
-                  {edu.institution || "Institution"}
+                  {edu.institution || t("resumeEditorFieldInstitution")}
                   {edu.degree ? ` — ${edu.degree}` : ""}
                 </p>
                 <p className="text-xs text-muted-foreground">
@@ -949,6 +974,7 @@ function LanguagesEditor({
   onToggleCollapsed: () => void;
   onSave: (v: ParsedResumeLanguage[]) => Promise<void>;
 }) {
+  const t = useTranslations("recruitment");
   const { editing, setEditing, draft, setDraft, busy, setBusy } =
     useEditState<ParsedResumeLanguage[]>(value);
 
@@ -965,7 +991,7 @@ function LanguagesEditor({
       data-resume-section="languages"
     >
       <SectionHeader
-        title="Languages"
+        title={t("resumeEditorSectionLanguages")}
         testId="candidate-card-edit-languages"
         editing={editing}
         busy={busy}
@@ -973,7 +999,7 @@ function LanguagesEditor({
         onToggleCollapsed={onToggleCollapsed}
         onEdit={() => startEditing(collapsed, onToggleCollapsed, setEditing)}
         onCancel={() => setEditing(false)}
-        onSave={() => runSave(setBusy, setEditing, () => onSave(draft))}
+        onSave={() => runSave(t, setBusy, setEditing, () => onSave(draft))}
       />
       {!collapsed && (editing ? (
         <div className="space-y-2">
@@ -985,13 +1011,13 @@ function LanguagesEditor({
               data-resume-item-key={`language-${i}`}
             >
               <FieldInput
-                label="Name"
+                label={t("fieldName")}
                 value={lang.name ?? ""}
                 onChange={(v) => patchItem(i, { name: v })}
                 testId={`candidate-card-edit-languages-${i}-name`}
               />
               <FieldInput
-                label="Level"
+                label={t("resumeEditorFieldLevel")}
                 value={lang.level ?? ""}
                 onChange={(v) => patchItem(i, { level: v })}
                 testId={`candidate-card-edit-languages-${i}-level`}
@@ -1002,7 +1028,7 @@ function LanguagesEditor({
                 onClick={() =>
                   setDraft((prev) => prev.filter((_, j) => j !== i))
                 }
-                aria-label="Remove language"
+                aria-label={t("resumeEditorRemoveLanguage")}
                 data-testid={`candidate-card-edit-languages-${i}-remove`}
               >
                 <Trash2 className="size-3" />
@@ -1015,11 +1041,13 @@ function LanguagesEditor({
             onClick={() => setDraft((prev) => [...prev, emptyLanguage()])}
             data-testid="candidate-card-edit-languages-add"
           >
-            <Plus className="mr-1 size-3" /> Add language
+            <Plus className="mr-1 size-3" /> {t("resumeEditorAddLanguage")}
           </Button>
         </div>
       ) : value.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No languages listed.</p>
+        <p className="text-xs text-muted-foreground">
+          {t("resumeEditorLanguagesEmpty")}
+        </p>
       ) : (
         <ul className="flex flex-wrap items-center gap-2 text-sm">
           {value.map((l, i) => (
@@ -1054,6 +1082,7 @@ function CertificatesEditor({
   onToggleCollapsed: () => void;
   onSave: (v: ParsedResumeCertificate[]) => Promise<void>;
 }) {
+  const t = useTranslations("recruitment");
   const { editing, setEditing, draft, setDraft, busy, setBusy } =
     useEditState<ParsedResumeCertificate[]>(value);
 
@@ -1070,7 +1099,7 @@ function CertificatesEditor({
       data-resume-section="certificates"
     >
       <SectionHeader
-        title="Certificates"
+        title={t("resumeEditorSectionCertificates")}
         testId="candidate-card-edit-certificates"
         editing={editing}
         busy={busy}
@@ -1078,7 +1107,7 @@ function CertificatesEditor({
         onToggleCollapsed={onToggleCollapsed}
         onEdit={() => startEditing(collapsed, onToggleCollapsed, setEditing)}
         onCancel={() => setEditing(false)}
-        onSave={() => runSave(setBusy, setEditing, () => onSave(draft))}
+        onSave={() => runSave(t, setBusy, setEditing, () => onSave(draft))}
       />
       {!collapsed && (editing ? (
         <div className="space-y-3">
@@ -1091,19 +1120,19 @@ function CertificatesEditor({
             >
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <FieldInput
-                  label="Name"
+                  label={t("fieldName")}
                   value={cert.name ?? ""}
                   onChange={(v) => patchItem(i, { name: v })}
                   testId={`candidate-card-edit-certificates-${i}-name`}
                 />
                 <FieldInput
-                  label="Issuer"
+                  label={t("resumeEditorFieldIssuer")}
                   value={cert.issuer ?? ""}
                   onChange={(v) => patchItem(i, { issuer: v })}
                   testId={`candidate-card-edit-certificates-${i}-issuer`}
                 />
                 <FieldInput
-                  label="Issued"
+                  label={t("resumeEditorFieldIssued")}
                   value={cert.issued_at ?? ""}
                   onChange={(v) => patchItem(i, { issued_at: v })}
                   testId={`candidate-card-edit-certificates-${i}-issued`}
@@ -1117,7 +1146,7 @@ function CertificatesEditor({
                 }
                 data-testid={`candidate-card-edit-certificates-${i}-remove`}
               >
-                <Trash2 className="mr-1 size-3" /> Remove
+                <Trash2 className="mr-1 size-3" /> {t("resumeEditorRemove")}
               </Button>
             </div>
           ))}
@@ -1127,11 +1156,13 @@ function CertificatesEditor({
             onClick={() => setDraft((prev) => [...prev, emptyCertificate()])}
             data-testid="candidate-card-edit-certificates-add"
           >
-            <Plus className="mr-1 size-3" /> Add certificate
+            <Plus className="mr-1 size-3" /> {t("resumeEditorAddCertificate")}
           </Button>
         </div>
       ) : value.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No certificates listed.</p>
+        <p className="text-xs text-muted-foreground">
+          {t("resumeEditorCertificatesEmpty")}
+        </p>
       ) : (
         <ul className="list-disc space-y-1 pl-5 text-foreground/90">
           {value.map((c, i) => (

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +23,48 @@ type ScaleLevel = {
   sort_order: number;
 };
 
+// HRP-476: the seeded level names are recruiter-facing copy that lands in
+// the draft form (and, on save, in the tenant's scale), so they come from
+// the `recruitment` i18n namespace. The static list owns everything else.
+const EMPTY_LEVEL_SEEDS: Array<Omit<ScaleLevel, "label"> & { labelKey: string }> =
+  [
+    {
+      value: 1,
+      labelKey: "scaleLevelNotSuitable",
+      weight: 0,
+      sort_order: 0,
+      color: "rose",
+    },
+    {
+      value: 2,
+      labelKey: "scaleLevelBelowExpectations",
+      weight: 33,
+      sort_order: 1,
+      color: "amber",
+    },
+    {
+      value: 3,
+      labelKey: "scaleLevelMeetsExpectations",
+      weight: 66,
+      sort_order: 2,
+      color: "blue",
+    },
+    {
+      value: 4,
+      labelKey: "scaleLevelExceedsExpectations",
+      weight: 100,
+      sort_order: 3,
+      color: "emerald",
+    },
+  ];
+
+function buildEmptyLevels(t: (key: string) => string): ScaleLevel[] {
+  return EMPTY_LEVEL_SEEDS.map(({ labelKey, ...rest }) => ({
+    ...rest,
+    label: t(labelKey),
+  }));
+}
+
 type Scale = {
   id: string;
   tenant_id: string;
@@ -36,14 +79,9 @@ type Scale = {
   levels: ScaleLevel[];
 };
 
-const EMPTY_LEVELS: ScaleLevel[] = [
-  { value: 1, label: "Not suitable", weight: 0, sort_order: 0, color: "rose" },
-  { value: 2, label: "Below expectations", weight: 33, sort_order: 1, color: "amber" },
-  { value: 3, label: "Meets expectations", weight: 66, sort_order: 2, color: "blue" },
-  { value: 4, label: "Exceeds expectations", weight: 100, sort_order: 3, color: "emerald" },
-];
-
 export default function ScaleSettingsPage() {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [scales, setScales] = useState<Scale[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -53,7 +91,7 @@ export default function ScaleSettingsPage() {
     description: "",
     is_default: false,
     divergence_threshold: 2,
-    levels: [...EMPTY_LEVELS],
+    levels: buildEmptyLevels(t),
   });
 
   const load = useCallback(async () => {
@@ -78,7 +116,7 @@ export default function ScaleSettingsPage() {
       const last = next[next.length - 1];
       next.push({
         value: (last?.value ?? 0) + 1,
-        label: `Level ${next.length + 1}`,
+        label: t("scaleLevelDefaultName", { index: String(next.length + 1) }),
         weight: Math.min(100, (last?.weight ?? 0) + 25),
         sort_order: next.length,
       });
@@ -116,16 +154,16 @@ export default function ScaleSettingsPage() {
 
   async function handleCreate() {
     if (!draft.name.trim()) {
-      toast.error("Scale name is required");
+      toast.error(t("scaleNameRequired"));
       return;
     }
     if (draft.levels.length < 2 || draft.levels.length > 10) {
-      toast.error("Scale must have between 2 and 10 levels");
+      toast.error(t("scaleLevelsRange"));
       return;
     }
     const values = new Set(draft.levels.map((l) => l.value));
     if (values.size !== draft.levels.length) {
-      toast.error("Level values must be unique");
+      toast.error(t("scaleLevelValuesUnique"));
       return;
     }
     setCreating(true);
@@ -144,17 +182,17 @@ export default function ScaleSettingsPage() {
           sort_order: i,
         })),
       });
-      toast.success("Scale created");
+      toast.success(t("scaleToastCreated"));
       setDraft({
         name: "",
         description: "",
         is_default: false,
         divergence_threshold: 2,
-        levels: [...EMPTY_LEVELS],
+        levels: buildEmptyLevels(t),
       });
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Create failed");
+      toast.error(err instanceof Error ? err.message : t("scaleCreateFailed"));
     } finally {
       setCreating(false);
     }
@@ -166,7 +204,7 @@ export default function ScaleSettingsPage() {
       await api.post(`/v1/assessment-scales/${scale.id}/archive`);
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Archive failed");
+      toast.error(err instanceof Error ? err.message : t("scaleArchiveFailed"));
     } finally {
       setSavingId(null);
     }
@@ -180,20 +218,20 @@ export default function ScaleSettingsPage() {
       });
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Update failed");
+      toast.error(err instanceof Error ? err.message : t("scaleUpdateFailed"));
     } finally {
       setSavingId(null);
     }
   }
 
   async function handleDelete(scale: Scale) {
-    if (!confirm(`Delete scale "${scale.name}"? Archived scales must be archived instead.`)) return;
+    if (!confirm(t("scaleDeleteConfirm", { name: scale.name }))) return;
     setSavingId(scale.id);
     try {
       await api.delete(`/v1/assessment-scales/${scale.id}`);
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Delete failed");
+      toast.error(err instanceof Error ? err.message : t("scaleDeleteFailed"));
     } finally {
       setSavingId(null);
     }
@@ -203,39 +241,41 @@ export default function ScaleSettingsPage() {
     <div className="space-y-5" data-testid="assessment-scale-page-list">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Settings", href: "/recruitment/settings" },
-          { label: "Assessment scales" },
+          { label: tc("settings"), href: "/recruitment/settings" },
+          { label: t("scalesTitle") },
         ]}
       />
       <header>
-        <h1 className="text-xl font-semibold tracking-tight">Assessment scales</h1>
+        <h1 className="text-xl font-semibold tracking-tight">
+          {t("scalesTitle")}
+        </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Configure rating levels used in interview evaluation forms. One
-          scale is marked as default and applied to new vacancies; existing
-          vacancies keep their snapshot once scoring begins.
+          {t("scalesDescription")}
         </p>
       </header>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">New scale</CardTitle>
+          <CardTitle className="text-base">{t("scaleNewCardTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label htmlFor="scale-name">Name</Label>
+              <Label htmlFor="scale-name">{t("fieldName")}</Label>
               <Input
                 id="scale-name"
                 value={draft.name}
                 onChange={(e) =>
                   setDraft((d) => ({ ...d, name: e.target.value }))
                 }
-                placeholder="Standard 1-5"
+                placeholder={t("scaleNamePlaceholder")}
                 data-testid="assessment-scale-form-name"
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="scale-description">Description (optional)</Label>
+              <Label htmlFor="scale-description">
+                {t("scaleDescriptionLabel")}
+              </Label>
               <Input
                 id="scale-description"
                 value={draft.description}
@@ -247,7 +287,9 @@ export default function ScaleSettingsPage() {
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label htmlFor="scale-divergence">Divergence threshold</Label>
+              <Label htmlFor="scale-divergence">
+                {t("scaleDivergenceLabel")}
+              </Label>
               <Input
                 id="scale-divergence"
                 type="number"
@@ -262,8 +304,7 @@ export default function ScaleSettingsPage() {
                 }
               />
               <p className="text-xs text-muted-foreground">
-                Highlight competences where evaluator scores differ by ≥ this
-                many levels.
+                {t("scaleDivergenceHint")}
               </p>
             </div>
             <div className="flex items-end gap-2">
@@ -275,14 +316,14 @@ export default function ScaleSettingsPage() {
                     setDraft((d) => ({ ...d, is_default: e.target.checked }))
                   }
                 />
-                Make default for new vacancies
+                {t("scaleMakeDefaultCheckbox")}
               </Label>
             </div>
           </div>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>Levels (2–10)</Label>
+              <Label>{t("scaleLevelsLabel")}</Label>
               <Button
                 size="sm"
                 variant="outline"
@@ -290,7 +331,7 @@ export default function ScaleSettingsPage() {
                 disabled={draft.levels.length >= 10}
                 data-testid="assessment-scale-form-add-level-btn"
               >
-                <Plus className="size-3.5" /> Add level
+                <Plus className="size-3.5" /> {t("scaleAddLevel")}
               </Button>
             </div>
             <ul className="space-y-2">
@@ -313,7 +354,7 @@ export default function ScaleSettingsPage() {
                     onChange={(e) =>
                       updateLevel(idx, { label: e.target.value })
                     }
-                    placeholder="Label"
+                    placeholder={t("scaleLevelLabelPlaceholder")}
                     data-testid={`assessment-scale-form-level-${idx}-label`}
                   />
                   <Input
@@ -321,7 +362,7 @@ export default function ScaleSettingsPage() {
                     onChange={(e) =>
                       updateLevel(idx, { description: e.target.value })
                     }
-                    placeholder="Reference description (optional)"
+                    placeholder={t("scaleLevelDescriptionPlaceholder")}
                   />
                   <Input
                     type="number"
@@ -374,22 +415,22 @@ export default function ScaleSettingsPage() {
               ) : (
                 <Plus className="size-4" />
               )}
-              Create scale
+              {t("scaleCreateButton")}
             </Button>
           </div>
         </CardContent>
       </Card>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-medium">Existing scales</h2>
+        <h2 className="text-sm font-medium">{t("scaleExistingTitle")}</h2>
         {loading ? (
           <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
             <Loader2 className="mr-2 size-4 animate-spin" />
-            Loading…
+            {t("loading")}
           </div>
         ) : scales.length === 0 ? (
           <div className="rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">
-            No scales yet — the default will be seeded on first request.
+            {t("scaleEmpty")}
           </div>
         ) : (
           <ul className="space-y-2">
@@ -405,11 +446,11 @@ export default function ScaleSettingsPage() {
                       <span className="text-sm font-medium">{s.name}</span>
                       {s.is_default && (
                         <Badge className={BADGE_COLOR.emerald}>
-                          Default
+                          {t("scaleBadgeDefault")}
                         </Badge>
                       )}
                       {s.archived_at && (
-                        <Badge variant="outline">Archived</Badge>
+                        <Badge variant="outline">{t("statusArchived")}</Badge>
                       )}
                     </div>
                     {s.description && (
@@ -426,7 +467,7 @@ export default function ScaleSettingsPage() {
                         onClick={() => handleMakeDefault(s)}
                         disabled={savingId === s.id}
                       >
-                        <Star className="size-3.5" /> Make default
+                        <Star className="size-3.5" /> {t("scaleMakeDefaultAction")}
                       </Button>
                     )}
                     {!s.archived_at && (
@@ -436,7 +477,7 @@ export default function ScaleSettingsPage() {
                         onClick={() => handleArchive(s)}
                         disabled={savingId === s.id}
                       >
-                        <Archive className="size-3.5" /> Archive
+                        <Archive className="size-3.5" /> {t("actionArchive")}
                       </Button>
                     )}
                     <Button
@@ -458,7 +499,7 @@ export default function ScaleSettingsPage() {
                       <span className="font-mono w-8">{lvl.value}</span>
                       <span className="font-medium">{lvl.label}</span>
                       <span className="text-muted-foreground">
-                        weight {lvl.weight}
+                        {t("scaleWeight", { weight: String(lvl.weight) })}
                       </span>
                       {lvl.description && (
                         <span className="text-muted-foreground">

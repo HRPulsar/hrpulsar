@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,6 +11,8 @@ import { AuthLogo } from "@/components/auth-logo";
 import { API_BASE } from "@/lib/api-base";
 
 export default function ForgotPasswordPage() {
+  const t = useTranslations("auth");
+  const tc = useTranslations("common");
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -27,12 +30,14 @@ export default function ForgotPasswordPage() {
         body: JSON.stringify({ email }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ detail: "Request failed" }));
-        throw new Error(body.detail || "Request failed");
+        const body = await res
+          .json()
+          .catch(() => ({ detail: t("requestFailed") }));
+        throw new Error(body.detail || t("requestFailed"));
       }
       setSubmitted(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Request failed");
+      setError(err instanceof Error ? err.message : t("requestFailed"));
     } finally {
       setLoading(false);
     }
@@ -43,16 +48,16 @@ export default function ForgotPasswordPage() {
       <AuthLogo />
       <Card className="w-full max-w-sm border-white/10 bg-black/40 backdrop-blur-xl">
         <CardHeader className="text-center">
-          <CardTitle className="text-xl text-white">Reset password</CardTitle>
+          <CardTitle className="text-xl text-white">
+            {t("resetPassword")}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {submitted ? (
             <div className="space-y-4 text-center">
-              <p className="text-sm text-white/70">
-                If an account with that email exists, we&apos;ve sent a password reset link.
-              </p>
+              <p className="text-sm text-white/70">{t("resetLinkSent")}</p>
               <a href="/login" className="text-sm text-brand hover:underline">
-                Back to sign in
+                {t("backToSignIn")}
               </a>
             </div>
           ) : (
@@ -62,15 +67,15 @@ export default function ForgotPasswordPage() {
                   {error}
                 </div>
               )}
-              <p className="text-sm text-white/50">
-                Enter your email address and we&apos;ll send you a link to reset your password.
-              </p>
+              <p className="text-sm text-white/50">{t("forgotPasswordIntro")}</p>
               <div className="space-y-2">
-                <Label htmlFor="email" className="text-white/70">Email</Label>
+                <Label htmlFor="email" className="text-white/70">
+                  {t("email")}
+                </Label>
                 <Input
                   id="email"
                   type="email"
-                  placeholder="you@company.com"
+                  placeholder={t("emailPlaceholder")}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="border-white/10 bg-white/5 text-white placeholder:text-white/30"
@@ -79,14 +84,14 @@ export default function ForgotPasswordPage() {
                 />
               </div>
               <Button type="submit" className="w-full" disabled={loading} data-testid="forgot-btn-submit">
-                {loading ? "Sending..." : "Send reset link"}
+                {loading ? t("sending") : t("sendResetLink")}
               </Button>
             </form>
           )}
           {!submitted && (
             <p className="mt-4 text-center text-sm text-white/50">
-              Remember your password?{" "}
-              <a href="/login" className="text-brand hover:underline" data-testid="forgot-link-login">Sign in</a>
+              {t("rememberPassword")}{" "}
+              <a href="/login" className="text-brand hover:underline" data-testid="forgot-link-login">{tc("signIn")}</a>
             </p>
           )}
         </CardContent>

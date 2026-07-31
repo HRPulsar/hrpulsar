@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { EyeOff, Layers, Plus, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 
 import { specializationsApi } from "@/lib/api/specializations";
 import type { SpecializationListItem } from "@/lib/api/specializations";
@@ -44,6 +45,8 @@ export function MaterialOverridesPanel({
   baseMaterials,
   canEdit,
 }: Props) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
   const [specializations, setSpecializations] = useState<
     SpecializationListItem[]
   >([]);
@@ -88,12 +91,12 @@ export function MaterialOverridesPanel({
       setOverrides(ovs);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to load overrides",
+        err instanceof Error ? err.message : t("errorLoadOverrides"),
       );
     } finally {
       setLoading(false);
     }
-  }, [competenceId, contextSpecId]);
+  }, [competenceId, contextSpecId, t]);
 
   useEffect(() => {
     void reload();
@@ -137,11 +140,12 @@ export function MaterialOverridesPanel({
   }, [baseMaterials, contextMaterials, hideOverrideByMaterial]);
 
   const selectedSpecLabel = useMemo(() => {
-    if (contextSpecId === BASE_VALUE) return "Base";
+    if (contextSpecId === BASE_VALUE) return t("overridesBase");
     return (
-      specializations.find((s) => s.id === contextSpecId)?.title ?? "Context"
+      specializations.find((s) => s.id === contextSpecId)?.title ??
+      t("overridesContext")
     );
-  }, [contextSpecId, specializations]);
+  }, [contextSpecId, specializations, t]);
 
   async function hideMaterial(materialId: string) {
     if (contextSpecId === BASE_VALUE) return;
@@ -152,10 +156,10 @@ export function MaterialOverridesPanel({
         specialization_id: contextSpecId,
         mode: "hide",
       });
-      toast.success(`Hidden in ${selectedSpecLabel}`);
+      toast.success(t("toastHiddenInContext", { context: selectedSpecLabel }));
       await reload();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to hide");
+      toast.error(err instanceof Error ? err.message : t("errorHide"));
     } finally {
       setBusy(false);
     }
@@ -170,12 +174,12 @@ export function MaterialOverridesPanel({
         specialization_id: contextSpecId,
         mode: "add",
       });
-      toast.success(`Added in ${selectedSpecLabel}`);
+      toast.success(t("toastAddedInContext", { context: selectedSpecLabel }));
       setAddDialogOpen(false);
       setPendingMaterialId("");
       await reload();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add");
+      toast.error(err instanceof Error ? err.message : t("errorAdd"));
     } finally {
       setBusy(false);
     }
@@ -185,10 +189,10 @@ export function MaterialOverridesPanel({
     setBusy(true);
     try {
       await materialOverridesApi.remove(competenceId, overrideId);
-      toast.success("Default restored");
+      toast.success(t("toastDefaultRestored"));
       await reload();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to restore");
+      toast.error(err instanceof Error ? err.message : t("errorRestore"));
     } finally {
       setBusy(false);
     }
@@ -204,10 +208,9 @@ export function MaterialOverridesPanel({
             <Layers className="size-4" aria-hidden />
           </span>
           <div className="space-y-1">
-            <CardTitle>Materials by context</CardTitle>
+            <CardTitle>{t("sectionMaterialsByContext")}</CardTitle>
             <p className="text-xs text-muted-foreground">
-              Pick a specialization to see how the material set looks for that
-              profile and manage hide / add overrides.
+              {t("overridesSubtitle")}
             </p>
           </div>
         </div>
@@ -218,11 +221,11 @@ export function MaterialOverridesPanel({
               className="gap-1 border border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-900 dark:bg-violet-950 dark:text-violet-200"
               data-testid="materials-context-active-badge"
             >
-              Context: {selectedSpecLabel}
+              {t("overridesContextBadge", { context: selectedSpecLabel })}
             </Badge>
           )}
           <Label className="text-xs text-muted-foreground" htmlFor="context-spec">
-            Context
+            {t("overridesContextLabel")}
           </Label>
           <Select value={contextSpecId} onValueChange={setContextSpecId}>
             <SelectTrigger
@@ -230,12 +233,12 @@ export function MaterialOverridesPanel({
               className="h-8 w-56"
               data-testid="materials-context-select"
             >
-              <SelectValue placeholder="Pick context">
+              <SelectValue placeholder={t("overridesPickContext")}>
                 {selectedSpecLabel}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={BASE_VALUE}>Base</SelectItem>
+              <SelectItem value={BASE_VALUE}>{t("overridesBase")}</SelectItem>
               {specializations.map((s) => (
                 <SelectItem key={s.id} value={s.id}>
                   {s.title}
@@ -251,7 +254,7 @@ export function MaterialOverridesPanel({
               data-testid="materials-context-reset"
             >
               <RotateCcw className="mr-1 size-3.5" />
-              Reset to Base
+              {t("overridesResetToBase")}
             </Button>
           )}
         </div>
@@ -259,18 +262,24 @@ export function MaterialOverridesPanel({
       <CardContent className="space-y-3">
         {isBase ? (
           <p className="text-sm text-muted-foreground">
-            Pick a specialization to see how the material set looks for
-            employees of that profile and to manage hide / add overrides.
+            {t("overridesBaseHint")}
           </p>
         ) : loading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">
+            {t("loadingEllipsis")}
+          </p>
         ) : (
           <>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm text-muted-foreground">
-                In context of <span className="font-medium">{selectedSpecLabel}</span>
-                {" — "}
-                {contextMaterials.length} visible · {hiddenMaterials.length} hidden
+                {t.rich("overridesInContext", {
+                  context: selectedSpecLabel,
+                  visible: contextMaterials.length,
+                  hidden: hiddenMaterials.length,
+                  name: (chunks) => (
+                    <span className="font-medium">{chunks}</span>
+                  ),
+                })}
               </p>
               {canEdit && (
                 <Button
@@ -284,14 +293,14 @@ export function MaterialOverridesPanel({
                   data-testid="material-override-btn-add"
                 >
                   <Plus className="mr-1 size-3.5" />
-                  Add to context
+                  {t("overridesAddToContext")}
                 </Button>
               )}
             </div>
 
             {contextMaterials.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                No materials visible in this context.
+                {t("overridesNoVisible")}
               </p>
             ) : (
               <ul className="space-y-1">
@@ -311,7 +320,7 @@ export function MaterialOverridesPanel({
                           className="text-xs"
                           data-testid={`material-override-badge-added-${mat.id}`}
                         >
-                          Added in context
+                          {t("overridesAddedBadge")}
                         </Badge>
                       )}
                       {canEdit && (
@@ -325,7 +334,7 @@ export function MaterialOverridesPanel({
                               data-testid={`material-override-btn-restore-${mat.id}`}
                             >
                               <RotateCcw className="mr-1 size-3.5" />
-                              Restore default
+                              {t("overridesRestoreDefault")}
                             </Button>
                           ) : (
                             <Button
@@ -336,7 +345,7 @@ export function MaterialOverridesPanel({
                               data-testid={`material-override-btn-hide-${mat.id}`}
                             >
                               <EyeOff className="mr-1 size-3.5" />
-                              Hide in context
+                              {t("overridesHideInContext")}
                             </Button>
                           )}
                         </>
@@ -353,7 +362,7 @@ export function MaterialOverridesPanel({
                 data-testid="material-override-hidden-list"
               >
                 <p className="text-xs font-medium text-muted-foreground">
-                  Hidden in this context
+                  {t("overridesHiddenHeader")}
                 </p>
                 <ul className="space-y-1">
                   {hiddenMaterials.map((mat) => {
@@ -374,7 +383,7 @@ export function MaterialOverridesPanel({
                             data-testid={`material-override-btn-restore-${mat.id}`}
                           >
                             <RotateCcw className="mr-1 size-3.5" />
-                            Restore default
+                            {t("overridesRestoreDefault")}
                           </Button>
                         )}
                       </li>
@@ -390,10 +399,12 @@ export function MaterialOverridesPanel({
       <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
         <DialogContent data-testid="material-override-add-dialog">
           <DialogHeader>
-            <DialogTitle>Add material to {selectedSpecLabel}</DialogTitle>
+            <DialogTitle>
+              {t("overridesAddDialogTitle", { context: selectedSpecLabel })}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="material-override-pick">Material</Label>
+            <Label htmlFor="material-override-pick">{t("fieldMaterial")}</Label>
             <Select
               value={pendingMaterialId}
               onValueChange={setPendingMaterialId}
@@ -402,7 +413,7 @@ export function MaterialOverridesPanel({
                 id="material-override-pick"
                 data-testid="material-override-add-select"
               >
-                <SelectValue placeholder="Pick a material">
+                <SelectValue placeholder={t("overridesPickMaterial")}>
                   {addableMaterials.find((m) => m.id === pendingMaterialId)
                     ?.title ?? undefined}
                 </SelectValue>
@@ -417,8 +428,7 @@ export function MaterialOverridesPanel({
             </Select>
             {addableMaterials.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                Every base material is already visible in this context.
-                Create a material on the competence first, then add it here.
+                {t("overridesNothingToAdd")}
               </p>
             )}
           </div>
@@ -428,14 +438,14 @@ export function MaterialOverridesPanel({
               onClick={() => setAddDialogOpen(false)}
               disabled={busy}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={() => addMaterial(pendingMaterialId)}
               disabled={busy || !pendingMaterialId}
               data-testid="material-override-add-confirm"
             >
-              {busy ? "Saving…" : "Add"}
+              {busy ? t("savingEllipsis") : t("add")}
             </Button>
           </DialogFooter>
         </DialogContent>

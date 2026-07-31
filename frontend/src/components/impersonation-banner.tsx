@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 
 const emptySubscribe = () => () => {};
@@ -12,6 +13,7 @@ function getTenantName() {
 }
 
 export function ImpersonationBanner() {
+  const t = useTranslations("platform");
   const tenantName = useSyncExternalStore(emptySubscribe, getTenantName, () => null);
 
   if (!tenantName) return null;
@@ -39,7 +41,10 @@ export function ImpersonationBanner() {
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
         </svg>
         <span className="text-amber-700 dark:text-amber-400">
-          Viewing as <strong>{tenantName}</strong>
+          {t.rich("viewingAs", {
+            name: tenantName,
+            strong: (chunks) => <strong>{chunks}</strong>,
+          })}
         </span>
       </div>
       <Button
@@ -49,7 +54,7 @@ export function ImpersonationBanner() {
         className="border-amber-500/30 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
         data-testid="impersonation-btn-exit"
       >
-        Exit impersonation
+        {t("exitImpersonation")}
       </Button>
     </div>
   );

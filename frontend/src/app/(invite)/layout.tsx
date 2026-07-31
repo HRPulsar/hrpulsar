@@ -1,12 +1,14 @@
 import type { ReactNode } from "react";
+import { getTranslations } from "next-intl/server";
 
 import { getBrandName } from "@/lib/brand";
 
-export default function InvitedEvaluatorLayout({
+export default async function InvitedEvaluatorLayout({
   children,
 }: {
   children: ReactNode;
 }) {
+  const t = await getTranslations("auth");
   // HRP-359: this shell is the contact surface for external evaluators —
   // no navigation into the tenant app, not even a logo link home.
   return (
@@ -17,7 +19,7 @@ export default function InvitedEvaluatorLayout({
             {getBrandName()}
           </span>
           <span className="text-xs text-muted-foreground">
-            Evaluation form
+            {t("evaluationForm")}
           </span>
         </div>
       </header>

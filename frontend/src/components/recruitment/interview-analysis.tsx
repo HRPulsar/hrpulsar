@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type {
   Interview,
@@ -44,10 +45,11 @@ function CompetenceBars({
   onSeek?: (sec: number) => void;
   scaleMax: number;
 }) {
+  const t = useTranslations("recruitment");
   if (competences.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        Competence scores have not been generated yet.
+        {t("interviewAnalysisNoScores")}
       </p>
     );
   }
@@ -108,7 +110,7 @@ function CompetenceBars({
                         )
                           .toString()
                           .padStart(2, "0")}`
-                      : "quote"}
+                      : t("interviewAnalysisQuote")}
                   </button>
                 ))}
               </div>
@@ -126,6 +128,7 @@ export function InterviewAnalysisPanel({
   onSeek,
   scaleMax,
 }: InterviewAnalysisProps) {
+  const t = useTranslations("recruitment");
   const analysis: InterviewAnalysis | null = interview.analysis ?? null;
 
   const verdictClass = useMemo(() => {
@@ -172,29 +175,28 @@ export function InterviewAnalysisPanel({
   if (interview.analysis_status === "pending") {
     return (
       <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-        AI analysis has not started yet. After uploading the recording and
-        completing transcription, start analysis with the &ldquo;Analyze&rdquo; button.
+        {t("interviewAnalysisPending")}
       </div>
     );
   }
   if (interview.analysis_status === "processing") {
     return (
       <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-        AI analysis in progress. See the checklist on the left for progress.
+        {t("interviewAnalysisProcessing")}
       </div>
     );
   }
   if (interview.analysis_status === "failed") {
     return (
       <div className={`rounded-md border p-4 text-sm ${ALERT_TONE.rose}`}>
-        AI analysis failed. {interview.analysis_error}
+        {t("interviewAnalysisFailed")} {interview.analysis_error}
       </div>
     );
   }
   if (!analysis) {
     return (
       <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-        Analysis result is not available.
+        {t("interviewAnalysisUnavailable")}
       </div>
     );
   }
@@ -205,7 +207,7 @@ export function InterviewAnalysisPanel({
         <section className="space-y-1">
           <h3 className="flex items-center gap-1.5 text-sm font-medium">
             <Trophy className="size-4 text-amber-500" />
-            Final recommendation
+            {t("interviewAnalysisVerdictHeading")}
           </h3>
           <div className={`rounded-md border p-3 text-sm ${verdictClass}`}>
             <p className="font-semibold capitalize">
@@ -213,18 +215,19 @@ export function InterviewAnalysisPanel({
             </p>
             {analysis.verdict.key_strength && (
               <p className="mt-1 text-xs">
-                <strong>Key strength:</strong>{" "}
+                <strong>{t("interviewAnalysisKeyStrength")}</strong>{" "}
                 {analysis.verdict.key_strength}
               </p>
             )}
             {analysis.verdict.key_risk && (
               <p className="mt-1 text-xs">
-                <strong>Risk:</strong> {analysis.verdict.key_risk}
+                <strong>{t("interviewAnalysisRisk")}</strong>{" "}
+                {analysis.verdict.key_risk}
               </p>
             )}
             {analysis.verdict.risk_mitigation && (
               <p className="mt-1 text-xs">
-                <strong>Mitigation:</strong>{" "}
+                <strong>{t("interviewAnalysisMitigation")}</strong>{" "}
                 {analysis.verdict.risk_mitigation}
               </p>
             )}
@@ -235,7 +238,7 @@ export function InterviewAnalysisPanel({
       <section className="space-y-1.5">
         <h3 className="flex items-center gap-1.5 text-sm font-medium">
           <Target className="size-4 text-accent" />
-          Competences
+          {t("interviewAnalysisCompetencesHeading")}
         </h3>
         <CompetenceBars
           competences={analysis.competence_assessments ?? []}
@@ -249,7 +252,7 @@ export function InterviewAnalysisPanel({
         <section className="space-y-1.5">
           <h3 className="flex items-center gap-1.5 text-sm font-medium">
             <Lightbulb className="size-4 text-amber-500" />
-            Blind spots
+            {t("interviewAnalysisBlindSpots")}
           </h3>
           <ul className="space-y-1.5">
             {analysis.blind_spots.map((b, i) => (
@@ -261,7 +264,7 @@ export function InterviewAnalysisPanel({
                 {b.suggested_question && (
                   <p className="mt-1">
                     <Badge variant="outline" className="mr-1 text-[10px]">
-                      question
+                      {t("interviewAnalysisQuestionBadge")}
                     </Badge>
                     {b.suggested_question}
                   </p>
@@ -276,7 +279,7 @@ export function InterviewAnalysisPanel({
         <section className="space-y-1.5">
           <h3 className="flex items-center gap-1.5 text-sm font-medium">
             <AlertTriangle className="size-4 text-blue-600" />
-            Process findings
+            {t("interviewAnalysisProcessFindings")}
           </h3>
           <ul className="space-y-1.5">
             {analysis.process_findings.map((f, i) => (
@@ -300,7 +303,7 @@ export function InterviewAnalysisPanel({
         <section className="space-y-1.5">
           <h3 className="flex items-center gap-1.5 text-sm font-medium">
             <ShieldAlert className="size-4 text-rose-600" />
-            Red flags
+            {t("interviewAnalysisRedFlags")}
           </h3>
           <ul className="space-y-1.5">
             {analysis.red_flags.map((f, i) => (

@@ -1,10 +1,11 @@
 import logging
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError, exception_summary
 from app.modules.ai import llm_client, prompts
 from app.modules.ai.models import Embedding
 from app.modules.ai_settings import service as ai_settings_service
@@ -33,13 +34,15 @@ async def generate_competences(
             prompt,
             system=prompts.build_system_competence(tenant_settings),
             tenant_settings=tenant_settings,
+            db=db,
         )
         return result if isinstance(result, list) else [result]  # type: ignore[list-item]
     except Exception as e:
         logger.exception("Failed to generate competences")
-        raise HTTPException(
+        raise AppError(
+            "llm_generation_failed",
             status.HTTP_502_BAD_GATEWAY,
-            f"LLM generation failed: {str(e)}",
+            error=exception_summary(e),
         )
 
 
@@ -62,12 +65,15 @@ async def generate_indicators(
             prompt,
             system=prompts.build_system_competence(tenant_settings),
             tenant_settings=tenant_settings,
+            db=db,
         )
         return result if isinstance(result, list) else [result]  # type: ignore[list-item]
     except Exception as e:
         logger.exception("Failed to generate indicators")
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, f"LLM generation failed: {str(e)}"
+        raise AppError(
+            "llm_generation_failed",
+            status.HTTP_502_BAD_GATEWAY,
+            error=exception_summary(e),
         )
 
 
@@ -88,7 +94,7 @@ async def _collect_context_for_pdp(
     all_results = results.scalars().all()
 
     if not all_results:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No assessment results found")
+        raise AppError("no_assessment_results_found", status.HTTP_404_NOT_FOUND)
 
     sorted_results = sorted(all_results, key=lambda r: r.avg_score)
     weak = [
@@ -121,12 +127,15 @@ async def suggest_pdp(
             prompt,
             system=prompts.build_system_competence(tenant_settings),
             tenant_settings=tenant_settings,
+            db=db,
         )
         return result if isinstance(result, list) else [result]  # type: ignore[list-item]
     except Exception as e:
         logger.exception("Failed to suggest PDP")
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, f"LLM generation failed: {str(e)}"
+        raise AppError(
+            "llm_generation_failed",
+            status.HTTP_502_BAD_GATEWAY,
+            error=exception_summary(e),
         )
 
 
@@ -337,13 +346,16 @@ async def generate_positions(
             ctx["prompt"],
             system=prompts.build_system_position(tenant_settings),
             tenant_settings=tenant_settings,
+            db=db,
         )
         items = result if isinstance(result, list) else [result]
         items = items[: ctx["count"]]
     except Exception as e:
         logger.exception("Failed to generate positions")
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, f"LLM generation failed: {str(e)}"
+        raise AppError(
+            "llm_generation_failed",
+            status.HTTP_502_BAD_GATEWAY,
+            error=exception_summary(e),
         )
 
     created = await _persist_positions(

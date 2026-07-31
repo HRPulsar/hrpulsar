@@ -83,6 +83,13 @@ celery.conf.update(
             "task": "app.modules.employee.tasks.check_certificate_expiry",
             "schedule": 86400.0,  # every 24 hours
         },
+        "refresh-model-catalog": {
+            # HRP-466: daily AI model discovery — core on purpose, so
+            # community installs with provider keys also pick up new
+            # models without a redeploy.
+            "task": "app.modules.ai.tasks.refresh_model_catalog_task",
+            "schedule": 86400.0,  # every 24 hours
+        },
         "write-celery-heartbeat": {
             "task": "app.core.tasks.write_celery_heartbeat",
             "schedule": 30.0,  # every 30s — feeds /health celery check + status page

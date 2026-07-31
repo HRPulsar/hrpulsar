@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
   Bot,
@@ -110,19 +111,29 @@ interface Props {
 
 const GENERATE_ACTION = "recruitment.generate_question_set";
 
+// HRP-476: module-scope maps hold i18n keys in the ``recruitment``
+// namespace; every consumer resolves them with its own ``t``.
 const SOURCE_META: Record<
   QuestionSource,
-  { label: string; icon: typeof Bot; tint: string }
+  { labelKey: string; icon: typeof Bot; tint: string }
 > = {
-  ai_generated: { label: "AI", icon: Bot, tint: "text-sky-600" },
-  manual: { label: "Manual", icon: Pin, tint: "text-amber-600" },
+  ai_generated: {
+    labelKey: "questionSetsSourceAi",
+    icon: Bot,
+    tint: "text-sky-600",
+  },
+  manual: {
+    labelKey: "questionSetsSourceManual",
+    icon: Pin,
+    tint: "text-amber-600",
+  },
   from_competency_indicator: {
-    label: "Indicator",
+    labelKey: "questionSetsSourceIndicator",
     icon: Target,
     tint: "text-violet-600",
   },
   from_blind_spot: {
-    label: "Blind spot",
+    labelKey: "questionSetsSourceBlindSpot",
     icon: Lightbulb,
     tint: "text-rose-600",
   },
@@ -134,12 +145,20 @@ const PRIORITY_BADGE: Record<QuestionPriority, string> = {
   nice_to_ask: BADGE_COLOR.emerald,
 };
 
-const GOAL_LABEL: Record<QuestionGoal, string> = {
-  clarification: "Clarification",
-  depth: "Depth",
-  risk: "Risk",
-  motivation: "Motivation",
-  fit: "Fit",
+// Lowercase badge wording — the chip renders the priority inline, the
+// dialog selects use the capitalised ``questionSetsPriority*`` keys.
+const PRIORITY_BADGE_LABEL_KEYS: Record<QuestionPriority, string> = {
+  must: "questionSetsPriorityBadgeMust",
+  should: "questionSetsPriorityBadgeShould",
+  nice_to_ask: "questionSetsPriorityBadgeNiceToAsk",
+};
+
+const GOAL_LABEL_KEYS: Record<QuestionGoal, string> = {
+  clarification: "questionSetsGoalClarification",
+  depth: "questionSetsGoalDepth",
+  risk: "questionSetsGoalRisk",
+  motivation: "questionSetsGoalMotivation",
+  fit: "questionSetsGoalFit",
 };
 
 function activeQuestions(set: QuestionSet): QuestionRow[] {
@@ -151,6 +170,8 @@ export function InterviewQuestionSets({
   vacancyOptions,
   initialVacancyId,
 }: Props) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [vacancyId, setVacancyId] = useState<string | undefined>(
     initialVacancyId || vacancyOptions[0]?.id,
   );
@@ -248,15 +269,17 @@ export function InterviewQuestionSets({
   // Credit copy only renders on SaaS builds where billing is active; the
   // number is server-priced so it stays in sync with backend/ee/credits.yaml.
   const creditSuffix =
-    isSaas && generateCost !== null ? ` (${generateCost} cr)` : "";
+    isSaas && generateCost !== null
+      ? t("questionSetsCreditSuffix", { cost: generateCost })
+      : "";
 
   async function handleSample() {
     try {
       const s = await api.get<QuestionSet>("/v1/question-sets/sample");
       setSample(s);
-      toast.message("Sample mode — no credits charged");
+      toast.message(t("questionSetsToastSampleMode"));
     } catch {
-      toast.error("Failed to load sample");
+      toast.error(t("questionSetsSampleLoadFailed"));
     }
   }
 
@@ -282,13 +305,13 @@ export function InterviewQuestionSets({
         return [created, ...filtered];
       });
       setActiveSetId(created.id);
-      toast.success("Question set ready");
+      toast.success(t("questionSetsToastReady"));
       refreshBalance();
     } catch (err) {
       const msg =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: unknown }).message)
-          : "Failed to generate";
+          : t("questionSetsGenerateFailed");
       toast.error(msg);
     } finally {
       setGenerating(false);
@@ -318,13 +341,13 @@ export function InterviewQuestionSets({
             : s,
         ),
       );
-      toast.success("Question added");
+      toast.success(t("questionSetsToastAdded"));
       setAddOpen(false);
     } catch (err) {
       const msg =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: unknown }).message)
-          : "Failed to add";
+          : t("questionSetsAddFailed");
       toast.error(msg);
     }
   }
@@ -349,7 +372,7 @@ export function InterviewQuestionSets({
         ),
       );
     } catch {
-      toast.error("Failed to update");
+      toast.error(t("questionSetsUpdateFailed"));
     }
   }
 
@@ -370,7 +393,7 @@ export function InterviewQuestionSets({
         ),
       );
     } catch {
-      toast.error("Failed to save");
+      toast.error(t("questionSetsSaveFailed"));
     }
   }
 
@@ -386,9 +409,9 @@ export function InterviewQuestionSets({
           ),
         })),
       );
-      toast.success("Question deleted");
+      toast.success(t("questionSetsToastDeleted"));
     } catch {
-      toast.error("Failed to delete");
+      toast.error(t("questionSetsDeleteFailed"));
     } finally {
       setDeleteId(null);
     }
@@ -404,7 +427,7 @@ export function InterviewQuestionSets({
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-sky-600" />
-          <h2 className="text-lg font-semibold">Interview questions</h2>
+          <h2 className="text-lg font-semibold">{t("questionSetsTitle")}</h2>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {vacancyOptions.length > 1 && (
@@ -413,10 +436,10 @@ export function InterviewQuestionSets({
                 className="w-64"
                 data-testid="recruitment-interview-questions-vacancy-select"
               >
-                <SelectValue placeholder="Select vacancy">
+                <SelectValue placeholder={t("questionSetsSelectVacancy")}>
                   {(value) =>
                     vacancyOptions.find((v) => v.id === value)?.title ??
-                    "Select vacancy"
+                    t("questionSetsSelectVacancy")
                   }
                 </SelectValue>
               </SelectTrigger>
@@ -437,7 +460,7 @@ export function InterviewQuestionSets({
               onClick={() => setExportOpen(true)}
             >
               <Download className="mr-1 h-4 w-4" />
-              Export PDF
+              {t("questionSetsExportPdf")}
             </Button>
           )}
         </div>
@@ -446,7 +469,7 @@ export function InterviewQuestionSets({
       {sets.length > 0 && !sample && (
         <div
           role="tablist"
-          aria-label="Question sets"
+          aria-label={t("questionSetsTablistAria")}
           className="flex flex-wrap items-center gap-1 border-b"
           data-testid="recruitment-interview-questions-tabbar"
         >
@@ -478,7 +501,7 @@ export function InterviewQuestionSets({
             data-testid="recruitment-interview-questions-new-set-btn"
           >
             <Plus className="mr-1 h-4 w-4" />
-            New set
+            {t("questionSetsNewSet")}
           </Button>
           {transcribedRounds.length > 0 && (
             <Button
@@ -489,14 +512,15 @@ export function InterviewQuestionSets({
               data-testid="recruitment-interview-questions-next-set-btn"
             >
               <Sparkles className="mr-1 h-4 w-4" />
-              Generate next set{creditSuffix}
+              {t("questionSetsGenerateNextSet")}
+              {creditSuffix}
             </Button>
           )}
         </div>
       )}
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <p className="text-sm text-muted-foreground">{t("loading")}</p>
       ) : !sets.length && !sample ? (
         <EmptyState
           resumeMissing={Boolean(resumeMissing)}
@@ -522,7 +546,9 @@ export function InterviewQuestionSets({
                   {currentSet.generation_mode.replace(/_/g, " ")}
                 </Badge>
                 {currentSet.status === "sample" && (
-                  <Badge variant="secondary">Sample</Badge>
+                  <Badge variant="secondary">
+                    {t("questionSetsSampleBadge")}
+                  </Badge>
                 )}
               </CardTitle>
               {currentSet.coverage_note && (
@@ -544,7 +570,7 @@ export function InterviewQuestionSets({
                     data-testid="recruitment-interview-questions-add-btn"
                   >
                     <Plus className="mr-1 h-4 w-4" />
-                    Add
+                    {t("questionSetsAdd")}
                   </Button>
                   <Button
                     variant="outline"
@@ -554,7 +580,8 @@ export function InterviewQuestionSets({
                     data-testid="recruitment-interview-questions-regenerate-btn"
                   >
                     <RefreshCw className="mr-1 h-4 w-4" />
-                    Re-generate{creditSuffix}
+                    {t("questionSetsRegenerate")}
+                    {creditSuffix}
                   </Button>
                 </>
               )}
@@ -563,7 +590,7 @@ export function InterviewQuestionSets({
           <CardContent className="space-y-2">
             {activeQuestions(currentSet).length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Set is empty. Add a question or regenerate.
+                {t("questionSetsSetEmpty")}
               </p>
             ) : (
               activeQuestions(currentSet).map((q) => (
@@ -597,12 +624,16 @@ export function InterviewQuestionSets({
       <ConfirmDialog
         open={regenerateConfirm}
         onOpenChange={(o) => !o && setRegenerateConfirm(false)}
-        title="Re-generate this set?"
-        description={`AI-generated questions will be replaced. Manual and indicator entries stay.${
-          isSaas && generateCost !== null ? ` Cost: ${generateCost} credits.` : ""
-        }`}
-        confirmLabel="Re-generate"
-        cancelLabel="Cancel"
+        title={t("questionSetsRegenerateTitle")}
+        description={
+          isSaas && generateCost !== null
+            ? t("questionSetsRegenerateDescriptionCost", {
+                cost: generateCost,
+              })
+            : t("questionSetsRegenerateDescription")
+        }
+        confirmLabel={t("questionSetsRegenerate")}
+        cancelLabel={tc("cancel")}
         onConfirm={() => {
           setRegenerateConfirm(false);
           handleGenerate("regenerated");
@@ -613,10 +644,10 @@ export function InterviewQuestionSets({
       <ConfirmDialog
         open={deleteId !== null}
         onOpenChange={(o) => !o && setDeleteId(null)}
-        title="Delete question?"
-        description="Soft-deletes the row. It will not return on regeneration."
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
+        title={t("questionSetsDeleteTitle")}
+        description={t("questionSetsDeleteDescription")}
+        confirmLabel={tc("delete")}
+        cancelLabel={tc("cancel")}
         destructive
         onConfirm={confirmDelete}
         testId="recruitment-interview-questions-delete-confirm"
@@ -646,6 +677,7 @@ function EmptyState({
   onGenerate,
   onSample,
 }: EmptyStateProps) {
+  const t = useTranslations("recruitment");
   const withCredits = showCredits && cost !== null;
   return (
     <div
@@ -653,15 +685,16 @@ function EmptyState({
       data-testid="recruitment-interview-questions-empty"
     >
       <FileQuestion className="mx-auto mb-3 h-10 w-10 text-muted-foreground/50" />
-      <p className="text-sm font-medium">No question set yet</p>
+      <p className="text-sm font-medium">{t("questionSetsEmptyTitle")}</p>
       <p className="mt-1 text-xs text-muted-foreground">
         {resumeMissing
-          ? "Upload and parse a resume to enable AI generation."
+          ? t("questionSetsEmptyResumeMissing")
           : insufficient
-            ? `Generation needs ${cost} credits. Current balance: ${
-                balance ?? 0
-              }. View a sample at no cost while you top up.`
-            : `Generate the first set tailored to this candidate's resume.`}
+            ? t("questionSetsEmptyInsufficient", {
+                cost: cost ?? 0,
+                balance: balance ?? 0,
+              })
+            : t("questionSetsEmptyDefault")}
       </p>
       <div className="mt-4 flex items-center justify-center gap-2">
         <Button
@@ -670,13 +703,13 @@ function EmptyState({
           data-testid="recruitment-interview-questions-generate-btn"
         >
           {generating ? (
-            "Generating…"
+            t("questionSetsGenerating")
           ) : (
             <>
               <Sparkles className="mr-1 h-4 w-4" />
               {withCredits
-                ? `Generate first set (${cost} credits)`
-                : "Generate first set"}
+                ? t("questionSetsGenerateFirstSetCost", { cost: cost ?? 0 })
+                : t("questionSetsGenerateFirstSet")}
             </>
           )}
         </Button>
@@ -686,7 +719,7 @@ function EmptyState({
             onClick={onSample}
             data-testid="recruitment-interview-questions-sample-btn"
           >
-            View sample
+            {t("questionSetsViewSample")}
           </Button>
         )}
       </div>
@@ -709,6 +742,7 @@ function QuestionItem({
   onEdit,
   onDelete,
 }: QuestionItemProps) {
+  const t = useTranslations("recruitment");
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(question.text);
@@ -734,7 +768,9 @@ function QuestionItem({
           onClick={onToggleCovered}
           disabled={readOnly}
           aria-label={
-            question.covered_at ? "Mark as not covered" : "Mark as covered"
+            question.covered_at
+              ? t("questionSetsMarkNotCovered")
+              : t("questionSetsMarkCovered")
           }
           className={`mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border ${
             question.covered_at
@@ -746,7 +782,10 @@ function QuestionItem({
           <Check className="h-3.5 w-3.5" />
         </button>
 
-        <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${meta.tint}`} aria-label={meta.label} />
+        <Icon
+          className={`mt-0.5 h-4 w-4 shrink-0 ${meta.tint}`}
+          aria-label={t(meta.labelKey)}
+        />
 
         <div className="min-w-0 flex-1 space-y-1">
           {editing ? (
@@ -774,21 +813,30 @@ function QuestionItem({
               variant="secondary"
               className={PRIORITY_BADGE[question.priority]}
             >
-              {question.priority.replace("_", " ")}
+              {PRIORITY_BADGE_LABEL_KEYS[question.priority]
+                ? t(PRIORITY_BADGE_LABEL_KEYS[question.priority])
+                : question.priority.replace("_", " ")}
             </Badge>
-            <Badge variant="outline">{GOAL_LABEL[question.goal]}</Badge>
+            <Badge variant="outline">
+              {GOAL_LABEL_KEYS[question.goal]
+                ? t(GOAL_LABEL_KEYS[question.goal])
+                : question.goal}
+            </Badge>
             {question.resume_anchor_jsonb?.quote && (
               <span
                 className="truncate text-muted-foreground"
                 title={question.resume_anchor_jsonb.quote}
               >
-                Resume: “{question.resume_anchor_jsonb.quote.slice(0, 60)}
-                {question.resume_anchor_jsonb.quote.length > 60 ? "…" : ""}”
+                {t("questionSetsResumeAnchor", {
+                  quote:
+                    question.resume_anchor_jsonb.quote.slice(0, 60) +
+                    (question.resume_anchor_jsonb.quote.length > 60 ? "…" : ""),
+                })}
               </span>
             )}
             {question.covered_method === "auto_from_transcript" && (
               <Badge variant="secondary" className="text-[10px]">
-                Auto-covered
+                {t("questionSetsAutoCovered")}
               </Badge>
             )}
           </div>
@@ -799,7 +847,9 @@ function QuestionItem({
             >
               {question.expected_answer_indicators.length > 0 && (
                 <div>
-                  <p className="font-medium">Expected indicators</p>
+                  <p className="font-medium">
+                    {t("questionSetsExpectedIndicators")}
+                  </p>
                   <ul className="ml-4 list-disc">
                     {question.expected_answer_indicators.map((i, idx) => (
                       <li key={idx}>{i}</li>
@@ -809,7 +859,7 @@ function QuestionItem({
               )}
               {question.follow_ups.length > 0 && (
                 <div>
-                  <p className="font-medium">Follow-ups</p>
+                  <p className="font-medium">{t("questionSetsFollowUps")}</p>
                   <ul className="ml-4 list-disc">
                     {question.follow_ups.map((f, idx) => (
                       <li key={idx}>{f}</li>
@@ -819,7 +869,9 @@ function QuestionItem({
               )}
               {question.rationale && (
                 <div>
-                  <p className="font-medium">Why this question</p>
+                  <p className="font-medium">
+                    {t("questionSetsWhyThisQuestion")}
+                  </p>
                   <p className="text-muted-foreground">{question.rationale}</p>
                 </div>
               )}
@@ -834,7 +886,7 @@ function QuestionItem({
               size="icon"
               className="h-7 w-7"
               onClick={() => setEditing(true)}
-              aria-label="Edit question"
+              aria-label={t("questionSetsEditQuestionAria")}
               data-testid={`recruitment-interview-question-edit-btn-${question.id}`}
             >
               <PencilLine className="h-3.5 w-3.5" />
@@ -844,7 +896,7 @@ function QuestionItem({
               size="icon"
               className="h-7 w-7"
               onClick={onDelete}
-              aria-label="Delete question"
+              aria-label={t("questionSetsDeleteQuestionAria")}
               data-testid={`recruitment-interview-question-delete-btn-${question.id}`}
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -854,7 +906,7 @@ function QuestionItem({
               size="icon"
               className="h-7 w-7"
               onClick={() => setExpanded((v) => !v)}
-              aria-label="Toggle details"
+              aria-label={t("questionSetsToggleDetails")}
             >
               <ChevronDown
                 className={`h-3.5 w-3.5 transition ${expanded ? "rotate-180" : ""}`}
@@ -878,6 +930,8 @@ function AddQuestionDialog({
   onOpenChange,
   onSubmit,
 }: AddQuestionDialogProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [text, setText] = useState("");
   const [goal, setGoal] = useState<QuestionGoal>("clarification");
   const [priority, setPriority] = useState<QuestionPriority>("should");
@@ -904,41 +958,43 @@ function AddQuestionDialog({
         data-testid="recruitment-interview-questions-add-dialog"
       >
         <DialogHeader>
-          <DialogTitle>Add a question</DialogTitle>
+          <DialogTitle>{t("questionSetsAddDialogTitle")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <Label htmlFor="q-text">Question</Label>
+            <Label htmlFor="q-text">{t("questionSetsFieldQuestion")}</Label>
             <Textarea
               id="q-text"
               rows={3}
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder="What concrete decision did you make under uncertainty?"
+              placeholder={t("questionSetsQuestionPlaceholder")}
               data-testid="recruitment-interview-questions-add-text"
             />
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <Label>Goal</Label>
+              <Label>{t("questionSetsFieldGoal")}</Label>
               <Select
                 value={goal}
                 onValueChange={(v) => setGoal(v as QuestionGoal)}
               >
                 <SelectTrigger data-testid="recruitment-interview-questions-add-goal">
-                  <SelectValue>{GOAL_LABEL[goal] ?? goal}</SelectValue>
+                  <SelectValue>
+                    {GOAL_LABEL_KEYS[goal] ? t(GOAL_LABEL_KEYS[goal]) : goal}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(GOAL_LABEL).map(([k, v]) => (
+                  {Object.entries(GOAL_LABEL_KEYS).map(([k, labelKey]) => (
                     <SelectItem key={k} value={k}>
-                      {v}
+                      {t(labelKey)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div>
-              <Label>Priority</Label>
+              <Label>{t("questionSetsFieldPriority")}</Label>
               <Select
                 value={priority}
                 onValueChange={(v) => setPriority(v as QuestionPriority)}
@@ -946,21 +1002,27 @@ function AddQuestionDialog({
                 <SelectTrigger data-testid="recruitment-interview-questions-add-priority">
                   <SelectValue>
                     {priority === "must"
-                      ? "Must"
+                      ? t("questionSetsPriorityMust")
                       : priority === "nice_to_ask"
-                        ? "Nice to ask"
-                        : "Should"}
+                        ? t("questionSetsPriorityNiceToAsk")
+                        : t("questionSetsPriorityShould")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="must">Must</SelectItem>
-                  <SelectItem value="should">Should</SelectItem>
-                  <SelectItem value="nice_to_ask">Nice to ask</SelectItem>
+                  <SelectItem value="must">
+                    {t("questionSetsPriorityMust")}
+                  </SelectItem>
+                  <SelectItem value="should">
+                    {t("questionSetsPriorityShould")}
+                  </SelectItem>
+                  <SelectItem value="nice_to_ask">
+                    {t("questionSetsPriorityNiceToAsk")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div>
-              <Label>Type</Label>
+              <Label>{t("questionSetsFieldType")}</Label>
               <Select
                 value={source}
                 onValueChange={(v) =>
@@ -970,14 +1032,16 @@ function AddQuestionDialog({
                 <SelectTrigger data-testid="recruitment-interview-questions-add-source">
                   <SelectValue>
                     {source === "from_competency_indicator"
-                      ? "From indicator"
-                      : "Custom"}
+                      ? t("questionSetsSourceFromIndicator")
+                      : t("questionSetsSourceCustom")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="manual">Custom</SelectItem>
+                  <SelectItem value="manual">
+                    {t("questionSetsSourceCustom")}
+                  </SelectItem>
                   <SelectItem value="from_competency_indicator">
-                    From indicator
+                    {t("questionSetsSourceFromIndicator")}
                   </SelectItem>
                 </SelectContent>
               </Select>
@@ -986,12 +1050,12 @@ function AddQuestionDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={() => {
               if (!text.trim()) {
-                toast.error("Question text is required");
+                toast.error(t("questionSetsTextRequired"));
                 return;
               }
               onSubmit({ text, goal, priority, source });
@@ -999,7 +1063,7 @@ function AddQuestionDialog({
             }}
             data-testid="recruitment-interview-questions-add-submit"
           >
-            Add question
+            {t("questionSetsAddSubmit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1020,6 +1084,8 @@ function ExportDialog({
   setId,
   setName,
 }: ExportDialogProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [format, setFormat] = useState<"compact" | "full" | "cards">("full");
   const [includeIndicators, setIncludeIndicators] = useState(true);
   const [includeFollowUps, setIncludeFollowUps] = useState(true);
@@ -1077,7 +1143,7 @@ function ExportDialog({
       URL.revokeObjectURL(url);
       onOpenChange(false);
     } catch {
-      toast.error("Failed to export");
+      toast.error(t("questionSetsExportFailed"));
     } finally {
       setBusy(false);
     }
@@ -1087,11 +1153,11 @@ function ExportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="recruitment-interview-questions-export-dialog">
         <DialogHeader>
-          <DialogTitle>Export to PDF</DialogTitle>
+          <DialogTitle>{t("questionSetsExportDialogTitle")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <Label>Format</Label>
+            <Label>{t("questionSetsFieldFormat")}</Label>
             <Select
               value={format}
               onValueChange={(v) => setFormat(v as typeof format)}
@@ -1099,21 +1165,27 @@ function ExportDialog({
               <SelectTrigger>
                 <SelectValue>
                   {format === "full"
-                    ? "Full (interviewer prep)"
+                    ? t("questionSetsFormatFull")
                     : format === "cards"
-                      ? "Cards"
-                      : "Compact (list)"}
+                      ? t("questionSetsFormatCards")
+                      : t("questionSetsFormatCompact")}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="compact">Compact (list)</SelectItem>
-                <SelectItem value="full">Full (interviewer prep)</SelectItem>
-                <SelectItem value="cards">Cards</SelectItem>
+                <SelectItem value="compact">
+                  {t("questionSetsFormatCompact")}
+                </SelectItem>
+                <SelectItem value="full">
+                  {t("questionSetsFormatFull")}
+                </SelectItem>
+                <SelectItem value="cards">
+                  {t("questionSetsFormatCards")}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div>
-            <Label>Sort</Label>
+            <Label>{t("questionSetsFieldSort")}</Label>
             <Select
               value={sort}
               onValueChange={(v) => setSort(v as typeof sort)}
@@ -1121,16 +1193,22 @@ function ExportDialog({
               <SelectTrigger>
                 <SelectValue>
                   {sort === "priority"
-                    ? "Priority"
+                    ? t("questionSetsSortPriority")
                     : sort === "competence"
-                      ? "Competence"
-                      : "Default"}
+                      ? t("questionSetsSortCompetence")
+                      : t("questionSetsSortDefault")}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="sort_order">Default</SelectItem>
-                <SelectItem value="priority">Priority</SelectItem>
-                <SelectItem value="competence">Competence</SelectItem>
+                <SelectItem value="sort_order">
+                  {t("questionSetsSortDefault")}
+                </SelectItem>
+                <SelectItem value="priority">
+                  {t("questionSetsSortPriority")}
+                </SelectItem>
+                <SelectItem value="competence">
+                  {t("questionSetsSortCompetence")}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -1142,7 +1220,7 @@ function ExportDialog({
                 checked={includeIndicators}
                 onChange={(e) => setIncludeIndicators(e.target.checked)}
               />
-              Indicators
+              {t("questionSetsOptIndicators")}
             </label>
             <label className="flex items-center gap-2">
               <Input
@@ -1151,7 +1229,7 @@ function ExportDialog({
                 checked={includeFollowUps}
                 onChange={(e) => setIncludeFollowUps(e.target.checked)}
               />
-              Follow-ups
+              {t("questionSetsFollowUps")}
             </label>
             <label className="flex items-center gap-2">
               <Input
@@ -1160,7 +1238,7 @@ function ExportDialog({
                 checked={includeRationale}
                 onChange={(e) => setIncludeRationale(e.target.checked)}
               />
-              Rationale
+              {t("questionSetsOptRationale")}
             </label>
             <label className="flex items-center gap-2">
               <Input
@@ -1169,20 +1247,20 @@ function ExportDialog({
                 checked={includeResumeAnchor}
                 onChange={(e) => setIncludeResumeAnchor(e.target.checked)}
               />
-              Resume anchor
+              {t("questionSetsOptResumeAnchor")}
             </label>
           </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={handleExport}
             disabled={busy}
             data-testid="recruitment-interview-questions-export-submit"
           >
-            {busy ? "Exporting…" : "Download PDF"}
+            {busy ? t("questionSetsExporting") : t("questionSetsDownloadPdf")}
           </Button>
         </DialogFooter>
       </DialogContent>

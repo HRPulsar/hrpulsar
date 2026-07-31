@@ -26,14 +26,18 @@ pytestmark = pytest.mark.asyncio
 
 
 def _anthropic_client(
-    stop_reason: str, captured: dict | None = None
+    stop_reason: str,
+    captured: dict | None = None,
+    content: list | None = None,
 ) -> SimpleNamespace:
     # HRP-432: budgets above the non-streaming threshold go through the
     # stream() helper, smaller ones through create() — the mock exposes
     # both surfaces and counts which one was used.
     response = SimpleNamespace(
         stop_reason=stop_reason,
-        content=[SimpleNamespace(text='{"ok": true}')],
+        content=(
+            content if content is not None else [SimpleNamespace(text='{"ok": true}')]
+        ),
     )
     calls = {"create": 0, "stream": 0}
 
@@ -69,14 +73,14 @@ class TestAnthropicTruncation:
             pytest.raises(LLMOutputTruncatedError, match="max_tokens"),
         ):
             await llm_client._generate_anthropic(
-                "p", None, "claude-sonnet-4-6", 0.3, 8192
+                "p", None, "claude-sonnet-5", 0.3, 8192
             )
 
     async def test_end_turn_returns_text(self) -> None:
         client = _anthropic_client("end_turn")
         with patch.object(llm_client, "_get_anthropic", return_value=client):
             result = await llm_client._generate_anthropic(
-                "p", None, "claude-sonnet-4-6", 0.3, 8192
+                "p", None, "claude-sonnet-5", 0.3, 8192
             )
         assert result == '{"ok": true}'
 
@@ -85,7 +89,7 @@ class TestAnthropicTruncation:
         client = _anthropic_client("end_turn", captured)
         with patch.object(llm_client, "_get_anthropic", return_value=client):
             await llm_client._generate_anthropic(
-                "p", None, "claude-sonnet-4-6", 0.3, 64000
+                "p", None, "claude-sonnet-5", 0.3, 64000
             )
         assert captured["max_tokens"] == 64000
         assert client.calls == {"create": 0, "stream": 1}
@@ -97,7 +101,7 @@ class TestAnthropicTruncation:
         client = _anthropic_client("end_turn")
         with patch.object(llm_client, "_get_anthropic", return_value=client):
             await llm_client._generate_anthropic(
-                "p", None, "claude-sonnet-4-6", 0.3, 8192
+                "p", None, "claude-sonnet-5", 0.3, 8192
             )
         assert client.calls == {"create": 1, "stream": 0}
 
@@ -125,8 +129,90 @@ class TestAnthropicTruncation:
             pytest.raises(ValueError, match="no content blocks"),
         ):
             await llm_client._generate_anthropic(
-                "p", None, "claude-sonnet-4-6", 0.3, 8192
+                "p", None, "claude-sonnet-5", 0.3, 8192
             )
+
+    async def test_leading_thinking_block_skipped(self) -> None:
+        # HRP-509: thinking models (balanced/thorough tiers) return a
+        # ThinkingBlock before the text block — the adapter must return
+        # the text, not 502 on the first block.
+        client = _anthropic_client(
+            "end_turn",
+            content=[
+                SimpleNamespace(thinking="chain of thought"),
+                SimpleNamespace(text='{"ok": true}'),
+            ],
+        )
+        with patch.object(llm_client, "_get_anthropic", return_value=client):
+            result = await llm_client._generate_anthropic(
+                "p", None, "claude-sonnet-5", 0.3, 8192
+            )
+        assert result == '{"ok": true}'
+        assert client.calls == {"create": 1, "stream": 0}
+
+    async def test_leading_thinking_block_skipped_streaming(self) -> None:
+        # Same scan runs after the stream/create join point — pin the
+        # streaming path too (64k budgets stream on sonnet-5).
+        client = _anthropic_client(
+            "end_turn",
+            content=[
+                SimpleNamespace(thinking="chain of thought"),
+                SimpleNamespace(text='{"ok": true}'),
+            ],
+        )
+        with patch.object(llm_client, "_get_anthropic", return_value=client):
+            result = await llm_client._generate_anthropic(
+                "p", None, "claude-sonnet-5", 0.3, 64000
+            )
+        assert result == '{"ok": true}'
+        assert client.calls == {"create": 0, "stream": 1}
+
+    async def test_no_text_block_raises_value_error(self) -> None:
+        client = _anthropic_client(
+            "end_turn", content=[SimpleNamespace(thinking="chain of thought")]
+        )
+        with (
+            patch.object(llm_client, "_get_anthropic", return_value=client),
+            pytest.raises(ValueError, match="no text content block"),
+        ):
+            await llm_client._generate_anthropic(
+                "p", None, "claude-sonnet-5", 0.3, 8192
+            )
+
+
+class TestAnthropicSamplingGate:
+    """HRP-464: Opus 4.7+/Sonnet 5/Fable 5 reject ``temperature`` with 400."""
+
+    @pytest.mark.parametrize(
+        "model",
+        ["claude-sonnet-5", "claude-opus-4-8", "claude-fable-5"],
+    )
+    async def test_new_models_omit_temperature(self, model: str) -> None:
+        captured: dict = {}
+        client = _anthropic_client("end_turn", captured)
+        with patch.object(llm_client, "_get_anthropic", return_value=client):
+            await llm_client._generate_anthropic("p", None, model, 0.3, 8192)
+        assert "temperature" not in captured
+
+    @pytest.mark.parametrize(
+        "model",
+        ["claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-6"],
+    )
+    async def test_legacy_models_send_temperature(self, model: str) -> None:
+        captured: dict = {}
+        client = _anthropic_client("end_turn", captured)
+        with patch.object(llm_client, "_get_anthropic", return_value=client):
+            await llm_client._generate_anthropic("p", None, model, 0.3, 8192)
+        assert captured["temperature"] == 0.3
+
+    def test_unknown_future_model_defaults_to_omitting(self) -> None:
+        # A newly discovered model id (3B catalog) must never inherit the
+        # legacy sampling params — omitting temperature is always accepted.
+        from app.modules.ai import model_registry
+
+        assert not model_registry.anthropic_accepts_temperature("claude-sonnet-6")
+        assert not model_registry.anthropic_accepts_temperature("claude-mythos-5")
+        assert model_registry.anthropic_accepts_temperature("claude-haiku-4-5")
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +381,7 @@ class TestProfileCompactRetry:
         async def fake_generate(prompt, **kwargs):
             prompts.append(prompt)
             if len(prompts) == 1:
-                raise LLMOutputTruncatedError("claude-sonnet-4-6", 32768)
+                raise LLMOutputTruncatedError("claude-sonnet-5", 32768)
             return '{"vacancy_id": "x", "competences": []}'
 
         with patch.object(llm_client, "generate", new=fake_generate):
@@ -313,7 +399,7 @@ class TestProfileCompactRetry:
 
         async def fake_generate(prompt, **kwargs):
             calls["n"] += 1
-            raise LLMOutputTruncatedError("claude-sonnet-4-6", 32768)
+            raise LLMOutputTruncatedError("claude-sonnet-5", 32768)
 
         with (
             patch.object(llm_client, "generate", new=fake_generate),

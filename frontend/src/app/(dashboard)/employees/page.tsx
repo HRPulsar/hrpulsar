@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { flattenTree } from "@/lib/utils";
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type {
   AssessmentList,
   DictionaryItem,
@@ -57,6 +59,7 @@ import {
   type FormErrorState,
 } from "@/lib/form-errors";
 import { Pagination } from "@/components/pagination";
+import { employeeStatusLabel } from "@/components/employees/employee-status";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -158,6 +161,9 @@ function buildBackendQuery(
 }
 
 export default function EmployeesPage() {
+  const t = useTranslations("employees");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -306,8 +312,9 @@ export default function EmployeesPage() {
   );
 
   const statusFilterOptions = useMemo(
-    () => statusOptions.map((s) => ({ value: s, label: s })),
-    [],
+    () =>
+      statusOptions.map((s) => ({ value: s, label: employeeStatusLabel(t, s) })),
+    [t],
   );
 
   const positionFilterOptions = useMemo(
@@ -321,17 +328,17 @@ export default function EmployeesPage() {
   const specializationFilterOptions = useMemo(
     () =>
       specializations
-        .map((s) => ({ value: s.id, label: s.title }))
+        .map((s) => ({ value: s.id, label: dictionaryItemLabel(tRef, s) }))
         .sort((a, b) => a.label.localeCompare(b.label)),
-    [specializations],
+    [specializations, tRef],
   );
 
   const gradeFilterOptions = useMemo(
     () =>
       grades
-        .map((g) => ({ value: g.id, label: g.title }))
+        .map((g) => ({ value: g.id, label: dictionaryItemLabel(tRef, g) }))
         .sort((a, b) => a.label.localeCompare(b.label)),
-    [grades],
+    [grades, tRef],
   );
 
   // HRP-120: the server applies the q filter, so the page already arrives
@@ -374,7 +381,7 @@ export default function EmployeesPage() {
         division_id: createForm.division_id || null,
         hire_date: createForm.hire_date,
       });
-      toast.success("Employee created");
+      toast.success(t("toastCreated"));
       setCreateOpen(false);
       setCreateForm(emptyCreateForm);
       await loadEmployees(page, filters, debouncedSearch);
@@ -414,7 +421,7 @@ export default function EmployeesPage() {
     const firstName = editForm.first_name.trim();
     const lastName = editForm.last_name.trim();
     if (!firstName || !lastName) {
-      toast.error("Name and Last name are required");
+      toast.error(t("toastNameRequired"));
       return;
     }
     setSaving(true);
@@ -427,7 +434,7 @@ export default function EmployeesPage() {
         division_id: editForm.division_id || null,
         status: editForm.status || undefined,
       });
-      toast.success("Employee updated");
+      toast.success(t("toastUpdated"));
       setEditOpen(false);
       await loadEmployees(page, filters, debouncedSearch);
     } catch (err) {
@@ -447,11 +454,11 @@ export default function EmployeesPage() {
     setSaving(true);
     try {
       await api.delete(`/employees/${deletingEmp.id}`);
-      toast.success("Employee deleted");
+      toast.success(t("toastDeleted"));
       setDeleteOpen(false);
       await loadEmployees(page, filters, debouncedSearch);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(err instanceof Error ? err.message : t("toastDeleteFailed"));
     } finally {
       setSaving(false);
     }
@@ -460,7 +467,7 @@ export default function EmployeesPage() {
   if (loading) {
     return (
       <div data-testid="employees-loading" className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -469,20 +476,22 @@ export default function EmployeesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Employees</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("employees")}
+          </h1>
           <p className="text-sm text-muted-foreground">
-            {total} employee{total !== 1 ? "s" : ""} total
+            {t("totalCount", { count: total })}
           </p>
         </div>
         {canManage && (
           <div className="flex items-center gap-2">
             <Button data-testid="employees-btn-import" variant="outline" size="sm" render={<Link href="/settings/import" />}>
               <Upload className="mr-1 h-4 w-4" />
-              Import
+              {t("import")}
             </Button>
             <Button data-testid="employees-btn-create" size="sm" onClick={() => { loadAvailableUsers(); setCreateError(EMPTY_FORM_ERROR); setCreateOpen(true); }}>
               <Plus className="mr-1 h-4 w-4" />
-              Add employee
+              {t("addEmployee")}
             </Button>
           </div>
         )}
@@ -494,7 +503,7 @@ export default function EmployeesPage() {
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             data-testid="employees-input-search"
-            placeholder="Search by name or email..."
+            placeholder={t("searchPlaceholder")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8"
@@ -505,7 +514,7 @@ export default function EmployeesPage() {
           options={divisionFilterOptions}
           value={filters.division_id}
           onChange={(next) => updateFilter("division_id", next)}
-          placeholder="Divisions"
+          placeholder={t("filterDivisions")}
           className="w-44"
         />
         <MultiSelectFilter
@@ -513,7 +522,7 @@ export default function EmployeesPage() {
           options={statusFilterOptions}
           value={filters.status}
           onChange={(next) => updateFilter("status", next)}
-          placeholder="Statuses"
+          placeholder={t("filterStatuses")}
           className="w-36"
         />
         <MultiSelectFilter
@@ -521,7 +530,7 @@ export default function EmployeesPage() {
           options={positionFilterOptions}
           value={filters.position_id}
           onChange={(next) => updateFilter("position_id", next)}
-          placeholder="Positions"
+          placeholder={t("filterPositions")}
           className="w-44"
         />
         <MultiSelectFilter
@@ -529,7 +538,7 @@ export default function EmployeesPage() {
           options={specializationFilterOptions}
           value={filters.specialization_id}
           onChange={(next) => updateFilter("specialization_id", next)}
-          placeholder="Specializations"
+          placeholder={t("filterSpecializations")}
           className="w-44"
         />
         <MultiSelectFilter
@@ -537,20 +546,20 @@ export default function EmployeesPage() {
           options={gradeFilterOptions}
           value={filters.grade_id}
           onChange={(next) => updateFilter("grade_id", next)}
-          placeholder="Grades"
+          placeholder={t("filterGrades")}
           className="w-36"
         />
         {hasFilters && (
           <Button data-testid="employees-btn-clear-filters" variant="ghost" size="sm" onClick={clearFilters}>
             <X className="mr-1 h-3 w-3" />
-            Clear
+            {t("clear")}
           </Button>
         )}
       </div>
 
       {filtered.length === 0 ? (
         <div data-testid="employees-empty" className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-          {hasFilters ? "No employees match the filters" : "No employees yet"}
+          {hasFilters ? t("emptyFiltered") : t("empty")}
         </div>
       ) : (
         <>
@@ -558,11 +567,11 @@ export default function EmployeesPage() {
             <Table data-testid="employees-table">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Division</TableHead>
-                  <TableHead>Position</TableHead>
-                  <TableHead>Specialization · Grade</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>{t("name")}</TableHead>
+                  <TableHead>{t("division")}</TableHead>
+                  <TableHead>{t("position")}</TableHead>
+                  <TableHead>{t("specializationGrade")}</TableHead>
+                  <TableHead>{t("status")}</TableHead>
                   {canManage && <TableHead className="w-10" />}
                 </TableRow>
               </TableHeader>
@@ -593,7 +602,7 @@ export default function EmployeesPage() {
                           </span>
                         </div>
                         {assessedEmployees.has(emp.id) && (
-                          <span title="Assessment completed">
+                          <span title={t("assessmentCompleted")}>
                             <CheckCircle className="h-3.5 w-3.5 text-green-600" />
                           </span>
                         )}
@@ -612,7 +621,7 @@ export default function EmployeesPage() {
                         variant="secondary"
                         className={statusColors[emp.status] || ""}
                       >
-                        {emp.status}
+                        {employeeStatusLabel(t, emp.status)}
                       </Badge>
                     </TableCell>
                     {canManage && (
@@ -624,7 +633,7 @@ export default function EmployeesPage() {
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem data-testid={`employees-row-${emp.id}-btn-edit`} onClick={() => openEdit(emp)}>
                               <Pencil className="mr-2 h-4 w-4" />
-                              Edit
+                              {t("edit")}
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               data-testid={`employees-row-${emp.id}-btn-delete`}
@@ -632,7 +641,7 @@ export default function EmployeesPage() {
                               onClick={() => openDelete(emp)}
                             >
                               <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
+                              {tc("delete")}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -651,7 +660,7 @@ export default function EmployeesPage() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent data-testid="employees-modal-create">
           <DialogHeader>
-            <DialogTitle>Add employee</DialogTitle>
+            <DialogTitle>{t("addEmployee")}</DialogTitle>
           </DialogHeader>
           <FormErrorBanner
             message={createError.message}
@@ -659,7 +668,7 @@ export default function EmployeesPage() {
           />
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>User</Label>
+              <Label>{t("user")}</Label>
               <Select
                 value={createForm.user_id}
                 onValueChange={(val) =>
@@ -667,14 +676,14 @@ export default function EmployeesPage() {
                 }
               >
                 <SelectTrigger data-testid="employees-modal-create-select-user" className="w-full">
-                  <SelectValue placeholder="Select user">
+                  <SelectValue placeholder={t("selectUser")}>
                     {(() => { if (!createForm.user_id) return undefined; const u = availableUsers.find((u) => u.id === createForm.user_id); return u ? `${u.first_name} ${u.last_name} (${u.email})` : undefined; })()}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {availableUsers.length === 0 && (
                     <div className="px-2 py-4 text-center text-sm text-muted-foreground">
-                      No available users
+                      {t("noAvailableUsers")}
                     </div>
                   )}
                   {availableUsers.map((u) => (
@@ -682,7 +691,9 @@ export default function EmployeesPage() {
                       <span className="flex items-center gap-2">
                         {u.first_name} {u.last_name} ({u.email})
                         <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                          {u.origin === "invited" ? "invited" : "self-registered"}
+                          {u.origin === "invited"
+                            ? t("originInvited")
+                            : t("originSelfRegistered")}
                         </Badge>
                       </span>
                     </SelectItem>
@@ -695,7 +706,7 @@ export default function EmployeesPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Position</Label>
+              <Label>{t("position")}</Label>
               <PositionCombobox
                 data-testid="employees-modal-create-input-position"
                 value={createForm.position_id || null}
@@ -709,7 +720,7 @@ export default function EmployeesPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Division</Label>
+              <Label>{t("division")}</Label>
               <Select
                 data-testid="employees-modal-create-select-division"
                 value={createForm.division_id}
@@ -718,12 +729,12 @@ export default function EmployeesPage() {
                 }
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="No division">
+                  <SelectValue placeholder={t("noDivision")}>
                     {(() => { if (!createForm.division_id) return undefined; const d = flatDivisions.find((d) => d.id === createForm.division_id); return d ? `${"—".repeat(d.depth)} ${d.name}` : undefined; })()}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">No division</SelectItem>
+                  <SelectItem value="">{t("noDivision")}</SelectItem>
                   {flatDivisions.map((d) => (
                     <SelectItem key={d.id} value={d.id}>
                       {"—".repeat(d.depth)} {d.name}
@@ -737,7 +748,7 @@ export default function EmployeesPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Hire date</Label>
+              <Label>{t("hireDate")}</Label>
               <DatePicker
                 data-testid="employees-modal-create-input-hire-date"
                 value={createForm.hire_date}
@@ -758,10 +769,10 @@ export default function EmployeesPage() {
               onClick={() => setCreateOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button data-testid="employees-modal-create-btn-submit" onClick={handleCreate} disabled={saving}>
-              {saving ? "Creating..." : "Create"}
+              {saving ? t("creating") : t("create")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -771,7 +782,7 @@ export default function EmployeesPage() {
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent data-testid="employees-modal-edit">
           <DialogHeader>
-            <DialogTitle>Edit employee</DialogTitle>
+            <DialogTitle>{t("editEmployee")}</DialogTitle>
           </DialogHeader>
           <FormErrorBanner
             message={editError.message}
@@ -780,7 +791,7 @@ export default function EmployeesPage() {
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label>Name</Label>
+                <Label>{t("name")}</Label>
                 <Input
                   data-testid="employees-modal-edit-input-first-name"
                   value={editForm.first_name}
@@ -791,7 +802,7 @@ export default function EmployeesPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Last name</Label>
+                <Label>{t("lastName")}</Label>
                 <Input
                   data-testid="employees-modal-edit-input-last-name"
                   value={editForm.last_name}
@@ -803,7 +814,7 @@ export default function EmployeesPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Position</Label>
+              <Label>{t("position")}</Label>
               <PositionCombobox
                 data-testid="employees-modal-edit-input-position"
                 value={editForm.position_id || null}
@@ -813,7 +824,7 @@ export default function EmployeesPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Division</Label>
+              <Label>{t("division")}</Label>
               <Select
                 data-testid="employees-modal-edit-select-division"
                 value={editForm.division_id}
@@ -822,12 +833,12 @@ export default function EmployeesPage() {
                 }
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="No division">
+                  <SelectValue placeholder={t("noDivision")}>
                     {(() => { if (!editForm.division_id) return undefined; const d = flatDivisions.find((d) => d.id === editForm.division_id); return d ? `${"—".repeat(d.depth)} ${d.name}` : undefined; })()}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">No division</SelectItem>
+                  <SelectItem value="">{t("noDivision")}</SelectItem>
                   {flatDivisions.map((d) => (
                     <SelectItem key={d.id} value={d.id}>
                       {"—".repeat(d.depth)} {d.name}
@@ -837,7 +848,7 @@ export default function EmployeesPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Status</Label>
+              <Label>{t("status")}</Label>
               <Select
                 data-testid="employees-modal-edit-select-status"
                 value={editForm.status}
@@ -846,12 +857,16 @@ export default function EmployeesPage() {
                 }
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue />
+                  <SelectValue>
+                    {editForm.status
+                      ? employeeStatusLabel(t, editForm.status)
+                      : undefined}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {statusOptions.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {s}
+                      {employeeStatusLabel(t, s)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -865,10 +880,10 @@ export default function EmployeesPage() {
               onClick={() => setEditOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button data-testid="employees-modal-edit-btn-submit" onClick={handleEdit} disabled={saving}>
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -878,8 +893,10 @@ export default function EmployeesPage() {
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title="Delete employee"
-        description={`Are you sure you want to delete ${deletingEmp?.user_name || "this employee"}? This action cannot be undone.`}
+        title={t("deleteEmployee")}
+        description={t("deleteConfirm", {
+          name: deletingEmp?.user_name || t("thisEmployee"),
+        })}
         onConfirm={confirmDelete}
         loading={saving}
       />

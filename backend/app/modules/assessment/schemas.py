@@ -36,6 +36,10 @@ class AnswerScaleRead(BaseModel):
     id: uuid.UUID
     title: str
     description: str | None
+    # HRP-479: 'standard_5point' on the seeded default scale and its
+    # snapshots; NULL on tenant scales. Frontend translates via
+    # reference.scale.* with the stored title as fallback.
+    i18n_key: str | None = None
     tenant_id: uuid.UUID | None
     is_default: bool
     options: list[AnswerOptionRead] = []
@@ -152,6 +156,9 @@ class AssessmentDetail(AssessmentRead):
     criteria_type: str | None = None
     specialization_title: str | None = None
     grade_title: str | None = None
+    # HRP-479: keys next to the denormalized titles (reference.dictionary.*).
+    specialization_i18n_key: str | None = None
+    grade_i18n_key: str | None = None
     recommendation: AssessmentRecommendation | None = None
     results: list[AssessmentResultRead] = []
     overall_percent: int | None = None
@@ -169,6 +176,8 @@ class AssessmentCompetenceRead(BaseModel):
     competence_title: str
     skill_level_id: uuid.UUID | None = None
     skill_level_title: str | None = None
+    # HRP-479: origin levels localize via reference.skillLevel.*.
+    skill_level_i18n_key: str | None = None
 
 
 class CompetenceCriteriaItem(BaseModel):
@@ -220,14 +229,18 @@ class AssessmentRecommendation(BaseModel):
     computed_at: datetime | None = None
 
 
+# HRP-479: criteria options are dictionary rows — origin ones localize
+# on the frontend via reference.dictionary.{specialization,grade}.*.
 class SpecializationOption(BaseModel):
     id: uuid.UUID
     title: str
+    i18n_key: str | None = None
 
 
 class GradeOption(BaseModel):
     id: uuid.UUID
     title: str
+    i18n_key: str | None = None
 
 
 # --- Participants ---
@@ -287,6 +300,8 @@ class ExternalAssessmentInfo(BaseModel):
     assessment_id: uuid.UUID
     employee_name: str | None = None
     type_title: str
+    # HRP-479: stable code so a future external-review UI can localize.
+    type_code: str | None = None
     competences: list[ExternalCompetenceInfo] = []
     scale: AnswerScaleRead | None = None
 
@@ -331,6 +346,8 @@ class AnswerRecord(BaseModel):
 class PerLevelResult(BaseModel):
     skill_level_id: uuid.UUID
     skill_level_title: str | None = None
+    # HRP-479: origin levels localize via reference.skillLevel.*.
+    skill_level_i18n_key: str | None = None
     sort_index: int
     percent: int | None = None
     model_config = {"from_attributes": True}
@@ -375,6 +392,9 @@ class CalibrateTotalsRequest(BaseModel):
 class DetailedRoleAnswer(BaseModel):
     role: str
     answer_title: str | None
+    # HRP-479: stable option code alongside the denormalized title so the
+    # frontend can localize seeded-scale answers (reference.scaleOption.*).
+    answer_code: str | None = None
     answer_weight: float | None
     is_neutral: bool
     answers_count: int
@@ -395,6 +415,8 @@ class DetailedQuestion(BaseModel):
     overall_avg_weight: float | None
     overall_percent: int | None
     overall_answer_title: str | None
+    # HRP-479: see DetailedRoleAnswer.answer_code.
+    overall_answer_code: str | None = None
     # HRP-185 REDO: id of the answer option whose weight is closest to the
     # computed Total — the frontend pre-populates the calibration Select
     # with it so the reviewer sees what the auto-computed Total is before
@@ -412,6 +434,8 @@ class DetailedQuestion(BaseModel):
 class DetailedSkillLevel(BaseModel):
     skill_level_id: uuid.UUID | None
     skill_level_title: str | None
+    # HRP-479: origin levels localize via reference.skillLevel.*.
+    skill_level_i18n_key: str | None = None
     sort_index: int
     percent_for_skill_level: int | None
     all_dont_know: bool
@@ -423,11 +447,18 @@ class DetailedCompetenceResult(BaseModel):
     competence_title: str
     competence_type_id: uuid.UUID | None
     competence_type_title: str | None
+    # HRP-479: stable keys for the denormalized titles above/below so the
+    # frontend can localize origin reference rows.
+    competence_type_i18n_key: str | None = None
     required_skill_level_id: uuid.UUID | None
     required_skill_level_title: str | None
+    required_skill_level_i18n_key: str | None = None
     percent: int | None
     level_id: uuid.UUID | None
     level_title: str | None
+    # HRP-479: origin scale levels have system_title NULL — the code is
+    # the only way to label them (level_title stays for tenant levels).
+    level_code: str | None = None
     all_dont_know: bool
     skill_levels: list[DetailedSkillLevel]
 
@@ -485,8 +516,10 @@ class AssessmentGroupDetail(AssessmentGroupRead):
     criteria_type: str | None = None
     specialization_id: uuid.UUID | None = None
     specialization_title: str | None = None
+    specialization_i18n_key: str | None = None
     grade_id: uuid.UUID | None = None
     grade_title: str | None = None
+    grade_i18n_key: str | None = None
     passing_score: int | None = None
     competences: list[AssessmentCompetenceRead] = []
     scale_id: uuid.UUID | None = None

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { AlertCircle, ExternalLink, Plus, X } from "lucide-react";
 import {
   DndContext,
@@ -105,6 +106,7 @@ export function MatrixEditor({
   activeSessionsMap,
   onOpenActiveSession,
 }: Props) {
+  const t = useTranslations("company");
   const grades = useMemo(() => gradesFromMeta(gradeMeta), [gradeMeta]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -287,7 +289,9 @@ export function MatrixEditor({
     } catch (err) {
       // Roll back to the parent's pre-drag state.
       onGradesChanged(gradeMeta);
-      toast.error(err instanceof Error ? err.message : "Failed to reorder grades");
+      toast.error(
+        err instanceof Error ? err.message : t("toastReorderGradesFailed"),
+      );
     }
   }
 
@@ -308,9 +312,9 @@ export function MatrixEditor({
       setSavedState(nextState);
       setEditState(nextState);
       onSaved(next);
-      toast.success("Matrix saved");
+      toast.success(t("toastMatrixSaved"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
+      toast.error(err instanceof Error ? err.message : t("toastSaveFailedShort"));
     } finally {
       setSaving(false);
     }
@@ -336,10 +340,13 @@ export function MatrixEditor({
           onClick={() => setAddDialogOpen(true)}
         >
           <Plus className="mr-1 h-3.5 w-3.5" />
-          Add competences
+          {t("addCompetences")}
         </Button>
         <span className="text-xs text-muted-foreground">
-          {currentCompetences.length} competences · {grades.length} grades
+          {t("matrixCounts", {
+            competences: currentCompetences.length,
+            grades: grades.length,
+          })}
         </span>
       </div>
 
@@ -348,7 +355,7 @@ export function MatrixEditor({
           data-testid="matrix-empty"
           className="rounded-lg border bg-muted/30 py-12 text-center text-sm text-muted-foreground"
         >
-          No competences in this matrix yet. Press &quot;Add competences&quot; to pick from the tree.
+          {t("matrixEmpty")}
         </p>
       ) : grades.length === 1 ? (
         // HRP-157 REDO: with a single grade the matrix is not really a
@@ -416,7 +423,7 @@ export function MatrixEditor({
             <thead className="bg-muted/40 text-xs">
               <tr>
                 <th className="sticky left-0 z-10 border-b bg-muted/40 px-3 py-2 text-left font-medium">
-                  Competence
+                  {t("competence")}
                 </th>
                 <SortableContext
                   items={grades.map((g) => g.grade_id)}
@@ -445,7 +452,7 @@ export function MatrixEditor({
                 </SortableContext>
                 <th
                   className="border-b px-2 py-2"
-                  aria-label="actions"
+                  aria-label={t("colActionsAria")}
                 />
               </tr>
             </thead>
@@ -459,7 +466,7 @@ export function MatrixEditor({
                 // Flag rows whose assigned skill levels still lack indicators
                 // or development materials so reviewers can drill into the
                 // competence detail page to fill the gap.
-                const coverageWarning = coverageGapMessage(comp);
+                const coverageWarning = coverageGapMessage(t, comp);
                 return (
                 <tr
                   key={comp.id}
@@ -539,8 +546,10 @@ export function MatrixEditor({
                     <button
                       type="button"
                       data-testid={`matrix-row-${comp.id}-btn-remove`}
-                      aria-label={`Remove ${comp.title} from matrix`}
-                      title="Remove competence from matrix"
+                      aria-label={t("removeCompetenceFromMatrix", {
+                        competence: comp.title,
+                      })}
+                      title={t("removeCompetenceFromMatrixTitle")}
                       className="rounded p-1 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
                       onClick={() => setPendingRemoveCompId(comp.id)}
                       disabled={saving}
@@ -590,9 +599,11 @@ export function MatrixEditor({
         onOpenChange={(next) => {
           if (!next) setPendingRemoveCompId(null);
         }}
-        title="Remove competence from matrix?"
-        description={`Drop "${pendingRemoveCompTitle ?? "this competence"}" from every grade in this matrix. Saved levels stay in the database until you press Save.`}
-        confirmLabel="Remove"
+        title={t("removeCompetenceConfirmTitle")}
+        description={t("removeCompetenceConfirmBody", {
+          competence: pendingRemoveCompTitle ?? t("thisCompetence"),
+        })}
+        confirmLabel={t("remove")}
         destructive
         onConfirm={() => {
           if (pendingRemoveCompId) handleRemoveCompetence(pendingRemoveCompId);

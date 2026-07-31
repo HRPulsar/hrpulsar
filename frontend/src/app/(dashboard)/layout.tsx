@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { AuthProvider, useAuth } from "@/context/auth-context";
 import { Sidebar } from "@/components/sidebar";
@@ -19,14 +20,15 @@ function InAppNotificationsBridge() {
 }
 
 function CreditLimitListener() {
+  const t = useTranslations("common");
   useEffect(() => {
     function handleCreditLimit(e: Event) {
       const detail = (e as CustomEvent).detail;
-      toast.error(detail || "Action unavailable — credit limit reached. Contact your administrator.");
+      toast.error(detail || t("creditLimitReached"));
     }
     window.addEventListener("hrpulsar:credit-limit", handleCreditLimit);
     return () => window.removeEventListener("hrpulsar:credit-limit", handleCreditLimit);
-  }, []);
+  }, [t]);
   return null;
 }
 
@@ -44,6 +46,7 @@ function PlatformAdminRedirect({ children }: { children: React.ReactNode }) {
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center">
+        {/* eslint-disable-next-line react/jsx-no-literals -- accepted F2 debt (HRP-476): pre-auth loading flash */}
         <div className="text-muted-foreground">Loading...</div>
       </div>
     );

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { ArrowUpRight, Plus, Sparkles, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/auth-context";
@@ -23,6 +24,13 @@ interface OnboardingStatus {
 
 const PERIODS = ["7d", "30d", "90d", "YTD"] as const;
 type Period = (typeof PERIODS)[number];
+
+/** Loose shape of the next-intl translator so plain helpers below can take it
+ * as an argument instead of being turned into components. */
+type Translate = (
+  key: string,
+  values?: Record<string, string | number>,
+) => string;
 
 function countDivisions(divs: Division[]): number {
   return divs.reduce((acc, d) => acc + 1 + countDivisions(d.children), 0);
@@ -116,10 +124,11 @@ interface DeptRow {
 }
 
 function DeptBars({ rows, total }: { rows: DeptRow[]; total: number }) {
+  const t = useTranslations("dashboard");
   if (rows.length === 0) {
     return (
       <div className="py-8 text-center text-sm text-muted-foreground">
-        No employees assigned to divisions yet.
+        {t("deptEmpty")}
       </div>
     );
   }
@@ -155,21 +164,39 @@ interface CycleStats {
 
 function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }) {
   const router = useRouter();
+  const t = useTranslations("dashboard");
   const completed = stats.done;
   const pct = stats.total > 0 ? Math.round((completed / stats.total) * 100) : 0;
 
   const segments = [
-    { key: "Submitted", count: stats.done, className: "bg-accent" },
-    { key: "In review", count: stats.inProgress, className: "bg-accent/60" },
-    { key: "Not started", count: stats.notStarted, className: "bg-accent/20" },
+    {
+      key: "submitted",
+      label: t("segmentSubmitted"),
+      count: stats.done,
+      className: "bg-accent",
+    },
+    {
+      key: "inReview",
+      label: t("segmentInReview"),
+      count: stats.inProgress,
+      className: "bg-accent/60",
+    },
+    {
+      key: "notStarted",
+      label: t("segmentNotStarted"),
+      count: stats.notStarted,
+      className: "bg-accent/20",
+    },
   ];
 
   return (
     <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
       <div className="flex items-center justify-between border-b border-border p-4">
-        <h3 className="text-sm font-semibold">Active assessment cycle</h3>
+        <h3 className="text-sm font-semibold">{t("cycleTitle")}</h3>
         <span className="font-mono text-[11px] text-muted-foreground">
-          {hasCycle ? `${stats.total} assessments` : "no active cycle"}
+          {hasCycle
+            ? t("cycleAssessmentsCount", { count: stats.total })
+            : t("noActiveCycle")}
         </span>
       </div>
       <div className="flex-1 p-4">
@@ -180,7 +207,7 @@ function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }
                 {pct}%
               </span>
               <span className="text-xs text-muted-foreground">
-                {completed} of {stats.total} submitted
+                {t("cycleSubmittedOf", { completed, total: stats.total })}
               </span>
             </div>
             <div className="flex h-2.5 overflow-hidden rounded-full bg-muted">
@@ -190,7 +217,7 @@ function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }
                     key={s.key}
                     className={s.className}
                     style={{ width: `${(s.count / stats.total) * 100}%` }}
-                    title={`${s.key}: ${s.count}`}
+                    title={`${s.label}: ${s.count}`}
                   />
                 ) : null,
               )}
@@ -199,23 +226,21 @@ function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }
               {segments.map((s) => (
                 <div key={s.key} className="flex items-center gap-1.5">
                   <span className={cn("h-2 w-2 rounded-sm", s.className)} />
-                  <span className="text-muted-foreground">{s.key}</span>
+                  <span className="text-muted-foreground">{s.label}</span>
                   <span className="font-mono font-semibold">{s.count}</span>
                 </div>
               ))}
             </div>
           </>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            No assessment cycle is in progress.
-          </p>
+          <p className="text-sm text-muted-foreground">{t("cycleEmpty")}</p>
         )}
       </div>
       <div className="flex items-center justify-between border-t border-border bg-muted px-4 py-3">
         <span className="text-xs text-muted-foreground">
           {stats.inProgress > 0
-            ? `${stats.inProgress} in review`
-            : "Manage cycles in Assessments"}
+            ? t("cycleInReviewCount", { count: stats.inProgress })
+            : t("manageCycles")}
         </span>
         <Button
           size="sm"
@@ -223,7 +248,7 @@ function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }
           onClick={() => router.push("/assessments")}
           data-testid="dashboard-cycle-cta"
         >
-          Open assessments
+          {t("openAssessments")}
         </Button>
       </div>
     </div>
@@ -238,16 +263,20 @@ interface InboxItem {
   href: string;
 }
 
-function buildInbox(assessments: AssessmentList | null, pdps: PDP[]): InboxItem[] {
+function buildInbox(
+  assessments: AssessmentList | null,
+  pdps: PDP[],
+  t: Translate,
+): InboxItem[] {
   const out: InboxItem[] = [];
   const inProgress =
     assessments?.items.filter((a) => a.status_code === "in_progress").length ?? 0;
   if (inProgress > 0) {
     out.push({
       tone: "alert",
-      title: `${inProgress} assessment${inProgress > 1 ? "s" : ""} in progress`,
-      sub: "Cycle awaiting completion",
-      action: "Review",
+      title: t("inboxAssessmentsInProgress", { count: inProgress }),
+      sub: t("inboxCycleAwaiting"),
+      action: t("inboxActionReview"),
       href: "/assessments",
     });
   }
@@ -255,9 +284,9 @@ function buildInbox(assessments: AssessmentList | null, pdps: PDP[]): InboxItem[
   if (draftPdps > 0) {
     out.push({
       tone: "info",
-      title: `${draftPdps} development plan${draftPdps > 1 ? "s" : ""} in draft`,
-      sub: "Pending review",
-      action: "Open",
+      title: t("inboxPdpsDraft", { count: draftPdps }),
+      sub: t("inboxPendingReview"),
+      action: t("inboxActionOpen"),
       href: "/development",
     });
   }
@@ -268,9 +297,9 @@ function buildInbox(assessments: AssessmentList | null, pdps: PDP[]): InboxItem[
   if (overdue > 0) {
     out.push({
       tone: "alert",
-      title: `${overdue} development plan${overdue > 1 ? "s" : ""} overdue`,
-      sub: "Past deadline",
-      action: "Open",
+      title: t("inboxPdpsOverdue", { count: overdue }),
+      sub: t("inboxPastDeadline"),
+      action: t("inboxActionOpen"),
       href: "/development",
     });
   }
@@ -278,17 +307,18 @@ function buildInbox(assessments: AssessmentList | null, pdps: PDP[]): InboxItem[
 }
 
 function InboxCard({ items }: { items: InboxItem[] }) {
+  const t = useTranslations("dashboard");
   return (
     <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
       <div className="flex items-center justify-between border-b border-border p-4">
-        <h3 className="text-sm font-semibold">Needs your attention</h3>
+        <h3 className="text-sm font-semibold">{t("inboxTitle")}</h3>
         <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[11px] font-semibold text-accent">
-          {items.length} item{items.length === 1 ? "" : "s"}
+          {t("inboxItemsCount", { count: items.length })}
         </span>
       </div>
       {items.length === 0 ? (
         <div className="p-8 text-center text-sm text-muted-foreground">
-          You&apos;re all caught up.
+          {t("inboxEmpty")}
         </div>
       ) : (
         <ul className="divide-y divide-border">
@@ -334,13 +364,14 @@ function InboxCard({ items }: { items: InboxItem[] }) {
 }
 
 function CalendarCard() {
+  const t = useTranslations("dashboard");
   return (
     <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
       <div className="border-b border-border p-4">
-        <h3 className="text-sm font-semibold">This week</h3>
+        <h3 className="text-sm font-semibold">{t("weekTitle")}</h3>
       </div>
       <div className="flex-1 p-8 text-center text-sm text-muted-foreground">
-        No scheduled events.
+        {t("weekEmpty")}
       </div>
     </div>
   );
@@ -370,6 +401,8 @@ const EMPTY_DATA: DashboardData = {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const t = useTranslations("dashboard");
+  const tCommon = useTranslations("common");
   const { user } = useAuth();
   const [data, setData] = useState<DashboardData>(EMPTY_DATA);
   const [period, setPeriod] = useState<Period>("30d");
@@ -425,14 +458,14 @@ export default function DashboardPage() {
     const counts = new Map<string, number>();
     for (const emp of data.employees) {
       const key = emp.division_id ? nameById.get(emp.division_id) : null;
-      const label = key ?? "Unassigned";
+      const label = key ?? t("unassigned");
       counts.set(label, (counts.get(label) ?? 0) + 1);
     }
     return [...counts.entries()]
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 7);
-  }, [data.divisions, data.employees]);
+  }, [data.divisions, data.employees, t]);
 
   const cycleStats = useMemo<CycleStats>(() => {
     const items = data.assessments?.items ?? [];
@@ -451,8 +484,8 @@ export default function DashboardPage() {
   }, [data.assessments]);
 
   const inbox = useMemo(
-    () => buildInbox(data.assessments, data.pdps),
-    [data.assessments, data.pdps],
+    () => buildInbox(data.assessments, data.pdps, t),
+    [data.assessments, data.pdps, t],
   );
 
   const activeReviews = cycleStats.inProgress + cycleStats.notStarted;
@@ -465,7 +498,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tCommon("loading")}
       </div>
     );
   }
@@ -475,16 +508,19 @@ export default function DashboardPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight" data-testid="dashboard-title">
-            {data.tenant?.name || "Dashboard"}
+            {data.tenant?.name || t("title")}
           </h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Organization health · {data.employeeCount} {data.employeeCount === 1 ? "person" : "people"} · {data.divisionCount} division{data.divisionCount === 1 ? "" : "s"}
+            {t("orgHealthSummary", {
+              employees: data.employeeCount,
+              divisions: data.divisionCount,
+            })}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <div
             role="tablist"
-            aria-label="Period"
+            aria-label={t("periodLabel")}
             className="flex items-center gap-0.5 rounded-md bg-muted p-0.5"
           >
             {PERIODS.map((p) => {
@@ -514,7 +550,7 @@ export default function DashboardPage() {
             data-testid="dashboard-btn-add-employee"
           >
             <Plus className="h-4 w-4" />
-            Add employee
+            {t("addEmployee")}
           </Button>
         </div>
       </div>
@@ -523,12 +559,12 @@ export default function DashboardPage() {
         <div className="flex flex-wrap">
           <KpiCell
             testId="dashboard-kpi-headcount"
-            label="Headcount"
+            label={t("kpiHeadcount")}
             value={data.employeeCount}
             sub={
               data.activeEmployeeCount === data.employeeCount
-                ? "all active"
-                : `${data.activeEmployeeCount} active`
+                ? t("allActive")
+                : t("activeCount", { count: data.activeEmployeeCount })
             }
             series={[
               data.employeeCount,
@@ -543,20 +579,20 @@ export default function DashboardPage() {
           />
           <KpiCell
             testId="dashboard-kpi-active-reviews"
-            label="Active reviews"
+            label={t("kpiActiveReviews")}
             value={activeReviews}
             sub={
               cycleStats.inProgress > 0
-                ? `${cycleStats.inProgress} in progress`
-                : "no active cycle"
+                ? t("inProgressCount", { count: cycleStats.inProgress })
+                : t("noActiveCycle")
             }
             series={[activeReviews, activeReviews, activeReviews, activeReviews]}
           />
           <KpiCell
             testId="dashboard-kpi-divisions"
-            label="Divisions"
+            label={t("kpiDivisions")}
             value={data.divisionCount}
-            sub={`${deptRows.length} with people`}
+            sub={t("withPeopleCount", { count: deptRows.length })}
             series={[
               data.divisionCount,
               data.divisionCount,
@@ -566,9 +602,9 @@ export default function DashboardPage() {
           />
           <KpiCell
             testId="dashboard-kpi-open-pdps"
-            label="Open dev plans"
+            label={t("kpiOpenDevPlans")}
             value={openPdpCount}
-            sub={`${activePct}% of org active`}
+            sub={t("orgActivePct", { percent: activePct })}
             progress={activePct}
             borderRight={false}
           />
@@ -579,16 +615,16 @@ export default function DashboardPage() {
         <div className="overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
           <div className="flex items-center justify-between border-b border-border p-4">
             <div>
-              <h3 className="text-sm font-semibold">Headcount by department</h3>
+              <h3 className="text-sm font-semibold">{t("deptTitle")}</h3>
               <p className="mt-0.5 text-[11.5px] text-muted-foreground">
-                Last {period} · % of org
+                {t("deptSubtitle", { period })}
               </p>
             </div>
             <Link
               href="/analytics"
               className="inline-flex items-center gap-1 text-xs font-medium text-accent transition-colors hover:underline"
             >
-              Open analytics
+              {t("openAnalytics")}
               <ArrowUpRight className="h-3 w-3" />
             </Link>
           </div>

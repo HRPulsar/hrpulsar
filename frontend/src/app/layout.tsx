@@ -1,4 +1,6 @@
 import type { Metadata, Viewport } from "next";
+import { NextIntlClientProvider } from "next-intl";
+import { getLocale } from "next-intl/server";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -77,14 +79,19 @@ export const viewport: Viewport = {
   themeColor: "#ffffff",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // i18n (F1): resolved per request from the NEXT_LOCALE cookie /
+  // Accept-Language by src/i18n/request.ts. The tree is already
+  // request-dynamic (RuntimeEnvScript calls headers()), so this adds no
+  // static-rendering cost.
+  const locale = await getLocale();
   return (
     <html
-      lang="en"
+      lang={locale}
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
@@ -93,10 +100,14 @@ export default function RootLayout({
         <BrandStyle />
       </head>
       <body className="h-full bg-background text-foreground">
-        <ThemeProvider>
-          {children}
-          <Toaster />
-        </ThemeProvider>
+        {/* Messages and locale are inherited from the server request
+            config (next-intl v4). */}
+        <NextIntlClientProvider>
+          <ThemeProvider>
+            {children}
+            <Toaster />
+          </ThemeProvider>
+        </NextIntlClientProvider>
       </body>
     </html>
   );

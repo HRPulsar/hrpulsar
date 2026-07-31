@@ -14,10 +14,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.recruitment import audit_service
 from app.modules.recruitment.manager_assessment_models import (
     PublicAssessmentIPBlock,
@@ -128,12 +129,9 @@ async def resolve_invite_by_token(
     """
 
     if ip and await is_ip_blocked(db, ip):
-        raise HTTPException(
-            status.HTTP_429_TOO_MANY_REQUESTS,
-            "Too many failed attempts; try again later",
-        )
+        raise AppError("too_many_failed_attempts", status.HTTP_429_TOO_MANY_REQUESTS)
     if not token:
-        raise HTTPException(status.HTTP_410_GONE, "Invalid invite link")
+        raise AppError("invalid_invite_link", status.HTTP_410_GONE)
 
     token_h = hash_token(token)
     result = await db.execute(
@@ -144,16 +142,16 @@ async def resolve_invite_by_token(
     invite = result.scalar_one_or_none()
     if invite is None:
         await register_invalid_attempt(db, ip or "")
-        raise HTTPException(status.HTTP_410_GONE, "Invalid invite link")
+        raise AppError("invalid_invite_link", status.HTTP_410_GONE)
 
     if invite.revoked_at is not None:
-        raise HTTPException(status.HTTP_410_GONE, "This invitation was revoked")
+        raise AppError("invitation_revoked", status.HTTP_410_GONE)
     if invite.purged_at is not None:
-        raise HTTPException(status.HTTP_410_GONE, "This invitation has expired")
+        raise AppError("invitation_expired", status.HTTP_410_GONE)
     if invite.status == "declined":
         # HRP-359 REDO: declining is terminal — the token dies with it.
         # Refreshing the stub page must not resurface the consent screen.
-        raise HTTPException(status.HTTP_410_GONE, "This invitation was declined")
+        raise AppError("invitation_declined", status.HTTP_410_GONE)
     if invite.expires_at < datetime.now(timezone.utc):
         # Only live invites flip to ``expired`` — a terminal status
         # (submitted / declined / revoked) must survive a late link visit,
@@ -162,7 +160,7 @@ async def resolve_invite_by_token(
         if invite.status in INVITE_ACTIVE_STATUSES:
             invite.status = "expired"
             await db.commit()
-        raise HTTPException(status.HTTP_410_GONE, "This invitation has expired")
+        raise AppError("invitation_expired", status.HTTP_410_GONE)
     return invite
 
 
@@ -174,9 +172,8 @@ async def resolve_invite_by_token(
 def _ensure_editable(invite: AssessmentInvite) -> None:
     """Reject edits on a submitted sheet when re-editing is disabled."""
     if invite.status == "submitted" and not invite.allow_reediting:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "This evaluation was already submitted and re-editing is disabled",
+        raise AppError(
+            "evaluation_submitted_reediting_disabled", status.HTTP_409_CONFLICT
         )
 
 
@@ -225,9 +222,9 @@ async def public_get_context(
     invite = await resolve_invite_by_token(db, token, ip=ip)
     cv = await db.get(CandidateVacancy, invite.candidate_vacancy_id)
     if cv is None:
-        raise HTTPException(status.HTTP_410_GONE, "Candidate is no longer available")
+        raise AppError("candidate_no_longer_available", status.HTTP_410_GONE)
     if cv.tenant_id != invite.tenant_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cross-tenant invite mismatch")
+        raise AppError("cross_tenant_invite_mismatch", status.HTTP_403_FORBIDDEN)
 
     await _mark_opened(db, invite)
 
@@ -338,7 +335,9 @@ async def public_get_context(
         "consent_accepted": invite.consent_accepted_at is not None,
         # HRP-359: everything the standalone evaluation page renders.
         "tenant_name": tenant.name if tenant else None,
-        "candidate_name": candidate_display_name(candidate, fallback="(unnamed)"),
+        # i18n F7: no English "(unnamed)" on the wire — the public
+        # evaluation page localizes the empty-name fallback itself.
+        "candidate_name": candidate_display_name(candidate, fallback=""),
         "vacancy_title": vacancy.title if vacancy else None,
         "resume_url": resume_url,
         "resume_filename": resume.original_filename if resume else None,
@@ -390,10 +389,7 @@ async def public_decline(
     if invite.status == "submitted":
         # A stale consent tab must not demote a completed evaluation whose
         # scores already feed the round aggregate (review [2]).
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "This evaluation was already submitted",
-        )
+        raise AppError("evaluation_already_submitted", status.HTTP_409_CONFLICT)
     invite.status = "declined"
     invite.declined_at = datetime.now(timezone.utc)
     await db.commit()
@@ -448,10 +444,7 @@ async def public_submit(
     invite = await resolve_invite_by_token(db, token, ip=ip)
     _ensure_editable(invite)
     if invite.round_id is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Invite has no associated round",
-        )
+        raise AppError("invite_has_no_round", status.HTTP_400_BAD_REQUEST)
     a = await get_or_create_assessment(
         db,
         invite.tenant_id,
@@ -499,10 +492,7 @@ async def public_save_final_notes(
     invite = await resolve_invite_by_token(db, token, ip=ip)
     _ensure_editable(invite)
     if invite.round_id is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Invite has no associated round",
-        )
+        raise AppError("invite_has_no_round", status.HTTP_400_BAD_REQUEST)
     a = await get_or_create_assessment(
         db,
         invite.tenant_id,
@@ -534,10 +524,7 @@ async def public_set_competence_score(
     invite = await resolve_invite_by_token(db, token, ip=ip)
     _ensure_editable(invite)
     if invite.round_id is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Invite has no associated round",
-        )
+        raise AppError("invite_has_no_round", status.HTTP_400_BAD_REQUEST)
     a = await get_or_create_assessment(
         db,
         invite.tenant_id,
@@ -586,10 +573,7 @@ async def public_set_indicator_score(
     invite = await resolve_invite_by_token(db, token, ip=ip)
     _ensure_editable(invite)
     if invite.round_id is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Invite has no associated round",
-        )
+        raise AppError("invite_has_no_round", status.HTTP_400_BAD_REQUEST)
     a = await get_or_create_assessment(
         db,
         invite.tenant_id,

@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.16.0] - 2026-07-31
+
+### Added
+- Interface-locale foundation: deployment-level available/default locale settings, per-tenant default locale with a new onboarding "Language" step (interface + AI content language), and a per-user language preference in profile settings (HRP-474)
+- Cookie-based interface-locale infrastructure (next-intl): per-request locale resolution with dynamic html lang, sticky NEXT_LOCALE cookie, and a header language switcher on multi-locale installs (HRP-475)
+- All product UI copy now renders through i18n message catalogs (~4000 keys across 20 namespaces) with locale-aware number formatting; English output is unchanged (HRP-476)
+- Backend user-facing errors now resolve through a locale-aware error catalog (~660 raise sites, 520 codes) with an additive machine-readable `code` field; pydantic validation messages localize too, and English output is unchanged (HRP-477)
+- Outbound email renders in the recipient's locale: code templates read from an `email.*` catalog and DB notification templates gain per-locale rows with English fallback; English output is unchanged (HRP-478)
+- Shipped reference data (grades, specializations, competence types, skill levels, assessment statuses/types, the default answer scale) now localizes via stable keys with verbatim fallback for tenant-created entries; English output is unchanged (HRP-479)
+- AI content language can now be set to German: selectable in AI settings and onboarding; competence, indicator, position, learning-material, and development-plan generators emit content in the tenant's chosen language (HRP-480)
+- German (de) interface locale: complete translations for the product UI including shipped reference data, backend errors, and outbound email — code templates and database notification templates alike (HRP-481)
+- White-label theming: curated UI theme presets selectable per installation via `NEXT_PUBLIC_BRAND_THEME`, sidebar logo height override, and a customizable login/register background color or image (HRP-463)
+- LLM provider registry with key-based gating: `/settings/ai` offers only providers with working credentials; local OpenAI-compatible servers (Ollama/vLLM/LM Studio) are supported via a custom endpoint, and workspace BYOK keys now apply to all AI generation (HRP-465)
+- Dynamic AI model catalog with a daily discovery sweep: new provider model versions appear without a redeploy (HRP-466)
+
+### Changed
+- Anthropic tier models refreshed (balanced → Claude Sonnet 5, thorough → Claude Opus 4.8, optional Claude Fable 5), with sampling params gated per model family (HRP-464)
+
+### Fixed
+- Celery worker container no longer accumulates zombie processes from healthcheck probes until the pids limit is exhausted and background tasks fail — backend containers now run with an init process
+- AI generation no longer fails on thinking-capable Anthropic models (balanced/thorough tiers): the adapter reads the first text content block instead of the first block (HRP-509)
+- English copy: verb agreement in the candidates bulk-analysis banner ("1 candidate has") and the answer-scale delete confirmation no longer repeats "archived" (HRP-481)
+- Backend now refuses to start when `S3_ENDPOINT` is an internal-only hostname and `S3_PUBLIC_ENDPOINT` is unset, instead of serving presigned file links browsers cannot reach (HRP-445)
+
 ## [1.15.5] - 2026-07-24
 
 ### Fixed

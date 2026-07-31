@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { Sparkles } from "lucide-react";
 
@@ -10,6 +11,7 @@ interface AIBadgeProps {
 }
 
 export function AIBadge({ source, date }: AIBadgeProps) {
+  const t = useTranslations("recruitment");
   const [showTooltip, setShowTooltip] = useState(false);
 
   const hasTooltip = source || date;
@@ -25,7 +27,7 @@ export function AIBadge({ source, date }: AIBadgeProps) {
         data-testid="ai-badge"
       >
         <Sparkles className="size-3" />
-        AI
+        {t("aiBadgeLabel")}
       </span>
       {hasTooltip && showTooltip && (
         <span
@@ -33,7 +35,9 @@ export function AIBadge({ source, date }: AIBadgeProps) {
             "absolute bottom-full left-1/2 z-50 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md ring-1 ring-foreground/10",
           )}
         >
-          {source && <span className="block">Based on: {source}</span>}
+          {source && (
+            <span className="block">{t("aiBadgeBasedOn", { source })}</span>
+          )}
           {date && <span className="block text-muted-foreground">{date}</span>}
         </span>
       )}

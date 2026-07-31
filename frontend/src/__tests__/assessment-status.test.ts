@@ -6,13 +6,17 @@
 import { describe, expect, it } from "vitest";
 import {
   ASSESSMENT_MANUAL_FORBIDDEN_STATUSES,
-  ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP,
+  ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP_KEY,
   ASSESSMENT_STATUS_FLOW,
-  ASSESSMENT_STATUS_LABELS,
+  ASSESSMENT_STATUS_KEYS,
   ASSESSMENT_STATUS_OPTIONS,
   ASSESSMENT_TERMINAL_STATUSES,
   assessmentStatusLabel,
 } from "@/lib/assessment-status";
+
+// HRP-476: status wording moved into the `assessments` i18n namespace —
+// the module now owns code → key, so the tests pin keys instead of copy.
+const t = (key: string) => key;
 
 describe("ASSESSMENT_STATUS_OPTIONS", () => {
   it("includes on_review between in_progress and done so the Change Status modal exposes it", () => {
@@ -67,21 +71,22 @@ describe("ASSESSMENT_STATUS_FLOW (HRP-117 — in_progress no longer jumps to don
   });
 });
 
-describe("ASSESSMENT_STATUS_LABELS (HRP-194 — filter/Change status modals)", () => {
-  it("renames In Progress / On Review to sentence case to match the rest of the UI", () => {
-    expect(ASSESSMENT_STATUS_LABELS.in_progress).toBe("In progress");
-    expect(ASSESSMENT_STATUS_LABELS.on_review).toBe("On review");
+describe("ASSESSMENT_STATUS_KEYS (HRP-194 — filter/Change status modals)", () => {
+  it("maps in_progress / on_review onto their own message keys", () => {
+    expect(ASSESSMENT_STATUS_KEYS.in_progress).toBe("statusInProgress");
+    expect(ASSESSMENT_STATUS_KEYS.on_review).toBe("statusOnReview");
   });
 
   it("covers every option so the filter dropdown never falls back to raw codes", () => {
     for (const code of ASSESSMENT_STATUS_OPTIONS) {
-      expect(ASSESSMENT_STATUS_LABELS[code]).toBeTruthy();
-      expect(ASSESSMENT_STATUS_LABELS[code]).not.toBe(code);
+      expect(ASSESSMENT_STATUS_KEYS[code]).toBeTruthy();
+      expect(ASSESSMENT_STATUS_KEYS[code]).not.toBe(code);
+      expect(assessmentStatusLabel(t, code)).toBe(ASSESSMENT_STATUS_KEYS[code]);
     }
   });
 
   it("falls back to the raw code when given an unknown status", () => {
-    expect(assessmentStatusLabel("unknown_code")).toBe("unknown_code");
+    expect(assessmentStatusLabel(t, "unknown_code")).toBe("unknown_code");
   });
 });
 
@@ -97,9 +102,9 @@ describe("ASSESSMENT_MANUAL_FORBIDDEN_STATUSES (HRP-192 — Change status modal)
     }
   });
 
-  it("ships a tooltip the operator can hover for context", () => {
-    expect(ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP).toBe(
-      "Manual transition is not allowed",
+  it("ships a tooltip key the operator can hover for context", () => {
+    expect(ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP_KEY).toBe(
+      "manualTransitionNotAllowed",
     );
   });
 });

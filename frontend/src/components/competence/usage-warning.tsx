@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import type { CompetenceUsage } from "@/lib/types";
 import {
@@ -12,17 +13,25 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
-const AREA_LABELS: Array<{ key: keyof CompetenceUsage; label: string }> = [
-  { key: "matrix", label: "Specialization matrices" },
-  { key: "employee_card", label: "Employee cards" },
-  { key: "assessment", label: "Assessments" },
-  { key: "idp", label: "Development plans" },
-  { key: "talent_market", label: "Talent market" },
-];
+/** HRP-476: usage flag → key in the `competences` i18n namespace. The map
+ *  owns the flag → key relation; the wording lives in the catalog. */
+const AREA_LABEL_KEYS: Array<{ key: keyof CompetenceUsage; labelKey: string }> =
+  [
+    { key: "matrix", labelKey: "usageAreaMatrix" },
+    { key: "employee_card", labelKey: "usageAreaEmployeeCard" },
+    { key: "assessment", labelKey: "usageAreaAssessment" },
+    { key: "idp", labelKey: "usageAreaIdp" },
+    { key: "talent_market", labelKey: "usageAreaTalentMarket" },
+  ];
 
-export function listUsageAreas(usage: CompetenceUsage | null): string[] {
+/** Translated usage areas. `t` is passed in so vitest can pin the key set
+ *  without an intl provider. */
+export function listUsageAreas(
+  t: (key: string) => string,
+  usage: CompetenceUsage | null,
+): string[] {
   if (!usage || !usage.is_used) return [];
-  return AREA_LABELS.filter((a) => usage[a.key]).map((a) => a.label);
+  return AREA_LABEL_KEYS.filter((a) => usage[a.key]).map((a) => t(a.labelKey));
 }
 
 export function CompetenceUsageBanner({
@@ -32,7 +41,8 @@ export function CompetenceUsageBanner({
   usage: CompetenceUsage;
   testIdPrefix?: string;
 }) {
-  const areas = listUsageAreas(usage);
+  const t = useTranslations("competences");
+  const areas = listUsageAreas(t, usage);
   if (areas.length === 0) return null;
   return (
     <div
@@ -42,10 +52,10 @@ export function CompetenceUsageBanner({
       <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
       <div className="space-y-1">
         <p className="font-medium text-amber-900 dark:text-amber-200">
-          This competence is in active use
+          {t("usageBannerTitle")}
         </p>
         <p className="text-amber-800 dark:text-amber-300">
-          Changes to its indicators will propagate everywhere it is used:
+          {t("usageBannerBody")}
         </p>
         <ul
           data-testid={`${testIdPrefix}-areas`}
@@ -76,13 +86,18 @@ export function CompetenceUsageWarningDialog({
   open,
   onOpenChange,
   usage,
-  title = "Save anyway?",
-  body = "Saving will update every place that references this competence.",
-  confirmLabel = "Save anyway",
+  title,
+  body,
+  confirmLabel,
   onConfirm,
   loading,
   testIdPrefix = "competence-usage-warning",
 }: CompetenceUsageWarningDialogProps) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
+  const resolvedTitle = title ?? t("usageSaveAnywayTitle");
+  const resolvedBody = body ?? t("usageSaveAnywayBody");
+  const resolvedConfirmLabel = confirmLabel ?? t("usageSaveAnywayConfirm");
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -90,9 +105,11 @@ export function CompetenceUsageWarningDialog({
         className="sm:max-w-md"
       >
         <DialogHeader>
-          <DialogTitle data-testid={`${testIdPrefix}-title`}>{title}</DialogTitle>
+          <DialogTitle data-testid={`${testIdPrefix}-title`}>
+            {resolvedTitle}
+          </DialogTitle>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">{body}</p>
+        <p className="text-sm text-muted-foreground">{resolvedBody}</p>
         {usage && <CompetenceUsageBanner usage={usage} testIdPrefix={testIdPrefix} />}
         <DialogFooter>
           <Button
@@ -101,14 +118,14 @@ export function CompetenceUsageWarningDialog({
             disabled={loading}
             data-testid={`${testIdPrefix}-btn-cancel`}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={onConfirm}
             disabled={loading}
             data-testid={`${testIdPrefix}-btn-confirm`}
           >
-            {loading ? "Saving…" : confirmLabel}
+            {loading ? t("savingEllipsis") : resolvedConfirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { flattenTree } from "@/lib/utils";
 import { formatDate } from "@/lib/date-format";
@@ -76,14 +77,17 @@ function employeeLabel(
   id: string,
   employees: Employee[],
   fallback: string | null | undefined,
+  noneLabel: string,
 ): string {
-  if (!id) return "None";
+  if (!id) return noneLabel;
   const emp = employees.find((e) => e.id === id);
   if (emp) return emp.user_name?.trim() || emp.user_email || "—";
   return fallback?.trim() || "—";
 }
 
 export default function DivisionDetailPage() {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   const { id } = useParams<{ id: string }>();
   const { canManage } = usePermissions();
   const [division, setDivision] = useState<Division | null>(null);
@@ -129,11 +133,11 @@ export default function DivisionDetailPage() {
       if (divsAll.status === "fulfilled") setAllDivisions(divsAll.value);
       if (empsAll.status === "fulfilled") setAllEmployees(empsAll.value.items);
       if (posAll.status === "fulfilled") setAllPositions(posAll.value.items);
-      if (div.status === "rejected") toast.error("Failed to load division");
+      if (div.status === "rejected") toast.error(t("toastDivisionLoadFailed"));
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     load();
@@ -168,7 +172,7 @@ export default function DivisionDetailPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -178,10 +182,10 @@ export default function DivisionDetailPage() {
       <div className="space-y-4">
         <Button variant="ghost" size="sm" render={<Link href="/company" />}>
           <ArrowLeft className="mr-1 h-4 w-4" />
-          Back to company
+          {t("backToCompany")}
         </Button>
         <div className="py-12 text-center text-muted-foreground">
-          Division not found
+          {t("divisionNotFound")}
         </div>
       </div>
     );
@@ -189,7 +193,7 @@ export default function DivisionDetailPage() {
 
   const filterSpecTitle = filterSpecId
     ? specializations.find((s) => s.specialization_id === filterSpecId)
-        ?.specialization_title ?? "Unknown"
+        ?.specialization_title ?? tc("unknown")
     : null;
 
   function openEditDialog() {
@@ -215,7 +219,7 @@ export default function DivisionDetailPage() {
         deputy_manager_id: editForm.deputy_manager_id || null,
       };
       const result = await api.put<Division>(`/divisions/${division.id}`, payload);
-      toast.success("Division updated");
+      toast.success(t("toastDivisionUpdated"));
       setEditOpen(false);
       const pending = result.pending_role_downgrade ?? [];
       // HRP-196: the server now auto-downgrades the previous manager
@@ -232,11 +236,11 @@ export default function DivisionDetailPage() {
         if (names.length > 0) {
           toast.success(
             names.length === 1
-              ? `${names[0]} downgraded to employee`
-              : `${names.length} managers downgraded to employee`,
+              ? t("toastDowngradedNamed", { name: names[0] })
+              : t("toastDowngradedCount", { count: names.length }),
           );
         } else {
-          toast.success("Previous manager role downgraded to employee");
+          toast.success(t("toastPreviousManagerDowngraded"));
         }
       }
       // HRP-196: the same flow auto-upgrades employees just put in a
@@ -251,11 +255,11 @@ export default function DivisionDetailPage() {
         if (names.length > 0) {
           toast.success(
             names.length === 1
-              ? `${names[0]} promoted to manager`
-              : `${names.length} employees promoted to manager`,
+              ? t("toastPromotedNamed", { name: names[0] })
+              : t("toastPromotedCount", { count: names.length }),
           );
         } else {
-          toast.success("Selected user promoted to manager");
+          toast.success(t("toastUserPromoted"));
         }
       }
       if (manual.length > 0) {
@@ -264,7 +268,7 @@ export default function DivisionDetailPage() {
       }
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("toastSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -287,11 +291,11 @@ export default function DivisionDetailPage() {
       await api.post(`/employees/${target.employee_id}/downgrade-role`, {});
       toast.success(
         target.user_name
-          ? `${target.user_name} downgraded to employee`
-          : "Role downgraded to employee",
+          ? t("toastDowngradedNamed", { name: target.user_name })
+          : t("toastRoleDowngraded"),
       );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to downgrade");
+      toast.error(err instanceof Error ? err.message : t("toastDowngradeFailed"));
     } finally {
       setDowngrading(false);
       advanceDowngrade();
@@ -319,7 +323,7 @@ export default function DivisionDetailPage() {
             onClick={openEditDialog}
           >
             <Pencil className="mr-1 h-4 w-4" />
-            Edit
+            {t("edit")}
           </Button>
         )}
       </div>
@@ -327,24 +331,28 @@ export default function DivisionDetailPage() {
       {/* Info card */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Division Info</CardTitle>
+          <CardTitle className="text-base">{t("divisionInfo")}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
             <div>
-              <p className="text-muted-foreground">Manager</p>
-              <p className="font-medium">{division.manager_name || "Not assigned"}</p>
+              <p className="text-muted-foreground">{t("manager")}</p>
+              <p className="font-medium">
+                {division.manager_name || t("notAssigned")}
+              </p>
             </div>
             <div>
-              <p className="text-muted-foreground">Deputy Manager</p>
-              <p className="font-medium">{division.deputy_manager_name || "Not assigned"}</p>
+              <p className="text-muted-foreground">{t("deputyManager")}</p>
+              <p className="font-medium">
+                {division.deputy_manager_name || t("notAssigned")}
+              </p>
             </div>
             <div>
-              <p className="text-muted-foreground">Employees</p>
+              <p className="text-muted-foreground">{t("employees")}</p>
               <p className="font-medium">{employees.length}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Created</p>
+              <p className="text-muted-foreground">{t("created")}</p>
               <p className="font-medium">{formatDate(division.created_at)}</p>
             </div>
           </div>
@@ -355,13 +363,13 @@ export default function DivisionDetailPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
-            Specializations ({specializations.length})
+            {t("specializationsWithCount", { count: specializations.length })}
           </CardTitle>
         </CardHeader>
         <CardContent>
           {specializations.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              No specializations assigned to this division
+              {t("divisionNoSpecializations")}
             </p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -385,7 +393,7 @@ export default function DivisionDetailPage() {
                     }`}
                   >
                     <span className="text-sm font-medium">
-                      {spec.specialization_title || "Unknown"}
+                      {spec.specialization_title || tc("unknown")}
                     </span>
                     <Badge variant="secondary" className="gap-1">
                       <Users className="h-3 w-3" />
@@ -409,12 +417,16 @@ export default function DivisionDetailPage() {
               // updated visible/total count when filters change.
               aria-live="polite"
             >
-              Employees{" "}
+              {t("employees")}{" "}
               <span className="text-muted-foreground">
-                — {filteredEmployees.length}
                 {hasActiveDivisionFilters(filters)
-                  ? ` of ${employees.length}`
-                  : ""}
+                  ? t("employeesVisibleOfTotal", {
+                      visible: filteredEmployees.length,
+                      total: employees.length,
+                    })
+                  : t("employeesVisible", {
+                      visible: filteredEmployees.length,
+                    })}
               </span>
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2">
@@ -433,18 +445,18 @@ export default function DivisionDetailPage() {
                 <SelectTrigger
                   className="h-8 w-[200px]"
                   data-testid="division-employees-position-filter"
-                  aria-label="Filter by position"
+                  aria-label={t("filterByPosition")}
                 >
-                  <SelectValue placeholder="All positions">
+                  <SelectValue placeholder={t("allPositions")}>
                     {filters.positionId
                       ? positionOptions.find(
                           (o) => o.id === filters.positionId,
-                        )?.title ?? "All positions"
-                      : "All positions"}
+                        )?.title ?? t("allPositions")
+                      : t("allPositions")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All positions</SelectItem>
+                  <SelectItem value="">{t("allPositions")}</SelectItem>
                   {positionOptions.map((opt) => (
                     <SelectItem key={opt.id} value={opt.id}>
                       {opt.title}
@@ -462,17 +474,17 @@ export default function DivisionDetailPage() {
                 <SelectTrigger
                   className="h-8 w-[160px]"
                   data-testid="division-employees-grade-filter"
-                  aria-label="Filter by grade"
+                  aria-label={t("filterByGrade")}
                 >
-                  <SelectValue placeholder="All grades">
+                  <SelectValue placeholder={t("allGrades")}>
                     {filters.gradeId
                       ? gradeOptions.find((o) => o.id === filters.gradeId)
-                          ?.title ?? "All grades"
-                      : "All grades"}
+                          ?.title ?? t("allGrades")
+                      : t("allGrades")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All grades</SelectItem>
+                  <SelectItem value="">{t("allGrades")}</SelectItem>
                   {gradeOptions.map((opt) => (
                     <SelectItem key={opt.id} value={opt.id}>
                       {opt.title}
@@ -489,7 +501,7 @@ export default function DivisionDetailPage() {
                   data-testid="division-detail-btn-add-employee"
                   onClick={() => setAddEmployeeOpen(true)}
                 >
-                  Add employee
+                  {t("addEmployee")}
                 </Button>
               ) : null}
             </div>
@@ -502,7 +514,9 @@ export default function DivisionDetailPage() {
                   className="gap-1 pr-1"
                   data-testid="division-employees-specialization-filter-chip"
                 >
-                  Specialization: {filterSpecTitle ?? "Unknown"}
+                  {t("chipSpecialization", {
+                    value: filterSpecTitle ?? tc("unknown"),
+                  })}
                   <button
                     type="button"
                     data-testid="division-employees-filter-clear"
@@ -510,7 +524,7 @@ export default function DivisionDetailPage() {
                     onClick={() =>
                       setFilters((prev) => ({ ...prev, specializationId: null }))
                     }
-                    aria-label="Clear specialization filter"
+                    aria-label={t("clearSpecializationFilter")}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -522,9 +536,11 @@ export default function DivisionDetailPage() {
                   className="gap-1 pr-1"
                   data-testid="division-employees-position-filter-chip"
                 >
-                  Position:{" "}
-                  {positionOptions.find((o) => o.id === filters.positionId)
-                    ?.title ?? "Unknown"}
+                  {t("chipPosition", {
+                    value:
+                      positionOptions.find((o) => o.id === filters.positionId)
+                        ?.title ?? tc("unknown"),
+                  })}
                   <button
                     type="button"
                     data-testid="division-employees-position-filter-clear"
@@ -532,7 +548,7 @@ export default function DivisionDetailPage() {
                     onClick={() =>
                       setFilters((prev) => ({ ...prev, positionId: null }))
                     }
-                    aria-label="Clear position filter"
+                    aria-label={t("clearPositionFilter")}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -544,9 +560,11 @@ export default function DivisionDetailPage() {
                   className="gap-1 pr-1"
                   data-testid="division-employees-grade-filter-chip"
                 >
-                  Grade:{" "}
-                  {gradeOptions.find((o) => o.id === filters.gradeId)?.title ??
-                    "Unknown"}
+                  {t("chipGrade", {
+                    value:
+                      gradeOptions.find((o) => o.id === filters.gradeId)
+                        ?.title ?? tc("unknown"),
+                  })}
                   <button
                     type="button"
                     data-testid="division-employees-grade-filter-clear"
@@ -554,7 +572,7 @@ export default function DivisionDetailPage() {
                     onClick={() =>
                       setFilters((prev) => ({ ...prev, gradeId: null }))
                     }
-                    aria-label="Clear grade filter"
+                    aria-label={t("clearGradeFilter")}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -568,7 +586,7 @@ export default function DivisionDetailPage() {
                   data-testid="division-employees-filter-clear-all"
                   onClick={() => setFilters(EMPTY_FILTERS)}
                 >
-                  Clear all
+                  {t("clearAll")}
                 </Button>
               ) : null}
             </div>
@@ -581,7 +599,7 @@ export default function DivisionDetailPage() {
               className="space-y-3 py-6 text-center"
             >
               <p className="text-sm text-muted-foreground">
-                No employees match the current filters
+                {t("divisionEmployeesNoMatches")}
               </p>
               <Button
                 variant="outline"
@@ -589,7 +607,7 @@ export default function DivisionDetailPage() {
                 data-testid="division-employees-empty-clear-all"
                 onClick={() => setFilters(EMPTY_FILTERS)}
               >
-                Clear all filters
+                {t("clearAllFilters")}
               </Button>
             </div>
           ) : filteredEmployees.length === 0 ? (
@@ -598,7 +616,7 @@ export default function DivisionDetailPage() {
               className="space-y-3 py-6 text-center"
             >
               <p className="text-sm text-muted-foreground">
-                No employees in this division
+                {t("divisionNoEmployees")}
               </p>
               {canManage ? (
                 <Button
@@ -607,7 +625,7 @@ export default function DivisionDetailPage() {
                   data-testid="division-detail-empty-add-employee"
                   onClick={() => setAddEmployeeOpen(true)}
                 >
-                  Add employee
+                  {t("addEmployee")}
                 </Button>
               ) : null}
             </div>
@@ -629,11 +647,11 @@ export default function DivisionDetailPage() {
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent data-testid="division-detail-modal-edit">
           <DialogHeader>
-            <DialogTitle>Edit division</DialogTitle>
+            <DialogTitle>{t("editDivision")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Name</Label>
+              <Label>{t("name")}</Label>
               <Input
                 data-testid="division-detail-modal-edit-input-name"
                 value={editForm.name}
@@ -641,7 +659,7 @@ export default function DivisionDetailPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Description</Label>
+              <Label>{t("description")}</Label>
               <Textarea
                 data-testid="division-detail-modal-edit-input-description"
                 value={editForm.description}
@@ -652,7 +670,7 @@ export default function DivisionDetailPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Parent division</Label>
+              <Label>{t("parentDivision")}</Label>
               <Select
                 value={editForm.parent_id}
                 onValueChange={(val) => setEditForm({ ...editForm, parent_id: val })}
@@ -661,7 +679,7 @@ export default function DivisionDetailPage() {
                   className="w-full"
                   data-testid="division-detail-modal-edit-select-parent"
                 >
-                  <SelectValue placeholder="None (top level)">
+                  <SelectValue placeholder={t("noneTopLevel")}>
                     {(() => {
                       if (!editForm.parent_id) return undefined;
                       const d = flatDivisions.find((x) => x.id === editForm.parent_id);
@@ -670,7 +688,7 @@ export default function DivisionDetailPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None (top level)</SelectItem>
+                  <SelectItem value="">{t("noneTopLevel")}</SelectItem>
                   {flatDivisions
                     .filter((d) => d.id !== division.id)
                     .map((d) => (
@@ -682,7 +700,7 @@ export default function DivisionDetailPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Manager</Label>
+              <Label>{t("manager")}</Label>
               <Select
                 value={editForm.manager_id}
                 onValueChange={(val) => setEditForm({ ...editForm, manager_id: val })}
@@ -691,12 +709,17 @@ export default function DivisionDetailPage() {
                   className="w-full"
                   data-testid="division-detail-modal-edit-select-manager"
                 >
-                  <SelectValue placeholder="None">
-                    {employeeLabel(editForm.manager_id, allEmployees, division.manager_name)}
+                  <SelectValue placeholder={t("none")}>
+                    {employeeLabel(
+                      editForm.manager_id,
+                      allEmployees,
+                      division.manager_name,
+                      t("none"),
+                    )}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None</SelectItem>
+                  <SelectItem value="">{t("none")}</SelectItem>
                   {allEmployees.map((emp) => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.user_name?.trim() || emp.user_email || "—"}
@@ -706,7 +729,7 @@ export default function DivisionDetailPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Deputy Manager</Label>
+              <Label>{t("deputyManager")}</Label>
               <Select
                 value={editForm.deputy_manager_id}
                 onValueChange={(val) =>
@@ -717,16 +740,17 @@ export default function DivisionDetailPage() {
                   className="w-full"
                   data-testid="division-detail-modal-edit-select-deputy-manager"
                 >
-                  <SelectValue placeholder="None">
+                  <SelectValue placeholder={t("none")}>
                     {employeeLabel(
                       editForm.deputy_manager_id,
                       allEmployees,
                       division.deputy_manager_name,
+                      t("none"),
                     )}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None</SelectItem>
+                  <SelectItem value="">{t("none")}</SelectItem>
                   {allEmployees.map((emp) => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.user_name?.trim() || emp.user_email || "—"}
@@ -738,14 +762,14 @@ export default function DivisionDetailPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditOpen(false)} disabled={saving}>
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               data-testid="division-detail-modal-edit-btn-submit"
               onClick={saveDivision}
               disabled={saving}
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -762,15 +786,17 @@ export default function DivisionDetailPage() {
           data-testid="division-detail-role-downgrade-dialog"
         >
           <DialogHeader>
-            <DialogTitle>Downgrade role to employee?</DialogTitle>
+            <DialogTitle>{t("downgradeTitle")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 text-sm text-muted-foreground">
             <p>
               {pendingDowngrade[downgradeIndex]?.user_name
-                ? `${pendingDowngrade[downgradeIndex]?.user_name} no longer manages any division.`
-                : "This user no longer manages any division."}
+                ? t("downgradeBodyNamed", {
+                    name: pendingDowngrade[downgradeIndex]!.user_name!,
+                  })
+                : t("downgradeBodyGeneric")}
             </p>
-            <p>Lower their role from manager to employee?</p>
+            <p>{t("downgradeQuestion")}</p>
           </div>
           <DialogFooter>
             <Button
@@ -779,14 +805,14 @@ export default function DivisionDetailPage() {
               disabled={downgrading}
               data-testid="division-detail-role-downgrade-keep"
             >
-              Keep as manager
+              {t("keepAsManager")}
             </Button>
             <Button
               onClick={confirmDowngrade}
               disabled={downgrading}
               data-testid="division-detail-role-downgrade-confirm"
             >
-              {downgrading ? "Downgrading..." : "Downgrade"}
+              {downgrading ? t("downgrading") : t("downgrade")}
             </Button>
           </DialogFooter>
         </DialogContent>

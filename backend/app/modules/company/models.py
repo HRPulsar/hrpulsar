@@ -44,6 +44,11 @@ class Tenant(BaseModel):
         Boolean, nullable=False, default=False, server_default="false"
     )
 
+    # i18n (F0): tenant-default interface locale, ISO 639-1, chosen from
+    # the deployment's AVAILABLE_LOCALES on the onboarding "Language" step.
+    # NULL → deployment DEFAULT_LOCALE. Per-user User.language overrides it.
+    default_locale: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
     # R4b: Recruitment branding overrides (accent, watermark, palette JSON)
     recruitment_branding: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 

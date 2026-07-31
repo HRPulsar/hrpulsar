@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
@@ -11,6 +12,7 @@ interface PaginationProps {
 }
 
 export function Pagination({ page, pageSize, total, onPageChange }: PaginationProps) {
+  const t = useTranslations("common");
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   if (totalPages <= 1) return null;
 
@@ -26,7 +28,11 @@ export function Pagination({ page, pageSize, total, onPageChange }: PaginationPr
   return (
     <div className="flex items-center justify-between" data-testid="pagination">
       <p className="text-sm text-muted-foreground">
-        {Math.min((page - 1) * pageSize + 1, total)}–{Math.min(page * pageSize, total)} of {total}
+        {t("paginationRange", {
+          from: Math.min((page - 1) * pageSize + 1, total),
+          to: Math.min(page * pageSize, total),
+          total,
+        })}
       </p>
       <div className="flex items-center gap-1">
         <Button

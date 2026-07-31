@@ -3,11 +3,12 @@ import uuid
 from datetime import date, datetime
 from io import BytesIO
 
-from fastapi import HTTPException, UploadFile, status
+from fastapi import UploadFile, status
 from openpyxl import load_workbook
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.core.security import hash_password
 from app.modules.auth.models import User
 from app.modules.data_import.models import ImportJob
@@ -25,9 +26,10 @@ async def start_import(
     file: UploadFile,
 ) -> dict:
     if import_type not in VALID_IMPORT_TYPES:
-        raise HTTPException(
+        raise AppError(
+            "invalid_import_type",
             status.HTTP_400_BAD_REQUEST,
-            f"Invalid import type. Valid: {', '.join(VALID_IMPORT_TYPES)}",
+            valid=", ".join(VALID_IMPORT_TYPES),
         )
 
     data = await file.read()
@@ -276,7 +278,7 @@ async def _import_dictionaries(
 async def get_job(db: AsyncSession, tenant_id: uuid.UUID, job_id: uuid.UUID) -> dict:
     job = await db.get(ImportJob, job_id)
     if not job or job.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Import job not found")
+        raise AppError("import_job_not_found", status.HTTP_404_NOT_FOUND)
     return _job_to_dict(job)
 
 

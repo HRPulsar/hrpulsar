@@ -73,6 +73,10 @@ class User(BaseModel, TenantMixin):
     email_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+    # i18n (F0): personal interface locale, ISO 639-1 (e.g. "de").
+    # NULL → fall back to Tenant.default_locale, then DEFAULT_LOCALE.
+    # Drives UI language plus this user's emails and error messages.
+    language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     # HRP-246: stamped on the first successful login (after email
     # verification). Powers the Employee profile Tenure / Status "since"
     # KPI tiles — falls back to ``hire_date`` / ``created_at`` for users

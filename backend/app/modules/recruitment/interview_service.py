@@ -14,10 +14,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+from app.core.errors import AppError
 
 # Role constants live in recruitment.common because resolve_user_role()
 # (also kept there) shares them with compare_candidates. Import here to
@@ -103,19 +105,20 @@ def _validate_upload_payload(
 ) -> None:
     detected_kind = _kind_for_mime(mime)
     if detected_kind is None:
-        raise HTTPException(
+        raise AppError(
+            "unsupported_mime_type",
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            f"Unsupported MIME type '{mime}'",
+            mime=mime,
         )
     if kind == "audio" and detected_kind != "audio":
-        raise HTTPException(
+        raise AppError(
+            "kind_audio_requires_audio_mime",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "kind=audio requires an audio MIME type",
         )
     if kind == "video" and detected_kind != "video":
-        raise HTTPException(
+        raise AppError(
+            "kind_video_requires_video_mime",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "kind=video requires a video MIME type",
         )
     # HRP-253 (D5): demo sandbox is text-only. The killswitch from D4 also
     # replaces the AI output, but blocking media at the upload door means
@@ -123,18 +126,19 @@ def _validate_upload_payload(
     # HRP-276 / L5: message text is neutral so the error doesn't double
     # as a "this is a demo tenant" oracle for unauthenticated probes.
     if is_demo and detected_kind != "text_transcript":
-        raise HTTPException(
+        raise AppError(
+            "media_upload_not_allowed_for_account",
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            "Audio/video uploads are not allowed for this account",
         )
     if is_demo:
         from app.config import settings
 
         demo_limit = settings.demo_max_upload_mb * 1024 * 1024
         if size_bytes > demo_limit:
-            raise HTTPException(
+            raise AppError(
+                "file_exceeds_upload_limit",
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                f"File exceeds {settings.demo_max_upload_mb} MB upload limit",
+                max_mb=settings.demo_max_upload_mb,
             )
         return
     limit = (
@@ -143,9 +147,10 @@ def _validate_upload_payload(
         else _MEDIA_MAX_BYTES
     )
     if size_bytes > limit:
-        raise HTTPException(
+        raise AppError(
+            "file_exceeds_size_limit",
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"File exceeds {limit // (1024 * 1024)} MB limit",
+            max_mb=limit // (1024 * 1024),
         )
 
 
@@ -179,11 +184,11 @@ async def _enforce_demo_upload_quota(tenant_id: uuid.UUID) -> None:
             pipe.expire(key, settings.demo_session_ttl_seconds, nx=True)
             count, _ = await pipe.execute()
         if count > settings.demo_quota_uploads:
-            raise HTTPException(
+            raise AppError(
+                "upload_quota_exhausted",
                 status.HTTP_429_TOO_MANY_REQUESTS,
-                "Upload quota exhausted",
             )
-    except HTTPException:
+    except AppError:
         raise
     except (RedisError, ConnectionError, TimeoutError) as exc:
         # Narrow on purpose: a TypeError/ValueError out of the pipeline
@@ -222,7 +227,7 @@ async def _get_interview_with_relations(
         stmt = stmt.where(Interview.archived_at.is_(None))
     interview = (await db.execute(stmt)).scalar_one_or_none()
     if not interview:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Interview not found")
+        raise AppError("interview_not_found", status.HTTP_404_NOT_FOUND)
     return interview
 
 
@@ -418,9 +423,7 @@ async def create_interview(
         )
     ).scalar_one_or_none()
     if not cv:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Candidate-vacancy link not found"
-        )
+        raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
 
     primary_interviewer = data.interviewer_id
     if not primary_interviewer and data.interviewers:
@@ -539,9 +542,9 @@ async def update_interview(
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
 
     if if_match_version is not None and interview.version != if_match_version:
-        raise HTTPException(
+        raise AppError(
+            "interview_version_conflict",
             status.HTTP_412_PRECONDITION_FAILED,
-            "Interview was edited by someone else; reload and retry",
         )
 
     if data.title is not None:
@@ -668,7 +671,7 @@ async def paste_text_transcript(
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     if interview.archived_at is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Interview is archived")
+        raise AppError("interview_archived", status.HTTP_409_CONFLICT)
 
     text = redact_pii(data.text)
     interview.transcript = text
@@ -727,7 +730,7 @@ async def update_segment(
         )
     ).scalar_one_or_none()
     if not segment:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Segment not found")
+        raise AppError("interview_segment_not_found", status.HTTP_404_NOT_FOUND)
 
     if data.speaker is not None:
         segment.speaker = data.speaker
@@ -784,9 +787,9 @@ async def init_interview_upload(
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     if interview.archived_at is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Interview is archived")
+        raise AppError("interview_archived", status.HTTP_409_CONFLICT)
     if interview.consent_signed_at is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "ConsentRequired")
+        raise AppError("consent_required", status.HTTP_409_CONFLICT)
     is_demo = await is_demo_tenant(db, tenant_id)
     _validate_upload_payload(
         data.mime_type, data.size_bytes, data.kind, is_demo=is_demo
@@ -795,9 +798,9 @@ async def init_interview_upload(
     key = _interview_storage_key(tenant_id, interview_id)
     upload_id = init_multipart_upload(key, data.mime_type)
     if not upload_id:
-        raise HTTPException(
+        raise AppError(
+            "object_storage_not_configured",
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Object storage is not configured",
         )
 
     # Debit the demo quota AFTER S3 init succeeds — otherwise a transient
@@ -870,7 +873,7 @@ async def get_upload_session_head(
     await _get_interview_with_relations(db, tenant_id, interview_id)
     session = await _get_active_session(db, tenant_id, interview_id, upload_id)
     if not session:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Upload session not found")
+        raise AppError("upload_session_not_found", status.HTTP_404_NOT_FOUND)
     return {
         "upload_offset": session.uploaded_bytes,
         "upload_length": session.total_size,
@@ -898,11 +901,11 @@ async def ack_uploaded_chunk(
     await _get_interview_with_relations(db, tenant_id, interview_id)
     session = await _get_active_session(db, tenant_id, interview_id, upload_id)
     if not session:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Upload session not found")
+        raise AppError("upload_session_not_found", status.HTTP_404_NOT_FOUND)
     if session.expires_at <= datetime.now(timezone.utc):
         session.status = "expired"
         await db.commit()
-        raise HTTPException(status.HTTP_410_GONE, "Upload session expired")
+        raise AppError("upload_session_expired", status.HTTP_410_GONE)
 
     parts: list[dict] = list(session.s3_parts or [])
     parts = [p for p in parts if p.get("part_number") != ack.part_number]
@@ -939,9 +942,9 @@ async def get_upload_part_url(
     key = _interview_storage_key(tenant_id, interview_id)
     url = get_part_presigned_url(key, data.upload_id, data.part_number)
     if not url:
-        raise HTTPException(
+        raise AppError(
+            "object_storage_not_configured",
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Object storage is not configured",
         )
 
     return {
@@ -968,18 +971,15 @@ async def complete_interview_upload(
     from app.modules.demo.utils import is_demo_tenant
 
     if kind not in {"audio", "video", "text_transcript"}:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "kind must be 'audio', 'video' or 'text_transcript'",
-        )
+        raise AppError("invalid_upload_kind", status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     # HRP-253 (D5): re-enforce the demo whitelist on complete — the init
     # gate alone is bypassable because S3 doesn't validate body-vs-mime
     # and the caller picks ``kind`` here independently from init.
     if await is_demo_tenant(db, tenant_id) and kind != "text_transcript":
-        raise HTTPException(
+        raise AppError(
+            "media_upload_not_allowed_for_account",
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            "Audio/video uploads are not allowed for this account",
         )
 
     locked = await db.execute(
@@ -992,19 +992,19 @@ async def complete_interview_upload(
     )
     interview = locked.scalar_one_or_none()
     if not interview:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Interview not found")
+        raise AppError("interview_not_found", status.HTTP_404_NOT_FOUND)
     if interview.archived_at is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Interview is archived")
+        raise AppError("interview_archived", status.HTTP_409_CONFLICT)
     if interview.consent_signed_at is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "ConsentRequired")
+        raise AppError("consent_required", status.HTTP_409_CONFLICT)
 
     key = _interview_storage_key(tenant_id, interview_id)
     parts_payload = [{"PartNumber": p.part_number, "ETag": p.etag} for p in data.parts]
     location = complete_multipart_upload(key, data.upload_id, parts_payload)
     if not location:
-        raise HTTPException(
+        raise AppError(
+            "object_storage_not_configured",
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Object storage is not configured",
         )
 
     head = head_object(key) or {}
@@ -1031,9 +1031,9 @@ async def complete_interview_upload(
                 logger.exception(
                     "demo: oversize cleanup delete_file failed for %s", key
                 )
-            raise HTTPException(
+            raise AppError(
+                "upload_exceeds_account_size_limit",
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                "Upload exceeds size limit for this account.",
             )
 
     file_record = File(
@@ -1127,9 +1127,9 @@ async def get_interview_media_url(
 
     role_norm = (role or "").lower()
     if role_norm == "invited_evaluator" and not allow_invited_evaluator_playback:
-        raise HTTPException(
+        raise AppError(
+            "invited_evaluator_playback_disabled",
             status.HTTP_403_FORBIDDEN,
-            "Invited-evaluator playback is disabled for this tenant",
         )
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
@@ -1139,7 +1139,7 @@ async def get_interview_media_url(
         or interview.transcript_file_id
     )
     if file_id is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Interview has no media file")
+        raise AppError("interview_has_no_media_file", status.HTTP_404_NOT_FOUND)
 
     file_record = (
         await db.execute(
@@ -1150,13 +1150,13 @@ async def get_interview_media_url(
         )
     ).scalar_one_or_none()
     if not file_record:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Interview media file not found")
+        raise AppError("interview_media_file_not_found", status.HTTP_404_NOT_FOUND)
 
     url = get_presigned_url(file_record.path, expires_in=_SIGNED_URL_TTL)
     if not url:
-        raise HTTPException(
+        raise AppError(
+            "object_storage_not_configured",
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Object storage is not configured",
         )
 
     if interview.audio_file_id == file_id:
@@ -1210,7 +1210,7 @@ async def replace_interview_file(
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     if interview.archived_at is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Interview is archived")
+        raise AppError("interview_archived", status.HTTP_409_CONFLICT)
     old_key = interview.file_s3_key
 
     interview.audio_file_id = None
@@ -1300,10 +1300,7 @@ async def restore_interview(
     if archived_at.tzinfo is None:
         archived_at = archived_at.replace(tzinfo=timezone.utc)
     if archived_at < retention_cutoff:
-        raise HTTPException(
-            status.HTTP_410_GONE,
-            "Archived interview has passed the 90-day retention window",
-        )
+        raise AppError("interview_retention_window_passed", status.HTTP_410_GONE)
 
     interview.archived_at = None
     interview.archived_by = None
@@ -1433,21 +1430,12 @@ async def enqueue_transcribe(
     # ``Interview`` row to a stale media file out-of-band, we still
     # refuse to dispatch a Whisper job from a sandbox.
     if await is_demo_tenant(db, tenant_id):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Transcription not allowed for this interview",
-        )
+        raise AppError("transcription_not_allowed", status.HTTP_409_CONFLICT)
 
     if not (interview.audio_file_id or interview.video_file_id):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Interview has no uploaded media file",
-        )
+        raise AppError("interview_no_uploaded_media", status.HTTP_409_CONFLICT)
     if interview.transcription_status == "processing":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Transcription already in progress",
-        )
+        raise AppError("transcription_already_in_progress", status.HTTP_409_CONFLICT)
 
     interview.transcription_status = "processing"
     interview.transcription_error = None
@@ -1466,15 +1454,9 @@ async def enqueue_analyze(
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     if interview.transcription_status != "completed":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Transcription must be completed before analysis",
-        )
+        raise AppError("analysis_requires_transcription", status.HTTP_409_CONFLICT)
     if interview.analysis_status == "processing":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Analysis already in progress",
-        )
+        raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
 
     interview.analysis_status = "processing"
     interview.analysis_error = None
@@ -1507,15 +1489,9 @@ async def enqueue_analyze_or_cached(
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     if interview.transcription_status != "completed":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Transcription must be completed before analysis",
-        )
+        raise AppError("analysis_requires_transcription", status.HTTP_409_CONFLICT)
     if interview.analysis_status == "processing":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Analysis already in progress",
-        )
+        raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
 
     cache_key = await compute_cache_key_for_interview(db, tenant_id, interview)
     if cache_key is not None:
@@ -1544,13 +1520,13 @@ async def enqueue_analyze_or_cached(
                 )
             ).scalar_one_or_none()
             if locked is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "Interview not found")
+                raise AppError("interview_not_found", status.HTTP_404_NOT_FOUND)
             if locked.analysis_status == "processing":
                 # Another worker grabbed the row between the pre-check
                 # and the lock — back off and let it finish.
-                raise HTTPException(
+                raise AppError(
+                    "analysis_already_in_progress",
                     status.HTTP_409_CONFLICT,
-                    "Analysis already in progress",
                 )
             interview = locked
             interviewer_id = interview.interviewer_id

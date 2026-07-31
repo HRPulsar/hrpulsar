@@ -384,7 +384,7 @@ class TestActiveSessionResultVisibility:
 
         captured: dict = {}
 
-        async def fake_gen(data):
+        async def fake_gen(data, **kwargs):
             captured.update(data)
             return _profile_payload(str(vacancy["id"]))
 
@@ -907,7 +907,7 @@ class TestCancelMidGenerationRace:
         # we're "waiting" for the model. The cancel handler commits on
         # its own connection so the new status is visible to the
         # re-fetch in generate_profile_now.
-        async def cancel_then_return(_data):
+        async def cancel_then_return(_data, **kwargs):
             await service.cancel_active_profile_session(db, tenant_id, vacancy_id)
             return payload
 
@@ -957,7 +957,7 @@ class TestClarificationContext:
         vacancy = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data())
         captured: dict = {}
 
-        async def fake_generate(data: dict) -> dict:
+        async def fake_generate(data: dict, **kwargs) -> dict:
             captured.update(data)
             return _profile_payload(str(vacancy["id"]))
 
@@ -983,7 +983,7 @@ class TestClarificationContext:
         vacancy = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data())
         captured: dict = {}
 
-        async def fake_generate(data: dict) -> dict:
+        async def fake_generate(data: dict, **kwargs) -> dict:
             captured.update(data)
             return _profile_payload(str(vacancy["id"]))
 
@@ -1019,7 +1019,7 @@ class TestProfilePromptContext:
         )
         captured: dict = {}
 
-        async def fake_generate(data: dict) -> dict:
+        async def fake_generate(data: dict, **kwargs) -> dict:
             captured.update(data)
             return _profile_payload(str(vacancy["id"]))
 
@@ -1064,7 +1064,7 @@ class TestProfilePromptContext:
 
         captured: dict = {}
 
-        async def fake_generate(data: dict) -> dict:
+        async def fake_generate(data: dict, **kwargs) -> dict:
             captured.update(data)
             return _profile_payload(str(vacancy["id"]))
 

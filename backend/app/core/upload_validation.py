@@ -25,7 +25,9 @@ their own stricter allowlists.
 
 from __future__ import annotations
 
-from fastapi import HTTPException, status
+from fastapi import status
+
+from app.core.errors import AppError
 
 # Raster images — served inline, therefore the security-critical category.
 _IMAGE_MIME_TO_EXT: dict[str, str] = {
@@ -81,22 +83,20 @@ def validate_upload(
     if len(data) > max_bytes:
         # 413 Content Too Large. Literal avoids the starlette constant rename
         # churn (REQUEST_ENTITY_TOO_LARGE → CONTENT_TOO_LARGE).
-        raise HTTPException(413, f"File exceeds {max_bytes // (1024 * 1024)} MB limit.")
+        raise AppError("upload_file_too_large", 413, max_mb=max_bytes // (1024 * 1024))
     if not data:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty file.")
+        raise AppError("upload_empty_file", status.HTTP_400_BAD_REQUEST)
 
     mime = (claimed_mime or "").split(";", 1)[0].strip().lower()
     allowed = _IMAGE_MIME_TO_EXT if images_only else _ALLOWED_MIME_TO_EXT
     if mime not in allowed:
-        raise HTTPException(
+        raise AppError(
+            "unsupported_file_type",
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            f"Unsupported file type: {mime or 'unknown'}.",
+            mime=mime or "unknown",
         )
     # Sniff only images — the inline-served category. A mismatch here is how an
     # SVG/HTML payload would try to pass as image/png.
     if mime in _IMAGE_MAGIC and not _sniff_image(data, mime):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "File content does not match its declared image type.",
-        )
+        raise AppError("file_content_type_mismatch", status.HTTP_400_BAD_REQUEST)
     return mime, allowed[mime]

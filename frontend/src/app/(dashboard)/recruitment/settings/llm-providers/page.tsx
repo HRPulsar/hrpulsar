@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,23 +24,27 @@ type Provider = {
   updated_at: string;
 };
 
+// HRP-476: labels live in the `recruitment` i18n namespace; this map only
+// owns the API code → key relation.
 const PROVIDERS = [
-  { value: "anthropic", label: "Anthropic Claude" },
-  { value: "openai", label: "OpenAI" },
-  { value: "gemini", label: "Google Gemini" },
-  { value: "azure", label: "Azure OpenAI" },
-  { value: "yandex", label: "Yandex GPT" },
-  { value: "gigachat", label: "GigaChat" },
+  { value: "anthropic", labelKey: "llmProviderAnthropic" },
+  { value: "openai", labelKey: "llmProviderOpenai" },
+  { value: "gemini", labelKey: "llmProviderGemini" },
+  { value: "azure", labelKey: "llmProviderAzure" },
+  { value: "yandex", labelKey: "llmProviderYandex" },
+  { value: "gigachat", labelKey: "llmProviderGigachat" },
 ];
 
 export default function LLMProvidersPage() {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [rows, setRows] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({
     provider: "anthropic",
-    model: "claude-sonnet-4-6",
+    model: "claude-sonnet-5",
     api_key: "",
   });
 
@@ -63,7 +68,7 @@ export default function LLMProvidersPage() {
 
   async function handleCreate() {
     if (!draft.model.trim()) {
-      toast.error("Provide a model name");
+      toast.error(t("llmModelRequired"));
       return;
     }
     setCreating(true);
@@ -74,11 +79,11 @@ export default function LLMProvidersPage() {
         api_key: draft.api_key || null,
         is_active: true,
       });
-      toast.success("Provider added");
-      setDraft({ provider: "anthropic", model: "claude-sonnet-4-6", api_key: "" });
+      toast.success(t("llmToastAdded"));
+      setDraft({ provider: "anthropic", model: "claude-sonnet-5", api_key: "" });
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
+      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setCreating(false);
     }
@@ -92,20 +97,23 @@ export default function LLMProvidersPage() {
       });
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
+      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setSavingId(null);
     }
   }
 
   async function handleDelete(p: Provider) {
-    if (!confirm(`Delete ${p.provider}/${p.model}?`)) return;
+    if (
+      !confirm(t("llmDeleteConfirm", { provider: p.provider, model: p.model }))
+    )
+      return;
     setSavingId(p.id);
     try {
       await api.delete(`/recruitment/settings/llm-providers/${p.id}`);
       void load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
+      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setSavingId(null);
     }
@@ -115,29 +123,27 @@ export default function LLMProvidersPage() {
     <div className="space-y-5" data-testid="recruitment-llm-providers-page">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Settings", href: "/recruitment/settings" },
-          { label: "LLM providers" },
+          { label: tc("settings"), href: "/recruitment/settings" },
+          { label: t("llmBreadcrumb") },
         ]}
       />
       <header>
         <h1 className="text-xl font-semibold tracking-tight">
-          LLM providers (BYOK)
+          {t("llmTitle")}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Bring your own API key to generate vacancy profiles, questions and
-          interview analysis. The key is stored encrypted (AES-GCM); only the
-          last 4 characters are returned in API responses.
+          {t("llmDescription")}
         </p>
       </header>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Add provider</CardTitle>
+          <CardTitle className="text-base">{t("llmAddCardTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1">
-              <Label htmlFor="llm-provider">Provider</Label>
+              <Label htmlFor="llm-provider">{t("llmProviderLabel")}</Label>
               <select
                 id="llm-provider"
                 value={draft.provider}
@@ -149,25 +155,25 @@ export default function LLMProvidersPage() {
               >
                 {PROVIDERS.map((p) => (
                   <option key={p.value} value={p.value}>
-                    {p.label}
+                    {t(p.labelKey)}
                   </option>
                 ))}
               </select>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="llm-model">Model</Label>
+              <Label htmlFor="llm-model">{t("llmModelLabel")}</Label>
               <Input
                 id="llm-model"
                 value={draft.model}
                 onChange={(e) =>
                   setDraft((d) => ({ ...d, model: e.target.value }))
                 }
-                placeholder="claude-sonnet-4-6"
+                placeholder="claude-sonnet-5"
                 data-testid="llm-input-model"
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="llm-key">API key</Label>
+              <Label htmlFor="llm-key">{t("llmApiKeyLabel")}</Label>
               <Input
                 id="llm-key"
                 type="password"
@@ -191,22 +197,22 @@ export default function LLMProvidersPage() {
               ) : (
                 <Plus className="size-4" />
               )}
-              Add
+              {t("llmAddButton")}
             </Button>
           </div>
         </CardContent>
       </Card>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-medium">Connected providers</h2>
+        <h2 className="text-sm font-medium">{t("llmConnectedTitle")}</h2>
         {loading ? (
           <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
             <Loader2 className="mr-2 size-4 animate-spin" />
-            Loading…
+            {t("loading")}
           </div>
         ) : rows.length === 0 ? (
           <div className="rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">
-            No providers connected. Without BYOK, environment keys will be used.
+            {t("llmEmpty")}
           </div>
         ) : (
           <ul className="space-y-2">
@@ -226,15 +232,15 @@ export default function LLMProvidersPage() {
                     </span>
                     {p.is_active ? (
                       <Badge className={BADGE_COLOR.emerald}>
-                        Active
+                        {t("statusActive")}
                       </Badge>
                     ) : (
-                      <Badge variant="outline">Disabled</Badge>
+                      <Badge variant="outline">{t("statusDisabled")}</Badge>
                     )}
                   </div>
                   <span className="flex items-center gap-1 text-xs text-muted-foreground">
                     <KeyRound className="size-3" />
-                    {p.api_key_masked || "key not set"}
+                    {p.api_key_masked || t("providerKeyNotSet")}
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
@@ -246,7 +252,7 @@ export default function LLMProvidersPage() {
                     data-testid={`llm-btn-toggle-${p.id}`}
                   >
                     <Save className="size-3.5" />
-                    {p.is_active ? "Disable" : "Enable"}
+                    {p.is_active ? t("actionDisable") : t("actionEnable")}
                   </Button>
                   <Button
                     size="sm"

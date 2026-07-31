@@ -1,10 +1,11 @@
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from pydantic_core import to_jsonable_python
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.competence.cascade import (
     cascade_activate_group,
     cascade_activate_parents,
@@ -305,7 +306,9 @@ async def create_group(
     if data.parent_id:
         parent = await db.get(CompetenceGroup, data.parent_id)
         if not parent:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid parent group")
+            raise AppError(
+                "competence_invalid_parent_group", status.HTTP_400_BAD_REQUEST
+            )
 
     group = CompetenceGroup(tenant_id=tenant_id, **data.model_dump())
     # Client groups can always be hidden by tenant admins (PM spec).
@@ -348,11 +351,11 @@ async def update_group(
 ) -> CompetenceGroup:
     group = await db.get(CompetenceGroup, group_id)
     if not group:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found")
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
     if group.tenant_id is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot modify origin groups")
+        raise AppError("origin_group_read_only", status.HTTP_403_FORBIDDEN)
     if group.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found")
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
 
     payload = data.model_dump(exclude_unset=True)
     for field, value in payload.items():
@@ -380,19 +383,16 @@ async def delete_group(
 ) -> None:
     group = await db.get(CompetenceGroup, group_id)
     if not group:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found")
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
     if group.tenant_id is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot delete origin groups")
+        raise AppError("origin_group_delete_forbidden", status.HTTP_403_FORBIDDEN)
     if group.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found")
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
     from app.modules.competence.usage import check_group_usage
 
     usage = await check_group_usage(db, group.id)
     if usage.is_used:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Cannot delete: the group is referenced by other services",
-        )
+        raise AppError("competence_group_in_use", status.HTTP_409_CONFLICT)
     await _audit(
         db,
         tenant_id=tenant_id,
@@ -440,9 +440,8 @@ async def deactivate_group(
 ) -> CompetenceGroup:
     group = await _load_group_in_tenant(db, tenant_id, group_id)
     if group.tenant_id is None and not group.can_deactivate:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "This origin group cannot be deactivated",
+        raise AppError(
+            "origin_group_not_deactivatable", status.HTTP_403_FORBIDDEN
         )
     deactivated = await cascade_deactivate_group(db, group, tenant_id)
     await _audit(
@@ -470,13 +469,17 @@ async def move_group(
 ) -> CompetenceGroup:
     group = await _load_group_in_tenant(db, tenant_id, group_id)
     if group.tenant_id is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Origin groups cannot be moved")
+        raise AppError("origin_group_move_forbidden", status.HTTP_403_FORBIDDEN)
     if new_parent_id is not None:
         parent = await db.get(CompetenceGroup, new_parent_id)
         if parent is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid target parent")
+            raise AppError(
+                "competence_invalid_target_parent", status.HTTP_400_BAD_REQUEST
+            )
         if parent.tenant_id is not None and parent.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Target parent not found")
+            raise AppError(
+                "competence_target_parent_not_found", status.HTTP_404_NOT_FOUND
+            )
 
     await validate_no_cycles(db, group_id, new_parent_id)
 
@@ -513,11 +516,10 @@ async def set_group_can_deactivate(
     affected groups."""
     group = await db.get(CompetenceGroup, group_id)
     if not group:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found")
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
     if group.tenant_id is not None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Lock applies only to origin groups",
+        raise AppError(
+            "competence_group_lock_origin_only", status.HTTP_400_BAD_REQUEST
         )
 
     affected: list[CompetenceGroup] = []
@@ -573,9 +575,9 @@ async def _load_group_in_tenant(
 ) -> CompetenceGroup:
     group = await db.get(CompetenceGroup, group_id)
     if not group:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found")
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
     if group.tenant_id is not None and group.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found")
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
     return group
 
 
@@ -591,7 +593,7 @@ async def create_competence(
 ) -> Competence:
     group = await db.get(CompetenceGroup, data.group_id)
     if not group:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid group")
+        raise AppError("competence_invalid_group", status.HTTP_400_BAD_REQUEST)
 
     comp = Competence(tenant_id=tenant_id, **data.model_dump())
     # HRP-118: a competence added under an inactive group inherits that state
@@ -630,9 +632,9 @@ async def bulk_create_competences(
     """
     group = await db.get(CompetenceGroup, group_id)
     if not group:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid group")
+        raise AppError("competence_invalid_group", status.HTTP_400_BAD_REQUEST)
     if group.tenant_id is not None and group.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Group not found")
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
 
     created: list[Competence] = []
     for item in data.items:
@@ -693,15 +695,15 @@ async def get_competence_detail(
     """
     comp = await db.get(Competence, competence_id)
     if not comp:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
     if comp.tenant_id is not None and comp.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
 
     allowed_level_ids: set[uuid.UUID] | None = None
     if skill_level_id is not None:
         target = await db.get(SkillLevel, skill_level_id)
         if target is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill level not found")
+            raise AppError("skill_level_not_found", status.HTTP_404_NOT_FOUND)
         # Tenant-custom skill levels live alongside origin (tenant_id IS NULL);
         # both contribute to the cap so an Advanced custom level still includes
         # the Basic origin one.
@@ -962,9 +964,9 @@ async def move_competence(
     comp = await _load_competence_for_edit(db, tenant_id, competence_id)
     target_group = await db.get(CompetenceGroup, new_group_id)
     if target_group is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid target group")
+        raise AppError("competence_invalid_target_group", status.HTTP_400_BAD_REQUEST)
     if target_group.tenant_id is not None and target_group.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Target group not found")
+        raise AppError("competence_target_group_not_found", status.HTTP_404_NOT_FOUND)
 
     old_group_id = comp.group_id
     comp.group_id = new_group_id
@@ -991,9 +993,9 @@ async def _load_competence_in_tenant(
 ) -> Competence:
     comp = await db.get(Competence, competence_id)
     if not comp:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
     if comp.tenant_id is not None and comp.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
     return comp
 
 
@@ -1002,13 +1004,11 @@ async def _load_competence_for_edit(
 ) -> Competence:
     comp = await db.get(Competence, competence_id)
     if not comp:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
     if comp.tenant_id is None:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Cannot modify origin competences"
-        )
+        raise AppError("origin_competence_read_only", status.HTTP_403_FORBIDDEN)
     if comp.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
     return comp
 
 
@@ -1078,13 +1078,11 @@ async def update_skill_level(
 ) -> SkillLevel:
     level = await db.get(SkillLevel, skill_level_id)
     if not level:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill level not found")
+        raise AppError("skill_level_not_found", status.HTTP_404_NOT_FOUND)
     if level.tenant_id is None:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Origin skill levels are read-only"
-        )
+        raise AppError("origin_skill_level_read_only", status.HTTP_403_FORBIDDEN)
     if level.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill level not found")
+        raise AppError("skill_level_not_found", status.HTTP_404_NOT_FOUND)
 
     payload: dict = {}
     if title is not None:
@@ -1123,18 +1121,15 @@ async def delete_skill_level(
 ) -> None:
     level = await db.get(SkillLevel, skill_level_id)
     if not level:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill level not found")
+        raise AppError("skill_level_not_found", status.HTTP_404_NOT_FOUND)
     if level.tenant_id is None:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Origin skill levels cannot be deleted"
+        raise AppError(
+            "origin_skill_level_delete_forbidden", status.HTTP_403_FORBIDDEN
         )
     if level.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill level not found")
+        raise AppError("skill_level_not_found", status.HTTP_404_NOT_FOUND)
     if await check_skill_level_usage(db, level.id):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "The skill level is referenced by indicators or materials",
-        )
+        raise AppError("skill_level_in_use", status.HTTP_409_CONFLICT)
     await _audit(
         db,
         tenant_id=tenant_id,
@@ -1161,7 +1156,7 @@ async def create_indicator(
 ) -> Indicator:
     comp = await db.get(Competence, competence_id)
     if not comp:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
 
     ind = Indicator(
         competence_id=competence_id, tenant_id=tenant_id, **data.model_dump()
@@ -1204,9 +1199,7 @@ async def create_indicators_bulk(
     if comp is None or (
         comp.tenant_id is not None and comp.tenant_id != tenant_id
     ):
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Competence not found"
-        )
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
 
     requested_levels = {row.skill_level_id for row in items}
     level_q = await db.execute(
@@ -1219,10 +1212,7 @@ async def create_indicators_bulk(
         if level_tenant_id is None or level_tenant_id == tenant_id:
             allowed_levels.add(level_id)
     if requested_levels - allowed_levels:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            "Skill level not available in this tenant",
-        )
+        raise AppError("skill_level_not_in_tenant", status.HTTP_404_NOT_FOUND)
 
     created: list[Indicator] = []
     for data in items:
@@ -1359,9 +1349,9 @@ async def move_indicator(
     await ensure_indicator_can_mutate(db, ind)
     level = await db.get(SkillLevel, new_skill_level_id)
     if level is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid skill level")
+        raise AppError("skill_level_invalid", status.HTTP_400_BAD_REQUEST)
     if level.tenant_id is not None and level.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill level not found")
+        raise AppError("skill_level_not_found", status.HTTP_404_NOT_FOUND)
     ind.skill_level_id = new_skill_level_id
     ind.sort_index = new_sort_index
     await _audit(
@@ -1386,9 +1376,9 @@ async def _load_indicator_in_tenant(
 ) -> Indicator:
     ind = await db.get(Indicator, indicator_id)
     if not ind:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Indicator not found")
+        raise AppError("indicator_not_found", status.HTTP_404_NOT_FOUND)
     if ind.tenant_id is not None and ind.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Indicator not found")
+        raise AppError("indicator_not_found", status.HTTP_404_NOT_FOUND)
     return ind
 
 
@@ -1397,13 +1387,11 @@ async def _load_indicator_for_edit(
 ) -> Indicator:
     ind = await db.get(Indicator, indicator_id)
     if not ind:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Indicator not found")
+        raise AppError("indicator_not_found", status.HTTP_404_NOT_FOUND)
     if ind.tenant_id is None:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Cannot modify origin indicators"
-        )
+        raise AppError("origin_indicator_read_only", status.HTTP_403_FORBIDDEN)
     if ind.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Indicator not found")
+        raise AppError("indicator_not_found", status.HTTP_404_NOT_FOUND)
     return ind
 
 
@@ -1420,7 +1408,7 @@ async def create_material(
 ) -> Material:
     comp = await db.get(Competence, competence_id)
     if not comp:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
 
     mat = Material(
         competence_id=competence_id, tenant_id=tenant_id, **data.model_dump()
@@ -1463,9 +1451,7 @@ async def create_materials_bulk(
     if comp is None or (
         comp.tenant_id is not None and comp.tenant_id != tenant_id
     ):
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Competence not found"
-        )
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
 
     requested_levels = {row.skill_level_id for row in items}
     level_q = await db.execute(
@@ -1479,10 +1465,7 @@ async def create_materials_bulk(
             allowed_levels.add(level_id)
     missing = requested_levels - allowed_levels
     if missing:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            "Skill level not available in this tenant",
-        )
+        raise AppError("skill_level_not_in_tenant", status.HTTP_404_NOT_FOUND)
 
     created: list[Material] = []
     for data in items:
@@ -1619,9 +1602,9 @@ async def move_material(
     await ensure_material_can_mutate(db, mat)
     level = await db.get(SkillLevel, new_skill_level_id)
     if level is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid skill level")
+        raise AppError("skill_level_invalid", status.HTTP_400_BAD_REQUEST)
     if level.tenant_id is not None and level.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill level not found")
+        raise AppError("skill_level_not_found", status.HTTP_404_NOT_FOUND)
     mat.skill_level_id = new_skill_level_id
     mat.sort_index = new_sort_index
     await _audit(
@@ -1646,9 +1629,9 @@ async def _load_material_in_tenant(
 ) -> Material:
     mat = await db.get(Material, material_id)
     if not mat:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Material not found")
+        raise AppError("material_not_found", status.HTTP_404_NOT_FOUND)
     if mat.tenant_id is not None and mat.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Material not found")
+        raise AppError("material_not_found", status.HTTP_404_NOT_FOUND)
     return mat
 
 
@@ -1657,9 +1640,9 @@ async def _load_material_for_edit(
 ) -> Material:
     mat = await db.get(Material, material_id)
     if not mat:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Material not found")
+        raise AppError("material_not_found", status.HTTP_404_NOT_FOUND)
     if mat.tenant_id is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot modify origin materials")
+        raise AppError("origin_material_read_only", status.HTTP_403_FORBIDDEN)
     if mat.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Material not found")
+        raise AppError("material_not_found", status.HTTP_404_NOT_FOUND)
     return mat

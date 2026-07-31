@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -47,13 +48,13 @@ import {
 // HRP-57 §3.1 (E4): four logical surfaces on a Specialization. The deep-link
 // query-param keeps direct URLs stable across reloads and shareable.
 type Tab = "grades" | "positions" | "employees" | "ai-history";
-const TABS: { key: Tab; label: string }[] = [
-  { key: "grades", label: "Grades & matrix" },
-  { key: "positions", label: "Positions" },
-  { key: "employees", label: "Employees" },
-  { key: "ai-history", label: "AI history" },
+const TABS: { key: Tab; labelKey: string }[] = [
+  { key: "grades", labelKey: "specTabGradesMatrix" },
+  { key: "positions", labelKey: "specTabPositions" },
+  { key: "employees", labelKey: "specTabEmployees" },
+  { key: "ai-history", labelKey: "specTabAiHistory" },
 ];
-const TAB_KEYS: Tab[] = TABS.map((t) => t.key);
+const TAB_KEYS: Tab[] = TABS.map((entry) => entry.key);
 
 function isTab(value: string | null | undefined): value is Tab {
   return !!value && (TAB_KEYS as string[]).includes(value);
@@ -72,6 +73,8 @@ function flattenCompetences(tree: CompetenceGroupTree[]): Competence[] {
 }
 
 export default function SpecializationDetailPage() {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -156,7 +159,7 @@ export default function SpecializationDetailPage() {
         }
       } catch (err) {
         toast.error(
-          err instanceof Error ? err.message : "Failed to load specialization",
+          err instanceof Error ? err.message : t("toastSpecLoadFailed"),
         );
       } finally {
         if (!cancelled) setLoading(false);
@@ -165,7 +168,7 @@ export default function SpecializationDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, t]);
 
   // HRP-67: matrix bulk + skill levels for the Builder; loaded the first
   // time the Grades tab is shown so the network cost lands only when
@@ -187,9 +190,7 @@ export default function SpecializationDetailPage() {
       } catch (err) {
         if (!cancelled) {
           toast.error(
-            err instanceof Error
-              ? err.message
-              : "Failed to load competence matrix",
+            err instanceof Error ? err.message : t("toastCompetenceMatrixLoadFailed"),
           );
         }
       } finally {
@@ -199,7 +200,7 @@ export default function SpecializationDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [id, tab, matrixBulk]);
+  }, [id, tab, matrixBulk, t]);
 
   // Lazy-load Employees only when the tab is opened. Caches in component
   // state so flipping tabs doesn't refetch unless the page is reloaded.
@@ -214,9 +215,7 @@ export default function SpecializationDetailPage() {
       } catch (err) {
         if (!cancelled) {
           toast.error(
-            err instanceof Error
-              ? err.message
-              : "Failed to load specialization employees",
+            err instanceof Error ? err.message : t("toastSpecEmployeesFailed"),
           );
         }
       } finally {
@@ -226,7 +225,7 @@ export default function SpecializationDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [id, tab, employees]);
+  }, [id, tab, employees, t]);
 
   // HRP-103 redo: load usage every time the delete confirm opens so the
   // operator sees up-to-date references (positions / grade chains).
@@ -275,10 +274,10 @@ export default function SpecializationDetailPage() {
     setDeleteBusy(true);
     try {
       await api.delete(`/dictionaries/items/${id}`);
-      toast.success(`"${detail.title}" deleted`);
+      toast.success(t("toastSpecDeleted", { title: detail.title }));
       router.replace("/company/specializations");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(err instanceof Error ? err.message : t("toastDeleteFailed"));
       setDeleteBusy(false);
     }
   }
@@ -347,7 +346,7 @@ export default function SpecializationDetailPage() {
   if (loading) {
     return (
       <div className="py-12 text-center text-sm text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -355,7 +354,7 @@ export default function SpecializationDetailPage() {
   if (!detail) {
     return (
       <div className="py-12 text-center text-sm text-muted-foreground">
-        Specialization not found.
+        {t("specializationNotFound")}
       </div>
     );
   }
@@ -370,14 +369,14 @@ export default function SpecializationDetailPage() {
               data-testid="specialization-detail-back-to-position"
               className="text-xs text-muted-foreground hover:underline"
             >
-              ← Back to position
+              {t("backToPosition")}
             </Link>
           ) : (
             <Link
               href="/company/specializations"
               className="text-xs text-muted-foreground hover:underline"
             >
-              ← All specializations
+              {t("allSpecializations")}
             </Link>
           )}
           <div className="flex items-center gap-2">
@@ -396,8 +395,12 @@ export default function SpecializationDetailPage() {
             )}
           </div>
           <p className="text-sm text-muted-foreground">
-            {detail.grade_count} grades · {detail.position_count} positions ·{" "}
-            {detail.assigned_count}/{detail.headcount_total} assigned
+            {t("specSummary", {
+              grades: detail.grade_count,
+              positions: detail.position_count,
+              assigned: detail.assigned_count,
+              headcount: detail.headcount_total,
+            })}
           </p>
         </div>
         <div className="flex gap-2">
@@ -407,14 +410,14 @@ export default function SpecializationDetailPage() {
             onClick={() => setAddGradesOpen(true)}
             className="rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
           >
-            + Add Grades
+            {t("addGrades")}
           </button>
           <Link
             href={`/company/specializations/${id}/ai-generate`}
             data-testid="specialization-ai-generate-link"
             className="rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
           >
-            AI Generate matrix
+            {t("aiGenerateMatrix")}
           </Link>
           {canManage && (
             <button
@@ -424,7 +427,7 @@ export default function SpecializationDetailPage() {
               className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-background px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/10"
             >
               <Trash2 className="h-4 w-4" />
-              Delete
+              {tc("delete")}
             </button>
           )}
         </div>
@@ -434,26 +437,26 @@ export default function SpecializationDetailPage() {
 
       <div
         role="tablist"
-        aria-label="Specialization sections"
+        aria-label={t("specSectionsAria")}
         className="flex gap-1 border-b"
       >
-        {TABS.map((t) => {
-          const active = tab === t.key;
+        {TABS.map((entry) => {
+          const active = tab === entry.key;
           return (
             <button
-              key={t.key}
+              key={entry.key}
               type="button"
               role="tab"
               aria-selected={active}
-              data-testid={`specialization-tab-${t.key}`}
+              data-testid={`specialization-tab-${entry.key}`}
               className={
                 active
                   ? "border-b-2 border-primary px-4 py-2 text-sm font-medium text-primary"
                   : "border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
               }
-              onClick={() => setTab(t.key)}
+              onClick={() => setTab(entry.key)}
             >
-              {t.label}
+              {t(entry.labelKey)}
             </button>
           );
         })}
@@ -466,11 +469,10 @@ export default function SpecializationDetailPage() {
             className="space-y-3 rounded-lg border bg-muted/30 py-12 text-center"
           >
             <p className="text-sm text-muted-foreground">
-              No grades configured for this specialization.
+              {t("specNoGrades")}
             </p>
             <p className="text-xs text-muted-foreground">
-              Pick grades manually from the dictionary, or let AI generate
-              the full ladder with matrix.
+              {t("specNoGradesHint")}
             </p>
             <div className="flex justify-center gap-2 pt-1">
               <button
@@ -479,13 +481,13 @@ export default function SpecializationDetailPage() {
                 onClick={() => setAddGradesOpen(true)}
                 className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
               >
-                + Add Grades
+                {t("addGrades")}
               </button>
               <Link
                 href={`/company/specializations/${id}/ai-generate`}
                 className="rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
               >
-                AI Generate matrix
+                {t("aiGenerateMatrix")}
               </Link>
             </div>
           </div>
@@ -502,27 +504,24 @@ export default function SpecializationDetailPage() {
                 data-testid="specialization-builder-matrix-heading"
                 className="text-base font-semibold tracking-tight"
               >
-                Competence matrix
+                {t("competenceMatrix")}
               </h2>
               <p className="text-xs text-muted-foreground">
-                Levels cascade up the career ladder: setting a level on a
-                lower grade inherits to higher grades; lowering a higher
-                grade caps the lower ones. Hover ⓘ for indicators
-                (includes prior levels).
+                {t("matrixPageHint")}
               </p>
               {matrixLoading && matrixBulk === null ? (
                 <p
                   data-testid="specialization-builder-matrix-loading"
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
-                  Loading matrix…
+                  {t("loadingMatrix")}
                 </p>
               ) : matrixBulk === null ? null : matrixBulk.grades.length === 0 ? (
                 <p
                   data-testid="specialization-builder-matrix-empty"
                   className="rounded-lg border bg-muted/30 py-12 text-center text-sm text-muted-foreground"
                 >
-                  Add at least one Spec×Grade chain before editing the matrix.
+                  {t("matrixNoGrades")}
                 </p>
               ) : (
                 <MatrixEditor
@@ -546,12 +545,10 @@ export default function SpecializationDetailPage() {
                 data-testid="specialization-builder-attrs-heading"
                 className="text-base font-semibold tracking-tight"
               >
-                Grade attributes
+                {t("gradeAttributes")}
               </h2>
               <p className="text-xs text-muted-foreground">
-                Description, requirements and salary for each (Specialization,
-                Grade) pair. Salary inherits down to every Position bound to
-                this profile.
+                {t("gradeAttributesHint")}
               </p>
               <div className="space-y-4">
                 {detail.grades.map((g) => (
@@ -576,14 +573,14 @@ export default function SpecializationDetailPage() {
             data-testid="specialization-employees-loading"
             className="py-8 text-center text-sm text-muted-foreground"
           >
-            Loading employees…
+            {t("loadingEmployees")}
           </p>
         ) : employeeRows.length === 0 ? (
           <p
             data-testid="specialization-employees-empty"
             className="py-8 text-center text-sm text-muted-foreground"
           >
-            No employees in any position of this specialization.
+            {t("specNoEmployees")}
           </p>
         ) : (
           /* HRP-175: shared EmployeeList wrapper enforces the 7-column
@@ -633,12 +630,12 @@ export default function SpecializationDetailPage() {
         onOpenChange={(open) => {
           if (!open && !deleteBusy) setDeleteOpen(false);
         }}
-        title="Delete specialization"
+        title={t("deleteSpecialization")}
         description={
           detail
             ? deleteHasReferences
-              ? `"${detail.title}" is still referenced. Detach the items below before deleting.`
-              : `Delete "${detail.title}"? This cannot be undone.`
+              ? t("deleteSpecReferenced", { title: detail.title })
+              : t("deleteSpecConfirm", { title: detail.title })
             : ""
         }
         onConfirm={handleDelete}

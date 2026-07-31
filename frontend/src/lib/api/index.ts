@@ -11,6 +11,7 @@
 // unauthenticated/public-token pages that must not trigger the
 // auto-logout pipeline.
 import { API_BASE } from "../api-base";
+import { clearLocaleCookie } from "@/i18n/config";
 
 export { API_BASE };
 
@@ -91,6 +92,11 @@ function forceLogout() {
   localStorage.removeItem("access_token");
   localStorage.removeItem("refresh_token");
   document.cookie = "has_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  document.cookie =
+    "demo_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  // Mirror clearTokens() in lib/auth.ts: an expired session on a shared
+  // device must not leak the previous user's language to the next one.
+  clearLocaleCookie();
   window.location.href = "/login";
 }
 

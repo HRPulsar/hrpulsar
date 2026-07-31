@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Settings2, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +26,7 @@ export function VacancyCandidatesSection({
   vacancyId,
   count,
 }: VacancyCandidatesSectionProps) {
+  const t = useTranslations("recruitment");
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [stagesOpen, setStagesOpen] = useState(false);
@@ -39,7 +41,7 @@ export function VacancyCandidatesSection({
     <Card data-testid="vacancy-section-candidates" id="candidates">
       <CardHeader className="flex flex-row items-center justify-between gap-2">
         <CardTitle>
-          Candidates{" "}
+          {t("candidatesTitle")}{" "}
           <span className="text-sm font-normal text-muted-foreground">
             ({currentCount})
           </span>
@@ -51,14 +53,14 @@ export function VacancyCandidatesSection({
             onClick={() => setStagesOpen(true)}
             data-testid="vacancy-stage-manage-btn"
           >
-            <Settings2 className="mr-1 size-4" /> Manage stages
+            <Settings2 className="mr-1 size-4" /> {t("vacancyManageStages")}
           </Button>
           <Button
             size="sm"
             onClick={() => setOpen(true)}
             data-testid="vacancy-section-candidates-add-btn"
           >
-            <UserPlus className="mr-1 size-4" /> Add candidate
+            <UserPlus className="mr-1 size-4" /> {t("candidateAddButton")}
           </Button>
         </div>
       </CardHeader>

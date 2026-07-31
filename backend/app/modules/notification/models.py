@@ -10,8 +10,19 @@ from app.models import BaseModel, TenantMixin
 
 class NotificationTemplate(BaseModel):
     __tablename__ = "notification_templates"
+    __table_args__ = (
+        UniqueConstraint(
+            "code", "locale", name="uq_notification_templates_code_locale"
+        ),
+    )
 
-    code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    # One row per (code, locale); non-en rows are seeded by migration as
+    # English copies until translated (i18n F4, HRP-478). Lookups resolve
+    # the recipient locale first and fall back to the en row.
+    locale: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="en", server_default="en"
+    )
     subject_template: Mapped[str] = mapped_column(String(500), nullable=False)
     body_template: Mapped[str] = mapped_column(String(5000), nullable=False)
     notification_type: Mapped[str] = mapped_column(

@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field
 class GradeOptionRead(BaseModel):
     id: uuid.UUID
     title: str
+    # HRP-479: options are dictionary rows — origin ones localize on the
+    # frontend via reference.dictionary.grade.*.
+    i18n_key: str | None = None
 
 
 class GradeCompetenceLinkCreate(BaseModel):

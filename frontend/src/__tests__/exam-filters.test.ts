@@ -139,26 +139,26 @@ describe("compareExamForList / sortExamsForList (HRP-233)", () => {
 });
 
 describe("examListTimestamp (HRP-233)", () => {
-  it("returns Created for active statuses", () => {
+  it("returns the Created key for active statuses", () => {
     const exam = makeExam({ status: "draft", created_at: "2026-05-01T00:00:00Z" });
     expect(examListTimestamp(exam)).toEqual({
-      label: "Created",
+      labelKey: "dateCreated",
       iso: "2026-05-01T00:00:00Z",
     });
   });
 
-  it("returns Completed for done exams", () => {
+  it("returns the Completed key for done exams", () => {
     const exam = makeExam({ status: "done", finished_at: "2026-05-05T00:00:00Z" });
     expect(examListTimestamp(exam)).toEqual({
-      label: "Completed",
+      labelKey: "dateCompleted",
       iso: "2026-05-05T00:00:00Z",
     });
   });
 
-  it("returns Cancelled for cancelled exams", () => {
+  it("returns the Cancelled key for cancelled exams", () => {
     const exam = makeExam({ status: "cancelled", finished_at: "2026-05-10T00:00:00Z" });
     expect(examListTimestamp(exam)).toEqual({
-      label: "Cancelled",
+      labelKey: "dateCancelled",
       iso: "2026-05-10T00:00:00Z",
     });
   });

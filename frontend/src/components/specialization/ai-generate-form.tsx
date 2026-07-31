@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Paperclip, Trash2 } from "lucide-react";
 import { ApiError, api } from "@/lib/api";
@@ -12,6 +13,7 @@ import {
   type MatrixGenerateInput,
 } from "@/lib/api/specialization-ai";
 import type { CompetenceGenerationSession } from "@/lib/api/competence-generation";
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type { DictionaryItem } from "@/lib/types";
 import {
   isActiveSessionConflict,
@@ -126,6 +128,8 @@ export function AIGenerateForm({
   onSessionCreated,
   disabled,
 }: Props) {
+  const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   // Read the persisted draft once on mount so the initial useState values
   // carry the user's last brief. Subsequent updates flow through the
   // setter + the save effect below.
@@ -255,6 +259,9 @@ export function AIGenerateForm({
             .filter((g) => g.is_active)
             .sort(
               (a, b) =>
+                // Raw-title tie-break: sort_index is the real order; ties
+                // only occur between tenant rows, whose labels render
+                // verbatim anyway (HRP-479).
                 a.sort_index - b.sort_index || a.title.localeCompare(b.title),
             ),
         );
@@ -262,7 +269,7 @@ export function AIGenerateForm({
       .catch((err) => {
         if (!cancelled) {
           toast.error(
-            err instanceof Error ? err.message : "Failed to load grades",
+            err instanceof Error ? err.message : t("toastGradesLoadFailed"),
           );
         }
       })
@@ -272,7 +279,7 @@ export function AIGenerateForm({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   const requiredSet = useMemo(
     () => new Set(requiredGradeIds),
@@ -303,7 +310,7 @@ export function AIGenerateForm({
   async function submitGeneration() {
     if (submitting) return;
     if (selectedGradeIds.length === 0) {
-      toast.error("Pick at least one grade.");
+      toast.error(t("errorPickGrade"));
       return;
     }
     setSubmitting(true);
@@ -326,7 +333,7 @@ export function AIGenerateForm({
       };
       const session = await specializationAiApi.start(input);
       onSessionCreated(session);
-      toast.success("Generation started");
+      toast.success(t("toastGenerationStarted"));
     } catch (err) {
       // HRP-168: a 409 with `error_code === "active_session_exists"` used
       // to silently `window.location.href` the user away, which read as
@@ -340,7 +347,9 @@ export function AIGenerateForm({
           return;
         }
       }
-      toast.error(err instanceof Error ? err.message : "Failed to start generation");
+      toast.error(
+        err instanceof Error ? err.message : t("toastGenerationStartFailed"),
+      );
     } finally {
       setSubmitting(false);
     }
@@ -368,21 +377,17 @@ export function AIGenerateForm({
     >
       <div className="space-y-2">
         <label className="text-sm font-medium">
-          Grades <span className="text-destructive">*</span>
+          {t("grades")} <span className="text-destructive">*</span>
         </label>
-        <p className="text-xs text-muted-foreground">
-          The model generates competences across these grades. Pairs are
-          created in the specialization automatically; you can reorder or add
-          more from the Builder later.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("gradesFormHint")}</p>
         {gradesLoading && gradePool.length === 0 ? (
-          <p className="text-xs text-muted-foreground">Loading grades…</p>
+          <p className="text-xs text-muted-foreground">{t("loadingGrades")}</p>
         ) : gradePool.length === 0 ? (
           <p
             data-testid={`${testIdPrefix}-grades-empty`}
             className="rounded border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
           >
-            No grades in the dictionary. Add some before running AI.
+            {t("noGradesForAi")}
           </p>
         ) : (
           <div
@@ -409,8 +414,8 @@ export function AIGenerateForm({
                     onCheckedChange={() => toggleGrade(g.id)}
                   />
                   <span>
-                    {g.title}
-                    {isRequired ? " · required" : ""}
+                    {dictionaryItemLabel(tRef, g)}
+                    {isRequired ? t("gradeRequiredSuffix") : ""}
                   </span>
                 </label>
               );
@@ -421,7 +426,7 @@ export function AIGenerateForm({
           data-testid={`${testIdPrefix}-grades-count`}
           className="text-xs text-muted-foreground"
         >
-          {selectedGradeIds.length} selected
+          {t("selectedCount", { count: selectedGradeIds.length })}
         </p>
       </div>
 
@@ -437,11 +442,10 @@ export function AIGenerateForm({
           />
           <span className="text-sm">
             <span className="font-medium">
-              Generate indicators for existing competences
+              {t("indicatorsForExisting")}
             </span>
             <span className="block text-xs text-muted-foreground">
-              The LLM returns new indicators for every competence already in the
-              matrix in addition to whatever new competences it suggests.
+              {t("indicatorsForExistingHint")}
             </span>
           </span>
         </label>
@@ -460,13 +464,9 @@ export function AIGenerateForm({
           htmlFor={`${testIdPrefix}-refinement-prompt`}
           className="text-sm font-medium"
         >
-          Refinement (optional)
+          {t("refinementOptional")}
         </label>
-        <p className="text-xs text-muted-foreground">
-          Free-form note appended to the prompt — use it to bias generation
-          (e.g. “focus on security competences”, “avoid duplicating the
-          ‘Code review’ competence”).
-        </p>
+        <p className="text-xs text-muted-foreground">{t("refinementHint")}</p>
         <textarea
           id={`${testIdPrefix}-refinement-prompt`}
           value={refinementPrompt}
@@ -478,41 +478,40 @@ export function AIGenerateForm({
       </div>
 
       <Field
-        label="Responsibilities"
+        label={t("responsibilities")}
         testId={`${testIdPrefix}-responsibilities`}
         value={responsibilities}
         onChange={setResponsibilities}
       />
       <Field
-        label="Daily tasks"
+        label={t("dailyTasks")}
         testId={`${testIdPrefix}-daily-tasks`}
         value={dailyTasks}
         onChange={setDailyTasks}
       />
       <Field
-        label="Weekly tasks"
+        label={t("weeklyTasks")}
         testId={`${testIdPrefix}-weekly-tasks`}
         value={weeklyTasks}
         onChange={setWeeklyTasks}
       />
       <Field
-        label="KPI"
+        label={t("kpi")}
         testId={`${testIdPrefix}-kpi`}
         value={kpi}
         onChange={setKpi}
       />
       <Field
-        label="Formal requirements"
+        label={t("formalRequirements")}
         testId={`${testIdPrefix}-requirements-text`}
         value={requirementsText}
         onChange={setRequirementsText}
       />
 
       <div className="space-y-2">
-        <label className="text-sm font-medium">Reference files</label>
+        <label className="text-sm font-medium">{t("referenceFiles")}</label>
         <p className="text-xs text-muted-foreground">
-          Supported: .pdf, .docx, .xlsx, .xls, .rtf, .txt. Each file ≤ 10 MB,
-          combined extracted text ≤ 50 000 characters.
+          {t("referenceFilesHint")}
         </p>
         <input
           ref={fileInputRef}
@@ -535,15 +534,15 @@ export function AIGenerateForm({
             data-testid={`${testIdPrefix}-file-pick`}
           >
             <Paperclip className="mr-2 h-4 w-4" />
-            Choose files
+            {t("chooseFiles")}
           </Button>
           <span
             className="text-xs text-muted-foreground"
             data-testid={`${testIdPrefix}-file-count`}
           >
             {files.length === 0
-              ? "No files chosen"
-              : `${files.length} file${files.length === 1 ? "" : "s"} selected`}
+              ? t("noFilesChosen")
+              : t("filesSelected", { count: files.length })}
           </span>
         </div>
         {files.length > 0 && (
@@ -568,7 +567,7 @@ export function AIGenerateForm({
                   className="text-xs text-destructive hover:underline"
                   data-testid={`${testIdPrefix}-remove-file-${idx}`}
                 >
-                  Remove
+                  {t("remove")}
                 </button>
               </li>
             ))}
@@ -587,7 +586,7 @@ export function AIGenerateForm({
             data-testid={`${testIdPrefix}-clear-draft`}
           >
             <Trash2 className="mr-1 h-4 w-4" />
-            Clear draft
+            {t("clearDraft")}
           </Button>
         )}
         <button
@@ -596,7 +595,7 @@ export function AIGenerateForm({
           data-testid={`${testIdPrefix}-submit`}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
-          {submitting ? "Starting…" : "Start AI generation"}
+          {submitting ? t("starting") : t("startAiGeneration")}
         </button>
       </div>
     </form>

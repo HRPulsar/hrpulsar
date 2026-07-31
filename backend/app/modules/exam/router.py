@@ -1,11 +1,12 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, UploadFile
 from fastapi import status as http_status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access_scope import get_current_employee, get_visible_employee_ids
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.assessment.schemas import StatusChange
 from app.modules.auth.dependencies import get_current_user, require_role
@@ -263,7 +264,7 @@ async def list_my_exams(
         and visible_ids is not None
         and employee_id not in visible_ids
     ):
-        raise HTTPException(http_status.HTTP_403_FORBIDDEN, "Out of scope")
+        raise AppError("exam_out_of_scope", http_status.HTTP_403_FORBIDDEN)
     return await service.list_my_exams(
         db,
         current_user.tenant_id,
@@ -278,9 +279,8 @@ async def _acting_employee_id(
     """HRP-328: taking an exam requires the caller's own employee row."""
     emp = await get_current_employee(db, current_user)
     if emp is None:
-        raise HTTPException(
-            http_status.HTTP_403_FORBIDDEN,
-            "Only the assigned employee can take this exam",
+        raise AppError(
+            "exam_only_assigned_employee", http_status.HTTP_403_FORBIDDEN
         )
     return emp.id
 

@@ -2,41 +2,45 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { usePermissions } from "@/hooks/use-permissions";
 
+// `labelKey` points at the `recruitment` i18n namespace; `testId` stays a
+// stable identifier and is never derived from the translation.
 const tabs = [
   {
     href: "/recruitment/requisitions",
-    label: "Vacancies",
+    labelKey: "vacanciesTitle",
     testId: "recruitment-tab-vacancies",
   },
   {
     href: "/recruitment/candidates",
-    label: "Candidates",
+    labelKey: "candidatesTitle",
     testId: "recruitment-tab-candidates",
   },
   {
     href: "/recruitment/reports",
-    label: "Reports",
+    labelKey: "breadcrumbReports",
     testId: "recruitment-tab-reports",
   },
   {
     href: "/recruitment/audit-log",
-    label: "Audit",
+    labelKey: "tabAudit",
     testId: "recruitment-tab-audit",
     // GET /recruitment/audit-log is admin|hrd-gated on the backend.
     auditRoles: true,
   },
   {
     href: "/recruitment/settings",
-    label: "Settings",
+    labelKey: "tabSettings",
     testId: "recruitment-tab-settings",
     adminOnly: true,
   },
 ];
 
 export function RecruitmentTabs() {
+  const t = useTranslations("recruitment");
   const pathname = usePathname() ?? "";
   const { roles, isAdmin, isPlatformAdmin } = usePermissions();
   const adminTier = isAdmin || isPlatformAdmin;
@@ -60,7 +64,7 @@ export function RecruitmentTabs() {
                 : "border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
             }
           >
-            {tab.label}
+            {t(tab.labelKey)}
           </Link>
         );
       })}

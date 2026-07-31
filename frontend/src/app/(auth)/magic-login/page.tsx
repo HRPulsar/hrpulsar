@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,6 +18,8 @@ export default function MagicLoginPage() {
 }
 
 function MagicLoginContent() {
+  const t = useTranslations("auth");
+  const tc = useTranslations("common");
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
@@ -25,31 +28,31 @@ function MagicLoginContent() {
   const [busy, setBusy] = useState(false);
 
   const handleLogin = useCallback(
-    async (t: string) => {
+    async (linkToken: string) => {
       setError("");
       setBusy(true);
       try {
-        const resp = await magicLogin(t);
+        const resp = await magicLogin(linkToken);
         localStorage.setItem("access_token", resp.access_token);
         localStorage.setItem("refresh_token", resp.refresh_token);
         document.cookie = "has_token=1; path=/; SameSite=Lax";
         router.push("/dashboard");
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Sign-in failed");
+        setError(err instanceof Error ? err.message : t("signInFailed"));
       } finally {
         setBusy(false);
       }
     },
-    [router],
+    [router, t],
   );
 
   useEffect(() => {
     if (token) {
       handleLogin(token);
     } else {
-      setError("Sign-in link is missing or invalid.");
+      setError(t("signInLinkInvalid"));
     }
-  }, [token, handleLogin]);
+  }, [token, handleLogin, t]);
 
   return (
     <div className="flex flex-col items-center gap-8">
@@ -57,7 +60,7 @@ function MagicLoginContent() {
       <Card className="w-full max-w-sm border-white/10 bg-black/40 backdrop-blur-xl">
         <CardHeader className="text-center">
           <CardTitle className="text-xl text-white">
-            {error ? "Could not sign you in" : "Signing you in..."}
+            {error ? t("couldNotSignIn") : t("signingYouIn")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -77,14 +80,14 @@ function MagicLoginContent() {
                     onClick={() => handleLogin(token)}
                     disabled={busy}
                   >
-                    {busy ? "Retrying..." : "Try again"}
+                    {busy ? t("retrying") : tc("tryAgain")}
                   </Button>
                 )}
                 <a
                   href="/register"
                   className="block text-center text-sm text-brand hover:underline"
                 >
-                  Request a new link
+                  {t("requestNewLink")}
                 </a>
               </div>
             </>
@@ -92,7 +95,7 @@ function MagicLoginContent() {
             <div className="flex flex-col items-center gap-3 py-4">
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-brand" />
               <p className="text-sm text-white/50">
-                Please wait while we verify your link...
+                {t("verifyingLinkWait")}
               </p>
             </div>
           )}

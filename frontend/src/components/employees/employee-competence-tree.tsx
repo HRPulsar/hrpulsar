@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -157,6 +158,7 @@ export function EmployeeCompetenceTree({
   tree,
   rows,
 }: EmployeeCompetenceTreeProps) {
+  const t = useTranslations("employees");
   const rowsByComp = useMemo(() => {
     const map = new Map<string, EmployeeCompetenceRow>();
     for (const row of rows) map.set(row.competence_id, row);
@@ -198,7 +200,7 @@ export function EmployeeCompetenceTree({
         className="py-4 text-center text-sm text-muted-foreground"
         data-testid="employee-competences-current-empty"
       >
-        No competences configured for the current position.
+        {t("currentPositionCompetencesEmpty")}
       </p>
     );
   }

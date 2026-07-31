@@ -1,7 +1,10 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import type { SkillLevel } from "@/lib/types";
 import { levelTint } from "@/lib/matrix-grading";
+import { skillLevelLabel } from "@/lib/reference-labels";
 import {
   Tooltip,
   TooltipContent,
@@ -37,6 +40,8 @@ export function MatrixCell({
   disabled,
   unstyled,
 }: Props) {
+  const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   const tint = levelTint(levelId, skillLevels);
   return (
     <div
@@ -60,7 +65,7 @@ export function MatrixCell({
         <option value="">—</option>
         {skillLevels.map((lvl) => (
           <option key={lvl.id} value={lvl.id}>
-            {lvl.title}
+            {skillLevelLabel(tRef, lvl)}
           </option>
         ))}
       </select>
@@ -76,13 +81,13 @@ export function MatrixCell({
               className="text-xs text-muted-foreground hover:text-foreground"
               onClick={onShowIndicators}
               disabled={disabled}
-              aria-label="Show indicators"
+              aria-label={t("showIndicators")}
             />
           }
         >
           ⓘ
         </TooltipTrigger>
-        <TooltipContent>Show indicators</TooltipContent>
+        <TooltipContent>{t("showIndicators")}</TooltipContent>
       </Tooltip>
     </div>
   );

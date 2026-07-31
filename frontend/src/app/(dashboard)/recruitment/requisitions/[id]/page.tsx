@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { CandidateVacancy, Vacancy, VacancyProfile } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
@@ -21,15 +22,11 @@ import { VacancyActionsMenu } from "../_components/VacancyActionsMenu";
 import { VacancyOverviewSection } from "../_components/VacancyOverviewSection";
 import { VacancyCompetencesSection } from "../_components/VacancyCompetencesSection";
 import { VacancyCandidatesSection } from "../_components/VacancyCandidatesSection";
-import { ALERT_TONE, BADGE_COLOR } from "@/lib/badge-tones";
-
-const statusColors: Record<string, string> = {
-  draft: BADGE_COLOR.neutral,
-  open: BADGE_COLOR.green,
-  paused: BADGE_COLOR.yellow,
-  closed: BADGE_COLOR.red,
-  cancelled: BADGE_COLOR.neutral,
-};
+import { ALERT_TONE } from "@/lib/badge-tones";
+import {
+  VACANCY_STATUS_COLORS,
+  vacancyStatusBadgeLabel,
+} from "@/lib/vacancy-status";
 
 // Legacy ?tab=profile / ?tab=candidates → single-page anchors.
 const LEGACY_TAB_ANCHORS: Record<string, string> = {
@@ -39,6 +36,8 @@ const LEGACY_TAB_ANCHORS: Record<string, string> = {
 
 export default function VacancyDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const router = useRouter();
   const searchParams = useSearchParams();
   const [vacancy, setVacancy] = useState<Vacancy | null>(null);
@@ -113,7 +112,7 @@ export default function VacancyDetailPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -121,14 +120,14 @@ export default function VacancyDetailPage() {
   if (!vacancy) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-        <p>Vacancy not found</p>
+        <p>{t("vacancyNotFound")}</p>
         <Button
           variant="outline"
           size="sm"
           className="mt-4"
           render={<Link href="/recruitment/requisitions" />}
         >
-          Back to vacancies
+          {t("vacancyBackToList")}
         </Button>
       </div>
     );
@@ -145,7 +144,7 @@ export default function VacancyDetailPage() {
     <div data-testid="recruitment-vacancy-detail" className="space-y-6">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Vacancies", href: "/recruitment/requisitions" },
+          { label: t("vacanciesTitle"), href: "/recruitment/requisitions" },
           { label: vacancy.title },
         ]}
       />
@@ -160,10 +159,12 @@ export default function VacancyDetailPage() {
               className={
                 vacancy.archived_at
                   ? "bg-muted text-muted-foreground"
-                  : statusColors[vacancy.status] || ""
+                  : VACANCY_STATUS_COLORS[vacancy.status] || ""
               }
             >
-              {vacancy.archived_at ? "archived" : vacancy.status}
+              {vacancy.archived_at
+                ? t("vacancyBadgeArchived")
+                : vacancyStatusBadgeLabel(t, vacancy.status)}
             </Badge>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -175,10 +176,16 @@ export default function VacancyDetailPage() {
               vacancy.location,
             ]
               .filter(Boolean)
-              .join(" / ") || "No additional details"}
+              .join(" / ") || t("vacancyNoDetails")}
             {" --- "}
-            Created {formatDate(vacancy.created_at)}
-            {vacancy.owner_name && ` by ${vacancy.owner_name}`}
+            {vacancy.owner_name
+              ? t("vacancyCreatedByLine", {
+                  date: formatDate(vacancy.created_at),
+                  owner: vacancy.owner_name,
+                })
+              : t("vacancyCreatedLine", {
+                  date: formatDate(vacancy.created_at),
+                })}
           </p>
         </div>
         <VacancyActionsMenu
@@ -194,7 +201,7 @@ export default function VacancyDetailPage() {
           className={`rounded-md border p-3 text-sm ${ALERT_TONE.yellow}`}
           data-testid="vacancy-archived-banner"
         >
-          This vacancy is archived. Restore to edit.
+          {t("vacancyArchivedBanner")}
         </div>
       )}
 
@@ -204,31 +211,31 @@ export default function VacancyDetailPage() {
             value="overview"
             data-testid="recruitment-vacancy-tab-overview"
           >
-            Overview
+            {t("vacancyTabOverview")}
           </TabsTrigger>
           <TabsTrigger
             value="questions"
             data-testid="recruitment-vacancy-tab-questions"
           >
-            Questions
+            {t("vacancyTabQuestions")}
           </TabsTrigger>
           <TabsTrigger
             value="assessments"
             data-testid="recruitment-vacancy-tab-assessments"
           >
-            Assessments
+            {t("vacancyTabAssessments")}
           </TabsTrigger>
           <TabsTrigger
             value="reports"
             data-testid="recruitment-vacancy-tab-reports"
           >
-            Reports
+            {t("breadcrumbReports")}
           </TabsTrigger>
           <TabsTrigger
             value="analytics"
             data-testid="recruitment-vacancy-tab-analytics"
           >
-            Analytics
+            {t("vacancyTabAnalytics")}
           </TabsTrigger>
         </TabsList>
 

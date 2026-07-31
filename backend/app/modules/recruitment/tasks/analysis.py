@@ -776,6 +776,9 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 pending_run.current_stage = "competences"
                 db.commit()
 
+            from app.modules.ai.providers import resolve_generation_target_sync
+
+            creds = resolve_generation_target_sync(db, interview.tenant_id, None)
             analysis_raw = asyncio.run(
                 generate_json(
                     prompt=prompt,
@@ -783,6 +786,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                     schema=InterviewAnalysisResult,
                     temperature=0.2,
                     max_tokens=RECRUITMENT_MAX_TOKENS,
+                    credentials=creds,
                 )
             )
             assert isinstance(analysis_raw, InterviewAnalysisResult)
@@ -1118,6 +1122,9 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
             run.current_stage = "competences"
             db.commit()
 
+            from app.modules.ai.providers import resolve_generation_target_sync
+
+            creds = resolve_generation_target_sync(db, resume.tenant_id, None)
             analysis_raw = asyncio.run(
                 generate_json(
                     prompt=prompt,
@@ -1125,6 +1132,7 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                     schema=ResumeOnlyAnalysisResult,
                     temperature=0.2,
                     max_tokens=RECRUITMENT_MAX_TOKENS,
+                    credentials=creds,
                 )
             )
             assert isinstance(analysis_raw, ResumeOnlyAnalysisResult)

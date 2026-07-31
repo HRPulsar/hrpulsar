@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,17 +10,28 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AuthLogo } from "@/components/auth-logo";
 import { createSignupRequest } from "@/lib/signup";
-import { TURNSTILE_FAILED_MESSAGE, useTurnstileGate } from "@/lib/turnstile";
+import { TURNSTILE_FAILED_MESSAGE_KEY, useTurnstileGate } from "@/lib/turnstile";
 
-const ROLE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "hr", label: "HR" },
-  { value: "recruiter", label: "Recruiter" },
-  { value: "manager", label: "Manager" },
-  { value: "founder", label: "Founder" },
-  { value: "other", label: "Other" },
-];
+/** Role values sent to the API; labels come from the `auth` catalog. */
+const ROLE_VALUES = [
+  "hr",
+  "recruiter",
+  "manager",
+  "founder",
+  "other",
+] as const;
+
+const ROLE_LABEL_KEY: Record<(typeof ROLE_VALUES)[number], string> = {
+  hr: "roleHr",
+  recruiter: "roleRecruiter",
+  manager: "roleManager",
+  founder: "roleFounder",
+  other: "roleOther",
+};
 
 export function RequestAccessForm() {
+  const t = useTranslations("auth");
+  const tc = useTranslations("common");
   const router = useRouter();
   const [form, setForm] = useState({
     email: "",
@@ -55,7 +67,7 @@ export function RequestAccessForm() {
         `/verify-email?email=${encodeURIComponent(form.email)}&flow=signup`,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Request failed");
+      setError(err instanceof Error ? err.message : t("requestFailed"));
       // Single-use token was burned; reset so retry waits for fresh.
       turnstile.reset();
     } finally {
@@ -68,7 +80,9 @@ export function RequestAccessForm() {
       <AuthLogo />
       <Card className="w-full max-w-sm border-white/10 bg-black/40 backdrop-blur-xl">
         <CardHeader className="text-center">
-          <CardTitle className="text-xl text-white">Request access</CardTitle>
+          <CardTitle className="text-xl text-white">
+            {t("requestAccess")}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <form
@@ -81,14 +95,11 @@ export function RequestAccessForm() {
                 {error}
               </div>
             )}
-            <p className="text-sm text-white/60">
-              Tell us a bit about yourself and we&apos;ll email you a sign-in
-              link once our team approves the request.
-            </p>
+            <p className="text-sm text-white/60">{t("requestAccessIntro")}</p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label htmlFor="first_name" className="text-white/70">
-                  First name
+                  {t("firstName")}
                 </Label>
                 <Input
                   id="first_name"
@@ -101,7 +112,7 @@ export function RequestAccessForm() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="last_name" className="text-white/70">
-                  Last name
+                  {t("lastName")}
                 </Label>
                 <Input
                   id="last_name"
@@ -114,7 +125,7 @@ export function RequestAccessForm() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="company" className="text-white/70">
-                Company name
+                {t("companyName")}
               </Label>
               <Input
                 id="company"
@@ -126,12 +137,12 @@ export function RequestAccessForm() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="email" className="text-white/70">
-                Work email
+                {t("workEmail")}
               </Label>
               <Input
                 id="email"
                 type="email"
-                placeholder="you@company.com"
+                placeholder={t("emailPlaceholder")}
                 value={form.email}
                 onChange={(e) => update("email", e.target.value)}
                 className="border-white/10 bg-white/5 text-white placeholder:text-white/30"
@@ -141,7 +152,7 @@ export function RequestAccessForm() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="role" className="text-white/70">
-                Role
+                {t("role")}
               </Label>
               <select
                 id="role"
@@ -151,15 +162,15 @@ export function RequestAccessForm() {
                 data-testid="register-select-role"
               >
                 <option value="" className="bg-black text-white">
-                  Choose a role
+                  {t("chooseRole")}
                 </option>
-                {ROLE_OPTIONS.map((opt) => (
+                {ROLE_VALUES.map((value) => (
                   <option
-                    key={opt.value}
-                    value={opt.value}
+                    key={value}
+                    value={value}
                     className="bg-black text-white"
                   >
-                    {opt.label}
+                    {t(ROLE_LABEL_KEY[value])}
                   </option>
                 ))}
               </select>
@@ -169,14 +180,14 @@ export function RequestAccessForm() {
                 className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
                 data-testid="register-verify-error"
               >
-                {TURNSTILE_FAILED_MESSAGE}{" "}
+                {t(TURNSTILE_FAILED_MESSAGE_KEY)}{" "}
                 <button
                   type="button"
                   onClick={turnstile.reset}
                   className="font-semibold underline"
                   data-testid="register-verify-retry"
                 >
-                  Retry
+                  {t("retry")}
                 </button>
               </div>
             )}
@@ -187,21 +198,21 @@ export function RequestAccessForm() {
               data-testid="register-btn-submit"
             >
               {loading
-                ? "Sending request..."
+                ? t("sendingRequest")
                 : !turnstile.isReady && !turnstile.failed
-                  ? "Verifying..."
-                  : "Request access"}
+                  ? t("verifying")
+                  : t("requestAccess")}
             </Button>
             {turnstile.widget}
           </form>
           <p className="mt-4 text-center text-sm text-white/50">
-            Already have an account?{" "}
+            {t("haveAccount")}{" "}
             <a
               href="/login"
               className="text-brand hover:underline"
               data-testid="register-link-login"
             >
-              Sign in
+              {tc("signIn")}
             </a>
           </p>
         </CardContent>

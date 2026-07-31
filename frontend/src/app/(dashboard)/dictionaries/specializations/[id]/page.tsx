@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Info, Save } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 
 import { api } from "@/lib/api";
 import type { DictionaryItem, GradeSpecialization } from "@/lib/types";
@@ -21,10 +22,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-const PASSING_SCORE_HINT =
-  "Passing score — the percentage threshold above which the grade is considered confirmed after an assessment. Default 75%, configurable from 0 to 100 in 1% steps.";
-
 export default function SpecializationDetailPage() {
+  const t = useTranslations("dictionaries");
   const { id } = useParams<{ id: string }>();
   const [specialization, setSpecialization] = useState<DictionaryItem | null>(null);
   const [chains, setChains] = useState<GradeSpecialization[]>([]);
@@ -51,11 +50,11 @@ export default function SpecializationDetailPage() {
         ),
       );
     } catch {
-      toast.error("Failed to load specialization");
+      toast.error(t("errorLoadSpecialization"));
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     load();
@@ -65,17 +64,17 @@ export default function SpecializationDetailPage() {
     const raw = drafts[chain.id];
     const value = Number(raw);
     if (!Number.isFinite(value) || value < 0 || value > 100 || !Number.isInteger(value)) {
-      toast.error("Enter a whole number between 0 and 100");
+      toast.error(t("errorPassingScoreRange"));
       return;
     }
     if (value === chain.passing_score) return;
     setSavingId(chain.id);
     try {
       await api.put(`/grade-system/chains/${chain.id}`, { passing_score: value });
-      toast.success("Passing score saved");
+      toast.success(t("toastPassingScoreSaved"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("errorSave"));
     } finally {
       setSavingId(null);
     }
@@ -94,41 +93,43 @@ export default function SpecializationDetailPage() {
           </Button>
           <div className="flex-1">
             <h1 className="text-2xl font-semibold tracking-tight">
-              {specialization?.title ?? "Specialization"}
+              {specialization?.title ?? t("specializationFallback")}
             </h1>
             <p className="text-sm text-muted-foreground">
-              Grades and passing scores
+              {t("gradesAndPassingScores")}
             </p>
           </div>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Grades and passing scores</CardTitle>
+            <CardTitle className="text-base">
+              {t("gradesAndPassingScores")}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             {loading ? (
               <div className="py-8 text-center text-sm text-muted-foreground">
-                Loading…
+                {t("loadingEllipsis")}
               </div>
             ) : chains.length === 0 ? (
               <div className="py-8 text-center text-sm text-muted-foreground">
-                No grades configured for this specialization yet.
+                {t("noGradesConfigured")}
               </div>
             ) : (
               <div className="rounded-lg border">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Grade</TableHead>
-                      <TableHead>Competences</TableHead>
+                      <TableHead>{t("columnGrade")}</TableHead>
+                      <TableHead>{t("columnCompetences")}</TableHead>
                       <TableHead>
                         <span className="inline-flex items-center gap-1.5">
-                          Passing score (%)
+                          {t("columnPassingScore")}
                           <span
-                            title={PASSING_SCORE_HINT}
+                            title={t("passingScoreHint")}
                             className="text-muted-foreground"
-                            aria-label="Passing score tooltip"
+                            aria-label={t("passingScoreTooltipAria")}
                           >
                             <Info className="size-3.5" />
                           </span>
@@ -178,7 +179,9 @@ export default function SpecializationDetailPage() {
                                 data-testid={`grade-spec-passing-score-save-${chain.grade_id}`}
                               >
                                 <Save className="mr-1 h-3 w-3" />
-                                {savingId === chain.id ? "Saving…" : "Save"}
+                                {savingId === chain.id
+                                  ? t("savingEllipsis")
+                                  : t("save")}
                               </Button>
                             </TableCell>
                           </TableRow>

@@ -24,34 +24,43 @@ interface PickedFileMeta {
   type: string;
 }
 
+/** Translator handed in by the calling component — `useTranslations(
+ *  "recruitment")`. Kept structural so vitest can pass a stub that echoes
+ *  the key back (HRP-476: tests pin keys, not wording). */
+export type RecruitmentTranslate = (
+  key: string,
+  values?: Record<string, string | number>,
+) => string;
+
 const MAX_MB = Math.round(BULK_UPLOAD_MAX_FILE_BYTES / (1024 * 1024));
 const MAX_TOTAL_MB = Math.round(BULK_UPLOAD_MAX_TOTAL_BYTES / (1024 * 1024));
 
 export function validateBulkUploadSelection(
+  t: RecruitmentTranslate,
   files: ReadonlyArray<PickedFileMeta>,
 ): string | null {
-  if (files.length === 0) return "Pick at least one file.";
+  if (files.length === 0) return t("bulkUploadPickFile");
   if (files.length > BULK_UPLOAD_MAX_FILES) {
-    return `Up to ${BULK_UPLOAD_MAX_FILES} files per upload.`;
+    return t("bulkUploadTooManyFiles", { max: BULK_UPLOAD_MAX_FILES });
   }
   let totalBytes = 0;
   for (const f of files) {
     if (f.size > BULK_UPLOAD_MAX_FILE_BYTES) {
-      return `${f.name}: exceeds ${MAX_MB} MB limit.`;
+      return t("bulkUploadFileTooLarge", { name: f.name, max: MAX_MB });
     }
     totalBytes += f.size;
     if (f.type) {
       if (!BULK_UPLOAD_ALLOWED_MIME.has(f.type)) {
-        return `${f.name}: only PDF or DOCX accepted.`;
+        return t("bulkUploadUnsupportedType", { name: f.name });
       }
     } else if (!/\.(pdf|docx)$/i.test(f.name)) {
       // Empty MIME means the browser couldn't determine the type — fall
       // back to the extension. The backend re-checks magic bytes anyway.
-      return `${f.name}: only PDF or DOCX accepted.`;
+      return t("bulkUploadUnsupportedType", { name: f.name });
     }
   }
   if (totalBytes > BULK_UPLOAD_MAX_TOTAL_BYTES) {
-    return `Batch total exceeds ${MAX_TOTAL_MB} MB.`;
+    return t("bulkUploadBatchTooLarge", { max: MAX_TOTAL_MB });
   }
   return null;
 }
@@ -90,11 +99,12 @@ export function buildManualPayload(
 }
 
 export function manualPayloadValidationError(
+  t: RecruitmentTranslate,
   form: ManualFormInput,
 ): string | null {
-  if (!form.full_name.trim()) return "Full name is required.";
+  if (!form.full_name.trim()) return t("candidateFullNameRequired");
   if (!form.email.trim() && !form.phone.trim()) {
-    return "Either email or phone is required.";
+    return t("candidateContactRequired");
   }
   return null;
 }
@@ -151,12 +161,13 @@ export function buildStagesPayload(
 }
 
 export function stagesValidationError(
+  t: RecruitmentTranslate,
   draft: ReadonlyArray<StageDraftRow>,
 ): string | null {
-  if (draft.length === 0) return "Add at least one stage.";
+  if (draft.length === 0) return t("stagesAtLeastOne");
   for (const s of draft) {
     if (!s.name.trim() || !s.code.trim()) {
-      return "Each stage needs a name and a code.";
+      return t("stageNameCodeRequired");
     }
   }
   return null;

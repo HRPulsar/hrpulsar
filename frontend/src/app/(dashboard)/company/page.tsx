@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { flattenTree } from "@/lib/utils";
 import { formatDate } from "@/lib/date-format";
@@ -62,6 +63,8 @@ function DivisionNode({
   onDelete: (d: Division) => void;
   onAddChild: (parentId: string) => void;
 }) {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   return (
     <div data-testid={`company-division-${division.id}`}>
       <div
@@ -113,11 +116,11 @@ function DivisionNode({
           <DropdownMenuContent align="end">
             <DropdownMenuItem data-testid={`company-division-${division.id}-btn-add-child`} onClick={() => onAddChild(division.id)}>
               <Plus className="mr-2 h-4 w-4" />
-              Add child
+              {t("addChild")}
             </DropdownMenuItem>
             <DropdownMenuItem data-testid={`company-division-${division.id}-btn-edit`} onClick={() => onEdit(division)}>
               <Pencil className="mr-2 h-4 w-4" />
-              Edit
+              {t("edit")}
             </DropdownMenuItem>
             <DropdownMenuItem
               data-testid={`company-division-${division.id}-btn-delete`}
@@ -125,7 +128,7 @@ function DivisionNode({
               onClick={() => onDelete(division)}
             >
               <Trash2 className="mr-2 h-4 w-4" />
-              Delete
+              {tc("delete")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -164,14 +167,17 @@ function employeeLabel(
   id: string,
   employees: Employee[],
   fallback: string | null | undefined,
+  noneLabel: string,
 ): string {
-  if (!id) return "None";
+  if (!id) return noneLabel;
   const emp = employees.find((e) => e.id === id);
   if (emp) return emp.user_name?.trim() || emp.user_email || "—";
   return fallback?.trim() || "—";
 }
 
 export default function CompanyPage() {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -238,7 +244,7 @@ export default function CompanyPage() {
     setTenantError(EMPTY_FORM_ERROR);
     try {
       await api.put("/company", tenantForm);
-      toast.success("Company updated");
+      toast.success(t("toastCompanyUpdated"));
       setTenantDialogOpen(false);
       await load();
     } catch (err) {
@@ -294,10 +300,10 @@ export default function CompanyPage() {
       let result: Division;
       if (divDialogMode === "create") {
         result = await api.post<Division>("/divisions", payload);
-        toast.success("Division created");
+        toast.success(t("toastDivisionCreated"));
       } else {
         result = await api.put<Division>(`/divisions/${editingDivId}`, payload);
-        toast.success("Division updated");
+        toast.success(t("toastDivisionUpdated"));
       }
       setDivDialogOpen(false);
       const pending = result.pending_role_downgrade ?? [];
@@ -313,11 +319,11 @@ export default function CompanyPage() {
         if (names.length > 0) {
           toast.success(
             names.length === 1
-              ? `${names[0]} downgraded to employee`
-              : `${names.length} managers downgraded to employee`,
+              ? t("toastDowngradedNamed", { name: names[0] })
+              : t("toastDowngradedCount", { count: names.length }),
           );
         } else {
-          toast.success("Previous manager role downgraded to employee");
+          toast.success(t("toastPreviousManagerDowngraded"));
         }
       }
       if (manual.length > 0) {
@@ -340,11 +346,11 @@ export default function CompanyPage() {
       await api.post(`/employees/${target.employee_id}/downgrade-role`, {});
       toast.success(
         target.user_name
-          ? `${target.user_name} downgraded to employee`
-          : "Role downgraded to employee",
+          ? t("toastDowngradedNamed", { name: target.user_name })
+          : t("toastRoleDowngraded"),
       );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to downgrade");
+      toast.error(err instanceof Error ? err.message : t("toastDowngradeFailed"));
     } finally {
       setDowngrading(false);
       advanceDowngrade();
@@ -371,11 +377,11 @@ export default function CompanyPage() {
     setSaving(true);
     try {
       await api.delete(`/divisions/${deletingDiv.id}`);
-      toast.success("Division deleted");
+      toast.success(t("toastDivisionDeleted"));
       setDeleteOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(err instanceof Error ? err.message : t("toastDeleteFailed"));
     } finally {
       setSaving(false);
     }
@@ -386,7 +392,7 @@ export default function CompanyPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -395,12 +401,12 @@ export default function CompanyPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Company</h1>
-          <p className="text-sm text-muted-foreground">Organization structure</p>
+          <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
         <Button variant="outline" size="sm" render={<Link href="/settings/import" />}>
           <Upload className="mr-1 h-4 w-4" />
-          Import
+          {t("import")}
         </Button>
       </div>
 
@@ -415,28 +421,26 @@ export default function CompanyPage() {
             </Button>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
-            <p>Slug: {tenant.slug}</p>
-            <p>
-              Created: {formatDate(tenant.created_at)}
-            </p>
+            <p>{t("slugLabel", { slug: tenant.slug })}</p>
+            <p>{t("createdLabel", { date: formatDate(tenant.created_at) })}</p>
           </CardContent>
         </Card>
       )}
 
       <Card data-testid="company-divisions-card">
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Divisions</CardTitle>
+          <CardTitle className="text-base">{t("divisions")}</CardTitle>
           {canManage && (
             <Button data-testid="company-divisions-btn-add" size="sm" onClick={() => openCreateDivision()}>
               <Plus className="mr-1 h-4 w-4" />
-              Add division
+              {t("addDivision")}
             </Button>
           )}
         </CardHeader>
         <CardContent>
           {divisions.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              No divisions yet
+              {t("noDivisions")}
             </p>
           ) : (
             <div data-testid="company-divisions-tree" className="-mx-3">
@@ -458,7 +462,7 @@ export default function CompanyPage() {
       <Dialog open={tenantDialogOpen} onOpenChange={setTenantDialogOpen}>
         <DialogContent data-testid="company-modal-edit">
           <DialogHeader>
-            <DialogTitle>Edit company</DialogTitle>
+            <DialogTitle>{t("editCompany")}</DialogTitle>
           </DialogHeader>
           <FormErrorBanner
             message={tenantError.message}
@@ -466,7 +470,7 @@ export default function CompanyPage() {
           />
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Name</Label>
+              <Label>{t("name")}</Label>
               <Input
                 data-testid="company-modal-edit-input-name"
                 value={tenantForm.name}
@@ -476,7 +480,7 @@ export default function CompanyPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Slug</Label>
+              <Label>{t("slug")}</Label>
               <Input
                 data-testid="company-modal-edit-input-slug"
                 value={tenantForm.slug}
@@ -492,10 +496,10 @@ export default function CompanyPage() {
               onClick={() => setTenantDialogOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button data-testid="company-modal-edit-btn-submit" onClick={saveTenant} disabled={saving}>
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -506,7 +510,9 @@ export default function CompanyPage() {
         <DialogContent data-testid="company-modal-division">
           <DialogHeader>
             <DialogTitle>
-              {divDialogMode === "create" ? "Add division" : "Edit division"}
+              {divDialogMode === "create"
+                ? t("addDivision")
+                : t("editDivision")}
             </DialogTitle>
           </DialogHeader>
           <FormErrorBanner
@@ -515,7 +521,7 @@ export default function CompanyPage() {
           />
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Name</Label>
+              <Label>{t("name")}</Label>
               <Input
                 data-testid="company-modal-division-input-name"
                 value={divForm.name}
@@ -529,7 +535,7 @@ export default function CompanyPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Description</Label>
+              <Label>{t("description")}</Label>
               <Textarea
                 data-testid="company-modal-division-input-description"
                 value={divForm.description}
@@ -540,7 +546,7 @@ export default function CompanyPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Parent division</Label>
+              <Label>{t("parentDivision")}</Label>
               <Select
                 value={divForm.parent_id}
                 onValueChange={(val) =>
@@ -548,12 +554,12 @@ export default function CompanyPage() {
                 }
               >
                 <SelectTrigger className="w-full" data-testid="company-modal-division-select-parent">
-                  <SelectValue placeholder="None (top level)">
+                  <SelectValue placeholder={t("noneTopLevel")}>
                     {(() => { if (!divForm.parent_id) return undefined; const d = flatDivisions.find((d) => d.id === divForm.parent_id); return d ? `${"—".repeat(d.depth)} ${d.name}` : undefined; })()}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None (top level)</SelectItem>
+                  <SelectItem value="">{t("noneTopLevel")}</SelectItem>
                   {flatDivisions
                     .filter((d) => d.id !== editingDivId)
                     .map((d) => (
@@ -565,7 +571,7 @@ export default function CompanyPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Manager</Label>
+              <Label>{t("manager")}</Label>
               <Select
                 value={divForm.manager_id}
                 onValueChange={(val) =>
@@ -573,12 +579,12 @@ export default function CompanyPage() {
                 }
               >
                 <SelectTrigger className="w-full" data-testid="company-modal-division-select-manager">
-                  <SelectValue placeholder="None">
-                    {employeeLabel(divForm.manager_id, employees, editingDivManagerName)}
+                  <SelectValue placeholder={t("none")}>
+                    {employeeLabel(divForm.manager_id, employees, editingDivManagerName, t("none"))}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None</SelectItem>
+                  <SelectItem value="">{t("none")}</SelectItem>
                   {employees.map((emp) => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.user_name?.trim() || emp.user_email || "—"}
@@ -588,7 +594,7 @@ export default function CompanyPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Deputy Manager</Label>
+              <Label>{t("deputyManager")}</Label>
               <Select
                 value={divForm.deputy_manager_id}
                 onValueChange={(val) =>
@@ -596,12 +602,12 @@ export default function CompanyPage() {
                 }
               >
                 <SelectTrigger className="w-full" data-testid="company-modal-division-select-deputy-manager">
-                  <SelectValue placeholder="None">
-                    {employeeLabel(divForm.deputy_manager_id, employees, editingDivDeputyName)}
+                  <SelectValue placeholder={t("none")}>
+                    {employeeLabel(divForm.deputy_manager_id, employees, editingDivDeputyName, t("none"))}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None</SelectItem>
+                  <SelectItem value="">{t("none")}</SelectItem>
                   {employees.map((emp) => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.user_name?.trim() || emp.user_email || "—"}
@@ -617,14 +623,14 @@ export default function CompanyPage() {
               onClick={() => setDivDialogOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button data-testid="company-modal-division-btn-submit" onClick={saveDivision} disabled={saving}>
               {saving
-                ? "Saving..."
+                ? t("saving")
                 : divDialogMode === "create"
-                  ? "Create"
-                  : "Save"}
+                  ? t("create")
+                  : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -634,8 +640,10 @@ export default function CompanyPage() {
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title="Delete division"
-        description={`Are you sure you want to delete "${deletingDiv?.name}"? This action cannot be undone.`}
+        title={t("deleteDivision")}
+        description={t("deleteDivisionConfirm", {
+          name: deletingDiv?.name ?? "",
+        })}
         onConfirm={confirmDelete}
         loading={saving}
       />
@@ -652,15 +660,17 @@ export default function CompanyPage() {
           data-testid="role-downgrade-dialog"
         >
           <DialogHeader>
-            <DialogTitle>Downgrade role to employee?</DialogTitle>
+            <DialogTitle>{t("downgradeTitle")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 text-sm text-muted-foreground">
             <p>
               {pendingDowngrade[downgradeIndex]?.user_name
-                ? `${pendingDowngrade[downgradeIndex]?.user_name} no longer manages any division.`
-                : "This user no longer manages any division."}
+                ? t("downgradeBodyNamed", {
+                    name: pendingDowngrade[downgradeIndex]!.user_name!,
+                  })
+                : t("downgradeBodyGeneric")}
             </p>
-            <p>Lower their role from manager to employee?</p>
+            <p>{t("downgradeQuestion")}</p>
           </div>
           <DialogFooter>
             <Button
@@ -669,14 +679,14 @@ export default function CompanyPage() {
               disabled={downgrading}
               data-testid="role-downgrade-keep"
             >
-              Keep manager
+              {t("keepManager")}
             </Button>
             <Button
               onClick={confirmDowngrade}
               disabled={downgrading}
               data-testid="role-downgrade-confirm"
             >
-              {downgrading ? "Downgrading..." : "Downgrade"}
+              {downgrading ? t("downgrading") : t("downgrade")}
             </Button>
           </DialogFooter>
         </DialogContent>

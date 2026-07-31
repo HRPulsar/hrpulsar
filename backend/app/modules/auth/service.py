@@ -18,6 +18,8 @@ from app.core.email import (
     send_invitation_reminder_email,
     send_verification_email,
 )
+from app.core.errors import AppError
+from app.core.i18n import resolve_locale
 from app.core.s3 import get_presigned_url
 from app.core.security import (
     create_access_token,
@@ -107,6 +109,7 @@ def _user_to_dict(user: User, avatar_url: str | None = None) -> dict[str, Any]:
         "email_verified_at": user.email_verified_at,
         "roles": role_codes,
         "avatar_url": avatar_url,
+        "language": user.language,
         "deployment_mode": settings.deployment_mode,
         # Enterprise adds e.g. ``is_platform_admin`` here; community keeps
         # the UserRead schema defaults (seam is a no-op).
@@ -151,7 +154,19 @@ def _log_verification_link(email: str, token: str) -> None:
     )
 
 
-def _send_verification_or_log(email: str, user_id: str) -> None:
+async def _tenant_locale(db: AsyncSession, tenant_id: uuid.UUID) -> str:
+    """Locale for a recipient who has no account yet (i18n F4).
+
+    Invitations and other pre-account emails have no ``User.language`` and
+    no request headers worth trusting (they are dispatched on behalf of
+    the inviter, not the recipient), so the tenant default is the only
+    honest signal; it falls through to the deployment default.
+    """
+    tenant = await db.get(Tenant, tenant_id)
+    return resolve_locale(tenant_default=tenant.default_locale if tenant else None)
+
+
+def _send_verification_or_log(email: str, user_id: str, *, locale: str = "en") -> None:
     """Best-effort verification email with the HRP-390 log fallback.
 
     Nothing may escape: the caller has already committed the user, and on
@@ -163,18 +178,20 @@ def _send_verification_or_log(email: str, user_id: str) -> None:
     sent = False
     try:
         token = create_email_verification_token(user_id)
-        sent = send_verification_email(email, token)
+        sent = send_verification_email(email, token, locale=locale)
     except Exception:  # noqa: BLE001 - email failure must not block or leak
         logger.warning("Verification email delivery failed", exc_info=True)
     if not sent and token:
         _log_verification_link(email, token)
 
 
-async def register(db: AsyncSession, data: RegisterRequest) -> dict[str, Any]:
+async def register(
+    db: AsyncSession, data: RegisterRequest, *, accept_language: str | None = None
+) -> dict[str, Any]:
     # Check email uniqueness (global, since tenant doesn't exist yet)
     existing = await db.execute(select(User).where(User.email == data.email))
     if existing.scalar_one_or_none():
-        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
+        raise AppError("email_already_registered", status.HTTP_409_CONFLICT)
 
     # Create tenant
     slug = _slugify(data.company_name)
@@ -250,7 +267,18 @@ async def register(db: AsyncSession, data: RegisterRequest) -> dict[str, Any]:
             data.email,
         )
     else:
-        _send_verification_or_log(data.email, str(user.id))
+        # Self-serve signup: both the tenant and the user were just created
+        # in this call, so neither carries a stored preference yet — the
+        # browser's Accept-Language is the only recipient signal available.
+        _send_verification_or_log(
+            data.email,
+            str(user.id),
+            locale=resolve_locale(
+                user_language=user.language,
+                tenant_default=tenant.default_locale,
+                accept_language=accept_language,
+            ),
+        )
 
     # Best-effort domain event — subscribers (e.g. the enterprise Slack
     # notifier) fan it out. Fires on account creation, before email
@@ -329,13 +357,11 @@ async def verify_email(db: AsyncSession, token: str) -> dict[str, Any]:
     try:
         payload = decode_token(token)
         if payload.get("type") != "email_verify":
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, "Invalid verification token"
-            )
+            raise AppError("invalid_verification_token", status.HTTP_400_BAD_REQUEST)
         user_id = payload.get("sub")
     except JWTError:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Invalid or expired verification token"
+        raise AppError(
+            "invalid_or_expired_verification_token", status.HTTP_400_BAD_REQUEST
         )
 
     result = await db.execute(
@@ -345,7 +371,7 @@ async def verify_email(db: AsyncSession, token: str) -> dict[str, Any]:
     )
     user = result.scalar_one_or_none()
     if not user:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid verification token")
+        raise AppError("invalid_verification_token", status.HTTP_400_BAD_REQUEST)
 
     if user.email_verified_at:
         # Already verified — just return tokens
@@ -365,13 +391,24 @@ async def verify_email(db: AsyncSession, token: str) -> dict[str, Any]:
     return {"user": _user_to_dict(user), **tokens, "token_type": "bearer"}
 
 
-async def resend_verification(db: AsyncSession, email: str) -> None:
+async def resend_verification(
+    db: AsyncSession, email: str, *, accept_language: str | None = None
+) -> None:
     """Resend verification email. Always returns success to prevent email enumeration."""
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 
     if user and not user.email_verified_at:
-        _send_verification_or_log(email, str(user.id))
+        # The account exists here, so the full chain is available. The
+        # tenant lookup stays inside the guard: an unknown email must not
+        # cost an extra query (timing differential = enumeration oracle).
+        tenant = await db.get(Tenant, user.tenant_id)
+        locale = resolve_locale(
+            user_language=user.language,
+            tenant_default=tenant.default_locale if tenant else None,
+            accept_language=accept_language,
+        )
+        _send_verification_or_log(email, str(user.id), locale=locale)
 
 
 async def magic_login(db: AsyncSession, token: str) -> dict[str, Any]:
@@ -394,25 +431,21 @@ async def magic_login(db: AsyncSession, token: str) -> dict[str, Any]:
     try:
         payload = decode_token(token)
     except JWTError as exc:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Magic-login link is invalid or expired."
+        raise AppError(
+            "magic_login_link_invalid_or_expired", status.HTTP_401_UNAUTHORIZED
         ) from exc
     if payload.get("type") != "magic_login":
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Magic-login link is invalid."
-        )
+        raise AppError("magic_login_link_invalid", status.HTTP_401_UNAUTHORIZED)
     jti = payload.get("jti")
     user_id_raw = payload.get("sub")
     if not jti or not user_id_raw:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Magic-login link is invalid."
-        )
+        raise AppError("magic_login_link_invalid", status.HTTP_401_UNAUTHORIZED)
 
     try:
         user_id = uuid.UUID(str(user_id_raw))
     except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Magic-login link is invalid."
+        raise AppError(
+            "magic_login_link_invalid", status.HTTP_401_UNAUTHORIZED
         ) from exc
 
     # Load + validate the user BEFORE burning the JTI. A transient DB
@@ -424,7 +457,7 @@ async def magic_login(db: AsyncSession, token: str) -> dict[str, Any]:
     )
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account not available.")
+        raise AppError("account_not_available", status.HTTP_401_UNAUTHORIZED)
 
     # Verify the JWT's tenant_id claim matches the user's current
     # tenant. If a moderator re-tenants the user between approve and
@@ -432,9 +465,7 @@ async def magic_login(db: AsyncSession, token: str) -> dict[str, Any]:
     # tenant the user happens to be on now.
     token_tenant_id = payload.get("tenant_id")
     if token_tenant_id and str(user.tenant_id) != str(token_tenant_id):
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Magic-login link is invalid."
-        )
+        raise AppError("magic_login_link_invalid", status.HTTP_401_UNAUTHORIZED)
 
     await assert_employee_active(db, user)
 
@@ -475,9 +506,8 @@ async def _consume_magic_jti(jti: str) -> None:
             ex=ttl_seconds,
         )
         if not ok:
-            raise HTTPException(
-                status.HTTP_401_UNAUTHORIZED,
-                "This sign-in link has already been used.",
+            raise AppError(
+                "magic_login_link_already_used", status.HTTP_401_UNAUTHORIZED
             )
     except HTTPException:
         raise
@@ -488,9 +518,8 @@ async def _consume_magic_jti(jti: str) -> None:
         # outages are rare and transient; the user can retry or use password
         # login. Previously this fell open.
         logger.exception("magic-login: redis unavailable, refusing jti=%s", jti)
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Sign-in is temporarily unavailable. Please try again shortly.",
+        raise AppError(
+            "sign_in_temporarily_unavailable", status.HTTP_503_SERVICE_UNAVAILABLE
         ) from None
     finally:
         if client is not None:
@@ -528,12 +557,12 @@ async def login(db: AsyncSession, email: str, password: str) -> dict[str, Any]:
     )
     users = list(result.scalars().all())
     if not users:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
+        raise AppError("invalid_email_or_password", status.HTTP_401_UNAUTHORIZED)
 
     # Verify password against all user records with this email
     valid_users = [u for u in users if verify_password(password, u.password_hash)]
     if not valid_users:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
+        raise AppError("invalid_email_or_password", status.HTTP_401_UNAUTHORIZED)
 
     # Filter to active, verified users
     active_users = [u for u in valid_users if u.is_active and u.email_verified_at]
@@ -543,11 +572,8 @@ async def login(db: AsyncSession, email: str, password: str) -> dict[str, Any]:
         # Check if any are just unverified
         unverified = [u for u in valid_users if u.is_active and not u.email_verified_at]
         if unverified:
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                "Email not verified. Check your inbox or request a new verification email.",
-            )
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Account is deactivated")
+            raise AppError("email_not_verified_check_inbox", status.HTTP_403_FORBIDDEN)
+        raise AppError("account_deactivated", status.HTTP_403_FORBIDDEN)
 
     # Single tenant — return tokens directly (preserves existing behavior)
     if len(active_users) == 1:
@@ -583,11 +609,11 @@ async def select_tenant(
     )
     user = result.scalar_one_or_none()
     if not user or not verify_password(password, user.password_hash):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+        raise AppError("invalid_credentials", status.HTTP_401_UNAUTHORIZED)
     if not user.is_active:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Account is deactivated")
+        raise AppError("account_deactivated", status.HTTP_403_FORBIDDEN)
     if not user.email_verified_at:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Email not verified")
+        raise AppError("email_not_verified", status.HTTP_403_FORBIDDEN)
     await assert_employee_active(db, user)
     await _stamp_first_login(db, user)
 
@@ -613,10 +639,10 @@ async def switch_tenant(
     )
     target_user = result.scalar_one_or_none()
     if not target_user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No account in target tenant")
+        raise AppError("no_account_in_target_tenant", status.HTTP_404_NOT_FOUND)
     if not target_user.is_active:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Account is deactivated in target tenant"
+        raise AppError(
+            "account_deactivated_in_target_tenant", status.HTTP_403_FORBIDDEN
         )
     await assert_employee_active(db, target_user)
     await _stamp_first_login(db, target_user)
@@ -645,11 +671,11 @@ async def refresh_tokens(
 ) -> dict[str, str]:
     user = await db.get(User, user_id)
     if not user or not user.is_active:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
+        raise AppError("invalid_refresh_token", status.HTTP_401_UNAUTHORIZED)
     # Reject a refresh token from before the user's current epoch — i.e. one
     # minted before a password change/reset (review P1-12).
     if token_version != user.token_version:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
+        raise AppError("invalid_refresh_token", status.HTTP_401_UNAUTHORIZED)
     await assert_employee_active(db, user)
 
     tokens = _make_tokens(user)
@@ -662,7 +688,7 @@ async def get_me(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
     )
     user = result.scalar_one_or_none()
     if not user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+        raise AppError("user_not_found", status.HTTP_404_NOT_FOUND)
     avatar_url = await _resolve_avatar_url(db, user.avatar_file_id)
     payload = _user_to_dict(user, avatar_url)
 
@@ -672,6 +698,7 @@ async def get_me(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
     if tenant is not None:
         payload["tenant_is_demo"] = bool(getattr(tenant, "is_demo", False))
         payload["tenant_expires_at"] = getattr(tenant, "expires_at", None)
+        payload["tenant_default_locale"] = tenant.default_locale
     return payload
 
 
@@ -683,7 +710,7 @@ async def update_profile(
     )
     user = result.scalar_one_or_none()
     if not user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+        raise AppError("user_not_found", status.HTTP_404_NOT_FOUND)
 
     # Explicit allowlist — never iterate model_dump() onto the User row.
     # Privileged fields (status, role_code, is_active, email, tenant_id, id)
@@ -694,6 +721,15 @@ async def update_profile(
         user.first_name = payload["first_name"]
     if "last_name" in payload:
         user.last_name = payload["last_name"]
+    if "language" in payload:
+        from app.config import settings
+
+        language = payload["language"]
+        if language is not None:
+            language = language.strip().lower()
+            if language not in settings.available_locales_list:
+                raise AppError("unsupported_language", status.HTTP_400_BAD_REQUEST)
+        user.language = language
     await db.commit()
     await db.refresh(user)
 
@@ -716,7 +752,7 @@ async def upload_avatar(
     )
     user = result.scalar_one_or_none()
     if not user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+        raise AppError("user_not_found", status.HTTP_404_NOT_FOUND)
 
     # Delete old avatar if exists
     if user.avatar_file_id:
@@ -751,9 +787,9 @@ async def remove_avatar(
     )
     user = result.scalar_one_or_none()
     if not user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+        raise AppError("user_not_found", status.HTTP_404_NOT_FOUND)
     if not user.avatar_file_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No avatar to remove")
+        raise AppError("no_avatar_to_remove", status.HTTP_400_BAD_REQUEST)
 
     with contextlib.suppress(HTTPException):
         await storage_service.delete(db, tenant_id, user.avatar_file_id)
@@ -773,12 +809,10 @@ async def change_password(
 ) -> None:
     user = await db.get(User, user_id)
     if not user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+        raise AppError("user_not_found", status.HTTP_404_NOT_FOUND)
 
     if not verify_password(data.current_password, user.password_hash):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Current password is incorrect"
-        )
+        raise AppError("current_password_incorrect", status.HTTP_400_BAD_REQUEST)
 
     user.password_hash = hash_password(data.new_password)
     # Revoke every previously-issued access/refresh token (review P1-12).
@@ -786,8 +820,17 @@ async def change_password(
     await db.commit()
 
 
-async def request_password_reset(db: AsyncSession, email: str) -> str | None:
-    """Generate a password reset token. Returns token or None if email not found."""
+async def request_password_reset(
+    db: AsyncSession, email: str, *, accept_language: str | None = None
+) -> tuple[str, str] | None:
+    """Generate a password reset token.
+
+    Returns ``(token, locale)`` — the recipient's locale is resolved here
+    because the caller must not look the user up a second time: the
+    endpoint answers identically for unknown addresses, so any extra work
+    keyed on "was the email found" belongs behind this same guard
+    (i18n F4). Returns ``None`` if the email is not registered.
+    """
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if not user:
@@ -796,7 +839,13 @@ async def request_password_reset(db: AsyncSession, email: str) -> str | None:
     # Use a short-lived JWT as reset token (15 min)
     from app.core.security import create_reset_token
 
-    return create_reset_token(str(user.id))
+    tenant = await db.get(Tenant, user.tenant_id)
+    locale = resolve_locale(
+        user_language=user.language,
+        tenant_default=tenant.default_locale if tenant else None,
+        accept_language=accept_language,
+    )
+    return create_reset_token(str(user.id)), locale
 
 
 async def reset_password(db: AsyncSession, token: str, new_password: str) -> None:
@@ -807,16 +856,14 @@ async def reset_password(db: AsyncSession, token: str, new_password: str) -> Non
     try:
         payload = decode_token(token)
         if payload.get("type") != "reset":
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid reset token")
+            raise AppError("invalid_reset_token", status.HTTP_400_BAD_REQUEST)
         user_id = payload.get("sub")
     except JWTError:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Invalid or expired reset token"
-        )
+        raise AppError("invalid_or_expired_reset_token", status.HTTP_400_BAD_REQUEST)
 
     user = await db.get(User, uuid.UUID(user_id))
     if not user:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid reset token")
+        raise AppError("invalid_reset_token", status.HTTP_400_BAD_REQUEST)
 
     user.password_hash = hash_password(new_password)
     # Revoke every previously-issued access/refresh token (review P1-12).
@@ -839,7 +886,7 @@ async def list_roles(db: AsyncSession, tenant_id: uuid.UUID) -> list[Role]:
 async def create_role(db: AsyncSession, tenant_id: uuid.UUID, data: RoleCreate) -> Role:
     existing = await db.execute(select(Role).where(Role.code == data.code))
     if existing.scalar_one_or_none():
-        raise HTTPException(status.HTTP_409_CONFLICT, "Role code already exists")
+        raise AppError("role_code_already_exists", status.HTTP_409_CONFLICT)
 
     role = Role(tenant_id=tenant_id, **data.model_dump())
     db.add(role)
@@ -853,11 +900,11 @@ async def update_role(
 ) -> Role:
     role = await db.get(Role, role_id)
     if not role:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Role not found")
+        raise AppError("role_not_found", status.HTTP_404_NOT_FOUND)
     if role.is_system:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot modify system roles")
+        raise AppError("cannot_modify_system_roles", status.HTTP_403_FORBIDDEN)
     if role.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Role not found")
+        raise AppError("role_not_found", status.HTTP_404_NOT_FOUND)
 
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(role, field, value)
@@ -871,11 +918,11 @@ async def delete_role(
 ) -> None:
     role = await db.get(Role, role_id)
     if not role:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Role not found")
+        raise AppError("role_not_found", status.HTTP_404_NOT_FOUND)
     if role.is_system:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot delete system roles")
+        raise AppError("cannot_delete_system_roles", status.HTTP_403_FORBIDDEN)
     if role.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Role not found")
+        raise AppError("role_not_found", status.HTTP_404_NOT_FOUND)
 
     await db.delete(role)
     await db.commit()
@@ -924,11 +971,11 @@ async def _validate_invitation_scope(
     if division_id is not None:
         division = await db.get(Division, division_id)
         if division is None or division.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Division not found")
+            raise AppError("division_not_found", status.HTTP_400_BAD_REQUEST)
     if position_id is not None:
         position = await db.get(Position, position_id)
         if position is None or position.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Position not found")
+            raise AppError("position_not_found", status.HTTP_400_BAD_REQUEST)
 
 
 async def _load_invitation(db: AsyncSession, invitation_id: uuid.UUID) -> Invitation:
@@ -991,8 +1038,10 @@ async def create_invitation(
         )
     )
     if not role.scalar_one_or_none():
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, f"Role '{data.role_code}' not found"
+        raise AppError(
+            "role_code_not_found",
+            status.HTTP_400_BAD_REQUEST,
+            role_code=data.role_code,
         )
 
     _assert_role_within_inviter(inviter_role_codes, data.role_code)
@@ -1002,9 +1051,9 @@ async def create_invitation(
     # invitation is meaningless (UI already blocks; this guard closes the
     # direct API path).
     if data.role_code == "manager" and data.division_id is None:
-        raise HTTPException(
+        raise AppError(
+            "manager_invitation_requires_division",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Manager invitations require a division",
         )
 
     # Check that email is not already a user in this tenant
@@ -1012,9 +1061,7 @@ async def create_invitation(
         select(User).where(User.email == data.email, User.tenant_id == tenant_id)
     )
     if existing_user.scalar_one_or_none():
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "User with this email already exists"
-        )
+        raise AppError("user_email_already_exists", status.HTTP_409_CONFLICT)
 
     # Check no pending invitation for same email in this tenant
     existing_inv = await db.execute(
@@ -1025,9 +1072,7 @@ async def create_invitation(
         )
     )
     if existing_inv.scalar_one_or_none():
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Pending invitation already exists for this email"
-        )
+        raise AppError("pending_invitation_already_exists", status.HTTP_409_CONFLICT)
 
     await _validate_invitation_scope(db, tenant_id, data.division_id, data.position_id)
 
@@ -1062,6 +1107,7 @@ async def create_invitation(
             token,
             INVITATION_EXPIRE_DAYS,
             tenant_id=tenant_id,
+            locale=await _tenant_locale(db, tenant_id),
         )
 
     return _invitation_to_read(inv)
@@ -1103,10 +1149,10 @@ async def cancel_invitation(
 ) -> dict[str, Any]:
     inv = await db.get(Invitation, invitation_id)
     if not inv or inv.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invitation not found")
+        raise AppError("invitation_not_found", status.HTTP_404_NOT_FOUND)
     if inv.status != "pending":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Only pending invitations can be cancelled"
+        raise AppError(
+            "only_pending_invitations_can_be_cancelled", status.HTTP_400_BAD_REQUEST
         )
 
     inv.status = "cancelled"
@@ -1120,10 +1166,10 @@ async def resend_invitation(
 ) -> dict[str, Any]:
     inv = await db.get(Invitation, invitation_id)
     if not inv or inv.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invitation not found")
+        raise AppError("invitation_not_found", status.HTTP_404_NOT_FOUND)
     if inv.status != "pending":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Only pending invitations can be resent"
+        raise AppError(
+            "only_pending_invitations_can_be_resent", status.HTTP_400_BAD_REQUEST
         )
 
     # Extend expiry
@@ -1139,6 +1185,7 @@ async def resend_invitation(
             inv.token,
             INVITATION_EXPIRE_DAYS,
             tenant_id=tenant_id,
+            locale=await _tenant_locale(db, tenant_id),
         )
 
     return _invitation_to_read(inv)
@@ -1154,18 +1201,18 @@ async def update_invitation(
 ) -> dict[str, Any]:
     inv = await db.get(Invitation, invitation_id)
     if not inv or inv.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invitation not found")
+        raise AppError("invitation_not_found", status.HTTP_404_NOT_FOUND)
     if inv.status != "pending":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Only pending invitations can be edited"
+        raise AppError(
+            "only_pending_invitations_can_be_edited", status.HTTP_409_CONFLICT
         )
 
     payload = data.model_dump(exclude_unset=True)
 
     is_admin = bool(set(role_codes) & rbac_hooks.admin_equivalent_codes())
     if "role_code" in payload and not is_admin:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Only admins can change invitation role"
+        raise AppError(
+            "only_admins_can_change_invitation_role", status.HTTP_403_FORBIDDEN
         )
 
     if "role_code" in payload:
@@ -1177,8 +1224,10 @@ async def update_invitation(
             )
         )
         if not role.scalar_one_or_none():
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, f"Role '{new_role_code}' not found"
+            raise AppError(
+                "role_code_not_found",
+                status.HTTP_400_BAD_REQUEST,
+                role_code=new_role_code,
             )
         _assert_role_within_inviter(role_codes, new_role_code)
         inv.role_code = new_role_code
@@ -1211,10 +1260,10 @@ async def update_invitation_email(
 ) -> dict[str, Any]:
     inv = await db.get(Invitation, invitation_id)
     if not inv or inv.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invitation not found")
+        raise AppError("invitation_not_found", status.HTTP_404_NOT_FOUND)
     if inv.status != "pending":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Only pending invitations can be edited"
+        raise AppError(
+            "only_pending_invitations_can_be_edited", status.HTTP_409_CONFLICT
         )
 
     new_email = data.email
@@ -1224,9 +1273,7 @@ async def update_invitation_email(
             select(User).where(User.email == new_email, User.tenant_id == tenant_id)
         )
         if existing_user.scalar_one_or_none():
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, "User with this email already exists"
-            )
+            raise AppError("user_email_already_exists", status.HTTP_409_CONFLICT)
 
         existing_inv = await db.execute(
             select(Invitation).where(
@@ -1237,9 +1284,8 @@ async def update_invitation_email(
             )
         )
         if existing_inv.scalar_one_or_none():
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "Pending invitation already exists for this email",
+            raise AppError(
+                "pending_invitation_already_exists", status.HTTP_409_CONFLICT
             )
 
     inv.email = new_email
@@ -1270,6 +1316,7 @@ async def update_invitation_email(
             inv.token,
             INVITATION_EXPIRE_DAYS,
             tenant_id=tenant_id,
+            locale=await _tenant_locale(db, tenant_id),
         )
 
     return _invitation_to_read(inv)
@@ -1282,24 +1329,20 @@ async def accept_invitation(
     result = await db.execute(select(Invitation).where(Invitation.token == data.token))
     inv = result.scalar_one_or_none()
     if not inv:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invitation not found")
+        raise AppError("invitation_not_found", status.HTTP_404_NOT_FOUND)
     if inv.status != "pending":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Invitation is no longer valid"
-        )
+        raise AppError("invitation_no_longer_valid", status.HTTP_400_BAD_REQUEST)
     if inv.expires_at < datetime.now(timezone.utc):
         inv.status = "expired"
         await db.commit()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invitation has expired")
+        raise AppError("invitation_has_expired", status.HTTP_400_BAD_REQUEST)
 
     # Check email not already taken in this tenant
     existing = await db.execute(
         select(User).where(User.email == inv.email, User.tenant_id == inv.tenant_id)
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "User with this email already exists"
-        )
+        raise AppError("user_email_already_exists", status.HTTP_409_CONFLICT)
 
     # Create user (invitation proves email ownership)
     user = User(

@@ -19,6 +19,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 import {
   DndContext,
   type DragEndEvent,
@@ -50,6 +51,7 @@ import { IndicatorWeight } from "@/components/competence/indicator-weight";
 import { MaterialOverridesPanel } from "@/components/competence/material-overrides-panel";
 import { MaterialsAIDialog } from "@/components/competence/materials-ai-dialog";
 import { levelTokens, type LevelTokens } from "@/lib/competences/level-tokens";
+import { skillLevelLabel } from "@/lib/reference-labels";
 import { cn } from "@/lib/utils";
 import {
   DEFAULT_MATERIAL_TYPE,
@@ -130,6 +132,9 @@ const emptyMaterialForm: MaterialForm = {
 };
 
 export default function CompetenceDetailPage() {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -227,11 +232,13 @@ export default function CompetenceDetailPage() {
         // best-effort
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load competence");
+      toast.error(
+        err instanceof Error ? err.message : t("errorLoadCompetence"),
+      );
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     refresh();
@@ -320,7 +327,7 @@ export default function CompetenceDetailPage() {
       setAiDrawerOpen(true);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to start AI generation",
+        err instanceof Error ? err.message : t("errorStartAiGeneration"),
       );
     } finally {
       setAiStarting(false);
@@ -362,6 +369,15 @@ export default function CompetenceDetailPage() {
     [skillLevels],
   );
 
+  // Display-only lookups for the dialog Select triggers — the forms keep
+  // storing `skill_level_id`, so the localized label never reaches a payload.
+  const selectedIndLevel = orderedLevels.find(
+    (lv) => lv.id === indForm.skill_level_id,
+  );
+  const selectedMatLevel = orderedLevels.find(
+    (lv) => lv.id === matForm.skill_level_id,
+  );
+
   // --- Publish / activate ---
 
   async function publish() {
@@ -369,10 +385,10 @@ export default function CompetenceDetailPage() {
     setSaving(true);
     try {
       await api.post(`/competences/${detail.id}/publish`);
-      toast.success("Competence published");
+      toast.success(t("toastCompetencePublished"));
       await Promise.all([refresh(), invalidateCompetenceTree()]);
     } catch (err) {
-      toast.error(formatUsageError(err, "Cannot publish competence"));
+      toast.error(formatUsageError(err, t("errorCannotPublish")));
     } finally {
       setSaving(false);
     }
@@ -383,10 +399,10 @@ export default function CompetenceDetailPage() {
     setSaving(true);
     try {
       await api.post(`/competences/${detail.id}/unpublish`);
-      toast.success("Competence unpublished");
+      toast.success(t("toastCompetenceUnpublished"));
       await Promise.all([refresh(), invalidateCompetenceTree()]);
     } catch (err) {
-      toast.error(formatUsageError(err, "Cannot unpublish competence"));
+      toast.error(formatUsageError(err, t("errorCannotUnpublish")));
     } finally {
       setSaving(false);
     }
@@ -398,10 +414,14 @@ export default function CompetenceDetailPage() {
     try {
       const path = detail.is_active ? "deactivate" : "activate";
       await api.patch(`/competences/${detail.id}/${path}`);
-      toast.success(detail.is_active ? "Hidden from users" : "Visible to users");
+      toast.success(
+        detail.is_active
+          ? t("toastHiddenFromUsers")
+          : t("toastVisibleToUsers"),
+      );
       await Promise.all([refresh(), invalidateCompetenceTree()]);
     } catch (err) {
-      toast.error(formatUsageError(err, "Failed to update visibility"));
+      toast.error(formatUsageError(err, t("errorUpdateVisibility")));
     } finally {
       setSaving(false);
     }
@@ -440,13 +460,17 @@ export default function CompetenceDetailPage() {
           skill_level_id: indForm.skill_level_id,
         });
       }
-      toast.success(editingInd ? "Indicator updated" : "Indicator added");
+      toast.success(
+        editingInd ? t("toastIndicatorUpdated") : t("toastIndicatorAdded"),
+      );
       setIndDialogOpen(false);
       setUsageConfirm(null);
       await refresh();
       await invalidateCompetenceTree();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save indicator");
+      toast.error(
+        err instanceof Error ? err.message : t("errorSaveIndicator"),
+      );
     } finally {
       setSaving(false);
     }
@@ -472,7 +496,9 @@ export default function CompetenceDetailPage() {
         await refresh();
         await invalidateCompetenceTree();
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to save weight");
+        toast.error(
+          err instanceof Error ? err.message : t("errorSaveWeight"),
+        );
       }
     };
     if (usage?.is_used) {
@@ -485,7 +511,7 @@ export default function CompetenceDetailPage() {
   async function saveIndicator() {
     if (!detail) return;
     if (!indForm.title.trim()) {
-      toast.error("Title is required");
+      toast.error(t("errorTitleRequired"));
       return;
     }
     // HRP-102: edits to a referenced competence ripple into every consumer —
@@ -521,11 +547,11 @@ export default function CompetenceDetailPage() {
   async function saveMaterial() {
     if (!detail) return;
     if (!matForm.title.trim()) {
-      toast.error("Title is required");
+      toast.error(t("errorTitleRequired"));
       return;
     }
     if (!matForm.material_type) {
-      toast.error("Type is required");
+      toast.error(t("errorTypeRequired"));
       return;
     }
     setSaving(true);
@@ -544,11 +570,15 @@ export default function CompetenceDetailPage() {
       } else {
         await api.post(`/competences/${detail.id}/materials`, payload);
       }
-      toast.success(editingMat ? "Material updated" : "Material added");
+      toast.success(
+        editingMat ? t("toastMaterialUpdated") : t("toastMaterialAdded"),
+      );
       setMatDialogOpen(false);
       await refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save material");
+      toast.error(
+        err instanceof Error ? err.message : t("errorSaveMaterial"),
+      );
     } finally {
       setSaving(false);
     }
@@ -562,13 +592,13 @@ export default function CompetenceDetailPage() {
     try {
       const path = deleting.kind === "indicator" ? "indicators" : "materials";
       await api.delete(`/${path}/${deleting.id}`);
-      toast.success("Deleted");
+      toast.success(t("toastDeleted"));
       setDeleting(null);
       setUsageConfirm(null);
       await refresh();
       await invalidateCompetenceTree();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(err instanceof Error ? err.message : t("errorDelete"));
     } finally {
       setSaving(false);
     }
@@ -635,7 +665,9 @@ export default function CompetenceDetailPage() {
       });
       await refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to move indicator");
+      toast.error(
+        err instanceof Error ? err.message : t("errorMoveIndicator"),
+      );
     }
   }
 
@@ -672,23 +704,27 @@ export default function CompetenceDetailPage() {
       });
       await refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to move material");
+      toast.error(
+        err instanceof Error ? err.message : t("errorMoveMaterial"),
+      );
     }
   }
 
   if (loading) {
     return (
       <div className="space-y-4 p-6">
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <p className="text-sm text-muted-foreground">{t("loadingEllipsis")}</p>
       </div>
     );
   }
   if (!detail) {
     return (
       <div className="space-y-4 p-6">
-        <p className="text-sm text-muted-foreground">Competence not found.</p>
+        <p className="text-sm text-muted-foreground">
+          {t("competenceNotFound")}
+        </p>
         <Link href="/competences" className="text-sm text-primary hover:underline">
-          ← Back to library
+          {t("backToLibrary")}
         </Link>
       </div>
     );
@@ -707,7 +743,7 @@ export default function CompetenceDetailPage() {
             className="flex items-center gap-1 hover:text-foreground"
           >
             <ArrowLeft className="size-3.5" />
-            Back to matrix
+            {t("backToMatrix")}
           </Link>
         ) : (
           <Link
@@ -715,7 +751,7 @@ export default function CompetenceDetailPage() {
             className="flex items-center gap-1 hover:text-foreground"
           >
             <ArrowLeft className="size-3.5" />
-            Competences
+            {t("title")}
           </Link>
         )}
         {group && (
@@ -740,7 +776,7 @@ export default function CompetenceDetailPage() {
                   data-testid="competence-detail-origin-badge"
                 >
                   <Lock className="size-3" />
-                  Origin
+                  {t("badgeOrigin")}
                 </Badge>
               )}
               {detail.is_published ? (
@@ -750,7 +786,7 @@ export default function CompetenceDetailPage() {
                   data-testid="competence-detail-published-badge"
                 >
                   <CheckCircle2 className="size-3" />
-                  Published
+                  {t("badgePublished")}
                 </Badge>
               ) : (
                 <Badge
@@ -759,7 +795,7 @@ export default function CompetenceDetailPage() {
                   data-testid="competence-detail-unpublished-badge"
                 >
                   <CircleSlash className="size-3" />
-                  Unpublished
+                  {t("badgeUnpublished")}
                 </Badge>
               )}
               {!detail.is_active && (
@@ -767,7 +803,7 @@ export default function CompetenceDetailPage() {
                   variant="outline"
                   data-testid="competence-detail-hidden-badge"
                 >
-                  Hidden
+                  {t("badgeHiddenCapital")}
                 </Badge>
               )}
             </div>
@@ -796,7 +832,7 @@ export default function CompetenceDetailPage() {
                   disabled={saving}
                   data-testid="competence-detail-btn-unpublish"
                 >
-                  Unpublish
+                  {t("unpublish")}
                 </Button>
               ) : (
                 <Button
@@ -805,7 +841,7 @@ export default function CompetenceDetailPage() {
                   disabled={saving}
                   data-testid="competence-detail-btn-publish"
                 >
-                  Publish
+                  {t("publish")}
                 </Button>
               )}
               <Button
@@ -815,7 +851,7 @@ export default function CompetenceDetailPage() {
                 disabled={saving}
                 data-testid="competence-detail-btn-toggle-active"
               >
-                {detail.is_active ? "Hide from users" : "Show to users"}
+                {detail.is_active ? t("hideFromUsers") : t("showToUsers")}
               </Button>
             </div>
           )}
@@ -835,9 +871,9 @@ export default function CompetenceDetailPage() {
                 <Target className="size-4" aria-hidden />
               </span>
               <div className="space-y-1">
-                <CardTitle>Indicators by level</CardTitle>
+                <CardTitle>{t("indicatorsByLevel")}</CardTitle>
                 <p className="text-xs text-muted-foreground">
-                  What people should be able to demonstrate at each level.
+                  {t("indicatorsByLevelHint")}
                 </p>
               </div>
             </div>
@@ -849,15 +885,12 @@ export default function CompetenceDetailPage() {
                     className="inline-flex cursor-help items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground"
                     data-testid="competence-detail-indicators-header-weight-help"
                   >
-                    <span>About weights</span>
+                    <span>{t("aboutWeights")}</span>
                   </span>
                 }
               />
               <TooltipContent className="max-w-sm">
-                Each indicator carries a weight (0–5). 0 marks it as
-                informational only — it won&apos;t count toward the level
-                score. 1 is the standard contribution; 2–5 emphasize critical
-                behaviours. Click any weight to edit it inline.
+                {t("aboutWeightsTooltip")}
               </TooltipContent>
             </Tooltip>
           </CardHeader>
@@ -927,9 +960,9 @@ export default function CompetenceDetailPage() {
                 <BookOpen className="size-4" aria-hidden />
               </span>
               <div className="space-y-1">
-                <CardTitle>Materials by level</CardTitle>
+                <CardTitle>{t("materialsByLevel")}</CardTitle>
                 <p className="text-xs text-muted-foreground">
-                  Learning resources that close the gap at each level.
+                  {t("materialsByLevelHint")}
                 </p>
               </div>
             </div>
@@ -941,7 +974,7 @@ export default function CompetenceDetailPage() {
                 onClick={() => setMaterialsAiOpen(true)}
               >
                 <Sparkles className="mr-2 h-4 w-4" />
-                Generate with AI
+                {t("generateWithAi")}
               </Button>
             )}
           </CardHeader>
@@ -988,12 +1021,12 @@ export default function CompetenceDetailPage() {
         <DialogContent data-testid="competence-detail-indicator-dialog">
           <DialogHeader>
             <DialogTitle>
-              {editingInd ? "Edit indicator" : "Add indicator"}
+              {editingInd ? t("editIndicator") : t("addIndicator")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label>Title</Label>
+              <Label>{t("fieldTitle")}</Label>
               <Textarea
                 value={indForm.title}
                 rows={2}
@@ -1002,7 +1035,7 @@ export default function CompetenceDetailPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Skill level</Label>
+              <Label>{t("fieldSkillLevel")}</Label>
               <Select
                 value={indForm.skill_level_id}
                 onValueChange={(v) => setIndForm({ ...indForm, skill_level_id: v })}
@@ -1011,22 +1044,23 @@ export default function CompetenceDetailPage() {
                   className="w-full"
                   data-testid="competence-detail-indicator-select-level"
                 >
-                  <SelectValue placeholder="Pick a level">
-                    {orderedLevels.find((lv) => lv.id === indForm.skill_level_id)
-                      ?.title ?? undefined}
+                  <SelectValue placeholder={t("pickLevel")}>
+                    {selectedIndLevel
+                      ? skillLevelLabel(tRef, selectedIndLevel)
+                      : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {orderedLevels.map((lv) => (
                     <SelectItem key={lv.id} value={lv.id}>
-                      {lv.title}
+                      {skillLevelLabel(tRef, lv)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Weight</Label>
+              <Label>{t("fieldWeight")}</Label>
               <Input
                 type="number"
                 value={indForm.weight}
@@ -1042,14 +1076,18 @@ export default function CompetenceDetailPage() {
               onClick={() => setIndDialogOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={saveIndicator}
               disabled={saving}
               data-testid="competence-detail-indicator-btn-save"
             >
-              {saving ? "Saving…" : editingInd ? "Save" : "Add"}
+              {saving
+                ? t("savingEllipsis")
+                : editingInd
+                  ? t("save")
+                  : t("add")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1060,12 +1098,12 @@ export default function CompetenceDetailPage() {
         <DialogContent data-testid="competence-detail-material-dialog">
           <DialogHeader>
             <DialogTitle>
-              {editingMat ? "Edit material" : "Add material"}
+              {editingMat ? t("editMaterial") : t("addMaterial")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label>Title</Label>
+              <Label>{t("fieldTitle")}</Label>
               <Input
                 value={matForm.title}
                 onChange={(e) =>
@@ -1076,7 +1114,7 @@ export default function CompetenceDetailPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Skill level</Label>
+                <Label>{t("fieldSkillLevel")}</Label>
                 <Select
                   value={matForm.skill_level_id}
                   onValueChange={(v) =>
@@ -1087,22 +1125,23 @@ export default function CompetenceDetailPage() {
                     className="w-full"
                     data-testid="competence-detail-material-select-level"
                   >
-                    <SelectValue placeholder="Pick a level">
-                      {orderedLevels.find((lv) => lv.id === matForm.skill_level_id)
-                        ?.title ?? undefined}
+                    <SelectValue placeholder={t("pickLevel")}>
+                      {selectedMatLevel
+                        ? skillLevelLabel(tRef, selectedMatLevel)
+                        : undefined}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {orderedLevels.map((lv) => (
                       <SelectItem key={lv.id} value={lv.id}>
-                        {lv.title}
+                        {skillLevelLabel(tRef, lv)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Format</Label>
+                <Label>{t("fieldFormat")}</Label>
                 <Select
                   value={matForm.format}
                   onValueChange={(v) =>
@@ -1113,15 +1152,15 @@ export default function CompetenceDetailPage() {
                     className="w-full"
                     data-testid="competence-detail-material-select-format"
                   >
-                    <SelectValue placeholder="Pick format">
-                      {materialFormatLabel(matForm.format) ?? undefined}
+                    <SelectValue placeholder={t("pickFormat")}>
+                      {materialFormatLabel(t, matForm.format) ?? undefined}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Unspecified</SelectItem>
+                    <SelectItem value="">{t("formatUnspecified")}</SelectItem>
                     {MATERIAL_FORMATS.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
+                        {t(opt.labelKey)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1129,7 +1168,7 @@ export default function CompetenceDetailPage() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Link</Label>
+              <Label>{t("fieldLink")}</Label>
               <Input
                 value={matForm.link}
                 onChange={(e) =>
@@ -1139,7 +1178,7 @@ export default function CompetenceDetailPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Study time (min)</Label>
+                <Label>{t("fieldStudyTime")}</Label>
                 <Input
                   type="number"
                   value={matForm.study_time}
@@ -1150,7 +1189,8 @@ export default function CompetenceDetailPage() {
               </div>
               <div className="space-y-1.5">
                 <Label>
-                  Type<span className="text-destructive"> *</span>
+                  {t("fieldType")}
+                  <span className="text-destructive"> *</span>
                 </Label>
                 <Select
                   value={matForm.material_type}
@@ -1162,7 +1202,7 @@ export default function CompetenceDetailPage() {
                     className="w-full"
                     data-testid="competence-detail-material-select-type"
                   >
-                    <SelectValue placeholder="Pick type">
+                    <SelectValue placeholder={t("pickType")}>
                       {(() => {
                         const opt = materialTypeOption(matForm.material_type);
                         if (!opt) return undefined;
@@ -1170,7 +1210,7 @@ export default function CompetenceDetailPage() {
                         return (
                           <span className="flex items-center gap-1.5">
                             <Icon className="size-3.5 text-muted-foreground" />
-                            {opt.label}
+                            {t(opt.labelKey)}
                           </span>
                         );
                       })()}
@@ -1182,7 +1222,7 @@ export default function CompetenceDetailPage() {
                       return (
                         <SelectItem key={opt.value} value={opt.value}>
                           <Icon className="size-3.5 text-muted-foreground" />
-                          {opt.label}
+                          {t(opt.labelKey)}
                         </SelectItem>
                       );
                     })}
@@ -1191,7 +1231,7 @@ export default function CompetenceDetailPage() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Comment</Label>
+              <Label>{t("fieldComment")}</Label>
               <Textarea
                 rows={2}
                 value={matForm.comment}
@@ -1207,14 +1247,18 @@ export default function CompetenceDetailPage() {
               onClick={() => setMatDialogOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={saveMaterial}
               disabled={saving}
               data-testid="competence-detail-material-btn-save"
             >
-              {saving ? "Saving…" : editingMat ? "Save" : "Add"}
+              {saving
+                ? t("savingEllipsis")
+                : editingMat
+                  ? t("save")
+                  : t("add")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1225,10 +1269,16 @@ export default function CompetenceDetailPage() {
         onOpenChange={(o) => {
           if (!o) setDeleting(null);
         }}
-        title={deleting ? `Delete ${deleting.kind}` : "Delete"}
+        title={
+          deleting
+            ? deleting.kind === "indicator"
+              ? t("deleteIndicator")
+              : t("deleteMaterial")
+            : tc("delete")
+        }
         description={
           deleting
-            ? `Are you sure you want to delete "${deleting.title}"?`
+            ? t("deleteSimpleDescription", { title: deleting.title })
             : ""
         }
         onConfirm={confirmDelete}
@@ -1245,16 +1295,18 @@ export default function CompetenceDetailPage() {
         usage={usage}
         title={
           usageConfirm?.kind === "delete"
-            ? "Delete anyway?"
-            : "Save anyway?"
+            ? t("usageDeleteAnywayTitle")
+            : t("usageSaveAnywayTitle")
         }
         body={
           usageConfirm?.kind === "delete"
-            ? "Deleting this indicator will remove it everywhere this competence is referenced."
-            : "Saving will update every place that references this competence."
+            ? t("usageDeleteAnywayBody")
+            : t("usageSaveAnywayBody")
         }
         confirmLabel={
-          usageConfirm?.kind === "delete" ? "Delete anyway" : "Save anyway"
+          usageConfirm?.kind === "delete"
+            ? t("usageDeleteAnywayConfirm")
+            : t("usageSaveAnywayConfirm")
         }
         onConfirm={() => {
           if (usageConfirm) void usageConfirm.run();
@@ -1319,9 +1371,9 @@ export default function CompetenceDetailPage() {
           setAiApplyConfirmOpen(open);
         }}
         usage={usage}
-        title="Apply AI suggestions?"
-        body="Applying will add and update indicators on a competence that is already in use. Every place that references it will reflect the change."
-        confirmLabel="Apply anyway"
+        title={t("usageApplyAiTitle")}
+        body={t("usageApplyAiBody")}
+        confirmLabel={t("usageApplyAiConfirm")}
         onConfirm={() => {
           if (aiApplyResolverRef.current) {
             aiApplyResolverRef.current(true);
@@ -1352,30 +1404,31 @@ export default function CompetenceDetailPage() {
  * get native focus behaviour.
  */
 function SectionNav() {
+  const t = useTranslations("competences");
   const items: { id: string; label: string; testId: string }[] = [
     {
       id: "indicators-section",
-      label: "Indicators",
+      label: t("sectionIndicators"),
       testId: "competence-detail-nav-indicators",
     },
     {
       id: "materials-context-section",
-      label: "Materials by context",
+      label: t("sectionMaterialsByContext"),
       testId: "competence-detail-nav-materials-context",
     },
     {
       id: "materials-level-section",
-      label: "Materials by level",
+      label: t("materialsByLevel"),
       testId: "competence-detail-nav-materials-level",
     },
   ];
   return (
     <nav
-      aria-label="Jump to section"
+      aria-label={t("jumpToSectionAria")}
       className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
       data-testid="competence-detail-section-nav"
     >
-      <span>Jump to:</span>
+      <span>{t("jumpTo")}</span>
       {items.map((item) => (
         <a
           key={item.id}
@@ -1412,24 +1465,25 @@ function AiIndicatorsButton({
   hasIndicators: boolean;
   onClick: () => void;
 }) {
+  const t = useTranslations("competences");
   let label = hasIndicators
-    ? "Augment indicators (AI)"
-    : "Generate indicators (AI)";
+    ? t("augmentIndicatorsAi")
+    : t("generateIndicatorsAi");
   let testId = hasIndicators
     ? "competence-detail-btn-ai-augment-indicators"
     : "competence-detail-btn-ai-generate-indicators";
   let icon = <Sparkles className="mr-1 size-4" />;
   let variant: "default" | "outline" = "outline";
   if (checking) {
-    label = "Checking session…";
+    label = t("genCheckingSession");
     testId = "competence-detail-btn-ai-checking";
     icon = <Loader2 className="mr-1 size-4 animate-spin" />;
   } else if (running) {
-    label = "AI generation in progress";
+    label = t("genInProgress");
     testId = "competence-detail-btn-ai-running";
     icon = <Loader2 className="mr-1 size-4 animate-spin" />;
   } else if (ready) {
-    label = "Open active AI session";
+    label = t("genOpenActiveSession");
     testId = "competence-detail-btn-ai-ready";
     variant = "default";
   }
@@ -1453,9 +1507,7 @@ function AiIndicatorsButton({
         {button}
       </TooltipTrigger>
       <TooltipContent data-testid="competence-detail-btn-ai-tooltip">
-        {ready
-          ? "Open the active AI session to apply or cancel it."
-          : "Another AI generation is in progress. Click to view or cancel it."}
+        {ready ? t("aiTooltipReady") : t("aiTooltipBusy")}
       </TooltipContent>
     </Tooltip>
   );
@@ -1490,6 +1542,9 @@ function LevelIndicatorsBlock({
   onWeightChange: (ind: Indicator, next: number) => Promise<void>;
   onBulkSaved: () => void;
 }) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState("");
   const [bulkSaving, setBulkSaving] = useState(false);
@@ -1500,7 +1555,7 @@ function LevelIndicatorsBlock({
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
     if (lines.length === 0) {
-      toast.error("Add at least one indicator.");
+      toast.error(t("errorBulkNeedIndicator"));
       return;
     }
     setBulkSaving(true);
@@ -1513,7 +1568,7 @@ function LevelIndicatorsBlock({
           sort_index: baseSort + idx,
         })),
       });
-      toast.success(`Added ${lines.length} indicator${lines.length === 1 ? "" : "s"}.`);
+      toast.success(t("toastIndicatorsBulkAdded", { count: lines.length }));
       setBulkText("");
       setBulkOpen(false);
       onBulkSaved();
@@ -1523,7 +1578,7 @@ function LevelIndicatorsBlock({
           ? err.detail || err.message
           : err instanceof Error
             ? err.message
-            : "Failed to save";
+            : t("errorSave");
       toast.error(String(msg));
     } finally {
       setBulkSaving(false);
@@ -1549,13 +1604,15 @@ function LevelIndicatorsBlock({
             aria-hidden
             className={cn("size-2 rounded-full", tokens.dot)}
           />
-          <h3 className="text-sm font-medium">{level.title}</h3>
+          <h3 className="text-sm font-medium">
+            {skillLevelLabel(tRef, level)}
+          </h3>
           <Badge
             variant="outline"
             className="h-5 px-1.5 text-[10px]"
             data-testid={`competence-detail-level-${level.id}-count`}
           >
-            {indicators.length} indicator{indicators.length === 1 ? "" : "s"}
+            {t("indicatorCount", { count: indicators.length })}
           </Badge>
         </div>
         {canEdit && (
@@ -1567,7 +1624,7 @@ function LevelIndicatorsBlock({
               data-testid={`competence-detail-level-${level.id}-btn-add-bulk`}
             >
               <Plus className="mr-1 size-3.5" />
-              {bulkOpen ? "Hide bulk add" : "Add multiple"}
+              {bulkOpen ? t("hideBulkAdd") : t("addMultiple")}
             </Button>
             <Button
               variant="ghost"
@@ -1576,7 +1633,7 @@ function LevelIndicatorsBlock({
               data-testid={`competence-detail-level-${level.id}-btn-add-indicator`}
             >
               <Plus className="mr-1 size-3.5" />
-              Add indicator
+              {t("addIndicator")}
             </Button>
           </div>
         )}
@@ -1588,14 +1645,14 @@ function LevelIndicatorsBlock({
           className="mb-3 space-y-2 rounded-md border border-dashed bg-muted/40 p-2"
         >
           <p className="text-xs text-muted-foreground">
-            One indicator per line. Blank lines are ignored.
+            {t("bulkIndicatorsHint")}
           </p>
           <textarea
             data-testid={`competence-detail-level-${level.id}-bulk-textarea`}
             value={bulkText}
             onChange={(e) => setBulkText(e.target.value)}
             rows={Math.min(8, Math.max(4, bulkText.split(/\r?\n/).length))}
-            placeholder={"e.g.\nReads diff carefully\nFlags risky areas\nLeaves actionable comments"}
+            placeholder={t("bulkIndicatorsPlaceholder")}
             className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             disabled={bulkSaving}
           />
@@ -1609,7 +1666,7 @@ function LevelIndicatorsBlock({
               }}
               disabled={bulkSaving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               size="sm"
@@ -1617,7 +1674,7 @@ function LevelIndicatorsBlock({
               onClick={handleBulkSave}
               disabled={bulkSaving || bulkText.trim().length === 0}
             >
-              {bulkSaving ? "Saving…" : "Save indicators"}
+              {bulkSaving ? t("savingEllipsis") : t("saveIndicators")}
             </Button>
           </div>
         </div>
@@ -1628,8 +1685,7 @@ function LevelIndicatorsBlock({
           className="py-2 pl-2 text-xs text-muted-foreground"
           data-testid={`competence-detail-level-${level.id}-empty`}
         >
-          No indicators at this level yet — add criteria to define what people
-          should demonstrate.
+          {t("levelNoIndicators")}
         </p>
       ) : (
         <ul className="space-y-1 pl-2">
@@ -1662,6 +1718,7 @@ function SortableIndicatorRow({
   onDelete: () => void;
   onWeightChange: (next: number) => Promise<void>;
 }) {
+  const t = useTranslations("competences");
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: indicator.id, disabled: !canEdit });
   const style: React.CSSProperties = {
@@ -1685,7 +1742,7 @@ function SortableIndicatorRow({
         <button
           type="button"
           className="cursor-grab text-muted-foreground"
-          aria-label="Drag indicator"
+          aria-label={t("dragIndicatorAria")}
           data-testid={`competence-detail-indicator-${indicator.id}-handle`}
           {...attributes}
           {...listeners}
@@ -1702,13 +1759,13 @@ function SortableIndicatorRow({
                 tabIndex={0}
                 className="inline-flex cursor-help text-amber-600 dark:text-amber-400"
                 data-testid={`competence-detail-indicator-${indicator.id}-warning-suspicious-text`}
-                aria-label="Indicator text looks incomplete"
+                aria-label={t("indicatorLooksIncomplete")}
               />
             }
           >
             <AlertTriangle className="size-3.5" />
           </TooltipTrigger>
-          <TooltipContent>Indicator text looks incomplete</TooltipContent>
+          <TooltipContent>{t("indicatorLooksIncomplete")}</TooltipContent>
         </Tooltip>
       )}
       <IndicatorWeight
@@ -1762,6 +1819,8 @@ function LevelMaterialsBlock({
   onDelete: (mat: Material) => void;
   onGenerate: () => void;
 }) {
+  const t = useTranslations("competences");
+  const tRef = useTranslations("reference");
   // “N materials for M indicators” — when M > 0 and N = 0, the level
   // isn’t closed yet; nudge the operator to add or generate.
   const hasGap = materials.length === 0 && indicatorsCount > 0;
@@ -1784,7 +1843,9 @@ function LevelMaterialsBlock({
             aria-hidden
             className={cn("size-2 rounded-full", tokens.dot)}
           />
-          <h3 className="text-sm font-medium">{level.title}</h3>
+          <h3 className="text-sm font-medium">
+            {skillLevelLabel(tRef, level)}
+          </h3>
           <Badge
             variant="outline"
             className={cn(
@@ -1793,8 +1854,10 @@ function LevelMaterialsBlock({
             )}
             data-testid={`competence-detail-matlevel-${level.id}-count`}
           >
-            {materials.length} material{materials.length === 1 ? "" : "s"} for{" "}
-            {indicatorsCount} indicator{indicatorsCount === 1 ? "" : "s"}
+            {t("materialsForIndicators", {
+              materials: materials.length,
+              indicators: indicatorsCount,
+            })}
           </Badge>
         </div>
         {canEdit && (
@@ -1805,7 +1868,7 @@ function LevelMaterialsBlock({
             data-testid={`competence-detail-matlevel-${level.id}-btn-add-material`}
           >
             <Plus className="mr-1 size-3.5" />
-            Add material
+            {t("addMaterial")}
           </Button>
         )}
       </div>
@@ -1816,8 +1879,7 @@ function LevelMaterialsBlock({
             data-testid={`competence-detail-matlevel-${level.id}-warning-empty`}
           >
             <span>
-              {indicatorsCount} indicator{indicatorsCount === 1 ? "" : "s"}{" "}
-              {indicatorsCount === 1 ? "has" : "have"} no materials yet.
+              {t("indicatorsNoMaterials", { count: indicatorsCount })}
             </span>
             <Button
               size="sm"
@@ -1827,7 +1889,7 @@ function LevelMaterialsBlock({
               data-testid={`competence-detail-matlevel-${level.id}-btn-generate-ai`}
             >
               <Sparkles className="mr-1 size-3.5" />
-              Generate with AI
+              {t("generateWithAi")}
             </Button>
           </div>
         ) : (
@@ -1835,7 +1897,7 @@ function LevelMaterialsBlock({
             className="py-2 pl-2 text-xs text-muted-foreground"
             data-testid={`competence-detail-matlevel-${level.id}-empty`}
           >
-            No materials at this level yet.
+            {t("levelNoMaterials")}
           </p>
         )
       ) : (
@@ -1866,6 +1928,7 @@ function SortableMaterialRow({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const t = useTranslations("competences");
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: material.id, disabled: !canEdit });
   const style: React.CSSProperties = {
@@ -1884,7 +1947,7 @@ function SortableMaterialRow({
         <button
           type="button"
           className="cursor-grab text-muted-foreground"
-          aria-label="Drag material"
+          aria-label={t("dragMaterialAria")}
           data-testid={`competence-detail-material-${material.id}-handle`}
           {...attributes}
           {...listeners}
@@ -1900,13 +1963,13 @@ function SortableMaterialRow({
         return (
           <Icon
             className="size-3.5 text-muted-foreground"
-            aria-label={typeOpt.label}
+            aria-label={t(typeOpt.labelKey)}
           />
         );
       })()}
       {material.format && (
         <span className="text-xs text-muted-foreground">
-          {materialFormatLabel(material.format)}
+          {materialFormatLabel(t, material.format)}
         </span>
       )}
       {canEdit && (

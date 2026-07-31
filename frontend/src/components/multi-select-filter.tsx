@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -35,6 +36,7 @@ export function MultiSelectFilter({
   disabled,
   "data-testid": testId,
 }: MultiSelectFilterProps) {
+  const t = useTranslations("common");
   const selected = useMemo(() => new Set(value), [value]);
 
   const labelText = useMemo(() => {
@@ -97,7 +99,7 @@ export function MultiSelectFilter({
       >
         {options.length === 0 ? (
           <div className="px-2 py-2 text-xs text-muted-foreground">
-            No options
+            {t("noOptions")}
           </div>
         ) : (
           options.map((opt) => (

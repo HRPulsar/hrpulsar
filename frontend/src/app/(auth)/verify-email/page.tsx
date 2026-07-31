@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { verifyEmail, resendVerification } from "@/lib/auth";
 import { verifySignupRequest } from "@/lib/signup";
@@ -20,6 +21,8 @@ export default function VerifyEmailPage() {
 }
 
 function VerifyEmailContent() {
+  const t = useTranslations("auth");
+  const tc = useTranslations("common");
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
@@ -35,28 +38,28 @@ function VerifyEmailContent() {
   const [cooldown, setCooldown] = useState(0);
 
   const handleVerify = useCallback(
-    async (t: string) => {
+    async (verifyToken: string) => {
       setError("");
       setVerifying(true);
       try {
         if (isSignupFlow) {
           // Moderated signup: stay on this page after success and
           // show the waiting-for-moderation copy below.
-          await verifySignupRequest(t);
+          await verifySignupRequest(verifyToken);
           setVerified(true);
         } else {
-          await verifyEmail(t);
+          await verifyEmail(verifyToken);
           router.push("/dashboard");
         }
       } catch (err) {
         setError(
-          err instanceof Error ? err.message : "Verification failed",
+          err instanceof Error ? err.message : t("verificationFailed"),
         );
       } finally {
         setVerifying(false);
       }
     },
-    [isSignupFlow, router],
+    [isSignupFlow, router, t],
   );
 
   useEffect(() => {
@@ -84,7 +87,7 @@ function VerifyEmailContent() {
       setCooldown(RESEND_COOLDOWN);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to resend email",
+        err instanceof Error ? err.message : t("resendFailed"),
       );
     } finally {
       setResending(false);
@@ -100,10 +103,10 @@ function VerifyEmailContent() {
           <CardHeader className="text-center">
             <CardTitle className="text-xl text-white">
               {error
-                ? "Verification failed"
+                ? t("verificationFailed")
                 : verified
-                  ? "Email confirmed"
-                  : "Verifying your email"}
+                  ? t("emailConfirmed")
+                  : t("verifyingEmail")}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -116,7 +119,7 @@ function VerifyEmailContent() {
                   {error}
                 </div>
                 <p className="text-center text-sm text-white/50">
-                  The verification link may have expired or already been used.
+                  {t("verifyLinkExpired")}
                 </p>
                 <div className="flex flex-col gap-2">
                   <Button
@@ -125,13 +128,13 @@ function VerifyEmailContent() {
                     onClick={() => handleVerify(token)}
                     disabled={verifying}
                   >
-                    {verifying ? "Retrying..." : "Try again"}
+                    {verifying ? t("retrying") : tc("tryAgain")}
                   </Button>
                   <a
                     href="/register"
                     className="block text-center text-sm text-brand hover:underline"
                   >
-                    Back to request access
+                    {t("backToRequestAccess")}
                   </a>
                 </div>
               </>
@@ -142,15 +145,14 @@ function VerifyEmailContent() {
               >
                 <div className="text-2xl">✓</div>
                 <p className="text-center text-sm text-white">
-                  Thanks — your request is in our moderation queue. Expect an
-                  email with a sign-in link within 24 hours.
+                  {t("moderationQueue")}
                 </p>
               </div>
             ) : (
               <div className="flex flex-col items-center gap-3 py-4">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-brand" />
                 <p className="text-sm text-white/50">
-                  Please wait while we verify your email address...
+                  {t("verifyingEmailWait")}
                 </p>
               </div>
             )}
@@ -161,10 +163,10 @@ function VerifyEmailContent() {
   }
 
   // No token: "check your email" state.
-  const titleText = isSignupFlow ? "Check your email" : "Check your email";
+  const titleText = t("checkYourEmail");
   const subText = isSignupFlow
-    ? "Click the link in the email to confirm your address. Our team typically reviews new requests within 24 hours after confirmation."
-    : "Click the link in the email to verify your account and get started.";
+    ? t("checkEmailSignup")
+    : t("checkEmailDefault");
 
   return (
     <div className="flex flex-col items-center gap-8">
@@ -181,11 +183,11 @@ function VerifyEmailContent() {
           )}
           {resent && (
             <div className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400">
-              Verification email sent. Please check your inbox.
+              {t("verificationEmailSent")}
             </div>
           )}
           <p className="text-center text-sm text-white/60">
-            We sent a verification link to
+            {t("sentVerificationLinkTo")}
           </p>
           {email && (
             <p
@@ -204,16 +206,16 @@ function VerifyEmailContent() {
               disabled={resending || cooldown > 0}
             >
               {resending
-                ? "Sending..."
+                ? t("sending")
                 : cooldown > 0
-                  ? `Resend in ${cooldown}s`
-                  : "Resend verification email"}
+                  ? t("resendIn", { seconds: cooldown })
+                  : t("resendVerificationEmail")}
             </Button>
           )}
           <p className="text-center text-sm text-white/50">
-            Already have an account?{" "}
+            {t("haveAccount")}{" "}
             <a href="/login" className="text-brand hover:underline">
-              Sign in
+              {tc("signIn")}
             </a>
           </p>
         </CardContent>

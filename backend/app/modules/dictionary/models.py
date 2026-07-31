@@ -33,6 +33,11 @@ class DictionaryItem(BaseModel):
     type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # HRP-479: stable key for origin rows only — the frontend renders
+    # t(`reference.dictionary.${type}.${i18n_key}`) and falls back to the
+    # stored title. Tenant-created items keep NULL and render verbatim;
+    # the API never accepts this field from clients.
+    i18n_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )

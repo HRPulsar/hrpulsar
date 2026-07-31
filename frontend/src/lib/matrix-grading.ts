@@ -57,20 +57,43 @@ export function levelHueClass(
   return LEVEL_HUES[Math.min(idx, LEVEL_HUES.length - 1)];
 }
 
-/** Coverage-gap message for a competence row, or null when everything is
- *  in place. Backend rolls indicator / material coverage into two booleans
- *  per competence — we surface the union, not per-level breakdown.
+// HRP-476: one key per gap combination in the `company` i18n namespace.
+// The sentence is not assembled from fragments here — languages order the
+// "indicators and development materials" enumeration differently, so each
+// variant is a whole translatable string.
+const COVERAGE_GAP_KEYS = {
+  indicators: "coverageGapIndicators",
+  materials: "coverageGapMaterials",
+  both: "coverageGapBoth",
+} as const;
+
+/** Key in the `company` namespace for a competence row's coverage gap, or
+ *  null when everything is in place. Backend rolls indicator / material
+ *  coverage into two booleans per competence — we surface the union, not
+ *  the per-level breakdown.
  */
-export function coverageGapMessage(
+function coverageGapKey(
   competence: Pick<Competence, "levels_completion">,
 ): string | null {
   const c = competence.levels_completion;
   // Backend omits the field on origin competences that have never had a
   // matrix link — treat absence as "no signal yet", not as a gap.
   if (!c) return null;
-  if (!c.has_uncovered_indicators && !c.has_uncovered_materials) return null;
-  const parts: string[] = [];
-  if (c.has_uncovered_indicators) parts.push("indicators");
-  if (c.has_uncovered_materials) parts.push("development materials");
-  return `Missing ${parts.join(" and ")} at one or more grade levels. Click the title to add them.`;
+  if (c.has_uncovered_indicators && c.has_uncovered_materials) {
+    return COVERAGE_GAP_KEYS.both;
+  }
+  if (c.has_uncovered_indicators) return COVERAGE_GAP_KEYS.indicators;
+  if (c.has_uncovered_materials) return COVERAGE_GAP_KEYS.materials;
+  return null;
+}
+
+/** Translated coverage-gap message, or null when the row has no gap.
+ *  ``t`` must be bound to the `company` namespace.
+ */
+export function coverageGapMessage(
+  t: (key: string) => string,
+  competence: Pick<Competence, "levels_completion">,
+): string | null {
+  const key = coverageGapKey(competence);
+  return key ? t(key) : null;
 }

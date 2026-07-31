@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/auth-context";
 import {
@@ -73,36 +74,53 @@ interface VacancyOption {
 }
 
 // HRP-358: raw invite statuses are machine-codes; the recruiter-facing
-// chip needs a readable label and a tone that survives at a glance.
+// chip needs a readable label and a tone that survives at a glance. The
+// map stores i18n keys — the caller resolves them with its own `t`.
 const INVITE_STATUS_CHIPS: Record<
   string,
-  { label: string; className: string }
+  { labelKey: string; className: string }
 > = {
-  pending: { label: "pending", className: "bg-muted text-muted-foreground" },
-  opened: { label: "opened", className: "bg-blue-50 text-blue-700" },
+  pending: {
+    labelKey: "managerAssessmentInviteStatusPending",
+    className: "bg-muted text-muted-foreground",
+  },
+  opened: {
+    labelKey: "managerAssessmentInviteStatusOpened",
+    className: "bg-blue-50 text-blue-700",
+  },
   in_progress: {
-    label: "in progress",
+    labelKey: "managerAssessmentInviteStatusInProgress",
     className: "bg-amber-50 text-amber-700",
   },
   submitted: {
-    label: "submitted",
+    labelKey: "managerAssessmentInviteStatusSubmitted",
     className: "bg-emerald-50 text-emerald-700",
   },
-  expired: { label: "expired", className: "bg-rose-50 text-rose-700" },
-  declined: { label: "declined", className: "bg-rose-50 text-rose-700" },
-  revoked: { label: "revoked", className: "bg-muted text-muted-foreground" },
+  expired: {
+    labelKey: "managerAssessmentInviteStatusExpired",
+    className: "bg-rose-50 text-rose-700",
+  },
+  declined: {
+    labelKey: "managerAssessmentInviteStatusDeclined",
+    className: "bg-rose-50 text-rose-700",
+  },
+  revoked: {
+    labelKey: "managerAssessmentInviteStatusRevoked",
+    className: "bg-muted text-muted-foreground",
+  },
 };
 
-export function inviteStatusChip(status: string): {
+export function inviteStatusChip(
+  t: (key: string) => string,
+  status: string,
+): {
   label: string;
   className: string;
 } {
-  return (
-    INVITE_STATUS_CHIPS[status] ?? {
-      label: status,
-      className: "bg-muted text-muted-foreground",
-    }
-  );
+  const chip = INVITE_STATUS_CHIPS[status];
+  return chip
+    ? { label: t(chip.labelKey), className: chip.className }
+    : { label: status, className: "bg-muted text-muted-foreground" };
 }
 
 interface Props {
@@ -141,6 +159,7 @@ export function ManagerAssessmentSection({
   );
   const [loadingRounds, setLoadingRounds] = useState(false);
   const { user } = useAuth();
+  const t = useTranslations("recruitment");
 
   // HRP-348 REDO: one debounce timer per score row — a shared timer would
   // silently drop the previous row's PATCH when the evaluator moves fast
@@ -287,7 +306,11 @@ export function ManagerAssessmentSection({
       setRounds((prev) => [...prev, r]);
       setActiveRoundId(r.id);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Round create failed");
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : t("managerAssessmentRoundCreateFailed"),
+      );
     }
   }
 
@@ -299,9 +322,11 @@ export function ManagerAssessmentSection({
         { status: "complete" },
       );
       setRounds((prev) => prev.map((x) => (x.id === r.id ? r : x)));
-      toast.success("Round marked complete");
+      toast.success(t("managerAssessmentRoundCompleted"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(
+        err instanceof Error ? err.message : t("managerAssessmentFailed"),
+      );
     }
   }
 
@@ -322,7 +347,7 @@ export function ManagerAssessmentSection({
             setTimeout(() => setSavingState("idle"), 1200);
           }
         } catch {
-          toast.error("Failed to save a score — please retry");
+          toast.error(t("managerAssessmentScoreSaveFailed"));
           if (--pendingSaves.current <= 0) {
             pendingSaves.current = 0;
             setSavingState("idle");
@@ -447,16 +472,19 @@ export function ManagerAssessmentSection({
     completedCount > 0 && unscoredCritical.length === 0;
   const completeHint = !canComplete
     ? unscoredCritical.length > 0
-      ? `Assess all critical competences first — ${unscoredCritical.length} left: ${unscoredCritical
-          .map((c) => c.name)
-          .join(", ")}`
-      : "Assess at least one competence first"
+      ? t("managerAssessmentCompleteHintCritical", {
+          count: unscoredCritical.length,
+          names: unscoredCritical.map((c) => c.name).join(", "),
+        })
+      : t("managerAssessmentCompleteHintNone")
     : undefined;
 
   return (
     <Card data-testid="candidate-section-assessments">
       <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <CardTitle className="text-base">Manager assessments</CardTitle>
+        <CardTitle className="text-base">
+          {t("managerAssessmentTitle")}
+        </CardTitle>
         {vacancies.length > 1 && (
           <select
             className="rounded-md border px-2 py-1 text-xs"
@@ -474,7 +502,7 @@ export function ManagerAssessmentSection({
       <CardContent className="space-y-4">
         {!activeCvId && (
           <p className="text-sm text-muted-foreground">
-            Attach this candidate to a vacancy first.
+            {t("managerAssessmentNoVacancy")}
           </p>
         )}
 
@@ -500,7 +528,7 @@ export function ManagerAssessmentSection({
                   }`}
                   data-testid={`assessment-round-tab-${r.id}`}
                 >
-                  {labelForRound(r)}
+                  {labelForRound(t, r)}
                   {r.status === "complete" && <span className="ml-1">·✓</span>}
                 </button>
               ))}
@@ -510,7 +538,7 @@ export function ManagerAssessmentSection({
                 onClick={() => setPendingNewRound(true)}
                 data-testid="assessment-round-new-btn"
               >
-                <Plus className="size-3" /> New round
+                <Plus className="size-3" /> {t("managerAssessmentNewRound")}
               </Button>
               {!rounds.some((r) => r.type === "pre_interview") && (
                 <Button
@@ -518,7 +546,7 @@ export function ManagerAssessmentSection({
                   variant="ghost"
                   onClick={() => createRound("pre_interview")}
                 >
-                  + Pre-interview
+                  {t("managerAssessmentAddPreInterview")}
                 </Button>
               )}
               {!rounds.some((r) => r.type === "final") && rounds.length > 0 && (
@@ -527,7 +555,7 @@ export function ManagerAssessmentSection({
                   variant="ghost"
                   onClick={() => createRound("final")}
                 >
-                  + Final
+                  {t("managerAssessmentAddFinal")}
                 </Button>
               )}
             </div>
@@ -539,9 +567,9 @@ export function ManagerAssessmentSection({
               data-testid="assessment-autosave-status"
             >
               {savingState === "saving"
-                ? "Saving…"
+                ? t("managerAssessmentSaving")
                 : savingState === "saved"
-                  ? "Saved"
+                  ? t("managerAssessmentSaved")
                   : null}
             </div>
 
@@ -550,7 +578,10 @@ export function ManagerAssessmentSection({
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span data-testid="assessment-progress-counter">
-                    {completedCount} / {totalCount} competences assessed
+                    {t("managerAssessmentProgress", {
+                      completed: completedCount,
+                      total: totalCount,
+                    })}
                   </span>
                   <div
                     role="progressbar"
@@ -581,7 +612,7 @@ export function ManagerAssessmentSection({
                       disabled={!canComplete}
                       data-testid="assessment-round-complete-btn"
                     >
-                      Mark as complete
+                      {t("managerAssessmentMarkComplete")}
                     </Button>
                   </span>
                 </div>
@@ -590,7 +621,7 @@ export function ManagerAssessmentSection({
                   scaleLevels={scaleLevels}
                   competenceScores={sheet.competence_scores}
                   indicatorScores={sheet.indicator_scores}
-                  emptyHint="Vacancy profile has no competences yet. Open the vacancy profile to add them, then come back here to assess."
+                  emptyHint={t("managerAssessmentEmptyHint")}
                   onCompetenceScore={(compId, value, comment) =>
                     void setCompetenceScore(compId, value, comment)
                   }
@@ -610,7 +641,7 @@ export function ManagerAssessmentSection({
             <div className="space-y-2 border-t pt-3">
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-semibold uppercase text-muted-foreground">
-                  External evaluators
+                  {t("managerAssessmentExternalEvaluators")}
                 </h4>
                 <InviteEvaluatorButton
                   cvId={activeCvId}
@@ -621,7 +652,7 @@ export function ManagerAssessmentSection({
               </div>
               {invites.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  No external evaluators invited yet.
+                  {t("managerAssessmentNoInvites")}
                 </p>
               ) : (
                 <ul className="space-y-1">
@@ -633,10 +664,12 @@ export function ManagerAssessmentSection({
                       inv.delivery_status === "delivery_failed" &&
                       inv.status === "pending"
                         ? {
-                            label: "delivery failed",
+                            label: t(
+                              "managerAssessmentInviteStatusDeliveryFailed",
+                            ),
                             className: "bg-rose-50 text-rose-700",
                           }
-                        : inviteStatusChip(inv.status);
+                        : inviteStatusChip(t, inv.status);
                     return (
                       <li
                         key={inv.id}
@@ -666,9 +699,11 @@ export function ManagerAssessmentSection({
       <ConfirmDialog
         open={pendingNewRound}
         onOpenChange={setPendingNewRound}
-        title="Add new interview round?"
-        description={`This will create Interview ${nextInterviewNumber(rounds)}.`}
-        confirmLabel="Add round"
+        title={t("managerAssessmentNewRoundConfirmTitle")}
+        description={t("managerAssessmentNewRoundConfirmDescription", {
+          number: nextInterviewNumber(rounds),
+        })}
+        confirmLabel={t("managerAssessmentAddRound")}
         onConfirm={() => {
           setPendingNewRound(false);
           void createRound("interview");
@@ -686,10 +721,15 @@ function nextInterviewNumber(rounds: RoundDto[]): number {
   return highest + 1;
 }
 
-function labelForRound(r: RoundDto): string {
-  if (r.type === "pre_interview") return "Pre-interview";
-  if (r.type === "final") return "Final";
-  return `Interview ${r.round_number ?? "?"}`;
+function labelForRound(
+  t: (key: string, values?: Record<string, string | number>) => string,
+  r: RoundDto,
+): string {
+  if (r.type === "pre_interview") return t("managerAssessmentRoundPreInterview");
+  if (r.type === "final") return t("managerAssessmentRoundFinal");
+  return t("managerAssessmentRoundInterview", {
+    number: r.round_number ?? "?",
+  });
 }
 
 function AddSelfAsEvaluator({
@@ -700,6 +740,7 @@ function AddSelfAsEvaluator({
   onAdded: (sheet: AssessmentSheet) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const t = useTranslations("recruitment");
   async function add() {
     if (!roundId) return;
     setBusy(true);
@@ -714,7 +755,9 @@ function AddSelfAsEvaluator({
       const mine = list.find((a) => a.evaluator_user_id === me.id);
       if (mine) onAdded(mine);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(
+        err instanceof Error ? err.message : t("managerAssessmentFailed"),
+      );
     } finally {
       setBusy(false);
     }
@@ -722,7 +765,7 @@ function AddSelfAsEvaluator({
   return (
     <Button onClick={add} disabled={busy || !roundId} size="sm">
       {busy ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
-      Start scoring this round
+      {t("managerAssessmentStartScoring")}
     </Button>
   );
 }
@@ -750,6 +793,8 @@ function InviteEvaluatorButton({
   const [allowRe, setAllowRe] = useState(true);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
 
   function update(i: number, patch: Partial<{ email: string; name: string }>) {
     setEmails((prev) => prev.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
@@ -772,12 +817,14 @@ function InviteEvaluatorButton({
       .map((e) => ({ email: e.email.trim(), name: e.name.trim() }))
       .filter((e) => e.email && e.name);
     if (filtered.length === 0) {
-      toast.error("Add at least one invitee with email and name");
+      toast.error(t("managerAssessmentInviteeRequired"));
       return;
     }
     const invalid = filtered.filter((e) => !EMAIL_RE.test(e.email));
     if (invalid.length > 0) {
-      toast.error(`Invalid email address: ${invalid[0]!.email}`);
+      toast.error(
+        t("managerAssessmentInvalidEmail", { email: invalid[0]!.email }),
+      );
       return;
     }
     setBusy(true);
@@ -793,21 +840,23 @@ function InviteEvaluatorButton({
         },
       );
       onSent(rows);
-      toast.success(`${rows.length} invitation(s) sent`);
+      toast.success(t("managerAssessmentInvitesSent", { count: rows.length }));
       setOpen(false);
       setEmails([{ email: "", name: "" }]);
       setMessage("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to send");
+      toast.error(
+        err instanceof Error ? err.message : t("managerAssessmentSendFailed"),
+      );
     } finally {
       setBusy(false);
     }
   }
 
   const inviteDisabledHint = !hasProfileCompetences
-    ? "Vacancy profile has no competences yet. Open the vacancy profile to add them, then come back here to invite external evaluator."
+    ? t("managerAssessmentInviteDisabledNoCompetences")
     : !roundId
-      ? "Create an assessment round first."
+      ? t("managerAssessmentInviteDisabledNoRound")
       : undefined;
 
   return (
@@ -822,7 +871,7 @@ function InviteEvaluatorButton({
           disabled={!roundId || !hasProfileCompetences}
           data-testid="invite-evaluator-modal-open"
         >
-          <UserPlus className="size-3.5" /> Invite external evaluator
+          <UserPlus className="size-3.5" /> {t("managerAssessmentInviteEvaluator")}
         </Button>
       </span>
       {open && (
@@ -834,7 +883,9 @@ function InviteEvaluatorButton({
               modal; long invitee lists scroll instead of overflowing. */}
           <div className="max-h-[90vh] w-full max-w-2xl space-y-3 overflow-y-auto rounded-lg bg-background p-4 shadow-xl">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold">Invite external evaluator</h3>
+              <h3 className="text-base font-semibold">
+                {t("managerAssessmentInviteEvaluator")}
+              </h3>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
@@ -849,7 +900,7 @@ function InviteEvaluatorButton({
                   <input
                     type="email"
                     className="rounded-md border px-2 py-1 text-sm"
-                    placeholder="email@example.com"
+                    placeholder={t("managerAssessmentEmailPlaceholder")}
                     value={row.email}
                     onChange={(e) => update(i, { email: e.target.value })}
                     data-testid={`invite-evaluator-modal-email-${i}`}
@@ -857,7 +908,7 @@ function InviteEvaluatorButton({
                   <input
                     type="text"
                     className="rounded-md border px-2 py-1 text-sm"
-                    placeholder="Full name"
+                    placeholder={t("candidateFieldFullName")}
                     value={row.name}
                     onChange={(e) => update(i, { name: e.target.value })}
                     data-testid={`invite-evaluator-modal-name-${i}`}
@@ -868,7 +919,7 @@ function InviteEvaluatorButton({
                     className="rounded-md border px-2 text-xs"
                     data-testid={`invite-evaluator-modal-remove-${i}`}
                   >
-                    Remove
+                    {t("managerAssessmentRemove")}
                   </button>
                 </div>
               ))}
@@ -878,12 +929,12 @@ function InviteEvaluatorButton({
                 className="text-xs text-primary underline"
                 data-testid="invite-evaluator-modal-add-row-btn"
               >
-                + Add another
+                {t("managerAssessmentAddAnother")}
               </button>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <label className="space-y-1 text-xs">
-                Link expires in
+                {t("managerAssessmentLinkExpiresIn")}
                 <select
                   className="block w-full rounded-md border px-2 py-1"
                   value={expiresIn}
@@ -892,7 +943,7 @@ function InviteEvaluatorButton({
                 >
                   {[1, 3, 7, 14, 30].map((d) => (
                     <option key={d} value={d}>
-                      {d} days
+                      {t("managerAssessmentDays", { count: d })}
                     </option>
                   ))}
                 </select>
@@ -904,12 +955,12 @@ function InviteEvaluatorButton({
                   onChange={(e) => setAllowRe(e.target.checked)}
                   data-testid="invite-evaluator-modal-reediting-toggle"
                 />
-                Allow re-editing after submit
+                {t("managerAssessmentAllowReediting")}
               </label>
             </div>
             <textarea
               className="w-full rounded-md border p-2 text-sm"
-              placeholder="Personal message (optional)"
+              placeholder={t("managerAssessmentPersonalMessagePlaceholder")}
               maxLength={500}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
@@ -922,7 +973,7 @@ function InviteEvaluatorButton({
                 onClick={() => setOpen(false)}
                 disabled={busy}
               >
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button
                 onClick={submit}
@@ -930,7 +981,7 @@ function InviteEvaluatorButton({
                 data-testid="invite-evaluator-modal-submit"
               >
                 {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-                Send invitations
+                {t("managerAssessmentSendInvitations")}
               </Button>
             </div>
           </div>

@@ -132,6 +132,14 @@ the hosted-product entry surface.
 | `NEXT_PUBLIC_LOGO_DARK_URL` | No | Stock logo | Web UI logo for dark backgrounds (frontend) |
 | `NEXT_PUBLIC_BRAND_ACCENT_COLOR` | No | `#0066FF` | Web UI accent color, any CSS color (frontend) |
 | `NEXT_PUBLIC_FAVICON_URL` | No | `/icon.svg` | Web UI favicon (frontend) |
+| `NEXT_PUBLIC_SIDEBAR_LOGO_HEIGHT` | No | `28px` | Sidebar logo height, `px`/`rem` value (frontend) |
+| `NEXT_PUBLIC_BRAND_THEME` | No | `default` | Theme preset: `default`, `teal`, `slate`, `violet` (frontend) |
+| `NEXT_PUBLIC_BRAND_AUTH_BG_COLOR` | No | Stock dark | Login/register background color (frontend) |
+| `NEXT_PUBLIC_BRAND_AUTH_BG_URL` | No | — | Login/register background image URL (frontend) |
+| `AVAILABLE_LOCALES` | No | `en` | Comma-separated interface locales this install offers, e.g. `de,en` |
+| `DEFAULT_LOCALE` | No | `en` | Fallback interface locale; must be listed in `AVAILABLE_LOCALES` |
+| `NEXT_PUBLIC_AVAILABLE_LOCALES` | No | `en` | Frontend counterpart of `AVAILABLE_LOCALES` — keep both in sync |
+| `NEXT_PUBLIC_DEFAULT_LOCALE` | No | `en` | Frontend counterpart of `DEFAULT_LOCALE` — keep both in sync |
 
 ## Branding
 
@@ -156,13 +164,30 @@ NEXT_PUBLIC_FAVICON_URL=https://cdn.acme.example/favicon.png
   light theme); `NEXT_PUBLIC_LOGO_DARK_URL` on dark surfaces (auth
   pages, sidebar in dark theme). If only `NEXT_PUBLIC_LOGO_URL` is set,
   it is used everywhere. Horizontal logos around 5:1 aspect ratio work
-  best; they render at ~20–31px height.
+  best; the sidebar renders them at 28px height by default. If your
+  logo's proportions need a different size, set
+  `NEXT_PUBLIC_SIDEBAR_LOGO_HEIGHT` to an exact `px`/`rem` value
+  (e.g. `24px`).
 - `NEXT_PUBLIC_BRAND_ACCENT_COLOR` accepts any CSS color and recolors
   links, accent-colored buttons and badges, focus rings, and charts.
   Hover/darker shades are derived automatically. The neutral dark
   (near-black) primary buttons and body text are intentionally not
   affected. The same accent is applied in both light and dark themes —
   pick a color with sufficient contrast in both.
+- `NEXT_PUBLIC_BRAND_THEME` switches the whole UI to a curated theme
+  preset — surfaces, accent, charts, sidebar and corner radius change
+  together, in both light and dark mode. Available presets: `default`
+  (stock navy + blue), `teal` (deep navy + teal accent), `slate`
+  (neutral graphite + steel blue), `violet` (warm neutrals + violet
+  accent). An explicit `NEXT_PUBLIC_BRAND_ACCENT_COLOR` still applies
+  on top of the preset's accent for point tweaks.
+- The login/register pages can carry their own background:
+  `NEXT_PUBLIC_BRAND_AUTH_BG_COLOR` replaces the stock dark backdrop
+  with a solid color; `NEXT_PUBLIC_BRAND_AUTH_BG_URL` (absolute
+  `https://` or root-relative URL) shows a full-bleed image instead —
+  it is scaled to cover the viewport on every screen size, and a dark
+  scrim keeps the sign-in card readable on any image. Setting either
+  hides the stock starfield decoration.
 - The variables are read at runtime on every request, so a prebuilt
   image (GHCR) picks them up from the container environment — no
   rebuild needed.
@@ -184,6 +209,27 @@ Static assets that live in the frontend image (`site.webmanifest`,
 `apple-touch-icon.png`, PNG icons) can be replaced by mounting your own
 files over `/app/public/*` in the frontend container if you need a
 fully branded install surface (PWA icons, home-screen name).
+
+## Interface Languages
+
+An install can offer more than one interface language. Set the pair on
+both containers (backend reads `AVAILABLE_LOCALES` / `DEFAULT_LOCALE`,
+frontend reads the `NEXT_PUBLIC_*` counterparts at runtime):
+
+```bash
+AVAILABLE_LOCALES=de,en
+DEFAULT_LOCALE=de
+NEXT_PUBLIC_AVAILABLE_LOCALES=de,en
+NEXT_PUBLIC_DEFAULT_LOCALE=de
+```
+
+The onboarding wizard then asks for the workspace default language, and
+every member can pick a personal language in profile settings. The
+backend refuses to start when `DEFAULT_LOCALE` is not listed in
+`AVAILABLE_LOCALES`. Single-locale installs (the default) hide the
+language selects entirely. The wizard also records the AI content
+language — the language the AI generates competences and development
+plans in — which is independent of the interface language.
 
 ## Upgrading
 

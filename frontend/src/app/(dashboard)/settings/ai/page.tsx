@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { useIsSaas } from "@/hooks/use-is-saas";
@@ -8,12 +9,16 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
 import {
   aiSettingsApi,
+  CONTENT_LANGUAGES,
   type AISettings,
   type AllowedModel,
+  type ContentLanguage,
   type EffortLevel,
   type EffortPreset,
   type LLMProvider,
+  type ProviderStatus,
 } from "@/lib/api/ai-settings";
+import { localeLabel } from "@/lib/locale";
 import {
   buildPatchDiff,
   isFormValid,
@@ -43,16 +48,27 @@ import { cn } from "@/lib/utils";
 
 const USE_PRESET_DEFAULT = "__preset__";
 
-const PRESET_LABEL: Record<Exclude<EffortLevel, "custom">, string> = {
-  fast: "Fast",
-  balanced: "Balanced",
-  thorough: "Thorough",
+/** Preset name → key in the `settings` message namespace. */
+const PRESET_LABEL_KEY: Record<Exclude<EffortLevel, "custom">, string> = {
+  fast: "aiPresetFast",
+  balanced: "aiPresetBalanced",
+  thorough: "aiPresetThorough",
+};
+
+// i18n F7: the tier descriptions the API returns are static English
+// copy from the PRESETS table — render the localized catalog strings
+// instead.
+const PRESET_DESCRIPTION_KEY: Record<Exclude<EffortLevel, "custom">, string> = {
+  fast: "aiPresetFastDescription",
+  balanced: "aiPresetBalancedDescription",
+  thorough: "aiPresetThoroughDescription",
 };
 
 function NotAvailable({ message }: { message: string }) {
+  const t = useTranslations("settings");
   return (
     <div className="mx-auto max-w-3xl py-12 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight">AI Settings</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">{t("aiTitle")}</h1>
       <p className="mt-3 text-sm text-muted-foreground">{message}</p>
     </div>
   );
@@ -63,6 +79,7 @@ function formatMultiplier(value: number): string {
 }
 
 export default function AISettingsPage() {
+  const t = useTranslations("settings");
   const { isAdmin } = usePermissions();
   const isSaas = useIsSaas();
   const [settings, setSettings] = useState<AISettings | null>(null);
@@ -73,7 +90,8 @@ export default function AISettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [providerFilter, setProviderFilter] = useState<LLMProvider>("anthropic");
+  const [providerFilter, setProviderFilter] = useState<string>("anthropic");
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -84,12 +102,14 @@ export default function AISettingsPage() {
       aiSettingsApi.get(),
       aiSettingsApi.presets(),
       aiSettingsApi.models(),
+      aiSettingsApi.providers().catch(() => null),
       isSaas ? api.get<unknown>("/billing/costs").catch(() => null) : null,
     ])
-      .then(([s, p, m, costs]) => {
+      .then(([s, p, m, provs, costs]) => {
         setSettings(s);
         setPresets(p);
         setModels(m);
+        if (provs) setProviders(provs.filter((x) => x.configured));
         setForm(settingsToForm(s));
         setProviderFilter(s.effective_provider);
         if (Array.isArray(costs)) {
@@ -104,11 +124,11 @@ export default function AISettingsPage() {
       })
       .catch((err) => {
         toast.error(
-          err instanceof Error ? err.message : "Failed to load AI settings",
+          err instanceof Error ? err.message : t("aiLoadFailed"),
         );
       })
       .finally(() => setLoading(false));
-  }, [isAdmin, isSaas]);
+  }, [isAdmin, isSaas, t]);
 
   const baseForm = useMemo(
     () => (settings ? settingsToForm(settings) : null),
@@ -123,6 +143,27 @@ export default function AISettingsPage() {
 
   const formValid = form ? isFormValid(form) : false;
 
+  // Providers the tenant can actually generate through (HRP-465). Falls
+  // back to the classic trio while loading or if the endpoint errors.
+  // Brand labels stay verbatim; only the local-server option carries
+  // translatable words, so it resolves through the catalog.
+  const providerOptions = useMemo<Array<{ provider: string; label: string }>>(
+    () =>
+      (providers.length > 0
+        ? providers
+        : [
+            { provider: "anthropic", label: "Anthropic" },
+            { provider: "openai", label: "OpenAI" },
+            { provider: "gemini", label: "Google" },
+          ]
+      ).map((p) =>
+        p.provider === "openai_compatible"
+          ? { ...p, label: t("aiProviderOpenAiCompatible") }
+          : p,
+      ),
+    [providers, t],
+  );
+
   // Preview multiplier of the *form* state (not yet saved).
   const previewMultiplier = useMemo(() => {
     if (!form) return 1.0;
@@ -135,21 +176,19 @@ export default function AISettingsPage() {
     const preset = presets.find(
       (p) => p.name === (form.effort_level === "custom" ? "balanced" : form.effort_level),
     );
-    const presetModel = preset?.models[providerFilter];
+    const presetModel = preset?.models[providerFilter as LLMProvider];
     if (!presetModel) return 1.0;
     const entry = models.find((m) => m.model === presetModel);
     return entry?.credit_multiplier ?? 1.0;
   }, [form, models, presets, providerFilter]);
 
   if (!isAdmin) {
-    return (
-      <NotAvailable message="AI settings are visible to workspace administrators only." />
-    );
+    return <NotAvailable message={t("aiAdminOnly")} />;
   }
   if (loading || !settings || !form) {
     return (
       <div className="mx-auto max-w-3xl py-12 text-center text-sm text-muted-foreground">
-        Loading AI settings...
+        {t("aiLoading")}
       </div>
     );
   }
@@ -183,10 +222,10 @@ export default function AISettingsPage() {
       setSettings(updated);
       setForm(settingsToForm(updated));
       setProviderFilter(updated.effective_provider);
-      toast.success("Settings saved");
+      toast.success(t("aiSaved"));
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save AI settings",
+        err instanceof Error ? err.message : t("aiSaveFailed"),
       );
     } finally {
       setSaving(false);
@@ -205,10 +244,10 @@ export default function AISettingsPage() {
       setSettings(updated);
       setForm(settingsToForm(updated));
       setProviderFilter(updated.effective_provider);
-      toast.success("Settings reset to balanced preset");
+      toast.success(t("aiResetDone"));
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to reset AI settings",
+        err instanceof Error ? err.message : t("aiResetFailed"),
       );
     } finally {
       setResetting(false);
@@ -224,7 +263,7 @@ export default function AISettingsPage() {
   function presetMultiplier(name: Exclude<EffortLevel, "custom">): number {
     const preset = presetsByName.get(name);
     if (!preset) return 1.0;
-    const presetModel = preset.models[providerFilter];
+    const presetModel = preset.models[providerFilter as LLMProvider];
     return models.find((m) => m.model === presetModel)?.credit_multiplier ?? 1.0;
   }
 
@@ -244,23 +283,15 @@ export default function AISettingsPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-6 pb-24">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">AI Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          These settings affect every AI operation in your workspace —
-          competence generation, indicators, position drafts, and PDP
-          suggestions.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("aiTitle")}</h1>
+        <p className="text-sm text-muted-foreground">{t("aiDescription")}</p>
       </div>
 
       {/* Effort tier */}
       <Card>
         <CardHeader>
-          <CardTitle>Effort tier</CardTitle>
-          <CardDescription>
-            Pick a preset that balances speed, cost, and quality. Each tier
-            picks a different model — the multiplier shows how many credits
-            an AI call costs versus the Balanced baseline.
-          </CardDescription>
+          <CardTitle>{t("aiEffortTier")}</CardTitle>
+          <CardDescription>{t("aiEffortTierDescription")}</CardDescription>
         </CardHeader>
         <CardContent
           className="grid gap-3 sm:grid-cols-3"
@@ -286,24 +317,26 @@ export default function AISettingsPage() {
               >
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">
-                    {PRESET_LABEL[name]}
+                    {t(PRESET_LABEL_KEY[name])}
                   </span>
                   <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
                     {formatMultiplier(mult)}
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {preset?.description ?? ""}
+                  {t(PRESET_DESCRIPTION_KEY[name])}
                 </p>
                 {preset && (
                   <p className="mt-2 text-[11px] text-muted-foreground">
-                    temperature {preset.temperature} · max_retries{" "}
-                    {preset.max_retries}
+                    {t("aiPresetParams", {
+                      temperature: preset.temperature,
+                      maxRetries: preset.max_retries,
+                    })}
                   </p>
                 )}
                 {preset && (
                   <p className="mt-1 text-[11px] text-muted-foreground/80">
-                    {preset.models[providerFilter]}
+                    {preset.models[providerFilter as LLMProvider]}
                   </p>
                 )}
               </button>
@@ -315,10 +348,9 @@ export default function AISettingsPage() {
               data-active="true"
               className="col-span-full rounded-md border border-primary bg-primary/5 p-3"
             >
-              <div className="text-sm font-medium">Custom</div>
+              <div className="text-sm font-medium">{t("aiPresetCustom")}</div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Effective values come from the fields below. Switch back to a
-                preset to discard custom values.
+                {t("aiPresetCustomHint")}
               </p>
             </div>
           )}
@@ -328,48 +360,45 @@ export default function AISettingsPage() {
       {/* Custom overrides */}
       <Card>
         <CardHeader>
-          <CardTitle>Custom overrides</CardTitle>
+          <CardTitle>{t("aiCustomOverrides")}</CardTitle>
           <CardDescription>
-            Editing any field below switches the effort tier to{" "}
-            <span className="font-medium">Custom</span>. Pick a model from the
-            whitelist or fall back to the active preset&apos;s default.
+            {t.rich("aiCustomOverridesDescription", {
+              b: (chunks) => <span className="font-medium">{chunks}</span>,
+            })}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label>Provider</Label>
+              <Label>{t("aiProvider")}</Label>
               <Select
                 value={providerFilter}
-                onValueChange={(v) => setProviderFilter(v as LLMProvider)}
+                onValueChange={(v) => setProviderFilter(v)}
               >
                 <SelectTrigger
                   data-testid="settings-ai-select-provider"
                   className="w-full"
                 >
                   <SelectValue>
-                    {providerFilter === "anthropic"
-                      ? "Anthropic"
-                      : providerFilter === "openai"
-                        ? "OpenAI"
-                        : providerFilter === "gemini"
-                          ? "Google"
-                          : ""}
+                    {providerOptions.find((p) => p.provider === providerFilter)
+                      ?.label ?? providerFilter}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="anthropic">Anthropic</SelectItem>
-                  <SelectItem value="openai">OpenAI</SelectItem>
-                  <SelectItem value="gemini">Google</SelectItem>
+                  {providerOptions.map((p) => (
+                    <SelectItem key={p.provider} value={p.provider}>
+                      {p.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Filters the model list below.
+                {t("aiProviderHint")}
               </p>
             </div>
 
             <div className="space-y-2">
-              <Label>Model</Label>
+              <Label>{t("aiModel")}</Label>
               <Select
                 value={form.llm_model ?? USE_PRESET_DEFAULT}
                 onValueChange={(v) =>
@@ -386,7 +415,8 @@ export default function AISettingsPage() {
                   <SelectValue>
                     {(() => {
                       const selected = form.llm_model ?? USE_PRESET_DEFAULT;
-                      if (selected === USE_PRESET_DEFAULT) return "Use preset default";
+                      if (selected === USE_PRESET_DEFAULT)
+                        return t("aiUsePresetDefault");
                       const match = modelsForProvider.find((m) => m.model === selected);
                       return match
                         ? `${match.label} (${formatMultiplier(match.credit_multiplier)})`
@@ -396,7 +426,7 @@ export default function AISettingsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={USE_PRESET_DEFAULT}>
-                    Use preset default
+                    {t("aiUsePresetDefault")}
                   </SelectItem>
                   {modelsForProvider.map((m) => (
                     <SelectItem key={m.model} value={m.model}>
@@ -406,18 +436,25 @@ export default function AISettingsPage() {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Effective:{" "}
-                <span className="font-mono">{settings.effective_provider}</span>{" "}
-                ·{" "}
-                <span className="font-mono">{settings.effective_model}</span> ·{" "}
-                {formatMultiplier(settings.effective_credit_multiplier)}
+                {t.rich("aiEffectiveModel", {
+                  mono: (chunks) => (
+                    <span className="font-mono">{chunks}</span>
+                  ),
+                  provider: settings.effective_provider,
+                  model: settings.effective_model,
+                  multiplier: formatMultiplier(
+                    settings.effective_credit_multiplier,
+                  ),
+                })}
               </p>
             </div>
           </div>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label htmlFor="settings-ai-input-temperature">Temperature</Label>
+              <Label htmlFor="settings-ai-input-temperature">
+                {t("aiTemperature")}
+              </Label>
               <span className="text-sm font-mono text-muted-foreground">
                 {form.temperature.toFixed(2)}
               </span>
@@ -436,13 +473,16 @@ export default function AISettingsPage() {
               className="w-full accent-primary"
             />
             <p className="text-xs text-muted-foreground">
-              Lower values are more deterministic; higher values produce more
-              diverse output. Effective: {settings.effective_temperature}.
+              {t("aiTemperatureHint", {
+                value: settings.effective_temperature,
+              })}
             </p>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="settings-ai-input-retries">Max retries</Label>
+            <Label htmlFor="settings-ai-input-retries">
+              {t("aiMaxRetries")}
+            </Label>
             <Input
               id="settings-ai-input-retries"
               data-testid="settings-ai-input-retries"
@@ -456,8 +496,7 @@ export default function AISettingsPage() {
               }
             />
             <p className="text-xs text-muted-foreground">
-              JSON parse retries per AI call. Effective:{" "}
-              {settings.effective_max_retries}.
+              {t("aiRetriesHint", { value: settings.effective_max_retries })}
             </p>
           </div>
 
@@ -470,7 +509,7 @@ export default function AISettingsPage() {
               disabled={resetting || saving}
               data-testid="settings-ai-btn-reset"
             >
-              {resetting ? "Resetting..." : "Reset to balanced preset"}
+              {resetting ? t("aiResetting") : t("aiResetToBalanced")}
             </Button>
           </div>
         </CardContent>
@@ -479,33 +518,34 @@ export default function AISettingsPage() {
       {/* Content language */}
       <Card>
         <CardHeader>
-          <CardTitle>Content language</CardTitle>
+          <CardTitle>{t("aiContentLanguage")}</CardTitle>
           <CardDescription>
-            Language used by the model when generating competences,
-            indicators, positions, and PDP goals.
+            {t("aiContentLanguageDescription")}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           <Select
             value={form.content_language}
             onValueChange={(v) =>
-              setForm({ ...form, content_language: v as "en" })
+              setForm({ ...form, content_language: v as ContentLanguage })
             }
           >
             <SelectTrigger
               data-testid="settings-ai-select-language"
               className="w-full sm:w-64"
             >
-              <SelectValue>
-                {form.content_language === "en" ? "English" : form.content_language}
-              </SelectValue>
+              <SelectValue>{localeLabel(form.content_language)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="en">English</SelectItem>
+              {CONTENT_LANGUAGES.map((lang) => (
+                <SelectItem key={lang} value={lang}>
+                  {localeLabel(lang)}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            More languages will be added in the i18n phase.
+            {t("aiContentLanguageHint")}
           </p>
         </CardContent>
       </Card>
@@ -513,11 +553,9 @@ export default function AISettingsPage() {
       {/* Company context */}
       <Card>
         <CardHeader>
-          <CardTitle>Company context</CardTitle>
+          <CardTitle>{t("aiCompanyContext")}</CardTitle>
           <CardDescription>
-            Appended to every AI prompt as additional context. Describe your
-            company so the model picks competences and positions relevant to
-            your business.
+            {t("aiCompanyContextDescription")}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -529,10 +567,10 @@ export default function AISettingsPage() {
             onChange={(e) =>
               setForm({ ...form, company_context: e.target.value })
             }
-            placeholder="Acme Corp builds payment infrastructure for B2B SaaS..."
+            placeholder={t("aiCompanyContextPlaceholder")}
           />
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>Markdown is not interpreted; plain text only.</span>
+            <span>{t("aiCompanyContextHint")}</span>
             <span data-testid="settings-ai-company-context-counter">
               {form.company_context.length} / 2000
             </span>
@@ -548,17 +586,21 @@ export default function AISettingsPage() {
         >
           <div className="mx-auto flex max-w-3xl flex-col gap-2 px-6 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm text-muted-foreground">
-              <p>You have unsaved changes.</p>
+              <p>{t("aiUnsavedChanges")}</p>
               {showSpendPreview && (
                 <p
                   className="text-xs"
                   data-testid="settings-ai-spend-preview"
                 >
-                  Competence generation now: {currentSpend} →{" "}
-                  <span className="font-medium text-foreground">
-                    {previewSpend}
-                  </span>{" "}
-                  credits per call.
+                  {t.rich("aiSpendPreview", {
+                    b: (chunks) => (
+                      <span className="font-medium text-foreground">
+                        {chunks}
+                      </span>
+                    ),
+                    current: currentSpend,
+                    preview: previewSpend,
+                  })}
                 </p>
               )}
             </div>
@@ -571,7 +613,7 @@ export default function AISettingsPage() {
                 disabled={saving}
                 data-testid="settings-ai-btn-discard"
               >
-                Discard
+                {t("aiDiscard")}
               </Button>
               <Button
                 type="button"
@@ -580,7 +622,7 @@ export default function AISettingsPage() {
                 disabled={saving || !formValid}
                 data-testid="settings-ai-btn-save"
               >
-                {saving ? "Saving..." : "Save changes"}
+                {saving ? t("saving") : t("saveChanges")}
               </Button>
             </div>
           </div>

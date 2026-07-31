@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Lock } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ export function IndicatorsList({
   lockedIds,
   existingIndicators,
 }: IndicatorsListProps) {
+  const t = useTranslations("competences");
   const indicators: GeneratedIndicator[] = payload.indicators ?? [];
   const toggleable = indicators.filter((i) => {
     if (!i.temp_id) return false;
@@ -70,9 +72,7 @@ export function IndicatorsList({
         }
       }
       if (failed > 0) {
-        toast.error(
-          `${failed} indicator${failed === 1 ? "" : "s"} could not be updated. Try again.`,
-        );
+        toast.error(t("toastIndicatorsUpdateFailed", { count: failed }));
       }
     } finally {
       setBulkBusy(false);
@@ -92,22 +92,26 @@ export function IndicatorsList({
           className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs"
         >
           <span className="text-muted-foreground">
-            <span
-              data-testid="compgen-result-summary-new-count"
-              className="font-medium text-foreground"
-            >
-              {selectedCount}
-            </span>{" "}
-            new {selectedCount === 1 ? "indicator" : "indicators"} will be added
-            {" · "}
-            <span
-              data-testid="compgen-result-summary-existing-count"
-              className="font-medium text-foreground"
-            >
-              {existing.length}
-            </span>{" "}
-            existing {existing.length === 1 ? "indicator" : "indicators"} in this
-            competence
+            {t.rich("resultSummaryIndicators", {
+              newCount: selectedCount,
+              existingCount: existing.length,
+              new: (chunks) => (
+                <span
+                  data-testid="compgen-result-summary-new-count"
+                  className="font-medium text-foreground"
+                >
+                  {chunks}
+                </span>
+              ),
+              existing: (chunks) => (
+                <span
+                  data-testid="compgen-result-summary-existing-count"
+                  className="font-medium text-foreground"
+                >
+                  {chunks}
+                </span>
+              ),
+            })}
           </span>
           <div className="ml-auto inline-flex rounded-md border bg-background p-0.5">
             <Button
@@ -118,7 +122,7 @@ export function IndicatorsList({
               className="h-6 px-2 text-[11px]"
               onClick={() => setView("all")}
             >
-              All
+              {t("filterAll")}
             </Button>
             <Button
               data-testid="compgen-result-filter-show-new-only"
@@ -128,7 +132,7 @@ export function IndicatorsList({
               className="h-6 px-2 text-[11px]"
               onClick={() => setView("new-only")}
             >
-              New only
+              {t("filterNewOnly")}
             </Button>
           </div>
         </div>
@@ -138,8 +142,7 @@ export function IndicatorsList({
           data-testid="compgen-result-empty-state-only-duplicates"
           className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
         >
-          Generated indicators duplicate existing ones in this competence.
-          Nothing new to add — refine the prompt or try again.
+          {t("resultOnlyDuplicatesIndicators")}
         </div>
       )}
       {existing.length > 0 && view === "all" && (
@@ -148,7 +151,7 @@ export function IndicatorsList({
           className="space-y-0.5 rounded-md border border-dashed bg-muted/20 p-2"
         >
           <div className="mb-1.5 flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            <Lock className="h-3 w-3" /> Existing indicators (read-only)
+            <Lock className="h-3 w-3" /> {t("resultExistingIndicatorsHeader")}
           </div>
           <TooltipProvider>
             {existing.map((ind) => (
@@ -167,8 +170,7 @@ export function IndicatorsList({
                     />
                   </TooltipTrigger>
                   <TooltipContent side="right" className="max-w-xs text-xs">
-                    This item is already in the group and cannot be modified
-                    here. Edit it from the group page.
+                    {t("resultExistingTooltip")}
                   </TooltipContent>
                 </Tooltip>
                 <span className="flex-1 truncate">{ind.title}</span>
@@ -182,7 +184,7 @@ export function IndicatorsList({
                   variant="outline"
                   className="text-[10px] text-muted-foreground"
                 >
-                  existing
+                  {t("badgeExisting")}
                 </Badge>
               </div>
             ))}
@@ -192,7 +194,10 @@ export function IndicatorsList({
       {indicators.length > 0 && (
         <div className="flex items-center justify-between gap-2 pb-1">
           <span className="text-xs text-muted-foreground">
-            {selectedCount} of {indicators.length} selected
+            {t("selectedOfTotal", {
+              selected: selectedCount,
+              total: indicators.length,
+            })}
           </span>
           <Button
             type="button"
@@ -203,10 +208,10 @@ export function IndicatorsList({
             onClick={() => toggleAll(!allSelected)}
           >
             {bulkBusy
-              ? "Updating…"
+              ? t("bulkUpdating")
               : allSelected
-                ? "Deselect all"
-                : "Select all"}
+                ? t("deselectAll")
+                : t("selectAll")}
           </Button>
         </div>
       )}
@@ -241,9 +246,13 @@ export function IndicatorsList({
         data-testid="compgen-drawer-counter"
         className="sticky bottom-0 mt-2 rounded-md border bg-background/95 px-3 py-2 text-xs text-muted-foreground"
       >
-        Selected indicators:{" "}
-        <span className="font-medium text-foreground">{selectedCount}</span>{" "}
-        of {indicators.length}
+        {t.rich("counterIndicators", {
+          selected: selectedCount,
+          total: indicators.length,
+          count: (chunks) => (
+            <span className="font-medium text-foreground">{chunks}</span>
+          ),
+        })}
       </div>
     </div>
   );

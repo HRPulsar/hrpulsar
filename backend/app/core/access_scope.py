@@ -7,10 +7,11 @@ means "the user is not linked to any employee" and lists should return nothing.
 
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.auth.models import User
 from app.modules.company.models import Division
 from app.modules.employee.models import Employee
@@ -145,20 +146,18 @@ async def assert_employee_write_scope(
         visible = await get_visible_employee_ids(db, current_user)
         if visible is None or target.id in visible:
             return
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "error_code": "outside_division_scope",
-                "message": "Employee is outside your division scope",
-            },
+        raise AppError(
+            "outside_division_scope",
+            status.HTTP_403_FORBIDDEN,
+            detail_extra={},
+            detail_code_key="error_code",
         )
 
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail={
-            "error_code": "employee_write_forbidden",
-            "message": "Insufficient permissions for employee write operations",
-        },
+    raise AppError(
+        "employee_write_forbidden",
+        status.HTTP_403_FORBIDDEN,
+        detail_extra={},
+        detail_code_key="error_code",
     )
 
 
@@ -176,13 +175,9 @@ def assert_not_self_edit_via_employees(current_user: User, target: Employee) -> 
         return
     if target.user_id != current_user.id:
         return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail={
-            "error_code": "cannot_edit_self_status",
-            "message": (
-                "Managers cannot edit their own employee record; "
-                "profile self-edits go through /auth/me"
-            ),
-        },
+    raise AppError(
+        "cannot_edit_self_status",
+        status.HTTP_403_FORBIDDEN,
+        detail_extra={},
+        detail_code_key="error_code",
     )

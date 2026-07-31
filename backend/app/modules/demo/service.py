@@ -23,6 +23,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.errors import AppError
 from app.core.security import (
     create_demo_access_token,
     decode_token,
@@ -79,17 +80,17 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
             pipe.expire(key, 3600)
             count, _ = await pipe.execute()
         if count > settings.demo_rate_limit_per_ip_per_hour:
-            raise HTTPException(
+            raise AppError(
+                "demo_rate_limited",
                 status.HTTP_429_TOO_MANY_REQUESTS,
-                "Too many demo attempts from this address; please try again later.",
             )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         logger.exception("demo rate-limit: redis unavailable, refusing request")
-        raise HTTPException(
+        raise AppError(
+            "demo_sandbox_unavailable",
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Sandbox temporarily unavailable; please try again in a minute.",
         ) from exc
     finally:
         if client is not None:
@@ -128,9 +129,9 @@ async def _enforce_concurrent_limit(db: AsyncSession, *, now: datetime) -> None:
     )
     live = await _count_live_demo_tenants(db, now=now)
     if live >= settings.demo_max_concurrent_sessions:
-        raise HTTPException(
+        raise AppError(
+            "demo_sandbox_capacity_reached",
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Sandbox capacity reached; please try again in a few minutes.",
         )
 
 
@@ -148,9 +149,9 @@ async def _peek_concurrent_capacity(
     """
     live = await _count_live_demo_tenants(db, now=now)
     if live >= settings.demo_max_concurrent_sessions:
-        raise HTTPException(
+        raise AppError(
+            "demo_sandbox_capacity_reached",
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Sandbox capacity reached; please try again in a few minutes.",
         )
 
 
@@ -351,9 +352,9 @@ async def create_demo_session(
     their own sandbox instead of stranding the old one in the pool.
     """
     if not settings.demo_enabled:
-        raise HTTPException(
+        raise AppError(
+            "demo_disabled",
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Public sandbox is currently disabled.",
         )
 
     if existing_token:
@@ -362,10 +363,7 @@ async def create_demo_session(
             return resumed
 
     if not await verify_turnstile_token(turnstile_token, remote_ip=remote_ip):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Bot guard challenge failed.",
-        )
+        raise AppError("demo_bot_guard_failed", status.HTTP_400_BAD_REQUEST)
 
     # HRP-276 / M2: cheap peek first so a full pool returns 503 without
     # burning the IP's hourly INCR allowance.

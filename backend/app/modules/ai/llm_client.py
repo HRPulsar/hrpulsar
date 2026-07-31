@@ -1,10 +1,13 @@
-"""Unified LLM client. Supports Claude, OpenAI, and Gemini."""
+"""Unified LLM client. Supports Claude, OpenAI, Gemini, and OpenAI-compatible
+local servers (Ollama/vLLM/LM Studio via a per-tenant ``base_url``)."""
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import uuid
 from typing import TYPE_CHECKING, Any, TypeVar
 
 import anthropic
@@ -14,9 +17,11 @@ from google import genai
 from pydantic import BaseModel
 
 from app.config import settings
-from app.modules.ai import model_registry
+from app.modules.ai import model_registry, providers
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from app.modules.ai_settings.models import TenantAISettings
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -42,39 +47,63 @@ class LLMOutputTruncatedError(RuntimeError):
         )
 
 
-# Provider clients (lazy init)
-_openai_client: openai.AsyncOpenAI | None = None
-_anthropic_client: anthropic.AsyncAnthropic | None = None
-_gemini_client: genai.Client | None = None
+# Provider clients, cached per (provider, key fingerprint, base_url) so BYOK
+# tenants get their own client while the common global-key path still reuses
+# one connection pool (HRP-465). The fingerprint keeps raw keys out of the
+# cache keys (and out of any accidental debug output).
+_client_cache: dict[tuple[str, str, str], Any] = {}
 
 
-def _get_openai() -> openai.AsyncOpenAI:
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = openai.AsyncOpenAI(
-            api_key=settings.openai_api_key,
+def _cache_key(
+    provider: str, api_key: str | None, base_url: str | None
+) -> tuple[str, str, str]:
+    fingerprint = hashlib.sha256((api_key or "").encode()).hexdigest()[:16]
+    return (provider, fingerprint, base_url or "")
+
+
+def _get_openai(
+    api_key: str | None = None, base_url: str | None = None
+) -> openai.AsyncOpenAI:
+    key = _cache_key("openai", api_key, base_url)
+    client = _client_cache.get(key)
+    if client is None:
+        # A tenant-supplied base_url must NEVER fall back to the platform
+        # key: the key would be sent as a Bearer token to an arbitrary
+        # host. Local OpenAI-compatible servers usually run without auth,
+        # but the SDK insists on a non-empty key.
+        effective_key = api_key or (
+            "not-needed" if base_url else settings.openai_api_key
+        )
+        client = openai.AsyncOpenAI(
+            api_key=effective_key,
+            base_url=base_url,
             max_retries=3,
             timeout=httpx.Timeout(600.0, connect=30.0),
         )
-    return _openai_client
+        _client_cache[key] = client
+    return client
 
 
-def _get_anthropic() -> anthropic.AsyncAnthropic:
-    global _anthropic_client
-    if _anthropic_client is None:
-        _anthropic_client = anthropic.AsyncAnthropic(
-            api_key=settings.anthropic_api_key,
+def _get_anthropic(api_key: str | None = None) -> anthropic.AsyncAnthropic:
+    key = _cache_key("anthropic", api_key, None)
+    client = _client_cache.get(key)
+    if client is None:
+        client = anthropic.AsyncAnthropic(
+            api_key=api_key or settings.anthropic_api_key,
             max_retries=3,
             timeout=httpx.Timeout(600.0, connect=30.0),
         )
-    return _anthropic_client
+        _client_cache[key] = client
+    return client
 
 
-def _get_gemini() -> genai.Client:
-    global _gemini_client
-    if _gemini_client is None:
-        _gemini_client = genai.Client(api_key=settings.gemini_api_key)
-    return _gemini_client
+def _get_gemini(api_key: str | None = None) -> genai.Client:
+    key = _cache_key("gemini", api_key, None)
+    client = _client_cache.get(key)
+    if client is None:
+        client = genai.Client(api_key=api_key or settings.gemini_api_key)
+        _client_cache[key] = client
+    return client
 
 
 async def generate(
@@ -84,12 +113,23 @@ async def generate(
     temperature: float | None = None,
     max_tokens: int = 8192,
     tenant_settings: TenantAISettings | None = None,
+    *,
+    db: AsyncSession | None = None,
+    tenant_id: uuid.UUID | None = None,
+    credentials: providers.GenerationTarget | None = None,
 ) -> str:
     """Send a prompt to LLM and return the text response.
 
     Explicit `model` / `temperature` arguments always win. When omitted,
     `tenant_settings` (if provided) supplies the effective values via
     `app.modules.ai_settings.service`.
+
+    HRP-465 — per-tenant credentials: pass `db` (+ `tenant_id`, defaulted
+    from `tenant_settings`) to resolve the tenant's BYOK key or local
+    OpenAI-compatible endpoint, which win over the platform env keys.
+    Sync Celery callers resolve up front via
+    `providers.resolve_generation_target_sync` and pass `credentials`
+    directly. With neither, the platform env keys apply as before.
     """
     if tenant_settings is not None:
         from app.modules.ai_settings import service as ai_settings_service
@@ -98,23 +138,54 @@ async def generate(
             model = ai_settings_service.get_effective_model(tenant_settings)
         if temperature is None:
             temperature = ai_settings_service.get_effective_temperature(tenant_settings)
+        if tenant_id is None:
+            tenant_id = tenant_settings.tenant_id
 
     if temperature is None:
         temperature = 0.7
 
+    target = credentials
+    if target is None and db is not None and tenant_id is not None:
+        target = await providers.resolve_generation_target(db, tenant_id, model)
+
+    if model is None and target is not None and target.model:
+        # The caller picked no model (recruitment pipeline) — the tenant's
+        # BYOK/local config supplies both the credentials and the model.
+        model = target.model
+
     provider = _resolve_provider(model)
     model = model or _get_default_model()
+
+    api_key: str | None = None
+    base_url: str | None = None
+    if target is not None:
+        api_key = target.api_key
+        base_url = target.base_url
+        if target.provider == "anthropic":
+            provider = "claude"
+        elif target.provider == "gemini":
+            provider = "gemini"
+        else:  # openai / openai_compatible
+            provider = "openai"
 
     try:
         if provider == "claude":
             return await _generate_anthropic(
-                prompt, system, model, temperature, max_tokens
+                prompt, system, model, temperature, max_tokens, api_key=api_key
             )
         if provider == "gemini":
             return await _generate_gemini(
-                prompt, system, model, temperature, max_tokens
+                prompt, system, model, temperature, max_tokens, api_key=api_key
             )
-        return await _generate_openai(prompt, system, model, temperature, max_tokens)
+        return await _generate_openai(
+            prompt,
+            system,
+            model,
+            temperature,
+            max_tokens,
+            api_key=api_key,
+            base_url=base_url,
+        )
     except Exception:
         logger.exception(
             "LLM generation failed (provider=%s, model=%s)", provider, model
@@ -130,6 +201,10 @@ async def generate_json(
     max_tokens: int | None = None,
     tenant_settings: TenantAISettings | None = None,
     schema: type[BaseModel] | None = None,
+    *,
+    db: AsyncSession | None = None,
+    tenant_id: uuid.UUID | None = None,
+    credentials: providers.GenerationTarget | None = None,
 ) -> dict | list | BaseModel:
     """Generate and parse JSON from LLM response.
 
@@ -165,6 +240,9 @@ async def generate_json(
         "model": model,
         "temperature": temperature,
         "tenant_settings": tenant_settings,
+        "db": db,
+        "tenant_id": tenant_id,
+        "credentials": credentials,
     }
     if max_tokens is not None:
         generate_kwargs["max_tokens"] = max_tokens
@@ -208,9 +286,16 @@ async def get_embeddings_batch(
 
 
 async def _generate_openai(
-    prompt: str, system: str | None, model: str, temperature: float, max_tokens: int
+    prompt: str,
+    system: str | None,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> str:
-    client = _get_openai()
+    client = _get_openai(api_key, base_url)
     messages: list[dict[str, str]] = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -218,8 +303,10 @@ async def _generate_openai(
 
     # HRP-134: gpt-4o family rejects max_tokens > 16384 with HTTP 400 —
     # clamp like the Anthropic path so callers can request one generous
-    # budget across providers.
-    max_tokens = _clamp_openai_max_tokens(model, max_tokens)
+    # budget across providers. Local OpenAI-compatible servers (base_url
+    # set) serve arbitrary models with their own limits — don't clamp.
+    if base_url is None:
+        max_tokens = _clamp_openai_max_tokens(model, max_tokens)
     response = await client.chat.completions.create(
         model=model,
         messages=messages,  # type: ignore[arg-type]
@@ -240,19 +327,28 @@ def _clamp_openai_max_tokens(model: str, requested: int) -> int:
 
 
 async def _generate_anthropic(
-    prompt: str, system: str | None, model: str, temperature: float, max_tokens: int
+    prompt: str,
+    system: str | None,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    *,
+    api_key: str | None = None,
 ) -> str:
-    client = _get_anthropic()
+    client = _get_anthropic(api_key)
     kwargs: dict = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
         # HRP-122: Anthropic models cap standard output per family — Haiku 4.5
         # rejects max_tokens > 8192 with HTTP 400 unless the extended-output
         # beta header is set. Clamp here so callers can ask for a generous
         # budget without breaking the cheapest preset.
         "max_tokens": _clamp_anthropic_max_tokens(model, max_tokens),
     }
+    # Opus 4.7+/Sonnet 5/Fable 5 reject `temperature` with HTTP 400 — send it
+    # only to models that still accept sampling params.
+    if model_registry.anthropic_accepts_temperature(model):
+        kwargs["temperature"] = temperature
     if system:
         kwargs["system"] = system
 
@@ -275,13 +371,18 @@ async def _generate_anthropic(
         raise ValueError(
             f"Anthropic returned no content blocks (stop_reason={response.stop_reason})"
         )
-    block = response.content[0]
-    text = getattr(block, "text", None)
-    if text is None:
-        raise ValueError(
-            f"Anthropic first content block has no text ({type(block).__name__})"
-        )
-    return text
+    # HRP-509: thinking-capable models (balanced/thorough catalog tiers)
+    # emit a ThinkingBlock before the text — return the first text block,
+    # not the first block.
+    for block in response.content:
+        text = getattr(block, "text", None)
+        if text is not None:
+            return text
+    block_types = ", ".join(type(block).__name__ for block in response.content)
+    raise ValueError(
+        f"Anthropic returned no text content block "
+        f"(stop_reason={response.stop_reason}, blocks={block_types})"
+    )
 
 
 # HRP-432: 32768 is the largest budget proven to work through the
@@ -299,9 +400,15 @@ def _clamp_anthropic_max_tokens(model: str, requested: int) -> int:
 
 
 async def _generate_gemini(
-    prompt: str, system: str | None, model: str, temperature: float, max_tokens: int
+    prompt: str,
+    system: str | None,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    *,
+    api_key: str | None = None,
 ) -> str:
-    client = _get_gemini()
+    client = _get_gemini(api_key)
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
     max_tokens = _clamp_gemini_max_tokens(model, max_tokens)
 
@@ -330,11 +437,16 @@ def _clamp_gemini_max_tokens(model: str, requested: int) -> int:
 
 
 def _resolve_provider(model: str | None) -> str:
-    """Determine provider from explicit model name or settings."""
+    """Determine provider from explicit model name or settings.
+
+    Returns the legacy dispatch names ("claude"/"gemini"/"openai"); the
+    prefix knowledge itself lives in ``providers.PROVIDERS`` (HRP-465).
+    """
     if model:
-        if model.startswith("claude"):
+        canonical = providers.classify_model(model)
+        if canonical == "anthropic":
             return "claude"
-        if model.startswith("gemini"):
+        if canonical == "gemini":
             return "gemini"
         return "openai"
     return settings.llm_provider

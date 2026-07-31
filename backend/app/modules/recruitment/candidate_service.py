@@ -15,12 +15,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
-from fastapi import HTTPException, UploadFile, status
+from fastapi import UploadFile, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
+from app.core.errors import AppError
 from app.models import Person
 from app.modules.auth.models import User
 from app.modules.demo.utils import is_demo_tenant
@@ -161,9 +162,9 @@ async def create_candidate(
             )
         )
         if result.scalar_one_or_none():
-            raise HTTPException(
+            raise AppError(
+                "person_already_candidate",
                 status.HTTP_409_CONFLICT,
-                "This person is already a candidate in this tenant",
             )
         person = existing_person
     else:
@@ -303,7 +304,7 @@ async def update_person(
     """
     person = await db.get(Person, person_id)
     if not person:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Person not found")
+        raise AppError("person_not_found", status.HTTP_404_NOT_FOUND)
 
     updates = data.model_dump(exclude_unset=True)
     for field, value in updates.items():
@@ -367,9 +368,9 @@ async def attach_candidate(
         )
     )
     if result.scalar_one_or_none():
-        raise HTTPException(
+        raise AppError(
+            "candidate_already_linked_to_vacancy",
             status.HTTP_409_CONFLICT,
-            "Candidate is already linked to this vacancy",
         )
 
     # Resolve stage: use provided or find first non-terminal stage
@@ -441,8 +442,8 @@ async def change_candidate_status(
     )
     cv = result.scalar_one_or_none()
     if not cv:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Candidate-vacancy link not found"
+        raise AppError(
+            "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
         )
 
     old_stage_id = cv.stage_id
@@ -539,8 +540,8 @@ async def get_candidate_vacancy(
         )
     ).scalar_one_or_none()
     if not cv:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Candidate-vacancy link not found"
+        raise AppError(
+            "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
         )
     return _cv_to_read(cv)
 
@@ -646,7 +647,7 @@ async def update_resume_parsed_data(
     )
     resume = result.scalar_one_or_none()
     if not resume:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Resume not found")
+        raise AppError("resume_not_found", status.HTTP_404_NOT_FOUND)
     resume.parsed_data = parsed_data
     await db.commit()
     await db.refresh(resume)
@@ -689,13 +690,13 @@ async def get_resume_download_url(
     )
     resume = result.scalar_one_or_none()
     if not resume:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Resume not found")
+        raise AppError("resume_not_found", status.HTTP_404_NOT_FOUND)
     if not resume.file_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Resume file is missing")
+        raise AppError("resume_file_missing", status.HTTP_404_NOT_FOUND)
 
     file_record = await db.get(File, resume.file_id)
     if not file_record:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "File record not found")
+        raise AppError("file_record_not_found", status.HTTP_404_NOT_FOUND)
     content_disposition = (
         _attachment_disposition(resume.original_filename or "resume")
         if disposition == "attachment"
@@ -703,7 +704,7 @@ async def get_resume_download_url(
     )
     url = get_presigned_url(file_record.path, content_disposition=content_disposition)
     if url is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "S3 unavailable")
+        raise AppError("s3_unavailable", status.HTTP_503_SERVICE_UNAVAILABLE)
     return {
         "url": url,
         "mime_type": resume.mime_type,
@@ -1033,7 +1034,7 @@ async def _load_canonical_candidate(
     row = await db.execute(query)
     candidate = row.scalar_one_or_none()
     if not candidate:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate not found")
+        raise AppError("candidate_not_found", status.HTTP_404_NOT_FOUND)
     return candidate
 
 
@@ -1092,9 +1093,9 @@ async def add_candidate_to_vacancy_manual(
     await _get_vacancy(db, tenant_id, vacancy_id)
 
     if not data.email and not data.phone:
-        raise HTTPException(
+        raise AppError(
+            "candidate_email_or_phone_required",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Either email or phone is required.",
         )
 
     candidate: Candidate | None = None
@@ -1108,24 +1109,18 @@ async def add_candidate_to_vacancy_manual(
         # link path must mirror that or an archived candidate slips back
         # onto a vacancy with no edit affordance.
         if candidate.archived_at is not None:
-            raise HTTPException(
+            raise AppError(
+                "candidate_archived",
                 status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "candidate_archived",
-                    "message": "Cannot link an archived candidate. Restore it first.",
-                    "existing_candidate_id": str(candidate.id),
-                },
+                detail_extra={"existing_candidate_id": str(candidate.id)},
             )
     elif data.email is not None:
         existing = await find_active_candidate_by_email(db, tenant_id, data.email)
         if existing is not None:
-            raise HTTPException(
+            raise AppError(
+                "candidate_email_conflict",
                 status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "candidate_email_conflict",
-                    "message": "An active candidate with this email already exists.",
-                    "existing_candidate_id": str(existing.id),
-                },
+                detail_extra={"existing_candidate_id": str(existing.id)},
             )
 
     if candidate is None:
@@ -1155,9 +1150,9 @@ async def add_candidate_to_vacancy_manual(
         )
     )
     if existing_cv.scalar_one_or_none() is not None:
-        raise HTTPException(
+        raise AppError(
+            "candidate_already_attached_to_vacancy",
             status.HTTP_409_CONFLICT,
-            "Candidate is already attached to this vacancy.",
         )
 
     stage_id = await _first_non_terminal_stage_id(db, tenant_id, vacancy_id)
@@ -1479,15 +1474,15 @@ async def patch_candidate_vacancy(
         )
     ).scalar_one_or_none()
     if cv is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Candidate-vacancy link not found"
+        raise AppError(
+            "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
         )
 
     current_etag = candidate_vacancy_etag(cv)
     if if_match is not None and if_match != current_etag:
-        raise HTTPException(
+        raise AppError(
+            "candidate_vacancy_modified_concurrently",
             status.HTTP_412_PRECONDITION_FAILED,
-            "Candidate row was modified by someone else. Reload and try again.",
         )
 
     updates = data.model_dump(exclude_unset=True)
@@ -1500,8 +1495,8 @@ async def patch_candidate_vacancy(
         applicable = await _get_applicable_stages(db, tenant_id, cv.vacancy_id)
         target = next((s for s in applicable if s.id == new_stage_id), None)
         if target is None:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND, "Stage not found for this vacancy"
+            raise AppError(
+                "stage_not_found_for_vacancy", status.HTTP_404_NOT_FOUND
             )
 
         old_stage_id = cv.stage_id
@@ -1556,8 +1551,8 @@ async def delete_candidate_vacancy(
         )
     ).scalar_one_or_none()
     if cv is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Candidate-vacancy link not found"
+        raise AppError(
+            "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
         )
     await db.delete(cv)
     await db.commit()
@@ -1661,30 +1656,30 @@ async def patch_candidate(
         db, tenant_id, candidate_id, for_update=True
     )
     if candidate.archived_at is not None:
-        raise HTTPException(
+        raise AppError(
+            "candidate_archived_read_only",
             status.HTTP_409_CONFLICT,
-            "Candidate is archived. Restore before editing.",
         )
 
     current_etag = candidate_etag(candidate)
     if if_match is not None and if_match != current_etag:
-        raise HTTPException(
+        raise AppError(
+            "candidate_modified_concurrently",
             status.HTTP_412_PRECONDITION_FAILED,
-            "Candidate was modified by someone else. Reload and try again.",
         )
 
     updates = data.model_dump(exclude_unset=True)
     if "full_name" in updates:
         if updates["full_name"] is None:
-            raise HTTPException(
+            raise AppError(
+                "candidate_full_name_required",
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "Full name is required.",
             )
         updates["full_name"] = updates["full_name"].strip()
         if not updates["full_name"]:
-            raise HTTPException(
+            raise AppError(
+                "candidate_full_name_required",
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "Full name is required.",
             )
 
     for field, value in updates.items():
@@ -1805,13 +1800,12 @@ async def bulk_upload_resumes(
     await _get_vacancy(db, tenant_id, vacancy_id)
 
     if not files:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "At least one resume file is required."
-        )
+        raise AppError("resume_file_required", status.HTTP_400_BAD_REQUEST)
     if len(files) > MAX_BULK_RESUME_FILES:
-        raise HTTPException(
+        raise AppError(
+            "resume_bulk_limit_exceeded",
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"Up to {MAX_BULK_RESUME_FILES} resumes per upload.",
+            max_files=MAX_BULK_RESUME_FILES,
         )
 
     prepared: list[tuple[UploadFile, bytes, str, str]] = []
@@ -1819,26 +1813,29 @@ async def bulk_upload_resumes(
     for upload in files:
         content_type = upload.content_type or "application/octet-stream"
         if content_type not in ALLOWED_RESUME_MIMES:
-            raise HTTPException(
+            raise AppError(
+                "unsupported_resume_type",
                 status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                f"Unsupported resume type: {content_type}",
+                content_type=content_type,
             )
         data = await upload.read()
         if len(data) > MAX_RESUME_BYTES:
-            raise HTTPException(
+            raise AppError(
+                "resume_too_large",
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                f"Resume exceeds {MAX_RESUME_BYTES // (1024 * 1024)} MB limit.",
+                max_mb=MAX_RESUME_BYTES // (1024 * 1024),
             )
         total_bytes += len(data)
         if total_bytes > MAX_BULK_TOTAL_BYTES:
-            raise HTTPException(
+            raise AppError(
+                "resume_batch_too_large",
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                f"Batch exceeds {MAX_BULK_TOTAL_BYTES // (1024 * 1024)} MB total limit.",
+                max_mb=MAX_BULK_TOTAL_BYTES // (1024 * 1024),
             )
         if not _sniff_resume_bytes(content_type, data):
-            raise HTTPException(
+            raise AppError(
+                "resume_mime_mismatch",
                 status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                "File contents do not match the declared MIME type.",
             )
         original_filename = upload.filename or "resume"
         prepared.append((upload, data, content_type, original_filename))

@@ -4,6 +4,9 @@ import { useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { CircleDollarSign, GripVertical, X } from "lucide-react";
+import { useTranslations } from "next-intl";
+
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import { toast } from "sonner";
 
 import {
@@ -33,6 +36,17 @@ export function GradeHeaderCell({
   onGradeUpdated,
   onGradeRemoved,
 }: Props) {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
+  // HRP-479: localized grade name shared by the header and toasts.
+  const gradeLabel = grade.grade_title
+    ? dictionaryItemLabel(tRef, {
+        type: "grade",
+        title: grade.grade_title,
+        i18n_key: grade.grade_i18n_key,
+      })
+    : null;
   const {
     attributes,
     listeners,
@@ -63,11 +77,11 @@ export function GradeHeaderCell({
     const min = salaryMin.trim() === "" ? null : Number(salaryMin);
     const max = salaryMax.trim() === "" ? null : Number(salaryMax);
     if (min != null && Number.isNaN(min)) {
-      toast.error("salary_min must be a number");
+      toast.error(t("errorSalaryMinNumber"));
       return;
     }
     if (max != null && Number.isNaN(max)) {
-      toast.error("salary_max must be a number");
+      toast.error(t("errorSalaryMaxNumber"));
       return;
     }
     setSavingSalary(true);
@@ -78,9 +92,9 @@ export function GradeHeaderCell({
       });
       onGradeUpdated(next);
       setEditingSalary(false);
-      toast.success("Salary updated");
+      toast.success(t("toastSalaryUpdated"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save salary");
+      toast.error(err instanceof Error ? err.message : t("toastSalarySaveFailed"));
     } finally {
       setSavingSalary(false);
     }
@@ -91,12 +105,16 @@ export function GradeHeaderCell({
     try {
       await specializationsApi.deleteGrade(specId, grade.grade_id);
       onGradeRemoved(grade.grade_id);
-      toast.success(`Removed ${grade.grade_title ?? "grade"}`);
+      toast.success(
+        t("toastGradeRemoved", { grade: gradeLabel ?? t("gradeFallback") }),
+      );
     } catch (err) {
       // ConfirmDialog awaits this callback then closes itself; let the
       // toast carry the failure and swallow the error so the dialog
       // shutdown path still runs (otherwise `removing` stays true).
-      toast.error(err instanceof Error ? err.message : "Failed to remove grade");
+      toast.error(
+        err instanceof Error ? err.message : t("toastGradeRemoveFailed"),
+      );
     } finally {
       setRemoving(false);
     }
@@ -105,7 +123,7 @@ export function GradeHeaderCell({
   const hasSalary = grade.salary_min != null || grade.salary_max != null;
   const salaryLabel = hasSalary
     ? `${grade.salary_min ?? "?"} – ${grade.salary_max ?? "?"} ${grade.salary_currency}`
-    : "Add salary";
+    : t("addSalary");
 
   return (
     <th
@@ -124,7 +142,9 @@ export function GradeHeaderCell({
           {...attributes}
           {...listeners}
           data-testid={`matrix-grade-drag-${grade.grade_id}`}
-          aria-label={`Reorder ${grade.grade_title ?? "grade"}`}
+          aria-label={t("reorderGrade", {
+            grade: gradeLabel ?? t("gradeFallback"),
+          })}
           className="mt-0.5 cursor-grab touch-none rounded text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
         >
           <GripVertical className="h-4 w-4" />
@@ -132,9 +152,9 @@ export function GradeHeaderCell({
         <div className="min-w-0 flex-1 space-y-1.5">
           <div
             className="truncate text-sm font-semibold tracking-tight"
-            title={grade.grade_title ?? undefined}
+            title={gradeLabel ?? undefined}
           >
-            {grade.grade_title ?? "—"}
+            {gradeLabel ?? "—"}
             {/* HRP-288: surface the dictionary deactivation in the
                 matrix header too, so the matrix mirrors the spec page. */}
             {grade.grade_is_active === false && (
@@ -142,7 +162,7 @@ export function GradeHeaderCell({
                 data-testid={`matrix-grade-inactive-${grade.grade_id}`}
                 className="ml-1.5 inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 align-middle text-[10px] font-medium text-muted-foreground"
               >
-                Inactive
+                {t("inactive")}
               </span>
             )}
           </div>
@@ -158,7 +178,7 @@ export function GradeHeaderCell({
                   min={0}
                   value={salaryMin}
                   onChange={(e) => setSalaryMin(e.target.value)}
-                  placeholder="min"
+                  placeholder={t("salaryMinPlaceholder")}
                   className="h-7 px-1.5 text-xs"
                 />
                 <Input
@@ -167,7 +187,7 @@ export function GradeHeaderCell({
                   min={0}
                   value={salaryMax}
                   onChange={(e) => setSalaryMax(e.target.value)}
-                  placeholder="max"
+                  placeholder={t("salaryMaxPlaceholder")}
                   className="h-7 px-1.5 text-xs"
                 />
               </div>
@@ -179,7 +199,7 @@ export function GradeHeaderCell({
                   disabled={savingSalary}
                   className="h-6 px-2 text-[0.7rem]"
                 >
-                  {savingSalary ? "…" : "Save"}
+                  {savingSalary ? "…" : t("save")}
                 </Button>
                 <Button
                   size="sm"
@@ -196,7 +216,7 @@ export function GradeHeaderCell({
                   disabled={savingSalary}
                   className="h-6 px-2 text-[0.7rem]"
                 >
-                  Cancel
+                  {tc("cancel")}
                 </Button>
               </div>
             </div>
@@ -230,8 +250,10 @@ export function GradeHeaderCell({
           data-testid={`matrix-grade-remove-${grade.grade_id}`}
           onClick={() => setConfirmRemoveOpen(true)}
           disabled={removing}
-          aria-label={`Remove ${grade.grade_title ?? "grade"}`}
-          title="Remove grade"
+          aria-label={t("removeGrade", {
+            grade: gradeLabel ?? t("gradeFallback"),
+          })}
+          title={t("removeGradeTitle")}
           className="mt-0.5 rounded p-0.5 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
         >
           <X className="h-4 w-4" />
@@ -240,12 +262,11 @@ export function GradeHeaderCell({
       <ConfirmDialog
         open={confirmRemoveOpen}
         onOpenChange={setConfirmRemoveOpen}
-        title={`Remove ${grade.grade_title ?? "grade"}?`}
-        description={
-          "All matrix levels saved against this grade will be lost. " +
-          "This cannot be undone."
-        }
-        confirmLabel={removing ? "Removing…" : "Remove grade"}
+        title={t("removeGradeConfirmTitle", {
+          grade: gradeLabel ?? t("gradeFallback"),
+        })}
+        description={t("removeGradeConfirmBody")}
+        confirmLabel={removing ? t("removing") : t("removeGradeTitle")}
         destructive
         onConfirm={handleConfirmedRemove}
         testId={`matrix-grade-remove-confirm-${grade.grade_id}`}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { AlertTriangle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -19,10 +20,6 @@ interface CanvasConflictModalProps {
   onResolve: (cellKey: string, choice: "mine" | "theirs") => Promise<void>;
 }
 
-const MUTED_FOOTER =
-  "Resolve later keeps the cells in the conflict state so you can " +
-  "reopen the dialog from the toast or the Versions sheet.";
-
 /**
  * HRP-266: shown whenever the Canvas autosave hits HTTP 412 — the
  * backend detected a parallel editor and refused to overwrite their
@@ -34,6 +31,7 @@ export function CanvasConflictModal({
   conflicts,
   onResolve,
 }: CanvasConflictModalProps) {
+  const t = useTranslations("recruitment");
   const entries = useMemo(
     () => Array.from(conflicts.values()),
     [conflicts],
@@ -80,12 +78,10 @@ export function CanvasConflictModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertTriangle className="size-4 text-amber-600" />
-            Concurrent edit detected
+            {t("canvasConflictTitle")}
           </DialogTitle>
           <DialogDescription>
-            Someone else updated the cell{entries.length > 1 ? "s" : ""}{" "}
-            below while you were editing. Pick which value to keep — your
-            local edit, or the newer value from the server.
+            {t("canvasConflictDescription", { count: entries.length })}
           </DialogDescription>
         </DialogHeader>
 
@@ -97,12 +93,16 @@ export function CanvasConflictModal({
               className="rounded-md border p-3"
             >
               <div className="mb-2 text-[10px] text-muted-foreground">
-                Cell {entry.candidateVacancyId.slice(0, 8)}…
-                {" / "}competence {entry.competenceId.slice(0, 8)}…
+                {t("canvasConflictCellLine", {
+                  candidate: entry.candidateVacancyId.slice(0, 8),
+                  competence: entry.competenceId.slice(0, 8),
+                })}
               </div>
               <div className="mb-2">{entry.serverMessage}</div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-muted-foreground">Yours:</span>
+                <span className="text-muted-foreground">
+                  {t("canvasConflictYours")}
+                </span>
                 <span className="font-mono">
                   {entry.mine === null ? "—" : entry.mine.toFixed(1)}
                 </span>
@@ -113,7 +113,7 @@ export function CanvasConflictModal({
                   onClick={() => void handlePick(entry, "mine")}
                   data-testid={`canvas-conflict-keep-mine-${entry.cellKey}`}
                 >
-                  Keep mine
+                  {t("canvasConflictKeepMine")}
                 </Button>
                 <Button
                   size="sm"
@@ -122,7 +122,7 @@ export function CanvasConflictModal({
                   onClick={() => void handlePick(entry, "theirs")}
                   data-testid={`canvas-conflict-keep-theirs-${entry.cellKey}`}
                 >
-                  Keep theirs
+                  {t("canvasConflictKeepTheirs")}
                 </Button>
               </div>
             </li>
@@ -131,7 +131,7 @@ export function CanvasConflictModal({
 
         <DialogFooter className="flex items-center justify-between gap-3">
           <span className="text-[11px] text-muted-foreground">
-            {MUTED_FOOTER}
+            {t("canvasConflictFooter")}
           </span>
           <Button
             variant="ghost"
@@ -139,7 +139,7 @@ export function CanvasConflictModal({
             onClick={() => setDismissed(true)}
             data-testid="canvas-conflict-defer-btn"
           >
-            Resolve later
+            {t("canvasConflictResolveLater")}
           </Button>
         </DialogFooter>
       </DialogContent>

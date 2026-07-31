@@ -23,6 +23,7 @@ services:
       dockerfile: backend/Dockerfile
       args:
         APP_VERSION: ${APP_VERSION:-}
+    init: true
     env_file: .env
     environment:
       - DATABASE_URL=postgresql+asyncpg://hrpulsar:${POSTGRES_PASSWORD:-hrpulsar}@postgres:5432/hrpulsar
@@ -32,6 +33,11 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
       - S3_BUCKET=hrpulsar
+      # Required: minio:9000 is unreachable from browsers, so presigned
+      # file URLs must be signed against this public base URL (the
+      # bundled Caddyfile proxies /<S3_BUCKET>/* back to MinIO). The
+      # backend refuses to start when it is left empty.
+      - S3_PUBLIC_ENDPOINT=${S3_PUBLIC_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,6 +76,15 @@ services:
       - NEXT_PUBLIC_LOGO_DARK_URL=${NEXT_PUBLIC_LOGO_DARK_URL:-}
       - NEXT_PUBLIC_BRAND_ACCENT_COLOR=${NEXT_PUBLIC_BRAND_ACCENT_COLOR:-}
       - NEXT_PUBLIC_FAVICON_URL=${NEXT_PUBLIC_FAVICON_URL:-}
+      - NEXT_PUBLIC_SIDEBAR_LOGO_HEIGHT=${NEXT_PUBLIC_SIDEBAR_LOGO_HEIGHT:-}
+      - NEXT_PUBLIC_BRAND_THEME=${NEXT_PUBLIC_BRAND_THEME:-}
+      - NEXT_PUBLIC_BRAND_AUTH_BG_COLOR=${NEXT_PUBLIC_BRAND_AUTH_BG_COLOR:-}
+      - NEXT_PUBLIC_BRAND_AUTH_BG_URL=${NEXT_PUBLIC_BRAND_AUTH_BG_URL:-}
+      # i18n (HRP-474): interface locales offered by this deployment —
+      # delivered the same runtime way; keep in sync with the backend
+      # AVAILABLE_LOCALES / DEFAULT_LOCALE pair in .env.
+      - NEXT_PUBLIC_AVAILABLE_LOCALES=${NEXT_PUBLIC_AVAILABLE_LOCALES:-}
+      - NEXT_PUBLIC_DEFAULT_LOCALE=${NEXT_PUBLIC_DEFAULT_LOCALE:-}
     depends_on:
       backend:
         condition: service_healthy
@@ -87,6 +102,11 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    # tini as PID 1: the celery master doesn't reap orphans re-parented to it
+    # (each `celery inspect ping` healthcheck probe leaves a zombie child
+    # behind), so without an init the pids cgroup fills up in a few days and
+    # every task dies with "RuntimeError: can't start new thread".
+    init: true
     command: ["worker"]
     env_file: .env
     environment:
@@ -99,6 +119,7 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
       - S3_BUCKET=hrpulsar
+      - S3_PUBLIC_ENDPOINT=${S3_PUBLIC_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,7 +129,9 @@ services:
       # CMD-SHELL so $HOSTNAME expands to the worker's default node name
       test: ["CMD-SHELL", "celery -A app.core.celery_app:celery inspect ping -d celery@$$HOSTNAME --timeout 10"]
       interval: 30s
-      timeout: 15s
+      # 30s (not 15s): the celery CLI cold-imports the whole app — on small
+      # 2-vCPU hosts that alone can blow a 15s budget (HRP-459).
+      timeout: 30s
       retries: 3
       start_period: 30s
     restart: unless-stopped
@@ -117,6 +140,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    init: true
     command: ["beat"]
     env_file: .env
     environment:

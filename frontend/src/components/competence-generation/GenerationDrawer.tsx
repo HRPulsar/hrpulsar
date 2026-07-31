@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Loader2, Sparkles } from "lucide-react";
+import { useTranslations } from "next-intl";
 import {
   Sheet,
   SheetContent,
@@ -64,6 +65,8 @@ export function GenerationDrawer({
   applyWarning,
   applyGuard,
 }: GenerationDrawerProps) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
   const {
     session,
     loading,
@@ -170,10 +173,10 @@ export function GenerationDrawer({
     : null;
   const breadcrumbPrefix =
     scope === "whole_base"
-      ? "AI generation → competence library"
+      ? t("drawerBreadcrumbWholeBase")
       : scope === "group"
-        ? "AI generation → group"
-        : "AI generation → competence";
+        ? t("drawerBreadcrumbGroup")
+        : t("drawerBreadcrumbCompetence");
   const competenceLinkHref =
     scope === "competence_indicators" && targetId
       ? `/competences/${targetId}`
@@ -213,12 +216,14 @@ export function GenerationDrawer({
             </SheetTitle>
             {wsState !== "open" && (
               <p className="text-xs text-muted-foreground">
-                Realtime connection:{" "}
-                {wsState === "reconnecting"
-                  ? "reconnecting…"
-                  : wsState === "connecting"
-                    ? "connecting…"
-                    : "unavailable — status refreshes every 5s"}
+                {t("drawerRealtime", {
+                  status:
+                    wsState === "reconnecting"
+                      ? t("drawerRealtimeReconnecting")
+                      : wsState === "connecting"
+                        ? t("drawerRealtimeConnecting")
+                        : t("drawerRealtimeUnavailable"),
+                })}
               </p>
             )}
             <p
@@ -237,7 +242,7 @@ export function GenerationDrawer({
               aria-busy="true"
             >
               <Loader2 className="h-4 w-4 animate-spin" />
-              Loading session…
+              {t("drawerLoadingSession")}
             </div>
           )}
 
@@ -253,11 +258,8 @@ export function GenerationDrawer({
               aria-busy="true"
             >
               <Loader2 className="mx-auto h-4 w-4 animate-spin" />
-              <p>Waiting for the session to start…</p>
-              <p className="text-xs">
-                If nothing appears within a minute, refresh the page or close
-                this panel and try again.
-              </p>
+              <p>{t("drawerWaiting")}</p>
+              <p className="text-xs">{t("drawerWaitingHint")}</p>
             </div>
           )}
 
@@ -267,8 +269,8 @@ export function GenerationDrawer({
                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
                 <span>
                   {session.status === "pending"
-                    ? "Queued — waiting for a worker…"
-                    : "Generating — this usually takes 20–60 seconds."}
+                    ? t("drawerQueued")
+                    : t("drawerGenerating")}
                 </span>
               </div>
               {celeryHealth === "unavailable" && (
@@ -278,11 +280,9 @@ export function GenerationDrawer({
                 >
                   <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-500" />
                   <div className="space-y-0.5">
-                    <p className="font-medium">Background worker offline</p>
+                    <p className="font-medium">{t("drawerWorkerOffline")}</p>
                     <p className="text-xs text-muted-foreground">
-                      The Celery worker is not reporting heartbeats. The job
-                      will resume as soon as a worker comes back online — or
-                      cancel and try again later.
+                      {t("drawerWorkerOfflineHint")}
                     </p>
                   </div>
                 </div>
@@ -302,7 +302,7 @@ export function GenerationDrawer({
                   await regenerate();
                 } catch (err) {
                   toast.error(
-                    err instanceof Error ? err.message : "Failed to restart",
+                    err instanceof Error ? err.message : t("errorRestart"),
                   );
                 } finally {
                   setRetrying(false);
@@ -333,7 +333,7 @@ export function GenerationDrawer({
                         toast.error(
                           err instanceof Error
                             ? err.message
-                            : "Failed to update selection",
+                            : t("errorUpdateSelection"),
                         );
                       }
                     }}
@@ -350,7 +350,7 @@ export function GenerationDrawer({
                         toast.error(
                           err instanceof Error
                             ? err.message
-                            : "Failed to update selection",
+                            : t("errorUpdateSelection"),
                         );
                       }
                     }}
@@ -377,7 +377,7 @@ export function GenerationDrawer({
                         toast.error(
                           err instanceof Error
                             ? err.message
-                            : "Failed to refine request",
+                            : t("errorRefineRequest"),
                         );
                       }
                     }}
@@ -397,12 +397,12 @@ export function GenerationDrawer({
                     await regenerate();
                   } catch (err) {
                     toast.error(
-                      err instanceof Error ? err.message : "Failed",
+                      err instanceof Error ? err.message : t("errorGeneric"),
                     );
                   }
                 }}
               >
-                Try again
+                {tc("tryAgain")}
               </Button>
               <Button
                 data-testid="compgen-footer-btn-clear"
@@ -412,19 +412,19 @@ export function GenerationDrawer({
                     await clear();
                   } catch (err) {
                     toast.error(
-                      err instanceof Error ? err.message : "Failed",
+                      err instanceof Error ? err.message : t("errorGeneric"),
                     );
                   }
                 }}
               >
-                Clear data
+                {t("drawerClearData")}
               </Button>
               <Button
                 data-testid="compgen-footer-btn-refine"
                 variant="outline"
                 onClick={() => setRefining((v) => !v)}
               >
-                {refining ? "Hide" : "Refine request"}
+                {refining ? t("drawerHide") : t("drawerRefineRequest")}
               </Button>
               <Button
                 data-testid="compgen-footer-btn-apply"
@@ -432,7 +432,7 @@ export function GenerationDrawer({
                 disabled={!hasSelection(session.selection_state)}
                 className="ml-auto"
               >
-                Add to library
+                {t("addToLibrary")}
               </Button>
             </div>
           )}
@@ -449,10 +449,10 @@ export function GenerationDrawer({
                   onClick={() => setConfirmCancelOpen(true)}
                 >
                   {cancelling
-                    ? "Cancelling…"
+                    ? t("genCancelling")
                     : session.status === "ready"
-                      ? "Cancel session"
-                      : "Cancel generation"}
+                      ? t("drawerCancelSession")
+                      : t("drawerCancelGeneration")}
                 </Button>
               </div>
             )}
@@ -471,7 +471,7 @@ export function GenerationDrawer({
           onApply={async (body) => {
             try {
               await apply(body);
-              toast.success("Items added to the library");
+              toast.success(t("toastItemsAdded"));
               onApplied?.({
                 scope: session.scope,
                 target_id: session.target_id,
@@ -494,7 +494,7 @@ export function GenerationDrawer({
               }
             } catch (err) {
               toast.error(
-                err instanceof Error ? err.message : "Failed to apply",
+                err instanceof Error ? err.message : t("errorApply"),
               );
             }
           }}
@@ -504,18 +504,15 @@ export function GenerationDrawer({
       <Dialog open={confirmCloseOpen} onOpenChange={setConfirmCloseOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Close without applying?</DialogTitle>
-            <DialogDescription>
-              You have items selected but haven&apos;t added them to the library.
-              The session will be preserved — you can come back to it later.
-            </DialogDescription>
+            <DialogTitle>{t("drawerCloseTitle")}</DialogTitle>
+            <DialogDescription>{t("drawerCloseBody")}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
               variant="outline"
               onClick={() => setConfirmCloseOpen(false)}
             >
-              Stay
+              {t("drawerStay")}
             </Button>
             <Button
               onClick={() => {
@@ -523,7 +520,7 @@ export function GenerationDrawer({
                 onOpenChange(false);
               }}
             >
-              Close
+              {t("drawerClose")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -535,11 +532,8 @@ export function GenerationDrawer({
           className="sm:max-w-sm"
         >
           <DialogHeader>
-            <DialogTitle>Cancel this AI generation session?</DialogTitle>
-            <DialogDescription>
-              The generated suggestions will be discarded and you&apos;ll be
-              able to start a new AI generation right away.
-            </DialogDescription>
+            <DialogTitle>{t("drawerCancelTitle")}</DialogTitle>
+            <DialogDescription>{t("drawerCancelBody")}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
@@ -548,7 +542,7 @@ export function GenerationDrawer({
               onClick={() => setConfirmCancelOpen(false)}
               disabled={cancelling}
             >
-              Keep session
+              {t("drawerKeepSession")}
             </Button>
             <Button
               variant="destructive"
@@ -563,12 +557,12 @@ export function GenerationDrawer({
                 } catch (err) {
                   setCancelling(false);
                   toast.error(
-                    err instanceof Error ? err.message : "Cancel failed",
+                    err instanceof Error ? err.message : t("errorCancelFailed"),
                   );
                 }
               }}
             >
-              {cancelling ? "Cancelling…" : "Discard and cancel"}
+              {cancelling ? t("genCancelling") : t("drawerDiscardAndCancel")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -578,6 +572,7 @@ export function GenerationDrawer({
 }
 
 function SkeletonTree({ testId }: { testId: string }) {
+  const t = useTranslations("competences");
   return (
     <div data-testid={testId} className="space-y-2 py-4">
       {[0, 1, 2].map((i) => (
@@ -590,7 +585,7 @@ function SkeletonTree({ testId }: { testId: string }) {
         </div>
       ))}
       <p className="pt-2 text-center text-xs text-muted-foreground">
-        AI is generating the competence tree. This may take up to a minute.
+        {t("drawerSkeletonHint")}
       </p>
     </div>
   );

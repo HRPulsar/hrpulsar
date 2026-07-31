@@ -10,11 +10,12 @@ import logging
 import uuid
 from datetime import date, datetime, timezone
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.auth.models import User
 from app.modules.competence.models import Competence, SkillLevel
 from app.modules.dictionary.models import DictionaryItem
@@ -64,7 +65,7 @@ async def list_candidate_pool(
     """
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
 
     # HRP-214: in Change mode the picker also shows appointed candidates
     # so the recruiter can see the row (checkbox pre-checked + locked).
@@ -273,10 +274,10 @@ async def get_candidate_breakdown(
     """
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     emp = await db.get(Employee, employee_id)
     if not emp or emp.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found")
+        raise AppError("employee_not_found", status.HTTP_404_NOT_FOUND)
     if emp.user is None:
         await db.refresh(emp, ["user"])
     emp_name: str | None = None
@@ -306,14 +307,18 @@ async def get_candidate_breakdown(
             )
         ).all()
         comp_titles = {r[0]: r[1] for r in rows}
-    sl_titles: dict[uuid.UUID, str] = {}
+    # HRP-479: carry i18n_key alongside the title so origin rows localize
+    # in the match drawer (tenant rows keep a NULL key → verbatim).
+    sl_titles: dict[uuid.UUID, tuple[str, str | None]] = {}
     if sl_ids:
-        rows = (
+        sl_rows = (
             await db.execute(
-                select(SkillLevel.id, SkillLevel.title).where(SkillLevel.id.in_(sl_ids))
+                select(SkillLevel.id, SkillLevel.title, SkillLevel.i18n_key).where(
+                    SkillLevel.id.in_(sl_ids)
+                )
             )
         ).all()
-        sl_titles = {r[0]: r[1] for r in rows}
+        sl_titles = {r[0]: (r[1], r[2]) for r in sl_rows}
 
     competences_payload: list[dict] = []
     for r in comp_rows:
@@ -325,7 +330,14 @@ async def get_candidate_breakdown(
                 "competence_title": comp_titles.get(r.competence_id) or "—",
                 "required_skill_level_id": r.skill_level_id,
                 "required_skill_level_title": (
-                    sl_titles.get(r.skill_level_id) if r.skill_level_id else None
+                    sl_titles[r.skill_level_id][0]
+                    if r.skill_level_id and r.skill_level_id in sl_titles
+                    else None
+                ),
+                "required_skill_level_i18n_key": (
+                    sl_titles[r.skill_level_id][1]
+                    if r.skill_level_id and r.skill_level_id in sl_titles
+                    else None
                 ),
                 "card_match_percent": threshold,
                 "actual_percent": actual,
@@ -340,16 +352,16 @@ async def get_candidate_breakdown(
         spec_dict_ids.add(spec.specialization_id)
         if spec.grade_id is not None:
             spec_dict_ids.add(spec.grade_id)
-    dict_titles: dict[uuid.UUID, str] = {}
+    dict_titles: dict[uuid.UUID, tuple[str, str | None]] = {}
     if spec_dict_ids:
-        rows = (
+        dict_rows = (
             await db.execute(
-                select(DictionaryItem.id, DictionaryItem.title).where(
-                    DictionaryItem.id.in_(spec_dict_ids)
-                )
+                select(
+                    DictionaryItem.id, DictionaryItem.title, DictionaryItem.i18n_key
+                ).where(DictionaryItem.id.in_(spec_dict_ids))
             )
         ).all()
-        dict_titles = {r[0]: r[1] for r in rows}
+        dict_titles = {r[0]: (r[1], r[2]) for r in dict_rows}
 
     work_exps: list[WorkExperience] = []
     if spec_rows:
@@ -412,11 +424,25 @@ async def get_candidate_breakdown(
         specs_payload.append(
             {
                 "specialization_id": spec.specialization_id,
-                "specialization_title": dict_titles.get(spec.specialization_id) or "—",
+                "specialization_title": (
+                    dict_titles[spec.specialization_id][0]
+                    if spec.specialization_id in dict_titles
+                    else "—"
+                ),
+                "specialization_i18n_key": (
+                    dict_titles[spec.specialization_id][1]
+                    if spec.specialization_id in dict_titles
+                    else None
+                ),
                 "grade_id": spec.grade_id,
                 "grade_title": (
-                    dict_titles.get(spec.grade_id)
-                    if spec.grade_id is not None
+                    dict_titles[spec.grade_id][0]
+                    if spec.grade_id is not None and spec.grade_id in dict_titles
+                    else None
+                ),
+                "grade_i18n_key": (
+                    dict_titles[spec.grade_id][1]
+                    if spec.grade_id is not None and spec.grade_id in dict_titles
                     else None
                 ),
                 "required_years": spec.min_experience_years,
@@ -441,7 +467,7 @@ async def add_candidate(
 
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     common.assert_card_not_terminal(card)
 
     # HRP-95: compute and persist match_score at add time so the row stays
@@ -502,7 +528,7 @@ async def add_candidates_bulk(
     """
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     common.assert_card_not_terminal(card)
 
     existing_emp_ids = {
@@ -535,9 +561,10 @@ async def add_candidates_bulk(
         emp = await db.get(Employee, emp_id)
         if not emp or emp.tenant_id != tenant_id:
             # Reject the whole batch — the UI should never send a foreign id.
-            raise HTTPException(
+            raise AppError(
+                "tm_employee_id_not_found",
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"Employee {emp_id} not found",
+                employee_id=emp_id,
             )
         if comp_rows:
             score = _comp_percent_from_map(comp_rows, last_map.get(emp_id, {}))
@@ -605,7 +632,7 @@ async def delete_candidate(
     """
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     common.assert_card_not_terminal(card)
     row = (
         await db.execute(
@@ -616,7 +643,7 @@ async def delete_candidate(
         )
     ).scalar_one_or_none()
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate not found")
+        raise AppError("candidate_not_found", status.HTTP_404_NOT_FOUND)
     # HRP-245: notify the dropped employee when the card is already
     # Published. Capture the employee id before delete so we can resolve
     # the user after commit; the dispatcher branch is the same shape as
@@ -653,12 +680,12 @@ async def appoint_candidate(
 ) -> dict:
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     common.assert_card_not_terminal(card)
 
     candidate = await db.get(TalentCandidate, candidate_id)
     if not candidate or candidate.card_id != card_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate not found")
+        raise AppError("candidate_not_found", status.HTTP_404_NOT_FOUND)
 
     candidate.status = "appointed"
     candidate.appointed_at = datetime.now(timezone.utc)
@@ -714,15 +741,15 @@ async def react_to_card(
 
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     if card.status != "published":
-        raise HTTPException(
+        raise AppError(
+            "tm_card_not_open_for_reactions",
             status.HTTP_409_CONFLICT,
-            "Card is not open for reactions",
         )
     emp = await get_current_employee(db, user)
     if emp is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "No employee profile")
+        raise AppError("tm_no_employee_profile", status.HTTP_403_FORBIDDEN)
     row = (
         await db.execute(
             select(TalentCandidate).where(
@@ -732,14 +759,14 @@ async def react_to_card(
         )
     ).scalar_one_or_none()
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate not found")
+        raise AppError("candidate_not_found", status.HTTP_404_NOT_FOUND)
     if row.status == "appointed":
-        raise HTTPException(
+        raise AppError(
+            "tm_appointed_cannot_react",
             status.HTTP_409_CONFLICT,
-            "Appointed candidates cannot react",
         )
     if row.response_at is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Already reacted")
+        raise AppError("tm_already_reacted", status.HTTP_409_CONFLICT)
     row.response_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(row)
@@ -753,7 +780,8 @@ async def react_to_card(
     from app.core.email_templates import (
         render_talent_market_reacted_manager_email,
     )
-    from app.modules.company.models import Division
+    from app.core.i18n import resolve_locale
+    from app.modules.company.models import Division, Tenant
 
     if emp.division_id is not None:
         div = await db.get(Division, emp.division_id)
@@ -767,8 +795,24 @@ async def react_to_card(
                         if user.first_name or user.last_name
                         else None
                     )
+                    # i18n F4: the letter is rendered for the manager, not
+                    # for the reacting employee — Manager.language first,
+                    # then the card's tenant default.
+                    tenant = (
+                        await db.get(Tenant, card.tenant_id)
+                        if card.tenant_id is not None
+                        else None
+                    )
                     subject, body = render_talent_market_reacted_manager_email(
-                        card.title, emp_name, str(card.id)
+                        card.title,
+                        emp_name,
+                        str(card.id),
+                        locale=resolve_locale(
+                            user_language=mgr_user.language,
+                            tenant_default=(
+                                tenant.default_locale if tenant is not None else None
+                            ),
+                        ),
                     )
                     with _cl.suppress(Exception):
                         enqueue_email(

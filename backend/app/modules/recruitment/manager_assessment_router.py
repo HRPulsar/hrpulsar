@@ -22,6 +22,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.client_ip import client_ip
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
@@ -122,10 +123,7 @@ async def set_vacancy_scale_endpoint(
 ) -> dict[str, Any]:
     scale_id = payload.get("assessment_scale_id")
     if scale_id is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "assessment_scale_id is required",
-        )
+        raise AppError("assessment_scale_id_required", status.HTTP_400_BAD_REQUEST)
     return await service.set_vacancy_scale(
         db, current_user.tenant_id, current_user.id, vacancy_id, scale_id
     )
@@ -164,7 +162,7 @@ async def update_round_endpoint(
 ) -> dict[str, Any]:
     new_status = payload.get("status")
     if not isinstance(new_status, str):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "status is required")
+        raise AppError("round_status_required", status.HTTP_400_BAD_REQUEST)
     return await service.update_round_status(
         db,
         current_user.tenant_id,
@@ -414,10 +412,7 @@ async def public_save_notes_endpoint(
     _security_headers(response)
     notes = payload.get("final_notes")
     if not isinstance(notes, str):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "final_notes is required and must be a string",
-        )
+        raise AppError("final_notes_required", status.HTTP_400_BAD_REQUEST)
     return await public_service.public_save_final_notes(
         db, token, notes, ip=_client_ip(request)
     )
@@ -500,6 +495,9 @@ async def dev_get_manager_invite_token(
     from app.modules.recruitment.models import AssessmentInvite
 
     if not settings.e2e_mode:
+        # Deliberately a bare HTTPException, not AppError: the response must
+        # stay indistinguishable from a nonexistent route — an error code
+        # would fingerprint the hidden dev surface.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
     inv = (
         await db.execute(
@@ -507,7 +505,7 @@ async def dev_get_manager_invite_token(
         )
     ).scalar_one_or_none()
     if inv is None or inv.token is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invite not found")
+        raise AppError("invite_not_found", status.HTTP_404_NOT_FOUND)
     return {"token": inv.token}
 
 

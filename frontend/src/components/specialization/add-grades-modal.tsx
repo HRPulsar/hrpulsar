@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import {
@@ -8,6 +9,7 @@ import {
   type SpecializationGrade,
 } from "@/lib/api/specializations";
 import { computeGradeDiff } from "@/lib/grade-diff";
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type { DictionaryItem } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -36,6 +38,9 @@ export function AddGradesModal({
   onClose,
   onAdded,
 }: Props) {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [pool, setPool] = useState<DictionaryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -76,6 +81,9 @@ export function AddGradesModal({
               .sort(
                 (a, b) =>
                   a.sort_index - b.sort_index ||
+                  // Raw-title tie-break: sort_index is the real order;
+                  // ties only occur between tenant rows, whose labels
+                  // render verbatim anyway (HRP-479).
                   a.title.localeCompare(b.title),
               ),
           );
@@ -83,7 +91,7 @@ export function AddGradesModal({
       } catch (err) {
         if (!cancelled) {
           toast.error(
-            err instanceof Error ? err.message : "Failed to load grades",
+            err instanceof Error ? err.message : t("toastGradesLoadFailed"),
           );
         }
       } finally {
@@ -93,13 +101,19 @@ export function AddGradesModal({
     return () => {
       cancelled = true;
     };
-  }, [open, alreadyAdded]);
+  }, [open, alreadyAdded, t]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return pool;
-    return pool.filter((g) => g.title.toLowerCase().includes(q));
-  }, [pool, search]);
+    // HRP-479: the rows render the localized label, so the search must
+    // match it too (raw title kept as a secondary match).
+    return pool.filter(
+      (g) =>
+        g.title.toLowerCase().includes(q) ||
+        dictionaryItemLabel(tRef, g).toLowerCase().includes(q),
+    );
+  }, [pool, search, tRef]);
 
   const diff = useMemo(
     () => computeGradeDiff(selected, addedIds),
@@ -130,19 +144,15 @@ export function AddGradesModal({
       onAdded(next);
       const parts: string[] = [];
       if (diff.toAdd.length > 0) {
-        parts.push(
-          `Added ${diff.toAdd.length} grade${diff.toAdd.length === 1 ? "" : "s"}`,
-        );
+        parts.push(t("toastGradesAdded", { count: diff.toAdd.length }));
       }
       if (diff.toRemove.length > 0) {
-        parts.push(
-          `Removed ${diff.toRemove.length} grade${diff.toRemove.length === 1 ? "" : "s"}`,
-        );
+        parts.push(t("toastGradesRemoved", { count: diff.toRemove.length }));
       }
       toast.success(parts.join(" · "));
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save grades");
+      toast.error(err instanceof Error ? err.message : t("toastGradesSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -157,12 +167,8 @@ export function AddGradesModal({
         className="max-w-lg"
       >
         <DialogHeader>
-          <DialogTitle>Manage grades</DialogTitle>
-          <DialogDescription>
-            Tick a grade to attach it to this specialization, untick to
-            detach. New grades land in the matrix header in the order you
-            tick them — drag the columns later to fine-tune.
-          </DialogDescription>
+          <DialogTitle>{t("manageGrades")}</DialogTitle>
+          <DialogDescription>{t("manageGradesDescription")}</DialogDescription>
         </DialogHeader>
 
         <input
@@ -170,7 +176,7 @@ export function AddGradesModal({
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search grades…"
+          placeholder={t("searchGradesPlaceholder")}
           className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
           autoFocus
         />
@@ -181,16 +187,14 @@ export function AddGradesModal({
         >
           {loading ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              Loading grades…
+              {t("loadingGrades")}
             </p>
           ) : filtered.length === 0 ? (
             <p
               data-testid="add-grades-empty"
               className="py-6 text-center text-sm text-muted-foreground"
             >
-              {pool.length === 0
-                ? "No grades in the dictionary yet."
-                : "No matches."}
+              {pool.length === 0 ? t("noGradesInDictionary") : t("noMatches")}
             </p>
           ) : (
             <ul className="divide-y">
@@ -226,7 +230,7 @@ export function AddGradesModal({
                       htmlFor={`grade-${g.id}`}
                       className="flex-1 cursor-pointer text-sm"
                     >
-                      {g.title}
+                      {dictionaryItemLabel(tRef, g)}
                       {/* HRP-288 task 1: chip + suffix so the operator
                           sees the row was deactivated in the dictionary
                           but kept because it was previously attached. */}
@@ -235,12 +239,12 @@ export function AddGradesModal({
                           data-testid={`add-grades-row-${g.id}-inactive`}
                           className="ml-2 inline-flex items-center rounded-full bg-muted px-2 py-0.5 align-middle text-[10px] font-medium text-muted-foreground"
                         >
-                          Inactive
+                          {t("inactive")}
                         </span>
                       ) : null}
                       {isAttached && !willRemove ? (
                         <span className="ml-2 text-xs text-muted-foreground">
-                          · already attached
+                          {t("alreadyAttached")}
                         </span>
                       ) : null}
                       {willRemove ? (
@@ -248,7 +252,7 @@ export function AddGradesModal({
                           data-testid={`add-grades-row-${g.id}-remove`}
                           className="ml-2 text-xs font-medium text-destructive"
                         >
-                          · will detach
+                          {t("willDetach")}
                         </span>
                       ) : null}
                     </label>
@@ -266,7 +270,7 @@ export function AddGradesModal({
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             data-testid="add-grades-save"
@@ -274,10 +278,10 @@ export function AddGradesModal({
             disabled={totalChanges === 0 || saving}
           >
             {saving
-              ? "Saving…"
+              ? t("savingEllipsis")
               : totalChanges === 0
-                ? "Save"
-                : `Save (${totalChanges})`}
+                ? t("save")
+                : t("saveWithCount", { count: totalChanges })}
           </Button>
         </DialogFooter>
       </DialogContent>

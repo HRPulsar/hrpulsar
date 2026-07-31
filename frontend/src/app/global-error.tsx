@@ -1,3 +1,5 @@
+/* eslint-disable react/jsx-no-literals -- intentionally English: the root
+   error boundary renders outside NextIntlClientProvider, t() is unavailable */
 "use client";
 
 import { useEffect } from "react";

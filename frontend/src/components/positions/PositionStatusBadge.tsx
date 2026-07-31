@@ -1,13 +1,18 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { Badge } from "@/components/ui/badge";
 import type { PositionLifecycleStatus } from "@/lib/types";
 
-const STATUS_LABEL: Record<PositionLifecycleStatus, string> = {
-  active: "Active",
-  on_hold: "On hold",
-  frozen: "Frozen",
-  closed: "Closed",
+/** Lifecycle status code → key in the `company` i18n namespace. The set is
+ * closed (the API only ever sends these four), so the label is presentation
+ * rather than API data — same shape as `employee-status.ts`. */
+const STATUS_LABEL_KEY: Record<PositionLifecycleStatus, string> = {
+  active: "positionStatusActive",
+  on_hold: "positionStatusOnHold",
+  frozen: "positionStatusFrozen",
+  closed: "positionStatusClosed",
 };
 
 const STATUS_CLASS: Record<PositionLifecycleStatus, string> = {
@@ -32,6 +37,7 @@ export function PositionStatusBadge({
   className,
   testId,
 }: PositionStatusBadgeProps) {
+  const t = useTranslations("company");
   return (
     <Badge
       variant="outline"
@@ -39,12 +45,12 @@ export function PositionStatusBadge({
       data-status={status}
       className={[STATUS_CLASS[status], className].filter(Boolean).join(" ")}
     >
-      {STATUS_LABEL[status]}
+      {t(STATUS_LABEL_KEY[status])}
     </Badge>
   );
 }
 
-export const POSITION_LIFECYCLE_LABEL = STATUS_LABEL;
+export const POSITION_LIFECYCLE_LABEL_KEY = STATUS_LABEL_KEY;
 
 /**
  * HRP-111: single source of truth for "from status X, which transitions

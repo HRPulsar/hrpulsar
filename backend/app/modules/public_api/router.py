@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
@@ -90,7 +91,7 @@ async def _get_tenant_from_api_key(
 ):
     key = await service.authenticate_api_key(db, x_api_key)
     if not key:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key")
+        raise AppError("invalid_api_key", status.HTTP_401_UNAUTHORIZED)
     return key
 
 

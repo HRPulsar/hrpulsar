@@ -76,7 +76,7 @@ class TestLLMClientUsesSettings:
 
         captured: dict = {}
 
-        async def fake_anthropic(prompt, system, model, temperature, max_tokens):
+        async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             captured["model"] = model
             captured["temperature"] = temperature
             return "ok"
@@ -86,7 +86,7 @@ class TestLLMClientUsesSettings:
                 "test prompt", system="sys", tenant_settings=settings
             )
 
-        assert captured["model"] == "claude-opus-4-7"
+        assert captured["model"] == "claude-opus-4-8"
         assert captured["temperature"] == 0.2
 
     async def test_fast_preset_picks_haiku(self, db: AsyncSession, tenant) -> None:
@@ -96,7 +96,7 @@ class TestLLMClientUsesSettings:
 
         captured: dict = {}
 
-        async def fake_anthropic(prompt, system, model, temperature, max_tokens):
+        async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             captured["model"] = model
             captured["temperature"] = temperature
             return "ok"
@@ -118,7 +118,7 @@ class TestLLMClientUsesSettings:
 
         captured: dict = {}
 
-        async def fake_anthropic(prompt, system, model, temperature, max_tokens):
+        async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             captured["model"] = model
             captured["temperature"] = temperature
             return "ok"
@@ -127,12 +127,12 @@ class TestLLMClientUsesSettings:
             await llm_client.generate(
                 "test prompt",
                 system="sys",
-                model="claude-opus-4-7",
+                model="claude-opus-4-8",
                 temperature=0.1,
                 tenant_settings=settings,
             )
 
-        assert captured["model"] == "claude-opus-4-7"
+        assert captured["model"] == "claude-opus-4-8"
         assert captured["temperature"] == 0.1
 
     async def test_custom_settings_use_stored_values(
@@ -142,14 +142,14 @@ class TestLLMClientUsesSettings:
             db,
             tenant.id,
             AISettingsUpdate(
-                llm_model="claude-opus-4-7", temperature=0.42, max_retries=4
+                llm_model="claude-opus-4-8", temperature=0.42, max_retries=4
             ),
         )
         assert settings.effort_level == "custom"
 
         captured: dict = {}
 
-        async def fake_anthropic(prompt, system, model, temperature, max_tokens):
+        async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             captured["model"] = model
             captured["temperature"] = temperature
             return "ok"
@@ -159,7 +159,7 @@ class TestLLMClientUsesSettings:
                 "test prompt", system="sys", tenant_settings=settings
             )
 
-        assert captured["model"] == "claude-opus-4-7"
+        assert captured["model"] == "claude-opus-4-8"
         assert captured["temperature"] == 0.42
 
 

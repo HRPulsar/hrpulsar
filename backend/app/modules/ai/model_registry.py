@@ -9,8 +9,11 @@ from __future__ import annotations
 
 # --- Anthropic ---------------------------------------------------------------
 ANTHROPIC_FAST = "claude-haiku-4-5-20251001"
-ANTHROPIC_BALANCED = "claude-sonnet-4-6"
-ANTHROPIC_THOROUGH = "claude-opus-4-7"
+ANTHROPIC_BALANCED = "claude-sonnet-5"
+ANTHROPIC_THOROUGH = "claude-opus-4-8"
+# Optional pickable flagship — never a tier default (always-on thinking and
+# stricter refusal semantics make it a deliberate, opt-in choice).
+ANTHROPIC_FABLE = "claude-fable-5"
 
 # --- OpenAI ------------------------------------------------------------------
 OPENAI_FAST = "gpt-4o-mini"
@@ -48,7 +51,29 @@ ANTHROPIC_OUTPUT_CAPS: dict[str, int] = {
     "claude-haiku-4-5": 8192,
     ANTHROPIC_BALANCED: 64000,
     ANTHROPIC_THOROUGH: 32000,
+    # Fable budgets above the 32768 non-streaming threshold stream, which
+    # suits its long always-thinking turns.
+    ANTHROPIC_FABLE: 64000,
 }
+
+# Anthropic removed sampling params on newer models: Opus 4.7+, Sonnet 5, and
+# Fable 5 reject ``temperature``/``top_p``/``top_k`` with HTTP 400. Families
+# listed here still accept ``temperature``; unknown or future models default
+# to omitting it, which is always safe (the server-side default applies).
+_ANTHROPIC_TEMPERATURE_OK_PREFIXES: tuple[str, ...] = (
+    "claude-haiku-4-5",
+    "claude-sonnet-4-",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-opus-4-1",
+    "claude-opus-4-0",
+    "claude-3",
+)
+
+
+def anthropic_accepts_temperature(model: str) -> bool:
+    """True when this Anthropic model still accepts the ``temperature`` param."""
+    return model.startswith(_ANTHROPIC_TEMPERATURE_OK_PREFIXES)
 
 # HRP-134: OpenAI chat-completions output ceilings. gpt-4o rejects
 # max_tokens above 16384 with HTTP 400, so callers asking for a bigger

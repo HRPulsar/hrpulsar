@@ -1,13 +1,14 @@
 import uuid
 from collections.abc import Callable
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWTError as JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.core.security import decode_token
 from app.database import get_db
 from app.modules.auth.models import User
@@ -19,9 +20,9 @@ async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
+    credentials_exception = AppError(
+        "could_not_validate_credentials",
+        status.HTTP_401_UNAUTHORIZED,
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
@@ -63,10 +64,7 @@ def require_role(*role_codes: str) -> Callable:
     async def role_checker(current_user: User = Depends(get_current_user)) -> User:
         user_roles = {r.code for r in current_user.roles}
         if not user_roles.intersection(role_codes):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient permissions",
-            )
+            raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
         return current_user
 
     return role_checker
@@ -81,10 +79,7 @@ def require_permission(*codenames: str) -> Callable:
             for perm in role.permissions:
                 user_permissions.add(perm.codename)
         if not user_permissions.intersection(codenames):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient permissions",
-            )
+            raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
         return current_user
 
     return permission_checker

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -62,13 +63,15 @@ export const emptyVacancyForm: VacancyFormValues = {
   conditions: "",
 };
 
+// HRP-476: labels live in the `recruitment` i18n namespace; this map only
+// owns the API code → key relation.
 const employmentTypes = [
-  { value: "full_time", label: "Full-time" },
-  { value: "part_time", label: "Part-time" },
-  { value: "contract", label: "Contract" },
-  { value: "internship", label: "Internship" },
-  { value: "temporary", label: "Temporary" },
-  { value: "remote", label: "Remote" },
+  { value: "full_time", labelKey: "employmentTypeFullTime" },
+  { value: "part_time", labelKey: "employmentTypePartTime" },
+  { value: "contract", labelKey: "employmentTypeContract" },
+  { value: "internship", labelKey: "employmentTypeInternship" },
+  { value: "temporary", labelKey: "employmentTypeTemporary" },
+  { value: "remote", labelKey: "employmentTypeRemote" },
 ];
 
 type Props = {
@@ -103,6 +106,8 @@ export function VacancyForm({
   footer,
   heading,
 }: Props) {
+  const t = useTranslations("recruitment");
+
   function updateField<K extends keyof VacancyFormValues>(
     field: K,
     value: VacancyFormValues[K],
@@ -231,14 +236,16 @@ export function VacancyForm({
   }
 
   const specsDisabled = !values.position_id;
-  const specsPlaceholder = specsDisabled ? "Select position first" : "Select";
+  const specsPlaceholder = specsDisabled
+    ? t("vacancySelectPositionFirst")
+    : t("selectPlaceholder");
   const gradesDisabled =
     !values.position_id || values.specialization_ids.length === 0;
   const gradesPlaceholder = !values.position_id
-    ? "Select position first"
+    ? t("vacancySelectPositionFirst")
     : values.specialization_ids.length === 0
-      ? "Select specializations first"
-      : "Select";
+      ? t("vacancySelectSpecializationsFirst")
+      : t("selectPlaceholder");
 
   return (
     <div data-testid={testId} className="space-y-6">
@@ -246,11 +253,11 @@ export function VacancyForm({
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">
           <div className="space-y-2">
-            <Label htmlFor="title">Title *</Label>
+            <Label htmlFor="title">{t("vacancyFieldTitle")}</Label>
             <Input
               id="title"
               data-testid="recruitment-vacancy-input-title"
-              placeholder="e.g. Senior Backend Developer"
+              placeholder={t("vacancyTitlePlaceholder")}
               value={values.title}
               disabled={disabled}
               onChange={(e) => updateField("title", e.target.value)}
@@ -259,7 +266,7 @@ export function VacancyForm({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="position">Position</Label>
+              <Label htmlFor="position">{t("columnPosition")}</Label>
               <Select
                 value={values.position_id ?? ""}
                 onValueChange={handlePositionChange}
@@ -269,14 +276,14 @@ export function VacancyForm({
                   id="position"
                   data-testid="recruitment-vacancy-select-position"
                 >
-                  <SelectValue placeholder="Select">
-                    {selectedPosition?.title ?? "Select"}
+                  <SelectValue placeholder={t("selectPlaceholder")}>
+                    {selectedPosition?.title ?? t("selectPlaceholder")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {positionOptions.length === 0 ? (
                     <div className="px-2 py-1 text-xs text-muted-foreground">
-                      No active positions
+                      {t("vacancyNoActivePositions")}
                     </div>
                   ) : (
                     positionOptions.map((opt) => (
@@ -289,7 +296,7 @@ export function VacancyForm({
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="division">Division</Label>
+              <Label htmlFor="division">{t("columnDivision")}</Label>
               <Select
                 value={values.division_id ?? ""}
                 onValueChange={(val: string) =>
@@ -301,15 +308,15 @@ export function VacancyForm({
                   id="division"
                   data-testid="recruitment-vacancy-select-division"
                 >
-                  <SelectValue placeholder="Select">
+                  <SelectValue placeholder={t("selectPlaceholder")}>
                     {divisions.find((d) => d.id === values.division_id)?.name ??
-                      "Select"}
+                      t("selectPlaceholder")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {divisionOptions.length === 0 ? (
                     <div className="px-2 py-1 text-xs text-muted-foreground">
-                      No divisions
+                      {t("vacancyNoDivisions")}
                     </div>
                   ) : (
                     divisionOptions.map((opt) => (
@@ -325,7 +332,9 @@ export function VacancyForm({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="hiring_manager">Hiring manager</Label>
+              <Label htmlFor="hiring_manager">
+                {t("vacancyFieldHiringManager")}
+              </Label>
               <HiringManagerSelect
                 id="hiring_manager"
                 testId="recruitment-vacancy-select-hiring-manager"
@@ -338,7 +347,7 @@ export function VacancyForm({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label>Specializations</Label>
+              <Label>{t("vacancyFieldSpecializations")}</Label>
               <MultiSelectFilter
                 options={specializationOptions}
                 value={values.specialization_ids}
@@ -349,7 +358,7 @@ export function VacancyForm({
               />
             </div>
             <div className="space-y-2">
-              <Label>Grades</Label>
+              <Label>{t("vacancyFieldGrades")}</Label>
               <MultiSelectFilter
                 options={gradeOptions}
                 value={values.grade_ids}
@@ -363,18 +372,20 @@ export function VacancyForm({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="location">Location</Label>
+              <Label htmlFor="location">{t("candidateFieldLocation")}</Label>
               <Input
                 id="location"
                 data-testid="recruitment-vacancy-input-location"
-                placeholder="e.g. Remote, New York"
+                placeholder={t("vacancyLocationPlaceholder")}
                 value={values.location}
                 disabled={disabled}
                 onChange={(e) => updateField("location", e.target.value)}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="employment_type">Employment type</Label>
+              <Label htmlFor="employment_type">
+                {t("vacancyFieldEmploymentType")}
+              </Label>
               <Select
                 value={values.employment_type}
                 onValueChange={(val: string) =>
@@ -386,16 +397,21 @@ export function VacancyForm({
                   id="employment_type"
                   data-testid="recruitment-vacancy-select-employment"
                 >
-                  <SelectValue placeholder="Select type">
-                    {employmentTypes.find(
-                      (t) => t.value === values.employment_type,
-                    )?.label ?? "Select type"}
+                  <SelectValue placeholder={t("vacancySelectType")}>
+                    {(() => {
+                      const picked = employmentTypes.find(
+                        (opt) => opt.value === values.employment_type,
+                      );
+                      return picked
+                        ? t(picked.labelKey)
+                        : t("vacancySelectType");
+                    })()}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {employmentTypes.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>
-                      {t.label}
+                  {employmentTypes.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {t(opt.labelKey)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -404,11 +420,11 @@ export function VacancyForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="description">Description</Label>
+            <Label htmlFor="description">{t("vacancyFieldDescription")}</Label>
             <Textarea
               id="description"
               data-testid="recruitment-vacancy-input-description"
-              placeholder="Describe the role, team, and what you're looking for..."
+              placeholder={t("vacancyDescriptionPlaceholder")}
               value={values.description}
               disabled={disabled}
               onChange={(e) => updateField("description", e.target.value)}
@@ -417,11 +433,13 @@ export function VacancyForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="requirements">Requirements</Label>
+            <Label htmlFor="requirements">
+              {t("vacancyFieldRequirements")}
+            </Label>
             <Textarea
               id="requirements"
               data-testid="recruitment-vacancy-input-requirements"
-              placeholder="Must-have skills, experience, certifications..."
+              placeholder={t("vacancyRequirementsPlaceholder")}
               value={values.requirements}
               disabled={disabled}
               onChange={(e) => updateField("requirements", e.target.value)}
@@ -430,11 +448,13 @@ export function VacancyForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="responsibilities">Responsibilities</Label>
+            <Label htmlFor="responsibilities">
+              {t("vacancyFieldResponsibilities")}
+            </Label>
             <Textarea
               id="responsibilities"
               data-testid="recruitment-vacancy-input-responsibilities"
-              placeholder="Day-to-day work, ownership areas..."
+              placeholder={t("vacancyResponsibilitiesPlaceholder")}
               value={values.responsibilities}
               disabled={disabled}
               onChange={(e) => updateField("responsibilities", e.target.value)}
@@ -443,11 +463,11 @@ export function VacancyForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="conditions">Conditions</Label>
+            <Label htmlFor="conditions">{t("vacancyFieldConditions")}</Label>
             <Textarea
               id="conditions"
               data-testid="recruitment-vacancy-input-conditions"
-              placeholder="Schedule, benefits, package..."
+              placeholder={t("vacancyConditionsPlaceholder")}
               value={values.conditions}
               disabled={disabled}
               onChange={(e) => updateField("conditions", e.target.value)}
@@ -458,15 +478,15 @@ export function VacancyForm({
 
         <div className="space-y-4 rounded-lg bg-muted/50 p-5">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Tasks &amp; Expectations
+            {t("vacancyTasksHeading")}
           </h2>
 
           <div className="space-y-2">
-            <Label htmlFor="tasks_main">Main tasks</Label>
+            <Label htmlFor="tasks_main">{t("vacancyFieldTasksMain")}</Label>
             <Textarea
               id="tasks_main"
               data-testid="recruitment-vacancy-input-tasks-main"
-              placeholder="Key responsibilities for this role..."
+              placeholder={t("vacancyTasksMainPlaceholder")}
               value={values.tasks_main}
               disabled={disabled}
               onChange={(e) => updateField("tasks_main", e.target.value)}
@@ -475,11 +495,13 @@ export function VacancyForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="tasks_additional">Additional tasks</Label>
+            <Label htmlFor="tasks_additional">
+              {t("vacancyFieldTasksAdditional")}
+            </Label>
             <Textarea
               id="tasks_additional"
               data-testid="recruitment-vacancy-input-tasks-additional"
-              placeholder="Nice-to-have or secondary responsibilities..."
+              placeholder={t("vacancyTasksAdditionalPlaceholder")}
               value={values.tasks_additional}
               disabled={disabled}
               onChange={(e) => updateField("tasks_additional", e.target.value)}
@@ -488,11 +510,11 @@ export function VacancyForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="tasks_kpi">KPIs &amp; Success criteria</Label>
+            <Label htmlFor="tasks_kpi">{t("vacancyFieldTasksKpi")}</Label>
             <Textarea
               id="tasks_kpi"
               data-testid="recruitment-vacancy-input-tasks-kpi"
-              placeholder="Measurable goals and expectations..."
+              placeholder={t("vacancyTasksKpiPlaceholder")}
               value={values.tasks_kpi}
               disabled={disabled}
               onChange={(e) => updateField("tasks_kpi", e.target.value)}

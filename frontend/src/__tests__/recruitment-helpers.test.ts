@@ -20,14 +20,23 @@ function file(name: string, size: number, type: string) {
   return { name, size, type };
 }
 
+// HRP-476: the validators return i18n keys now — the wording lives in
+// messages/*.json. The stub echoes the key back and records the values so
+// the tests pin the contract (key + placeholders), never the English copy.
+let lastValues: Record<string, string | number> | undefined;
+const t = (key: string, values?: Record<string, string | number>): string => {
+  lastValues = values;
+  return key;
+};
+
 describe("validateBulkUploadSelection", () => {
   it("rejects an empty selection", () => {
-    expect(validateBulkUploadSelection([])).toBe("Pick at least one file.");
+    expect(validateBulkUploadSelection(t, [])).toBe("bulkUploadPickFile");
   });
 
   it("accepts PDFs and DOCX under the byte cap", () => {
     expect(
-      validateBulkUploadSelection([
+      validateBulkUploadSelection(t, [
         file("cv.pdf", 1024, "application/pdf"),
         file(
           "cv.docx",
@@ -40,34 +49,37 @@ describe("validateBulkUploadSelection", () => {
 
   it("rejects unknown MIME types", () => {
     expect(
-      validateBulkUploadSelection([file("cv.jpg", 1024, "image/jpeg")]),
-    ).toMatch(/only PDF or DOCX/);
+      validateBulkUploadSelection(t, [file("cv.jpg", 1024, "image/jpeg")]),
+    ).toBe("bulkUploadUnsupportedType");
+    expect(lastValues).toEqual({ name: "cv.jpg" });
   });
 
   it("falls back to extension when MIME is empty", () => {
     expect(
-      validateBulkUploadSelection([file("cv.pdf", 1024, "")]),
+      validateBulkUploadSelection(t, [file("cv.pdf", 1024, "")]),
     ).toBeNull();
     expect(
-      validateBulkUploadSelection([file("cv.exe", 1024, "")]),
-    ).toMatch(/only PDF or DOCX/);
+      validateBulkUploadSelection(t, [file("cv.exe", 1024, "")]),
+    ).toBe("bulkUploadUnsupportedType");
   });
 
   it("rejects oversized files with the correct cap", () => {
     expect(
-      validateBulkUploadSelection([
+      validateBulkUploadSelection(t, [
         file("big.pdf", BULK_UPLOAD_MAX_FILE_BYTES + 1, "application/pdf"),
       ]),
-    ).toMatch(/exceeds/);
+    ).toBe("bulkUploadFileTooLarge");
+    expect(lastValues).toEqual({ name: "big.pdf", max: 10 });
   });
 
   it(`rejects more than ${BULK_UPLOAD_MAX_FILES} files`, () => {
     const tooMany = Array.from({ length: BULK_UPLOAD_MAX_FILES + 1 }, (_, i) =>
       file(`cv-${i}.pdf`, 1024, "application/pdf"),
     );
-    expect(validateBulkUploadSelection(tooMany)).toMatch(
-      /Up to .* files per upload/,
+    expect(validateBulkUploadSelection(t, tooMany)).toBe(
+      "bulkUploadTooManyFiles",
     );
+    expect(lastValues).toEqual({ max: BULK_UPLOAD_MAX_FILES });
   });
 
   it("rejects when the aggregate batch size exceeds the total cap", () => {
@@ -75,8 +87,8 @@ describe("validateBulkUploadSelection", () => {
     const overTotal = Array.from({ length: 11 }, (_, i) =>
       file(`cv-${i}.pdf`, BULK_UPLOAD_MAX_FILE_BYTES, "application/pdf"),
     );
-    expect(validateBulkUploadSelection(overTotal)).toMatch(
-      /Batch total exceeds/,
+    expect(validateBulkUploadSelection(t, overTotal)).toBe(
+      "bulkUploadBatchTooLarge",
     );
     expect(BULK_UPLOAD_MAX_TOTAL_BYTES).toBeGreaterThan(
       BULK_UPLOAD_MAX_FILE_BYTES,
@@ -99,20 +111,20 @@ describe("manualPayloadValidationError", () => {
 
   it("requires full name", () => {
     expect(
-      manualPayloadValidationError({ ...base, full_name: "" }),
-    ).toMatch(/Full name/);
+      manualPayloadValidationError(t, { ...base, full_name: "" }),
+    ).toBe("candidateFullNameRequired");
   });
 
   it("requires at least email or phone", () => {
     expect(
-      manualPayloadValidationError({ ...base, email: "", phone: "" }),
-    ).toMatch(/Either email or phone/);
+      manualPayloadValidationError(t, { ...base, email: "", phone: "" }),
+    ).toBe("candidateContactRequired");
   });
 
   it("passes when email-only or phone-only", () => {
-    expect(manualPayloadValidationError(base)).toBeNull();
+    expect(manualPayloadValidationError(t, base)).toBeNull();
     expect(
-      manualPayloadValidationError({ ...base, email: "", phone: "+1234" }),
+      manualPayloadValidationError(t, { ...base, email: "", phone: "+1234" }),
     ).toBeNull();
   });
 });
@@ -234,7 +246,7 @@ describe("buildStagesPayload", () => {
 
 describe("stagesValidationError", () => {
   it("requires at least one stage", () => {
-    expect(stagesValidationError([])).toMatch(/at least one/);
+    expect(stagesValidationError(t, [])).toBe("stagesAtLeastOne");
   });
 
   it("rejects empty name or code", () => {
@@ -246,10 +258,10 @@ describe("stagesValidationError", () => {
       color: "",
       stage_type: "active",
     };
-    expect(stagesValidationError([base])).toMatch(/needs a name/);
+    expect(stagesValidationError(t, [base])).toBe("stageNameCodeRequired");
     expect(
-      stagesValidationError([{ ...base, name: "ok", code: "" }]),
-    ).toMatch(/needs a name/);
+      stagesValidationError(t, [{ ...base, name: "ok", code: "" }]),
+    ).toBe("stageNameCodeRequired");
   });
 });
 

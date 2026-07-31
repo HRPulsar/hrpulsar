@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import {
   ChevronsLeft,
@@ -29,6 +30,7 @@ export function InterviewPlayer({
   onTime,
   refSetter,
 }: InterviewPlayerProps) {
+  const t = useTranslations("recruitment");
   const mediaRef = useRef<HTMLMediaElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [speed, setSpeed] = useState(1);
@@ -125,26 +127,26 @@ export function InterviewPlayer({
           ) : (
             <Play className="size-3.5" />
           )}
-          {playing ? "Pause" : "Play"}
+          {playing ? t("playerPause") : t("playerPlay")}
         </Button>
         <Button
           size="sm"
           variant="ghost"
           onClick={() => seekBy(-15)}
           data-testid="recruitment-interview-player-back15"
-          aria-label="Back 15 seconds"
+          aria-label={t("playerBack15Aria")}
         >
           <ChevronsLeft className="size-3.5" />
-          −15s
+          {t("playerBack15")}
         </Button>
         <Button
           size="sm"
           variant="ghost"
           onClick={() => seekBy(15)}
           data-testid="recruitment-interview-player-fwd15"
-          aria-label="Forward 15 seconds"
+          aria-label={t("playerFwd15Aria")}
         >
-          +15s
+          {t("playerFwd15")}
           <ChevronsRight className="size-3.5" />
         </Button>
         <select
@@ -152,11 +154,11 @@ export function InterviewPlayer({
           onChange={(e) => setSpeed(Number(e.target.value))}
           className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
           data-testid="recruitment-interview-player-speed"
-          aria-label="Playback speed"
+          aria-label={t("playerSpeedAria")}
         >
           {SPEED_STEPS.map((s) => (
             <option key={s} value={s}>
-              {s.toFixed(2)}x
+              {t("playerSpeedOption", { speed: s.toFixed(2) })}
             </option>
           ))}
         </select>
@@ -166,7 +168,7 @@ export function InterviewPlayer({
             variant="ghost"
             onClick={() => void toggleFullscreen()}
             data-testid="recruitment-interview-player-fullscreen"
-            aria-label="Fullscreen"
+            aria-label={t("playerFullscreenAria")}
           >
             <Maximize className="size-3.5" />
           </Button>

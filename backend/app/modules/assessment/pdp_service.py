@@ -2,11 +2,12 @@ import logging
 import uuid
 from datetime import date, datetime, timezone
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.core.s3 import get_presigned_url
 from app.modules.assessment.models import (
     PDP,
@@ -382,7 +383,7 @@ async def _pdp_to_detail(
 async def _get_pdp(db: AsyncSession, tenant_id: uuid.UUID, pdp_id: uuid.UUID) -> PDP:
     p = await db.get(PDP, pdp_id)
     if not p or p.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "PDP not found")
+        raise AppError("pdp_not_found", status.HTTP_404_NOT_FOUND)
     return p
 
 
@@ -513,7 +514,7 @@ async def _reload_pdp_for_read(
     )
     p = result.scalar_one_or_none()
     if not p:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "PDP not found")
+        raise AppError("pdp_not_found", status.HTTP_404_NOT_FOUND)
     reviewer_name = await _resolve_reviewer_name(db, p)
     return _pdp_to_read(p, reviewer_name=reviewer_name)
 
@@ -532,11 +533,11 @@ async def create_pdp(
     )
     active_count = (await db.execute(active_count_q)).scalar() or 0
     if active_count >= MAX_ACTIVE_PDPS_PER_EMPLOYEE:
-        raise HTTPException(
+        raise AppError(
+            "pdp_active_limit_reached",
             status.HTTP_409_CONFLICT,
-            f"Employee already has {active_count} active development plans "
-            f"(limit {MAX_ACTIVE_PDPS_PER_EMPLOYEE}). "
-            "Finish or cancel an existing one before starting another.",
+            active_count=active_count,
+            limit=MAX_ACTIVE_PDPS_PER_EMPLOYEE,
         )
 
     p = PDP(
@@ -587,9 +588,9 @@ async def _recompute_items_for_grade_change(
         # Hard fail-fast — any call from a non-draft state would silently
         # nuke completed work. Callers (router transitions, update_pdp)
         # already gate on draft; this assertion catches regressions.
-        raise HTTPException(
+        raise AppError(
+            "pdp_grade_replace_draft_only",
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Specialization & grade can only be replaced while the plan is in Draft.",
         )
 
     existing_result = await db.execute(select(PDPItem).where(PDPItem.pdp_id == pdp_id))
@@ -617,9 +618,10 @@ async def update_pdp(
     p = await _get_pdp(db, tenant_id, pdp_id)
 
     if p.status in PDP_FINALIZED_STATUSES:
-        raise HTTPException(
+        raise AppError(
+            "pdp_not_editable_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot edit a PDP in status '{p.status}'",
+            pdp_status=p.status,
         )
 
     fields = data.model_dump(exclude_unset=True)
@@ -632,9 +634,10 @@ async def update_pdp(
     grade_link_changed = spec_changed or grade_changed
 
     if grade_link_changed and p.status in PDP_GRADE_LOCKED_STATUSES:
-        raise HTTPException(
+        raise AppError(
+            "pdp_grade_locked_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot change specialization or grade while status is '{p.status}'",
+            pdp_status=p.status,
         )
 
     if "title" in fields:
@@ -707,7 +710,7 @@ async def get_pdp_detail(
     )
     p = result.scalar_one_or_none()
     if not p:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "PDP not found")
+        raise AppError("pdp_not_found", status.HTTP_404_NOT_FOUND)
     return await _pdp_to_detail(db, p, viewer_user_id=viewer_user_id)
 
 
@@ -778,9 +781,12 @@ async def change_pdp_status(
     if not bypass_transition_check:
         allowed = PDP_STATUS_TRANSITIONS.get(p.status, [])
         if new_status not in allowed:
-            raise HTTPException(
+            raise AppError(
+                "pdp_invalid_transition",
                 status.HTTP_400_BAD_REQUEST,
-                f"Cannot transition from {p.status} to {new_status}. Allowed: {allowed}",
+                from_status=p.status,
+                to_status=new_status,
+                allowed=allowed,
             )
 
     # HRP-130: a plan in ``review`` can only be returned to the employee
@@ -795,9 +801,9 @@ async def change_pdp_status(
         )
         items = list(items_result.scalars().all())
         if items and all(it.is_passed for it in items):
-            raise HTTPException(
+            raise AppError(
+                "pdp_all_items_accepted",
                 status.HTTP_409_CONFLICT,
-                "All items are accepted — complete the plan instead of returning it",
             )
 
     # HRP-12: don't let the admin "send" an empty plan — the employee would
@@ -811,22 +817,22 @@ async def change_pdp_status(
         )
         items = list(items_result.scalars().all())
         if not items:
-            raise HTTPException(
+            raise AppError(
+                "pdp_no_items_to_send",
                 status.HTTP_409_CONFLICT,
-                "Add at least one item before sending the plan",
             )
         if any(not it.materials for it in items):
-            raise HTTPException(
+            raise AppError(
+                "pdp_item_missing_material_send",
                 status.HTTP_409_CONFLICT,
-                "Every item must have at least one material before sending",
             )
         # HRP-191: the admin can't launch a plan whose deadline has already
         # elapsed — the employee would land on an overdue plan from minute
         # one. Same-day deadlines are still accepted.
         if _is_past_deadline(p.deadline):
-            raise HTTPException(
+            raise AppError(
+                "assessment_deadline_in_past",
                 status.HTTP_400_BAD_REQUEST,
-                "Deadline is in the past",
             )
 
     # HRP-187: returning a plan from review to the owner requires every
@@ -843,9 +849,9 @@ async def change_pdp_status(
         )
         items_for_return = list(items_result.scalars().all())
         if any(not it.materials for it in items_for_return):
-            raise HTTPException(
+            raise AppError(
+                "pdp_item_missing_material_return",
                 status.HTTP_409_CONFLICT,
-                "Every item must have at least one material before returning",
             )
 
     # HRP-187: a past deadline also blocks Review → Returned. The UI keeps
@@ -856,9 +862,9 @@ async def change_pdp_status(
         and new_status == "returned"
         and _is_past_deadline(p.deadline)
     ):
-        raise HTTPException(
+        raise AppError(
+            "assessment_deadline_in_past",
             status.HTTP_400_BAD_REQUEST,
-            "Deadline is in the past",
         )
 
     previous_status = p.status
@@ -886,21 +892,30 @@ async def change_pdp_status(
 
     await db.commit()
 
+    notifier = None
     if previous_status == "draft" and new_status == "sent":
-        await _notify_pdp_sent(db, p)
+        notifier = _notify_pdp_sent
     elif new_status == "review":
         # HRP-244: notify the reviewer that they have a plan to evaluate.
-        await _notify_pdp_review_submitted(db, p)
+        notifier = _notify_pdp_review_submitted
     elif new_status == "returned":
-        await _notify_pdp_returned(db, p)
+        notifier = _notify_pdp_returned
     elif new_status == "done":
-        await _notify_pdp_done(db, p)
+        notifier = _notify_pdp_done
     elif (
         new_status == "cancelled"
         and previous_status in {"sent", "in_progress", "review", "returned"}
     ):
         # HRP-244: silent on draft → cancelled (the employee never saw the plan).
-        await _notify_pdp_cancelled(db, p)
+        notifier = _notify_pdp_cancelled
+
+    if notifier is not None:
+        # i18n F4: read the tenant default once per transition — each
+        # notified recipient layers its own User.language on top of it.
+        from app.modules.company.models import Tenant
+
+        tenant = await db.get(Tenant, p.tenant_id) if p.tenant_id else None
+        await notifier(db, p, tenant_default=tenant.default_locale if tenant else None)
 
     return await _reload_pdp_for_read(db, tenant_id, pdp_id)
 
@@ -914,20 +929,31 @@ def _employee_display_name(user) -> str:
     return f"{user.first_name} {user.last_name}".strip() or user.email
 
 
-async def _notify_pdp_sent(db: AsyncSession, p: PDP) -> None:
+async def _notify_pdp_sent(
+    db: AsyncSession, p: PDP, *, tenant_default: str | None = None
+) -> None:
     """Email the employee that their development plan was sent for execution."""
     try:
         from app.core.email import enqueue_email
         from app.core.email_templates import render_pdp_sent_email
+        from app.core.i18n import format_date, resolve_locale
 
         user = _pdp_owner_user(p)
         if not user or not user.email:
             return
 
         employee_name = _employee_display_name(user)
-        deadline = p.deadline.strftime("%B %d, %Y") if p.deadline else None
+        locale = resolve_locale(
+            user_language=user.language, tenant_default=tenant_default
+        )
+        # i18n F7: deadline is rendered in the recipient's locale (the old
+        # strftime("%B %d, %Y") hardcoded English month names).
+        deadline = format_date(p.deadline, locale) if p.deadline else None
         subject, body = render_pdp_sent_email(
-            employee_name, deadline=deadline, pdp_title=p.title
+            employee_name,
+            deadline=deadline,
+            pdp_title=p.title,
+            locale=locale,
         )
         enqueue_email(
             user.email,
@@ -942,11 +968,14 @@ async def _notify_pdp_sent(db: AsyncSession, p: PDP) -> None:
         logger.exception("PDP sent notification failed for pdp_id=%s", p.id)
 
 
-async def _notify_pdp_review_submitted(db: AsyncSession, p: PDP) -> None:
+async def _notify_pdp_review_submitted(
+    db: AsyncSession, p: PDP, *, tenant_default: str | None = None
+) -> None:
     """HRP-244: tell the reviewer that the owner has submitted the plan."""
     try:
         from app.core.email import enqueue_email
         from app.core.email_templates import render_pdp_review_submitted_email
+        from app.core.i18n import resolve_locale
         from app.modules.auth.models import User
 
         owner = _pdp_owner_user(p)
@@ -966,7 +995,11 @@ async def _notify_pdp_review_submitted(db: AsyncSession, p: PDP) -> None:
 
         employee_name = _employee_display_name(owner)
         subject, body = render_pdp_review_submitted_email(
-            employee_name, pdp_title=p.title
+            employee_name,
+            pdp_title=p.title,
+            locale=resolve_locale(
+                user_language=reviewer.language, tenant_default=tenant_default
+            ),
         )
         enqueue_email(
             reviewer.email,
@@ -981,11 +1014,14 @@ async def _notify_pdp_review_submitted(db: AsyncSession, p: PDP) -> None:
         )
 
 
-async def _notify_pdp_returned(db: AsyncSession, p: PDP) -> None:
+async def _notify_pdp_returned(
+    db: AsyncSession, p: PDP, *, tenant_default: str | None = None
+) -> None:
     """HRP-244: tell the owner that the reviewer bounced the plan back."""
     try:
         from app.core.email import enqueue_email
         from app.core.email_templates import render_pdp_returned_email
+        from app.core.i18n import resolve_locale
 
         user = _pdp_owner_user(p)
         if not user or not user.email:
@@ -993,7 +1029,11 @@ async def _notify_pdp_returned(db: AsyncSession, p: PDP) -> None:
 
         employee_name = _employee_display_name(user)
         subject, body = render_pdp_returned_email(
-            employee_name, pdp_title=p.title
+            employee_name,
+            pdp_title=p.title,
+            locale=resolve_locale(
+                user_language=user.language, tenant_default=tenant_default
+            ),
         )
         enqueue_email(
             user.email,
@@ -1008,7 +1048,9 @@ async def _notify_pdp_returned(db: AsyncSession, p: PDP) -> None:
         )
 
 
-async def _notify_pdp_done(db: AsyncSession, p: PDP) -> None:
+async def _notify_pdp_done(
+    db: AsyncSession, p: PDP, *, tenant_default: str | None = None
+) -> None:
     """HRP-244: notify both the owner and the reviewer that the plan is complete."""
     try:
         from app.core.email import enqueue_email
@@ -1016,13 +1058,21 @@ async def _notify_pdp_done(db: AsyncSession, p: PDP) -> None:
             render_pdp_done_to_employee_email,
             render_pdp_done_to_reviewer_email,
         )
+        from app.core.i18n import resolve_locale, translate
         from app.modules.auth.models import User
 
         owner = _pdp_owner_user(p)
-        owner_display = _employee_display_name(owner) if owner else "The employee"
+        owner_display = _employee_display_name(owner) if owner else None
         if owner and owner.email:
+            # i18n F4: two recipients, two independent locales. The
+            # fallback also covers an owner with an empty display name.
+            owner_locale = resolve_locale(
+                user_language=owner.language, tenant_default=tenant_default
+            )
             subject, body = render_pdp_done_to_employee_email(
-                owner_display, pdp_title=p.title
+                owner_display or translate("email.fallback.employee", owner_locale),
+                pdp_title=p.title,
+                locale=owner_locale,
             )
             enqueue_email(
                 owner.email,
@@ -1044,8 +1094,14 @@ async def _notify_pdp_done(db: AsyncSession, p: PDP) -> None:
         # HRP-244 review fix: when the owner record is missing (User row
         # deactivated / deleted) the reviewer still gets a notice using a
         # generic display name so the lifecycle event is not silently lost.
+        # i18n F7: that generic name follows the reviewer's locale.
+        reviewer_locale = resolve_locale(
+            user_language=reviewer.language, tenant_default=tenant_default
+        )
         subject, body = render_pdp_done_to_reviewer_email(
-            owner_display, pdp_title=p.title
+            owner_display or translate("email.fallback.employee", reviewer_locale),
+            pdp_title=p.title,
+            locale=reviewer_locale,
         )
         enqueue_email(
             reviewer.email,
@@ -1058,7 +1114,9 @@ async def _notify_pdp_done(db: AsyncSession, p: PDP) -> None:
         logger.exception("PDP done notification failed for pdp_id=%s", p.id)
 
 
-async def _notify_pdp_cancelled(db: AsyncSession, p: PDP) -> None:
+async def _notify_pdp_cancelled(
+    db: AsyncSession, p: PDP, *, tenant_default: str | None = None
+) -> None:
     """HRP-244: notify both the owner and the reviewer about a post-launch cancel."""
     try:
         from app.core.email import enqueue_email
@@ -1066,13 +1124,21 @@ async def _notify_pdp_cancelled(db: AsyncSession, p: PDP) -> None:
             render_pdp_cancelled_to_employee_email,
             render_pdp_cancelled_to_reviewer_email,
         )
+        from app.core.i18n import resolve_locale, translate
         from app.modules.auth.models import User
 
         owner = _pdp_owner_user(p)
-        owner_display = _employee_display_name(owner) if owner else "The employee"
+        owner_display = _employee_display_name(owner) if owner else None
         if owner and owner.email:
+            # i18n F4: two recipients, two independent locales. The
+            # fallback also covers an owner with an empty display name.
+            owner_locale = resolve_locale(
+                user_language=owner.language, tenant_default=tenant_default
+            )
             subject, body = render_pdp_cancelled_to_employee_email(
-                owner_display, pdp_title=p.title
+                owner_display or translate("email.fallback.employee", owner_locale),
+                pdp_title=p.title,
+                locale=owner_locale,
             )
             enqueue_email(
                 owner.email,
@@ -1090,8 +1156,14 @@ async def _notify_pdp_cancelled(db: AsyncSession, p: PDP) -> None:
         reviewer = await db.get(User, reviewer_user_id)
         if not reviewer or not reviewer.email:
             return
+        # i18n F7: the missing-owner fallback follows the reviewer's locale.
+        reviewer_locale = resolve_locale(
+            user_language=reviewer.language, tenant_default=tenant_default
+        )
         subject, body = render_pdp_cancelled_to_reviewer_email(
-            owner_display, pdp_title=p.title
+            owner_display or translate("email.fallback.employee", reviewer_locale),
+            pdp_title=p.title,
+            locale=reviewer_locale,
         )
         enqueue_email(
             reviewer.email,
@@ -1111,9 +1183,10 @@ async def _notify_pdp_cancelled(db: AsyncSession, p: PDP) -> None:
 
 def _ensure_pdp_editable(p: PDP) -> None:
     if p.status in PDP_FINALIZED_STATUSES:
-        raise HTTPException(
+        raise AppError(
+            "pdp_not_editable_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot edit a PDP in status '{p.status}'",
+            pdp_status=p.status,
         )
 
 
@@ -1165,9 +1238,9 @@ def _ensure_item_editable(item: PDPItem) -> None:
     the checkbox. This keeps the recorded growth intact and prevents an
     accidental edit from rewriting history."""
     if item.is_passed:
-        raise HTTPException(
+        raise AppError(
+            "pdp_item_passed_read_only",
             status.HTTP_403_FORBIDDEN,
-            "Item is marked as passed and cannot be modified",
         )
 
 
@@ -1187,7 +1260,7 @@ async def update_item(
     )
     item = result.scalar_one_or_none()
     if not item or item.pdp_id != pdp_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        raise AppError("pdp_item_not_found", status.HTTP_404_NOT_FOUND)
     _ensure_item_editable(item)
 
     fields = data.model_dump(exclude_unset=True)
@@ -1241,7 +1314,7 @@ async def delete_item(
     )
     item = result.scalar_one_or_none()
     if not item or item.pdp_id != pdp_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        raise AppError("pdp_item_not_found", status.HTTP_404_NOT_FOUND)
     _ensure_item_editable(item)
     await db.delete(item)
     await db.flush()
@@ -1272,9 +1345,9 @@ async def reorder_items(
     items = {i.id: i for i in items_result.scalars().all()}
     missing = [iid for iid in ordered_ids if iid not in items]
     if missing or len(ordered_ids) != len(items):
-        raise HTTPException(
+        raise AppError(
+            "pdp_reorder_incomplete",
             status.HTTP_400_BAD_REQUEST,
-            "Reorder must include every item exactly once",
         )
     for idx, iid in enumerate(ordered_ids):
         items[iid].sort_index = idx
@@ -1366,27 +1439,28 @@ async def mark_item_passed(
 
     if p.status in PDP_OWNER_PASS_STATUSES:
         if not is_owner:
-            raise HTTPException(
+            raise AppError(
+                "pdp_only_owner_can_mark_items",
                 status.HTTP_403_FORBIDDEN,
-                "Only the plan owner can mark items as passed",
             )
     elif p.status in PDP_REVIEWER_PASS_STATUSES:
         if not (is_admin or is_pdp_reviewer):
-            raise HTTPException(
+            raise AppError(
+                "pdp_only_reviewer_can_mark_items",
                 status.HTTP_403_FORBIDDEN,
-                "Only admins or the assigned reviewer can mark items while the plan is under review",
             )
     else:
         # ``draft``/``done``/``cancelled`` — covers HRP-17 (terminal) and
         # the "not yet started" guard for draft in one place.
-        raise HTTPException(
+        raise AppError(
+            "pdp_cannot_mark_items_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot mark items while the plan is in status '{p.status}'",
+            pdp_status=p.status,
         )
 
     item = await db.get(PDPItem, item_id)
     if not item or item.pdp_id != pdp_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        raise AppError("pdp_item_not_found", status.HTTP_404_NOT_FOUND)
 
     # HRP-19 (REDO) overrides the earlier HRP-20 one-way guard: the owner
     # must be able to uncheck and re-check items while the plan is in
@@ -1417,7 +1491,7 @@ async def mark_item_passed(
 
     pdp = await db.get(PDP, pdp_id)
     if pdp is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "PDP not found")
+        raise AppError("pdp_not_found", status.HTTP_404_NOT_FOUND)
     pdp.total_progress = progress
     await db.commit()
 
@@ -1434,7 +1508,7 @@ async def add_material(
     _ensure_pdp_editable(p)
     item = await db.get(PDPItem, item_id)
     if not item or item.pdp_id != pdp_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        raise AppError("pdp_item_not_found", status.HTTP_404_NOT_FOUND)
     _ensure_item_editable(item)
 
     mat = PDPItemMaterial(
@@ -1478,11 +1552,11 @@ async def update_material(
     _ensure_pdp_editable(p)
     item = await db.get(PDPItem, item_id)
     if not item or item.pdp_id != pdp_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        raise AppError("pdp_item_not_found", status.HTTP_404_NOT_FOUND)
     _ensure_item_editable(item)
     mat = await db.get(PDPItemMaterial, material_id)
     if not mat or mat.item_id != item_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Material not found")
+        raise AppError("pdp_material_not_found", status.HTTP_404_NOT_FOUND)
 
     fields = data.model_dump(exclude_unset=True)
     for attr in ("title", "format", "link", "study_time", "file_id"):
@@ -1517,11 +1591,11 @@ async def delete_material(
     _ensure_pdp_editable(p)
     item = await db.get(PDPItem, item_id)
     if not item or item.pdp_id != pdp_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+        raise AppError("pdp_item_not_found", status.HTTP_404_NOT_FOUND)
     _ensure_item_editable(item)
     mat = await db.get(PDPItemMaterial, material_id)
     if not mat or mat.item_id != item_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Material not found")
+        raise AppError("pdp_material_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(mat)
     await db.commit()
 
@@ -1607,7 +1681,7 @@ async def get_version(
     await _get_pdp(db, tenant_id, pdp_id)
     v = await db.get(PDPVersion, version_id)
     if not v or v.pdp_id != pdp_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Version not found")
+        raise AppError("pdp_version_not_found", status.HTTP_404_NOT_FOUND)
     data = _version_to_read(v)
     data["snapshot"] = v.snapshot
     return data
@@ -1620,7 +1694,7 @@ async def restore_version(
     p = await _get_pdp(db, tenant_id, pdp_id)
     v = await db.get(PDPVersion, version_id)
     if not v or v.pdp_id != pdp_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Version not found")
+        raise AppError("pdp_version_not_found", status.HTTP_404_NOT_FOUND)
 
     snapshot = v.snapshot
 

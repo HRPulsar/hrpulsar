@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import type { Vacancy, VacancyProfile } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,6 +38,8 @@ export function VacancyCompetencesSection({
   canEdit,
   onProfileChange,
 }: VacancyCompetencesSectionProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draftData, setDraftData] = useState<Record<string, unknown> | null>(
@@ -110,7 +113,7 @@ export function VacancyCompetencesSection({
 
   function startEdit() {
     if (!hasProfile || !profileData) {
-      toast.info("Generate the profile first to enable inline editing.");
+      toast.info(t("vacancyCompetencesGenerateFirst"));
       return;
     }
     // Deep clone via JSON so the tree mutates a working copy and Cancel
@@ -124,7 +127,7 @@ export function VacancyCompetencesSection({
   function handleCancel() {
     if (
       (isDirty || hasPendingSections) &&
-      !window.confirm("Discard unsaved changes in Competences?")
+      !window.confirm(t("vacancyCompetencesDiscardConfirm"))
     ) {
       return;
     }
@@ -146,8 +149,8 @@ export function VacancyCompetencesSection({
         .join(" → ");
       toast.error(
         where
-          ? `Give every competence a name before saving (check ${where}).`
-          : "Give every competence a name before saving.",
+          ? t("vacancyCompetencesUnnamedWhere", { where })
+          : t("vacancyCompetencesUnnamed"),
       );
       return;
     }
@@ -159,14 +162,16 @@ export function VacancyCompetencesSection({
         profile_data: sanitizeProfileData(draftData),
         base_version: baseVersion,
       });
-      toast.success("Profile saved");
+      toast.success(t("vacancyProfileToastSaved"));
       await onProfileChange();
       setEditing(false);
       setDraftData(null);
       setHasPendingSections(false);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save competences",
+        err instanceof Error
+          ? err.message
+          : t("vacancyCompetencesSaveFailed"),
       );
     } finally {
       setSaving(false);
@@ -179,13 +184,12 @@ export function VacancyCompetencesSection({
     <Card data-testid="vacancy-section-competences" id="competences">
       <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
-          <CardTitle>Competences &amp; indicators</CardTitle>
+          <CardTitle>{t("vacancyCompetencesTitle")}</CardTitle>
           {/* HRP-235 REDO (QA case 1): the structure hint only makes sense
               once there is a tree to read — hide it for the empty state. */}
           {hasProfile && (
             <p className="text-sm text-muted-foreground">
-              Group → competence with the required skill level for the grade.
-              Expand a competence to see its indicators.
+              {t("vacancyCompetencesHint")}
             </p>
           )}
         </div>
@@ -200,7 +204,7 @@ export function VacancyCompetencesSection({
                   disabled={saving}
                   data-testid="vacancy-competences-cancel-btn"
                 >
-                  Cancel
+                  {tc("cancel")}
                 </Button>
                 <Button
                   size="sm"
@@ -208,7 +212,7 @@ export function VacancyCompetencesSection({
                   disabled={saving || !isDirty}
                   data-testid="vacancy-competences-save-btn"
                 >
-                  {saving ? "Saving..." : "Save"}
+                  {saving ? t("actionSaving") : t("save")}
                 </Button>
               </>
             ) : (
@@ -221,7 +225,7 @@ export function VacancyCompetencesSection({
                   data-testid="vacancy-competences-edit-btn"
                 >
                   <Pencil className="mr-1 size-4" />
-                  Edit
+                  {t("actionEdit")}
                 </Button>
               )
             )}
@@ -237,21 +241,19 @@ export function VacancyCompetencesSection({
               }
             >
               <Sparkles className="mr-1 size-4" />
-              {hasProfile ? "Regenerate" : "Generate"}
+              {hasProfile
+                ? t("vacancyCompetencesRegenerate")
+                : t("vacancyCompetencesGenerate")}
             </Button>
             <Button
               variant="outline"
               size="sm"
               data-testid="vacancy-competences-add-from-dict-btn"
               disabled={editing || sessionBlocksActions}
-              onClick={() =>
-                toast.info(
-                  "Adding from the company library will land in a follow-up.",
-                )
-              }
+              onClick={() => toast.info(t("vacancyCompetencesAddFromDictToast"))}
             >
               <BookOpen className="mr-1 size-4" />
-              Add from dictionary
+              {t("vacancyCompetencesAddFromDict")}
             </Button>
           </div>
         )}
@@ -278,7 +280,7 @@ export function VacancyCompetencesSection({
           >
             <Sparkles className="mx-auto mb-2 size-8 text-muted-foreground opacity-40" />
             <p className="text-sm font-medium text-muted-foreground">
-              No competency profile yet
+              {t("vacancyCompetencesEmpty")}
             </p>
             {canEdit && (
               <div className="mt-4 flex justify-center gap-2">
@@ -289,7 +291,7 @@ export function VacancyCompetencesSection({
                   data-testid="vacancy-competences-generate-btn"
                 >
                   <Sparkles className="mr-1 size-4" />
-                  Generate with AI
+                  {t("vacancyCompetencesGenerateWithAi")}
                 </Button>
               </div>
             )}

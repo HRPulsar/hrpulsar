@@ -18,7 +18,7 @@ def stub_signup_email(monkeypatch):
     """Skip the real email helper — tests focus on DB transitions."""
     sent: list[tuple[str, str]] = []
 
-    def _fake_send(to: str, token: str) -> bool:
+    def _fake_send(to: str, token: str, **_kwargs) -> bool:
         sent.append((to, token))
         return True
 

@@ -37,6 +37,18 @@ Pay only for what you use. Every organization starts with a free tier — no cre
 - **Bonus credits** — additional credits granted by support for special cases
 - **Deduction order** — free credits are used first, then bonus, then purchased
 - **No surprises** — cost confirmation before expensive operations
+- **Top up from the dashboard** — request a credit pack right from Settings → Billing. Depending on the region we issue an invoice for bank transfer (credits land as soon as payment clears) or take you to online checkout
+- **Local currency and invoicing** — regional and dedicated deployments price packs in the local currency and invoice from a local legal entity
+
+## Dedicated & White-Label Deployments
+
+Need your own brand, region, or legal setup? HRPulsar runs as a fully isolated deployment per brand or customer.
+
+- **Complete data isolation** — dedicated database, storage, and backups per deployment; data never leaves the chosen jurisdiction
+- **Your brand** — name, logo, colors, and email identity, no HRPulsar branding anywhere
+- **Data residency compliance** — hosting and logs stay in-country; only anonymous health metrics reach central monitoring
+- **Localized billing** — local currency, local legal entity, invoice-based payments
+- **Same product, same updates** — every deployment receives releases from the same pipeline, flagship-first with automatic rollback
 
 ## Multi-Tenant Platform
 
@@ -55,6 +67,7 @@ Centralized management tools for overseeing all organizations on the platform.
 - Organization lifecycle management — create, configure, deactivate
 - Credit allocation and bonus grants with audit trail
 - Support access — securely log in as an organization admin for debugging
+- AI model curation — newly released provider models are discovered automatically every day and reviewed by the platform team before they become selectable, so pricing is always explicit and predictable
 
 ## AI Competence Generation
 

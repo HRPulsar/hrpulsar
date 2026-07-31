@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Candidate, CandidateList } from "@/lib/types";
 import { formatDate } from "@/lib/date-format";
@@ -28,13 +29,17 @@ import { Pagination } from "@/components/pagination";
 import { usePermissions } from "@/hooks/use-permissions";
 import { RecruitmentBreadcrumbs, RecruitmentTabs } from "@/components/recruitment";
 import { Search, UserPlus, X } from "lucide-react";
+import {
+  CANDIDATE_SOURCE_OPTIONS,
+  candidateSourceLabel,
+} from "@/lib/candidate-source";
 
 const PAGE_SIZE = 25;
 
-const sourceOptions = ["manual", "resume_upload", "job_board", "referral", "agency", "other"];
-
 export default function CandidateListPage() {
   const router = useRouter();
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -96,20 +101,22 @@ export default function CandidateListPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
 
   return (
     <div data-testid="recruitment-candidate-list" className="space-y-6">
-      <RecruitmentBreadcrumbs segments={[{ label: "Candidates" }]} />
+      <RecruitmentBreadcrumbs segments={[{ label: t("candidatesTitle") }]} />
       <RecruitmentTabs />
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Candidates</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("candidatesTitle")}
+          </h1>
           <p className="text-sm text-muted-foreground">
-            {total} candidate{total !== 1 ? "s" : ""} total
+            {t("candidatesTotalCount", { count: total })}
           </p>
         </div>
         {canManage && (
@@ -120,7 +127,7 @@ export default function CandidateListPage() {
               onClick={() => router.push("/recruitment/candidates/new")}
             >
               <UserPlus className="mr-1 h-4 w-4" />
-              Add candidate
+              {t("candidateAddButton")}
             </Button>
           </div>
         )}
@@ -132,7 +139,7 @@ export default function CandidateListPage() {
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             data-testid="recruitment-candidate-input-search"
-            placeholder="Search by name or email..."
+            placeholder={t("candidatesSearchPlaceholder")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8"
@@ -140,19 +147,17 @@ export default function CandidateListPage() {
         </div>
         <Select value={filterSource} onValueChange={(val) => applyFilter(val)}>
           <SelectTrigger className="w-40" data-testid="recruitment-candidate-select-source">
-            <SelectValue placeholder="All sources">
+            <SelectValue placeholder={t("candidatesFilterAllSources")}>
               {filterSource
-                ? filterSource
-                    .replace(/_/g, " ")
-                    .replace(/\b\w/g, (c) => c.toUpperCase())
-                : "All sources"}
+                ? candidateSourceLabel(t, filterSource)
+                : t("candidatesFilterAllSources")}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All sources</SelectItem>
-            {sourceOptions.map((s) => (
+            <SelectItem value="">{t("candidatesFilterAllSources")}</SelectItem>
+            {CANDIDATE_SOURCE_OPTIONS.map((s) => (
               <SelectItem key={s} value={s}>
-                {s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                {candidateSourceLabel(t, s)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -160,7 +165,7 @@ export default function CandidateListPage() {
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="mr-1 h-3 w-3" />
-            Clear
+            {t("actionClear")}
           </Button>
         )}
       </div>
@@ -172,12 +177,10 @@ export default function CandidateListPage() {
         >
           <UserPlus className="mx-auto mb-3 h-10 w-10 opacity-40" />
           <p className="text-sm font-medium">
-            {hasFilters ? "No candidates match the filters" : "No candidates yet"}
+            {hasFilters ? t("candidatesEmptyFiltered") : t("candidatesEmpty")}
           </p>
           {!hasFilters && canManage && (
-            <p className="mt-1 text-xs">
-              Upload a resume or add a candidate manually to get started.
-            </p>
+            <p className="mt-1 text-xs">{t("candidatesEmptyHint")}</p>
           )}
         </div>
       ) : (
@@ -186,11 +189,11 @@ export default function CandidateListPage() {
             <Table data-testid="recruitment-candidate-table">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead>Resumes</TableHead>
-                  <TableHead>Created</TableHead>
+                  <TableHead>{t("fieldName")}</TableHead>
+                  <TableHead>{t("columnEmail")}</TableHead>
+                  <TableHead>{t("columnSource")}</TableHead>
+                  <TableHead>{t("columnResumes")}</TableHead>
+                  <TableHead>{t("columnCreated")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -210,11 +213,11 @@ export default function CandidateListPage() {
                           (candidate.person
                             ? `${candidate.person.first_name} ${candidate.person.last_name}`
                             : "")
-                        ).trim() || "(parsing…)"}
+                        ).trim() || t("candidateParsing")}
                       </Link>
                       {candidate.is_employee && (
                         <Badge variant="outline" className="ml-2 text-[10px]">
-                          Employee
+                          {tc("employee")}
                         </Badge>
                       )}
                     </TableCell>
@@ -222,7 +225,7 @@ export default function CandidateListPage() {
                       {candidate.email || candidate.person?.email || "---"}
                     </TableCell>
                     <TableCell className="text-muted-foreground capitalize">
-                      {candidate.source?.replace(/_/g, " ") || "---"}
+                      {candidateSourceLabel(t, candidate.source) || "---"}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {candidate.resumes_count ?? 0}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import type { CandidateQuestion, QuestionPriority, QuestionPurpose } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,18 +24,22 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2 } from "lucide-react";
 
-const priorityOptions: { value: QuestionPriority; label: string }[] = [
-  { value: "must", label: "Must" },
-  { value: "should", label: "Should" },
-  { value: "nice_to_ask", label: "Nice to ask" },
+// Module scope cannot call `useTranslations`, so the option maps hold i18n
+// keys in the `recruitment` namespace and the form resolves them with its
+// own `t` (see employee-status.ts for the same pattern). The `value` side
+// stays the enum code sent to the API.
+const priorityOptions: { value: QuestionPriority; labelKey: string }[] = [
+  { value: "must", labelKey: "questionDetailPriorityMust" },
+  { value: "should", labelKey: "questionDetailPriorityShould" },
+  { value: "nice_to_ask", labelKey: "questionDetailPriorityNiceToAsk" },
 ];
 
-const purposeOptions: { value: QuestionPurpose; label: string }[] = [
-  { value: "clarification", label: "Clarification" },
-  { value: "depth", label: "Depth" },
-  { value: "risk", label: "Risk" },
-  { value: "motivation", label: "Motivation" },
-  { value: "fit", label: "Fit" },
+const purposeOptions: { value: QuestionPurpose; labelKey: string }[] = [
+  { value: "clarification", labelKey: "questionDetailPurposeClarification" },
+  { value: "depth", labelKey: "questionDetailPurposeDepth" },
+  { value: "risk", labelKey: "questionDetailPurposeRisk" },
+  { value: "motivation", labelKey: "questionDetailPurposeMotivation" },
+  { value: "fit", labelKey: "questionDetailPurposeFit" },
 ];
 
 interface QuestionDetailSheetProps {
@@ -72,6 +77,8 @@ function QuestionForm({
   onCancel: () => void;
   title?: string;
 }) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [draft, setDraft] = useState<Partial<CandidateQuestion>>(() =>
     question ? { ...empty, ...question } : { ...empty },
   );
@@ -87,15 +94,18 @@ function QuestionForm({
     <>
       <SheetHeader>
         <SheetTitle>
-          {title || (question?.id ? "Edit question" : "New question")}
+          {title ||
+            (question?.id
+              ? t("questionDetailEditTitle")
+              : t("questionDetailNewTitle"))}
         </SheetTitle>
-        <SheetDescription>
-          Adjust the wording and reference answers. Changes save when you press Save.
-        </SheetDescription>
+        <SheetDescription>{t("questionDetailDescription")}</SheetDescription>
       </SheetHeader>
       <div className="space-y-4 px-4 py-3">
         <div className="space-y-2">
-          <Label htmlFor="question_text">Question</Label>
+          <Label htmlFor="question_text">
+            {t("questionDetailFieldQuestion")}
+          </Label>
           <Textarea
             id="question_text"
             value={draft.question_text || ""}
@@ -108,44 +118,48 @@ function QuestionForm({
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="priority">Priority</Label>
+            <Label htmlFor="priority">{t("questionDetailFieldPriority")}</Label>
             <Select
               value={draft.priority || "should"}
               onValueChange={(val) => update("priority", val)}
             >
               <SelectTrigger id="priority" data-testid="question-select-priority">
                 <SelectValue>
-                  {priorityOptions.find(
-                    (p) => p.value === (draft.priority || "should"),
-                  )?.label ?? "Should"}
+                  {t(
+                    priorityOptions.find(
+                      (p) => p.value === (draft.priority || "should"),
+                    )?.labelKey ?? "questionDetailPriorityShould",
+                  )}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {priorityOptions.map((p) => (
                   <SelectItem key={p.value} value={p.value}>
-                    {p.label}
+                    {t(p.labelKey)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="purpose">Purpose</Label>
+            <Label htmlFor="purpose">{t("questionDetailFieldPurpose")}</Label>
             <Select
               value={draft.purpose || "clarification"}
               onValueChange={(val) => update("purpose", val)}
             >
               <SelectTrigger id="purpose" data-testid="question-select-purpose">
                 <SelectValue>
-                  {purposeOptions.find(
-                    (p) => p.value === (draft.purpose || "clarification"),
-                  )?.label ?? "Clarification"}
+                  {t(
+                    purposeOptions.find(
+                      (p) => p.value === (draft.purpose || "clarification"),
+                    )?.labelKey ?? "questionDetailPurposeClarification",
+                  )}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {purposeOptions.map((p) => (
                   <SelectItem key={p.value} value={p.value}>
-                    {p.label}
+                    {t(p.labelKey)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -154,7 +168,9 @@ function QuestionForm({
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="good_answer">Good answer</Label>
+          <Label htmlFor="good_answer">
+            {t("questionDetailFieldGoodAnswer")}
+          </Label>
           <Textarea
             id="good_answer"
             value={draft.good_answer || ""}
@@ -165,7 +181,9 @@ function QuestionForm({
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="acceptable_answer">Acceptable answer</Label>
+          <Label htmlFor="acceptable_answer">
+            {t("questionDetailFieldAcceptableAnswer")}
+          </Label>
           <Textarea
             id="acceptable_answer"
             value={draft.acceptable_answer || ""}
@@ -176,7 +194,9 @@ function QuestionForm({
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="poor_answer">Poor answer</Label>
+          <Label htmlFor="poor_answer">
+            {t("questionDetailFieldPoorAnswer")}
+          </Label>
           <Textarea
             id="poor_answer"
             value={draft.poor_answer || ""}
@@ -187,13 +207,15 @@ function QuestionForm({
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="resume_fragment">Resume fragment</Label>
+          <Label htmlFor="resume_fragment">
+            {t("questionDetailFieldResumeFragment")}
+          </Label>
           <Input
             id="resume_fragment"
             value={draft.resume_fragment || ""}
             onChange={(e) => update("resume_fragment", e.target.value)}
             disabled={saving}
-            placeholder="optional"
+            placeholder={t("questionDetailResumeFragmentPlaceholder")}
           />
         </div>
       </div>
@@ -206,21 +228,21 @@ function QuestionForm({
             disabled={saving}
             data-testid="question-btn-delete"
           >
-            Delete
+            {tc("delete")}
           </Button>
         ) : (
           <span />
         )}
         <div className="flex items-center gap-2">
           <Button variant="ghost" onClick={onCancel} disabled={saving}>
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={() => onSave(draft)}
             disabled={saving}
             data-testid="question-btn-save"
           >
-            {saving ? <Loader2 className="size-4 animate-spin" /> : "Save"}
+            {saving ? <Loader2 className="size-4 animate-spin" /> : t("save")}
           </Button>
         </div>
       </SheetFooter>

@@ -13,7 +13,9 @@ import uuid
 from typing import Any
 from unittest.mock import patch
 
+import pytest
 import pytest_asyncio
+from app.config import settings
 from app.core import events
 from app.modules.notification.models import (
     Notification,
@@ -46,9 +48,15 @@ async def _seed_templates(db: AsyncSession):
     seeds never run, so templates would be missing. Insert them in-test.
     """
     for code, subject, body in _TEMPLATES:
+        # Rows are per (code, locale) since i18n F4 — the shared test DB
+        # also holds de rows seeded by the locale tests below, so the
+        # existence probe must pin the locale or it sees two rows.
         existing = (
             await db.execute(
-                select(NotificationTemplate).where(NotificationTemplate.code == code)
+                select(NotificationTemplate).where(
+                    NotificationTemplate.code == code,
+                    NotificationTemplate.locale == "en",
+                )
             )
         ).scalar_one_or_none()
         if existing is None:
@@ -96,6 +104,12 @@ async def _register_handlers(db: AsyncSession, monkeypatch):
     finally:
         events._handlers.clear()
         events._handlers.update(original)
+
+
+@pytest.fixture
+def locales_de_en(monkeypatch):
+    monkeypatch.setattr(settings, "available_locales", "de,en")
+    monkeypatch.setattr(settings, "default_locale", "en")
 
 
 async def _publish(event: str, payload: dict[str, Any]) -> None:
@@ -313,6 +327,67 @@ class TestRecruitmentNotifications:
         )
         rows = await _list_notifications_for(db, user.id)
         assert rows == []
+
+
+class TestRecipientLocale:
+    """i18n F4 (HRP-478): the recipient's locale picks the template row.
+
+    Recruitment fan-out resolves ``User.language > Tenant.default_locale
+    > deployment default`` per recipient and reads the matching
+    ``NotificationTemplate`` row, falling back to the en row.
+    """
+
+    async def test_de_recipient_gets_de_template_row(
+        self, db: AsyncSession, tenant, user, locales_de_en
+    ):
+        de_row = NotificationTemplate(
+            code="recruitment.vacancy_assigned",
+            locale="de",
+            subject_template="Vakanz zugewiesen: {{ vacancy_title }}",
+            body_template="x",
+            notification_type="email",
+        )
+        db.add(de_row)
+        user.language = "de"
+        await db.commit()
+
+        await _publish(
+            "recruitment.vacancy.assigned",
+            {
+                "tenant_id": str(tenant.id),
+                "vacancy_id": str(uuid.uuid4()),
+                "vacancy_title": "Senior Engineer",
+                "new_owner_id": str(user.id),
+            },
+        )
+        rows = await _list_notifications_for(db, user.id)
+        assert len(rows) == 1
+        assert rows[0].template_id == de_row.id
+
+    async def test_falls_back_to_en_row_without_de_translation(
+        self, db: AsyncSession, tenant, user, locales_de_en
+    ):
+        # ``recruitment.report_generated`` is seeded in en only, so a de
+        # recipient must still get the en row rather than no row at all.
+        user.language = "de"
+        await db.commit()
+
+        await _publish(
+            "recruitment.report.generated",
+            {
+                "tenant_id": str(tenant.id),
+                "report_id": str(uuid.uuid4()),
+                "vacancy_id": str(uuid.uuid4()),
+                "vacancy_title": "Vacancy",
+                "generated_by": str(user.id),
+            },
+        )
+        rows = await _list_notifications_for(db, user.id)
+        assert len(rows) == 1
+        template = await db.get(NotificationTemplate, rows[0].template_id)
+        assert template is not None
+        assert template.code == "recruitment.report_generated"
+        assert template.locale == "en"
 
 
 class TestServicePublishesEvents:

@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
+import createNextIntlPlugin from "next-intl/plugin";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -43,11 +44,16 @@ const nextConfig: NextConfig = {
   output: "standalone",
 };
 
+// i18n (F1): next-intl request config — inner wrapper, composed before
+// the conditional Sentry one below.
+const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
+const intlConfig = withNextIntl(nextConfig);
+
 // Wrap with Sentry only when DSN is configured
 const hasSentry = !!process.env.NEXT_PUBLIC_SENTRY_DSN;
 
 export default hasSentry
-  ? withSentryConfig(nextConfig, {
+  ? withSentryConfig(intlConfig, {
       // Upload source maps for better stack traces
       sourcemaps: {
         deleteSourcemapsAfterUpload: true,
@@ -55,4 +61,4 @@ export default hasSentry
       // Suppress Sentry CLI logs in dev
       silent: true,
     })
-  : nextConfig;
+  : intlConfig;

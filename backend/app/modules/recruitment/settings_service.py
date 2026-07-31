@@ -11,13 +11,15 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
+from app.core.errors import AppError
 from app.core.s3 import get_presigned_url
+from app.core.url_guard import ensure_public_base_url
 from app.modules.company.models import Tenant
 from app.modules.recruitment.models import (
     LLMProviderConfig,
@@ -84,9 +86,9 @@ async def create_scale(
     data: ScaleConfigCreate,
 ) -> ScaleConfig:
     if data.max_value <= data.min_value:
-        raise HTTPException(
+        raise AppError(
+            "scale_max_must_exceed_min",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "max_value must be greater than min_value",
         )
     if data.is_active:
         await _deactivate_other_scales(db, tenant_id)
@@ -118,9 +120,9 @@ async def update_scale(
     for k, v in payload.items():
         setattr(scale, k, v)
     if scale.max_value <= scale.min_value:
-        raise HTTPException(
+        raise AppError(
+            "scale_max_must_exceed_min",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "max_value must be greater than min_value",
         )
     await db.commit()
     await db.refresh(scale)
@@ -140,7 +142,7 @@ async def _get_scale(
 ) -> ScaleConfig:
     scale = await db.get(ScaleConfig, scale_id)
     if not scale or scale.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Scale not found")
+        raise AppError("scale_not_found", status.HTTP_404_NOT_FOUND)
     return scale
 
 
@@ -158,11 +160,22 @@ async def list_llm_providers(
     return list(result.scalars().all())
 
 
+async def _guard_llm_settings(provider_settings: dict | None) -> None:
+    """SSRF guard (saas only): a tenant-set base_url becomes a server-side
+    request target for every generation call — it must not point inside
+    the platform perimeter. Self-hosted installs pass through (a private
+    Ollama/vLLM endpoint is the feature there)."""
+    raw = (provider_settings or {}).get("base_url")
+    if isinstance(raw, str) and raw:
+        await ensure_public_base_url(raw, error_code="llm_base_url_not_public")
+
+
 async def create_llm_provider(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     data: LLMProviderCreate,
 ) -> LLMProviderConfig:
+    await _guard_llm_settings(data.settings)
     cfg = LLMProviderConfig(
         tenant_id=tenant_id,
         provider=data.provider,
@@ -185,8 +198,10 @@ async def update_llm_provider(
 ) -> LLMProviderConfig:
     cfg = await db.get(LLMProviderConfig, config_id)
     if not cfg or cfg.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "LLM provider not found")
+        raise AppError("llm_provider_not_found", status.HTTP_404_NOT_FOUND)
     payload = data.model_dump(exclude_unset=True)
+    if "settings" in payload:
+        await _guard_llm_settings(payload["settings"])
     if "api_key" in payload:
         new_key = payload.pop("api_key")
         cfg.api_key_encrypted = encrypt_secret(new_key) if new_key else None
@@ -202,7 +217,7 @@ async def delete_llm_provider(
 ) -> None:
     cfg = await db.get(LLMProviderConfig, config_id)
     if not cfg or cfg.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "LLM provider not found")
+        raise AppError("llm_provider_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(cfg)
     await db.commit()
 
@@ -282,9 +297,7 @@ async def update_transcription_provider(
 ) -> TranscriptionProviderConfig:
     cfg = await db.get(TranscriptionProviderConfig, config_id)
     if not cfg or cfg.tenant_id != tenant_id:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Transcription provider not found"
-        )
+        raise AppError("transcription_provider_not_found", status.HTTP_404_NOT_FOUND)
     payload = data.model_dump(exclude_unset=True)
     if "api_key" in payload:
         new_key = payload.pop("api_key")
@@ -301,9 +314,7 @@ async def delete_transcription_provider(
 ) -> None:
     cfg = await db.get(TranscriptionProviderConfig, config_id)
     if not cfg or cfg.tenant_id != tenant_id:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Transcription provider not found"
-        )
+        raise AppError("transcription_provider_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(cfg)
     await db.commit()
 
@@ -333,7 +344,7 @@ _BRANDING_LOGO_TTL_SECONDS = 3600
 async def get_branding(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
     tenant = await db.get(Tenant, tenant_id)
     if not tenant:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found")
+        raise AppError("tenant_not_found", status.HTTP_404_NOT_FOUND)
     raw = tenant.recruitment_branding or {}
 
     logo_url: str | None = None
@@ -368,7 +379,7 @@ async def get_ui_settings(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
     """
     tenant = await db.get(Tenant, tenant_id)
     if not tenant:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found")
+        raise AppError("tenant_not_found", status.HTTP_404_NOT_FOUND)
     raw = tenant.recruitment_branding or {}
     return {
         "hm_questions_above_resume": bool(raw.get("hm_questions_above_resume")),
@@ -383,7 +394,7 @@ async def update_branding(
 ) -> dict:
     tenant = await db.get(Tenant, tenant_id)
     if not tenant:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found")
+        raise AppError("tenant_not_found", status.HTTP_404_NOT_FOUND)
     current = dict(tenant.recruitment_branding or {})
     payload = data.model_dump(exclude_unset=True)
     extra = payload.pop("extra", None)
@@ -490,7 +501,7 @@ def _matrix_settings_payload(raw: dict | None) -> dict:
 async def get_matrix_settings(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
     tenant = await db.get(Tenant, tenant_id)
     if not tenant:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found")
+        raise AppError("tenant_not_found", status.HTTP_404_NOT_FOUND)
     return _matrix_settings_payload(tenant.recruitment_matrix_settings)
 
 
@@ -514,7 +525,7 @@ async def update_matrix_settings(
 ) -> dict:
     tenant = await db.get(Tenant, tenant_id)
     if not tenant:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found")
+        raise AppError("tenant_not_found", status.HTTP_404_NOT_FOUND)
     current = _matrix_settings_payload(tenant.recruitment_matrix_settings)
     payload = data.model_dump(exclude_unset=True)
     if (

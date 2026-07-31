@@ -28,7 +28,7 @@ class TestTruncationFailFast:
 
         async def fake_generate_json(prompt, **kwargs):
             calls["n"] += 1
-            raise LLMOutputTruncatedError("claude-sonnet-4-6", 64000)
+            raise LLMOutputTruncatedError("claude-sonnet-5", 64000)
 
         with (
             patch.object(llm_client, "generate_json", new=fake_generate_json),

@@ -31,7 +31,7 @@ async def test_signup_request_returns_fast(client: AsyncClient, monkeypatch):
     """
     from app.modules.signup import service as signup_service
 
-    async def _noop_send(_row):
+    async def _noop_send(_row, **_kwargs):
         return None
 
     monkeypatch.setattr(signup_service, "_send_signup_verify_email", _noop_send)

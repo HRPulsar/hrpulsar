@@ -13,6 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 
+from app.core.errors import AppError
 from app.modules.auth.models import Invitation, Role, User, user_roles
 from app.modules.company.models import (
     CompanyActivityField,
@@ -45,7 +46,7 @@ _MANAGER_OR_HIGHER = frozenset({"manager", "admin", "hr", "platform_admin"})
 async def get_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> Tenant:
     tenant = await db.get(Tenant, tenant_id)
     if not tenant:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found")
+        raise AppError("tenant_not_found", status.HTTP_404_NOT_FOUND)
     return tenant
 
 
@@ -112,7 +113,7 @@ async def _validate_manager(
     if manager_id:
         emp = await db.get(Employee, manager_id)
         if not emp or emp.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid manager")
+            raise AppError("division_invalid_manager", status.HTTP_400_BAD_REQUEST)
 
 
 async def _user_role_codes(db: AsyncSession, user_id: uuid.UUID) -> set[str]:
@@ -178,9 +179,7 @@ async def _sync_role_on_assign(
         "employee_id": employee_id,
         "user_id": user_id,
         "new_role": "manager",
-        "user_name": (
-            f"{user.first_name} {user.last_name}".strip() if user else None
-        ),
+        "user_name": (f"{user.first_name} {user.last_name}".strip() if user else None),
     }
 
 
@@ -299,7 +298,7 @@ async def create_division(
     if data.parent_id:
         parent = await db.get(Division, data.parent_id)
         if not parent or parent.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid parent division")
+            raise AppError("invalid_parent_division", status.HTTP_400_BAD_REQUEST)
 
     await _validate_manager(db, tenant_id, data.manager_id)
     await _validate_manager(db, tenant_id, data.deputy_manager_id)
@@ -334,7 +333,7 @@ async def _get_division(
 ) -> Division:
     division = await db.get(Division, division_id)
     if not division or division.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Division not found")
+        raise AppError("division_not_found", status.HTTP_404_NOT_FOUND)
     return division
 
 
@@ -374,12 +373,10 @@ async def update_division(
     updates = data.model_dump(exclude_unset=True)
     if "parent_id" in updates and updates["parent_id"]:
         if updates["parent_id"] == division_id:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, "Division cannot be its own parent"
-            )
+            raise AppError("division_own_parent", status.HTTP_400_BAD_REQUEST)
         parent = await db.get(Division, updates["parent_id"])
         if not parent or parent.tenant_id != tenant_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid parent division")
+            raise AppError("invalid_parent_division", status.HTTP_400_BAD_REQUEST)
 
     if "manager_id" in updates:
         await _validate_manager(db, tenant_id, updates["manager_id"])
@@ -410,9 +407,7 @@ async def update_division(
         if result is not None:
             upgrades.append(result)
     if "deputy_manager_id" in updates:
-        result = await _sync_role_on_assign(
-            db, tenant_id, updates["deputy_manager_id"]
-        )
+        result = await _sync_role_on_assign(db, tenant_id, updates["deputy_manager_id"])
         if result is not None:
             upgrades.append(result)
 
@@ -479,9 +474,9 @@ async def add_division_specialization(
     # Validate specialization exists and belongs to tenant (or is origin)
     spec = await db.get(DictionaryItem, data.specialization_id)
     if not spec or spec.type != "specialization":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid specialization")
+        raise AppError("invalid_specialization", status.HTTP_400_BAD_REQUEST)
     if spec.tenant_id is not None and spec.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid specialization")
+        raise AppError("invalid_specialization", status.HTTP_400_BAD_REQUEST)
 
     # Check for duplicate
     existing = await db.execute(
@@ -491,8 +486,8 @@ async def add_division_specialization(
         )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Specialization already assigned to division"
+        raise AppError(
+            "specialization_already_assigned_to_division", status.HTTP_409_CONFLICT
         )
 
     sd = SpecializationDivision(
@@ -521,7 +516,9 @@ async def remove_division_specialization(
     )
     sd = result.scalar_one_or_none()
     if not sd or sd.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mapping not found")
+        raise AppError(
+            "specialization_division_mapping_not_found", status.HTTP_404_NOT_FOUND
+        )
     data = _spec_div_to_read(sd)
     await db.delete(sd)
     await db.commit()
@@ -576,6 +573,7 @@ async def get_company_profile(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
         "description": tenant.description,
         "logo_file_id": tenant.logo_file_id,
         "logo_url": logo_url,
+        "default_locale": tenant.default_locale,
         "created_at": tenant.created_at,
         "activity_fields": fields,
     }
@@ -585,7 +583,14 @@ async def update_company_profile(
     db: AsyncSession, tenant_id: uuid.UUID, data: CompanyProfileUpdate
 ) -> dict:
     tenant = await get_tenant(db, tenant_id)
-    for field, value in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    if payload.get("default_locale") is not None:
+        from app.config import settings
+
+        payload["default_locale"] = payload["default_locale"].strip().lower()
+        if payload["default_locale"] not in settings.available_locales_list:
+            raise AppError("unsupported_default_locale", status.HTTP_400_BAD_REQUEST)
+    for field, value in payload.items():
         setattr(tenant, field, value)
     await db.commit()
     await db.refresh(tenant)
@@ -596,9 +601,7 @@ async def update_company_profile(
 # presigned URLs serve it inline (image/svg+xml) from our origin → stored XSS.
 # Raster formats only until uploads are served from a sandboxed origin or
 # SVGs are sanitised. Matches the generic storage allowlist.
-ALLOWED_LOGO_TYPES = frozenset(
-    {"image/png", "image/jpeg", "image/webp"}
-)
+ALLOWED_LOGO_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 MAX_LOGO_BYTES = 5 * 1024 * 1024
 
 
@@ -620,18 +623,17 @@ async def upload_logo(
 
     data = await file.read()
     if len(data) > MAX_LOGO_BYTES:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Logo must be under 5 MB"
-        )
+        raise AppError("logo_too_large", status.HTTP_400_BAD_REQUEST)
     if not data:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty file")
+        raise AppError("logo_empty_file", status.HTTP_400_BAD_REQUEST)
 
     sniffed = detect_image_mime(data)
     effective = sniffed or file.content_type
     if effective not in ALLOWED_LOGO_TYPES:
-        raise HTTPException(
+        raise AppError(
+            "logo_invalid_file_type",
             status.HTTP_400_BAD_REQUEST,
-            f"Invalid file type. Allowed: {', '.join(sorted(ALLOWED_LOGO_TYPES))}",
+            allowed=", ".join(sorted(ALLOWED_LOGO_TYPES)),
         )
 
     tenant = await get_tenant(db, tenant_id)
@@ -672,16 +674,16 @@ async def _assert_safe_url(url: str) -> tuple[str, str]:
     """
     parsed = urlparse(url.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Only public http(s) URLs are supported"
-        )
+        raise AppError("logo_url_only_public_http", status.HTTP_400_BAD_REQUEST)
 
     loop = asyncio.get_running_loop()
     try:
         infos = await loop.getaddrinfo(parsed.hostname, None)
     except socket.gaierror as exc:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, f"Cannot resolve host: {parsed.hostname}"
+        raise AppError(
+            "logo_url_cannot_resolve_host",
+            status.HTTP_400_BAD_REQUEST,
+            host=parsed.hostname,
         ) from exc
     for info in infos:
         try:
@@ -696,10 +698,7 @@ async def _assert_safe_url(url: str) -> tuple[str, str]:
             or ip.is_multicast
             or ip.is_unspecified
         ):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "Logo URL must resolve to a public host",
-            )
+            raise AppError("logo_url_not_public_host", status.HTTP_400_BAD_REQUEST)
     return parsed.scheme, parsed.hostname
 
 
@@ -725,41 +724,37 @@ async def upload_logo_from_url(
             try:
                 response = await client.get(current)
             except httpx.HTTPError as exc:
-                raise HTTPException(
+                raise AppError(
+                    "logo_url_download_failed",
                     status.HTTP_400_BAD_REQUEST,
-                    f"Failed to download image: {exc}",
+                    error=str(exc),
                 ) from exc
             if response.is_redirect:
                 location = response.headers.get("location")
                 if not location:
-                    raise HTTPException(
+                    raise AppError(
+                        "logo_url_redirect_without_location",
                         status.HTTP_400_BAD_REQUEST,
-                        "Redirect without Location header",
                     )
                 current = urljoin(current, location)
                 continue
             break
         else:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, "Too many redirects"
-            )
+            raise AppError("logo_url_too_many_redirects", status.HTTP_400_BAD_REQUEST)
 
     assert response is not None  # loop body always assigns before break
     if response.is_error:
-        raise HTTPException(
+        raise AppError(
+            "logo_url_download_http_error",
             status.HTTP_400_BAD_REQUEST,
-            f"Failed to download image: HTTP {response.status_code}",
+            http_status=response.status_code,
         )
 
     body = response.content
     if not body:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Downloaded image is empty"
-        )
+        raise AppError("logo_url_downloaded_empty", status.HTTP_400_BAD_REQUEST)
     if len(body) > MAX_LOGO_BYTES:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Logo must be under 5 MB"
-        )
+        raise AppError("logo_too_large", status.HTTP_400_BAD_REQUEST)
 
     final_parsed = urlparse(current)
     filename = (final_parsed.path.rsplit("/", 1)[-1] or "logo")[:120]
@@ -783,7 +778,7 @@ async def delete_logo(
 
     tenant = await get_tenant(db, tenant_id)
     if not tenant.logo_file_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No logo set")
+        raise AppError("logo_not_set", status.HTTP_404_NOT_FOUND)
 
     with contextlib.suppress(HTTPException):
         await storage_service.delete(db, tenant_id, tenant.logo_file_id)
@@ -801,9 +796,9 @@ async def add_activity_field(
     # Validate activity field exists in dictionary
     item = await db.get(DictionaryItem, activity_field_id)
     if not item or item.type != "activity_field":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid activity field")
+        raise AppError("invalid_activity_field", status.HTTP_400_BAD_REQUEST)
     if item.tenant_id is not None and item.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid activity field")
+        raise AppError("invalid_activity_field", status.HTTP_400_BAD_REQUEST)
 
     # Check duplicate
     existing = await db.execute(
@@ -813,7 +808,7 @@ async def add_activity_field(
         )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(status.HTTP_409_CONFLICT, "Activity field already assigned")
+        raise AppError("activity_field_already_assigned", status.HTTP_409_CONFLICT)
 
     af = CompanyActivityField(
         tenant_id=tenant_id,
@@ -886,7 +881,7 @@ async def remove_activity_field(
     )
     af = result.scalar_one_or_none()
     if not af:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Activity field not found")
+        raise AppError("activity_field_not_found", status.HTTP_404_NOT_FOUND)
     data = _activity_field_to_read(af)
     await db.delete(af)
     await db.commit()

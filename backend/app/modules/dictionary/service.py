@@ -1,11 +1,12 @@
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.dictionary.models import (
     DictionaryItem,
     DictionaryItemTenantOverride,
@@ -23,6 +24,7 @@ def _item_to_dict(item: DictionaryItem, is_active: bool | None = None) -> dict:
         "type": item.type,
         "title": item.title,
         "description": item.description,
+        "i18n_key": item.i18n_key,
         # HRP-285: callers passing ``is_active`` substitute the
         # tenant-scoped override when present (origin items only).
         "is_active": item.is_active if is_active is None else is_active,
@@ -35,9 +37,11 @@ def _item_to_dict(item: DictionaryItem, is_active: bool | None = None) -> dict:
 
 def _validate_type(item_type: str) -> None:
     if item_type not in VALID_TYPES:
-        raise HTTPException(
+        raise AppError(
+            "invalid_dictionary_type",
             status.HTTP_400_BAD_REQUEST,
-            f"Invalid dictionary type: {item_type}. Valid: {', '.join(sorted(VALID_TYPES))}",
+            item_type=item_type,
+            valid=", ".join(sorted(VALID_TYPES)),
         )
 
 
@@ -124,9 +128,9 @@ async def list_items(
 async def get_item(db: AsyncSession, tenant_id: uuid.UUID, item_id: uuid.UUID) -> dict:
     item = await db.get(DictionaryItem, item_id)
     if not item:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dictionary item not found")
+        raise AppError("dictionary_item_not_found", status.HTTP_404_NOT_FOUND)
     if item.tenant_id is not None and item.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dictionary item not found")
+        raise AppError("dictionary_item_not_found", status.HTTP_404_NOT_FOUND)
     override = (
         await _get_origin_override(db, tenant_id, item_id)
         if item.tenant_id is None
@@ -152,9 +156,7 @@ async def create_item(
         )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Item with this title already exists"
-        )
+        raise AppError("dictionary_item_title_exists", status.HTTP_409_CONFLICT)
 
     item = DictionaryItem(
         type=item_type,
@@ -178,7 +180,7 @@ async def update_item(
 ) -> dict:
     item = await db.get(DictionaryItem, item_id)
     if not item:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dictionary item not found")
+        raise AppError("dictionary_item_not_found", status.HTTP_404_NOT_FOUND)
 
     updates = data.model_dump(exclude_unset=True)
 
@@ -187,9 +189,8 @@ async def update_item(
         # written to the override table. All other fields stay frozen.
         non_status_fields = {k for k in updates if k != "is_active"}
         if non_status_fields:
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                "Cannot modify origin items (only is_active is tenant-scoped)",
+            raise AppError(
+                "dictionary_cannot_modify_origin_items", status.HTTP_403_FORBIDDEN
             )
         if "is_active" not in updates:
             # Nothing to change — return current effective view.
@@ -212,7 +213,7 @@ async def update_item(
         return _item_to_dict(item, new_active)
 
     if item.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dictionary item not found")
+        raise AppError("dictionary_item_not_found", status.HTTP_404_NOT_FOUND)
 
     if "metadata" in updates:
         updates["metadata_"] = updates.pop("metadata")
@@ -449,18 +450,15 @@ async def get_item_usage(
     """HRP-103 redo: GET counterpart for the delete-confirm preview."""
     item = await db.get(DictionaryItem, item_id)
     if not item:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dictionary item not found")
+        raise AppError("dictionary_item_not_found", status.HTTP_404_NOT_FOUND)
     if item.tenant_id is None:
         # Origin items can never be deleted, so usage is moot — still return
         # an empty payload instead of leaking the existence of the origin
         # row to a different tenant.
         return dict(_EMPTY_USAGE)
     if item.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dictionary item not found")
+        raise AppError("dictionary_item_not_found", status.HTTP_404_NOT_FOUND)
     return await _collect_item_usage(db, tenant_id, item)
-
-
-_IN_USE_MESSAGE = "This item has connections with other object(s). It can't be deleted"
 
 
 async def delete_item(
@@ -468,11 +466,13 @@ async def delete_item(
 ) -> None:
     item = await db.get(DictionaryItem, item_id)
     if not item:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dictionary item not found")
+        raise AppError("dictionary_item_not_found", status.HTTP_404_NOT_FOUND)
     if item.tenant_id is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot delete origin items")
+        raise AppError(
+            "dictionary_cannot_delete_origin_items", status.HTTP_403_FORBIDDEN
+        )
     if item.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dictionary item not found")
+        raise AppError("dictionary_item_not_found", status.HTTP_404_NOT_FOUND)
 
     # HRP-57 §8.2 (E7 / HRP-73) + prod fix (issue 7559975192): Specializations
     # and Grades are referenced from Position (ondelete=SET NULL — would
@@ -513,10 +513,12 @@ async def delete_item(
         # counts were misleading reviewers since some references are
         # historical (e.g. closed assessments). The `counts` / `usage`
         # blobs stay in `detail` for callers that still want them.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error_code": "in_use",
+        raise AppError(
+            "dictionary_item_in_use",
+            status.HTTP_409_CONFLICT,
+            detail_code_key="error_code",
+            detail_code="in_use",
+            detail_extra={
                 "type": item.type,
                 "counts": {
                     "positions": position_count,
@@ -532,7 +534,6 @@ async def delete_item(
                 # serializer that fastapi uses for HTTPException details
                 # doesn't blow up on the raw Python uuid objects.
                 "usage": jsonable_encoder(usage),
-                "message": _IN_USE_MESSAGE,
             },
         )
 
@@ -547,11 +548,10 @@ async def delete_item(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error_code": "in_use",
-                "type": item.type,
-                "message": _IN_USE_MESSAGE,
-            },
+        raise AppError(
+            "dictionary_item_in_use",
+            status.HTTP_409_CONFLICT,
+            detail_code_key="error_code",
+            detail_code="in_use",
+            detail_extra={"type": item.type},
         ) from None

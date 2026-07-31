@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { useCompetenceTree } from "@/hooks/use-competence-tree";
 import { cn, flattenTree } from "@/lib/utils";
@@ -11,7 +12,11 @@ import {
   ASSESSMENT_STATUS_COLORS,
   assessmentRowDate,
 } from "@/lib/assessment-status";
-import { pdpStatusColor, pdpStatusLabel } from "@/lib/pdp-status";
+import {
+  assessmentStatusTitle,
+  assessmentTypeTitle,
+} from "@/lib/reference-labels";
+import { pdpStatusColor, translatePdpStatus } from "@/lib/pdp-status";
 import { sortPdpsForList } from "@/lib/pdp-filters";
 import {
   goalsProgressPercent,
@@ -19,6 +24,7 @@ import {
   openPdpCount,
 } from "@/lib/employee-kpis";
 import { EmployeeCompetenceTree } from "@/components/employees/employee-competence-tree";
+import { employeeStatusLabel } from "@/components/employees/employee-status";
 import { EmployeeCompetenceBreakdown } from "@/components/employees/employee-competence-breakdown";
 import { CompetenceTreePicker } from "@/components/competence/competence-tree-picker";
 import type {
@@ -110,13 +116,33 @@ const degreeOptions = [
   "Other",
 ];
 
-function formatDateRange(start: string, end: string | null): string {
+/** Loose shape of the next-intl translator so plain helpers below can take
+ * it as an argument instead of being turned into components. */
+type Translate = (
+  key: string,
+  values?: Record<string, string | number>,
+) => string;
+
+function formatDateRange(
+  t: Translate,
+  start: string,
+  end: string | null,
+): string {
   const s = formatDate(start);
-  if (!end) return `${s} — Present`;
+  if (!end) return `${s} — ${t("present")}`;
   return `${s} — ${formatDate(end)}`;
 }
 
 export default function EmployeeDetailPage() {
+  const t = useTranslations("employees");
+  const locale = useLocale();
+  const tc = useTranslations("common");
+  // HRP-476: the Assessments / Development tabs mirror the standalone list
+  // pages, so their status chips and row dates read from those pages'
+  // catalogs instead of duplicating the wording under `employees`.
+  const tAssessments = useTranslations("assessments");
+  const tDevelopment = useTranslations("development");
+  const tRef = useTranslations("reference");
   const { id } = useParams<{ id: string }>();
   const { user: currentUser } = useAuth();
   const { canManage } = usePermissions();
@@ -261,12 +287,12 @@ export default function EmployeeDetailPage() {
         if (crs.status === "fulfilled") setCourses(crs.value);
         if (comp.status === "fulfilled") setCompensations(comp.value);
         if (overview.status === "fulfilled") setCompetenceOverview(overview.value);
-        if (emp.status === "rejected") toast.error("Failed to load employee");
+        if (emp.status === "rejected") toast.error(t("toastLoadFailed"));
       } finally {
         setLoading(false);
       }
     },
-    [id],
+    [id, t],
   );
 
   useEffect(() => {
@@ -300,7 +326,7 @@ export default function EmployeeDetailPage() {
     const firstName = editForm.first_name.trim();
     const lastName = editForm.last_name.trim();
     if (!firstName || !lastName) {
-      toast.error("Name and Last name are required");
+      toast.error(t("toastNameRequired"));
       return;
     }
     setSaving(true);
@@ -312,11 +338,11 @@ export default function EmployeeDetailPage() {
         division_id: editForm.division_id || null,
         status: editForm.status || undefined,
       });
-      toast.success("Employee updated");
+      toast.success(t("toastUpdated"));
       setEditOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update");
+      toast.error(err instanceof Error ? err.message : t("toastUpdateFailed"));
     } finally {
       setSaving(false);
     }
@@ -326,7 +352,7 @@ export default function EmployeeDetailPage() {
     setSaving(true);
     try {
       await api.post(`/employees/${id}/events`, eventForm);
-      toast.success("Event added");
+      toast.success(t("toastEventAdded"));
       setEventOpen(false);
       setEventForm({
         event_type: "other",
@@ -335,7 +361,9 @@ export default function EmployeeDetailPage() {
       });
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add event");
+      toast.error(
+        err instanceof Error ? err.message : t("toastEventAddFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -374,7 +402,7 @@ export default function EmployeeDetailPage() {
   async function handleWeSave() {
     setWeError(null);
     if (!weForm.division_id || !weForm.position_id || !weForm.start_date) {
-      setWeError("Division, Position and Start date are required");
+      setWeError(t("errorWeRequired"));
       return;
     }
     // HRP-219 Task 3: Start must be on or before End for current employment.
@@ -383,7 +411,7 @@ export default function EmployeeDetailPage() {
       weForm.start_date &&
       weForm.start_date > weForm.end_date
     ) {
-      setWeError("Start date must be on or before End date");
+      setWeError(t("errorStartBeforeEnd"));
       return;
     }
     setSaving(true);
@@ -397,15 +425,15 @@ export default function EmployeeDetailPage() {
       };
       if (weEditId) {
         await api.put(`/employees/${id}/work-experience/${weEditId}`, body);
-        toast.success("Current employment updated");
+        toast.success(t("toastWeUpdated"));
       } else {
         await api.post(`/employees/${id}/work-experience`, body);
-        toast.success("Current employment added");
+        toast.success(t("toastWeAdded"));
       }
       setWeOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("toastSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -415,10 +443,12 @@ export default function EmployeeDetailPage() {
     setSaving(true);
     try {
       await api.delete(`/employees/${id}/work-experience/${itemId}`);
-      toast.success("Current employment record deleted");
+      toast.success(t("toastWeDeleted"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(
+        err instanceof Error ? err.message : t("toastDeleteFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -456,16 +486,16 @@ export default function EmployeeDetailPage() {
       !peForm.start_date ||
       !peForm.end_date
     ) {
-      setPeError("Company name, Position, Start date and End date are required");
+      setPeError(t("errorPeRequired"));
       return;
     }
     const today = yesterdayIso();
     if (peForm.start_date > today || peForm.end_date > today) {
-      setPeError("Start date and End date must be in the past");
+      setPeError(t("errorDatesInPast"));
       return;
     }
     if (peForm.start_date > peForm.end_date) {
-      setPeError("Start date must be on or before End date");
+      setPeError(t("errorStartBeforeEnd"));
       return;
     }
     setSaving(true);
@@ -478,15 +508,15 @@ export default function EmployeeDetailPage() {
       };
       if (peEditId) {
         await api.put(`/employees/${id}/previous-employment/${peEditId}`, body);
-        toast.success("Previous employment updated");
+        toast.success(t("toastPeUpdated"));
       } else {
         await api.post(`/employees/${id}/previous-employment`, body);
-        toast.success("Previous employment added");
+        toast.success(t("toastPeAdded"));
       }
       setPeOpen(false);
       await load();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to save";
+      const msg = err instanceof Error ? err.message : t("toastSaveFailed");
       setPeError(msg);
       toast.error(msg);
     } finally {
@@ -498,10 +528,12 @@ export default function EmployeeDetailPage() {
     setSaving(true);
     try {
       await api.delete(`/employees/${id}/previous-employment/${itemId}`);
-      toast.success("Previous employment deleted");
+      toast.success(t("toastPeDeleted"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(
+        err instanceof Error ? err.message : t("toastDeleteFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -539,16 +571,14 @@ export default function EmployeeDetailPage() {
       !eduForm.field_of_study.trim() ||
       !eduForm.start_date
     ) {
-      setEduError(
-        "Institution, Degree, Field of Study and Start date are required",
-      );
+      setEduError(t("errorEduRequired"));
       return;
     }
     if (
       eduForm.end_date &&
       eduForm.start_date > eduForm.end_date
     ) {
-      setEduError("Start date must be on or before End date");
+      setEduError(t("errorStartBeforeEnd"));
       return;
     }
     setSaving(true);
@@ -561,15 +591,15 @@ export default function EmployeeDetailPage() {
       };
       if (eduEditId) {
         await api.put(`/employees/${id}/education/${eduEditId}`, body);
-        toast.success("Education updated");
+        toast.success(t("toastEduUpdated"));
       } else {
         await api.post(`/employees/${id}/education`, body);
-        toast.success("Education added");
+        toast.success(t("toastEduAdded"));
       }
       setEduOpen(false);
       await load();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to save";
+      const msg = err instanceof Error ? err.message : t("toastSaveFailed");
       setEduError(msg);
       toast.error(msg);
     } finally {
@@ -581,10 +611,12 @@ export default function EmployeeDetailPage() {
     setSaving(true);
     try {
       await api.delete(`/employees/${id}/education/${itemId}`);
-      toast.success("Education deleted");
+      toast.success(t("toastEduDeleted"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(
+        err instanceof Error ? err.message : t("toastDeleteFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -619,19 +651,19 @@ export default function EmployeeDetailPage() {
     // HRP-220 Courses block: Title and Completed date are required;
     // Completed date must be in the past; Completed <= Expire when set.
     if (!courseForm.title.trim() || !courseForm.completed_date) {
-      setCourseError("Title and Completed date are required");
+      setCourseError(t("errorCourseRequired"));
       return;
     }
     const today = yesterdayIso();
     if (courseForm.completed_date > today) {
-      setCourseError("Completed date must be in the past");
+      setCourseError(t("errorCompletedInPast"));
       return;
     }
     if (
       courseForm.expiry_date &&
       courseForm.completed_date > courseForm.expiry_date
     ) {
-      setCourseError("Completed date must be on or before Expiry date");
+      setCourseError(t("errorCompletedBeforeExpiry"));
       return;
     }
     setSaving(true);
@@ -646,15 +678,15 @@ export default function EmployeeDetailPage() {
       };
       if (courseEditId) {
         await api.put(`/employees/${id}/courses/${courseEditId}`, body);
-        toast.success("Course updated");
+        toast.success(t("toastCourseUpdated"));
       } else {
         await api.post(`/employees/${id}/courses`, body);
-        toast.success("Course added");
+        toast.success(t("toastCourseAdded"));
       }
       setCourseOpen(false);
       await load();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to save";
+      const msg = err instanceof Error ? err.message : t("toastSaveFailed");
       setCourseError(msg);
       toast.error(msg);
     } finally {
@@ -666,10 +698,12 @@ export default function EmployeeDetailPage() {
     setSaving(true);
     try {
       await api.delete(`/employees/${id}/courses/${itemId}`);
-      toast.success("Course deleted");
+      toast.success(t("toastCourseDeleted"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(
+        err instanceof Error ? err.message : t("toastDeleteFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -706,7 +740,7 @@ export default function EmployeeDetailPage() {
       compForm.effective_date &&
       compForm.effective_date > compForm.end_date
     ) {
-      setCompError("Effective date must be on or before End date");
+      setCompError(t("errorCompEffectiveBeforeEnd"));
       return;
     }
     setSaving(true);
@@ -721,10 +755,10 @@ export default function EmployeeDetailPage() {
       };
       if (compEditId) {
         await api.put(`/employees/${id}/compensation/${compEditId}`, body);
-        toast.success("Compensation updated");
+        toast.success(t("toastCompUpdated"));
       } else {
         await api.post(`/employees/${id}/compensation`, body);
-        toast.success("Compensation added");
+        toast.success(t("toastCompAdded"));
       }
       setCompOpen(false);
       await load();
@@ -733,7 +767,7 @@ export default function EmployeeDetailPage() {
       // toasting it — the save did not succeed if we reach this branch,
       // and an inline message gives a clearer recovery path than a toast
       // that vanishes.
-      const msg = err instanceof Error ? err.message : "Failed to save";
+      const msg = err instanceof Error ? err.message : t("toastSaveFailed");
       setCompError(msg);
       toast.error(msg);
     } finally {
@@ -745,10 +779,12 @@ export default function EmployeeDetailPage() {
     setSaving(true);
     try {
       await api.delete(`/employees/${id}/compensation/${itemId}`);
-      toast.success("Compensation deleted");
+      toast.success(t("toastCompDeleted"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(
+        err instanceof Error ? err.message : t("toastDeleteFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -757,7 +793,7 @@ export default function EmployeeDetailPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -767,10 +803,10 @@ export default function EmployeeDetailPage() {
       <div className="space-y-4">
         <Button variant="ghost" size="sm" render={<Link href="/employees" />}>
           <ArrowLeft className="mr-1 h-4 w-4" />
-          Back to employees
+          {t("backToEmployees")}
         </Button>
         <div className="py-12 text-center text-muted-foreground">
-          Employee not found
+          {t("notFound")}
         </div>
       </div>
     );
@@ -783,7 +819,9 @@ export default function EmployeeDetailPage() {
   const tenureYears = (() => {
     const ms = Date.now() - new Date(tenureAnchorIso).getTime();
     const years = ms / (365.25 * 24 * 3600 * 1000);
-    return years >= 1 ? `${years.toFixed(1)}y` : `${Math.max(0, Math.round(years * 12))}mo`;
+    return years >= 1
+      ? t("kpiYearsShort", { years: years.toFixed(1) })
+      : t("kpiMonthsShort", { months: Math.max(0, Math.round(years * 12)) });
   })();
 
   const latestAssessment = [...assessments].sort(
@@ -798,7 +836,7 @@ export default function EmployeeDetailPage() {
               (24 * 3600 * 1000),
           ),
         );
-        return days === 0 ? "today" : `${days}d`;
+        return days === 0 ? t("kpiToday") : t("kpiDaysShort", { days });
       })()
     : "—";
 
@@ -819,49 +857,65 @@ export default function EmployeeDetailPage() {
         .slice(0, 2)
     : "?";
 
-  const kpis: { label: string; value: string; sub: string; info?: string }[] = [
+  // ``key`` keeps the KPI test ids locale-independent (HRP-247 documents
+  // ``employee-kpi-status`` & co.), ``label`` carries the translation.
+  const kpis: {
+    key: string;
+    label: string;
+    value: string;
+    sub: string;
+    info?: string;
+  }[] = [
     {
-      label: "Status",
-      value: employee.status.replace(/_/g, " "),
+      key: "status",
+      label: t("status"),
+      value: employeeStatusLabel(t, employee.status),
       // HRP-246: anchor on the last status mutation timestamp; fall
       // back to ``created_at`` only for rows that pre-date the
       // ``status_changed_at`` column.
-      sub: `since ${formatDate(employee.status_changed_at ?? employee.created_at)}`,
+      sub: t("kpiSince", {
+        date: formatDate(employee.status_changed_at ?? employee.created_at),
+      }),
     },
     {
-      label: "Tenure",
+      key: "tenure",
+      label: t("kpiTenure"),
       value: tenureYears,
       // HRP-246: TENURE measures how long the employee has been
       // *using the system* — anchored on first auth, not hire date.
-      sub: `joined ${formatDate(tenureAnchorIso)}`,
+      sub: t("kpiJoined", { date: formatDate(tenureAnchorIso) }),
     },
     {
-      label: "Assessments",
+      key: "assessments",
+      label: t("assessments"),
       value: String(assessments.length),
       // HRP-246: sub-line now spells out the open count instead of the
       // latest row's status, which read as random to QA. "Open" means
       // status_code not in (done, cancelled).
       sub:
         assessments.length === 0
-          ? "no records"
-          : `${openAssessmentsCount} open assessment${openAssessmentsCount === 1 ? "" : "s"}`,
+          ? t("kpiNoRecords")
+          : t("kpiOpenAssessments", { count: openAssessmentsCount }),
     },
     {
-      label: "Goals progress",
+      key: "goals-progress",
+      label: t("kpiGoalsProgress"),
       value: goalsProgress === null ? "—" : `${goalsProgress}%`,
-      sub: `${openPlansCount} open plan${openPlansCount === 1 ? "" : "s"}`,
+      sub: t("kpiOpenPlans", { count: openPlansCount }),
       // HRP-247: surface the formula so HR doesn't have to guess what
       // "55%" means. Open plans = PDPs not yet Done or Cancelled; each
       // plan's progress is items completed / items total.
-      info:
-        "Average completion across this employee's open development plans " +
-        "(plans not yet Done or Cancelled). Each plan's progress is the " +
-        "share of items marked complete.",
+      info: t("kpiGoalsProgressInfo"),
     },
     {
-      label: "Last assessment",
+      key: "last-assessment",
+      label: t("kpiLastAssessment"),
       value: lastAssessmentLabel,
-      sub: latestAssessment?.title || (latestAssessment ? latestAssessment.type_title : "no records"),
+      sub:
+        latestAssessment?.title ||
+        (latestAssessment
+          ? assessmentTypeTitle(tRef, latestAssessment)
+          : t("kpiNoRecords")),
     },
   ];
 
@@ -873,7 +927,7 @@ export default function EmployeeDetailPage() {
         data-testid="employee-btn-back"
       >
         <ArrowLeft className="h-3 w-3" />
-        All employees
+        {t("allEmployees")}
       </Link>
 
       <div
@@ -891,10 +945,10 @@ export default function EmployeeDetailPage() {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="truncate text-2xl font-semibold tracking-tight" data-testid="employee-name">
-                  {employee.user_name || "Employee"}
+                  {employee.user_name || tc("employee")}
                 </h1>
                 <Badge variant="secondary" className={statusColors[employee.status] || ""}>
-                  {employee.status.replace(/_/g, " ")}
+                  {employeeStatusLabel(t, employee.status)}
                 </Badge>
               </div>
               <p className="mt-1.5 truncate text-sm text-muted-foreground">
@@ -908,7 +962,7 @@ export default function EmployeeDetailPage() {
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={openEdit} data-testid="employee-btn-edit">
                 <Pencil className="h-3.5 w-3.5" />
-                Edit profile
+                {t("editProfile")}
               </Button>
             </div>
           )}
@@ -916,12 +970,12 @@ export default function EmployeeDetailPage() {
         <div className="flex flex-wrap border-t border-border">
           {kpis.map((k, i) => (
             <div
-              key={k.label}
+              key={k.key}
               className={cn(
                 "min-w-[140px] flex-1 px-4 py-3.5",
                 i < kpis.length - 1 && "border-r border-border",
               )}
-              data-testid={`employee-kpi-${k.label.toLowerCase().replace(/\s+/g, "-")}`}
+              data-testid={`employee-kpi-${k.key}`}
             >
               <div className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 <span>{k.label}</span>
@@ -929,9 +983,9 @@ export default function EmployeeDetailPage() {
                   <Tooltip>
                     <TooltipTrigger
                       type="button"
-                      aria-label={`${k.label} explanation`}
+                      aria-label={t("kpiInfoAria", { label: k.label })}
                       className="inline-flex text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none"
-                      data-testid={`employee-kpi-${k.label.toLowerCase().replace(/\s+/g, "-")}-info`}
+                      data-testid={`employee-kpi-${k.key}-info`}
                     >
                       <Info className="h-3 w-3" />
                     </TooltipTrigger>
@@ -955,20 +1009,20 @@ export default function EmployeeDetailPage() {
       {/* Tabbed content */}
       <Tabs defaultValue="events">
         <TabsList className="flex w-full max-w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <TabsTrigger value="events" data-testid="employee-tab-events" className="shrink-0">Events</TabsTrigger>
-          <TabsTrigger value="experience" data-testid="employee-tab-experience" className="shrink-0">Experience</TabsTrigger>
-          <TabsTrigger value="education" data-testid="employee-tab-education" className="shrink-0">Education</TabsTrigger>
-          <TabsTrigger value="compensation" data-testid="employee-tab-compensation" className="shrink-0">Compensation</TabsTrigger>
-          <TabsTrigger value="assessments" data-testid="employee-tab-assessments" className="shrink-0">Assessments</TabsTrigger>
-          <TabsTrigger value="development" data-testid="employee-tab-development" className="shrink-0">Development</TabsTrigger>
-          <TabsTrigger value="competences" data-testid="employee-tab-competences" className="shrink-0">Competences</TabsTrigger>
+          <TabsTrigger value="events" data-testid="employee-tab-events" className="shrink-0">{t("tabEvents")}</TabsTrigger>
+          <TabsTrigger value="experience" data-testid="employee-tab-experience" className="shrink-0">{t("tabExperience")}</TabsTrigger>
+          <TabsTrigger value="education" data-testid="employee-tab-education" className="shrink-0">{t("tabEducation")}</TabsTrigger>
+          <TabsTrigger value="compensation" data-testid="employee-tab-compensation" className="shrink-0">{t("tabCompensation")}</TabsTrigger>
+          <TabsTrigger value="assessments" data-testid="employee-tab-assessments" className="shrink-0">{t("assessments")}</TabsTrigger>
+          <TabsTrigger value="development" data-testid="employee-tab-development" className="shrink-0">{t("tabDevelopment")}</TabsTrigger>
+          <TabsTrigger value="competences" data-testid="employee-tab-competences" className="shrink-0">{t("tabCompetences")}</TabsTrigger>
         </TabsList>
 
         {/* --- Events tab --- */}
         <TabsContent value="events">
           <Card>
             <CardHeader className="flex-row items-center justify-between">
-              <CardTitle className="text-base">Events</CardTitle>
+              <CardTitle className="text-base">{t("tabEvents")}</CardTitle>
               {canEditOtherSections && (
               <Button
                 size="sm"
@@ -977,14 +1031,14 @@ export default function EmployeeDetailPage() {
                 data-testid="employee-events-btn-add"
               >
                 <Plus className="mr-1 h-4 w-4" />
-                Add event
+                {t("addEvent")}
               </Button>
               )}
             </CardHeader>
             <CardContent>
               {events.length === 0 ? (
                 <p className="py-4 text-center text-sm text-muted-foreground">
-                  No events yet
+                  {t("noEvents")}
                 </p>
               ) : (
                 <div className="space-y-3" data-testid="employee-events-list">
@@ -1032,18 +1086,20 @@ export default function EmployeeDetailPage() {
                 within the current company, each with a computed duration. */}
             <Card>
               <CardHeader className="flex-row items-center justify-between">
-                <CardTitle className="text-base">Current Employment</CardTitle>
+                <CardTitle className="text-base">
+                  {t("currentEmployment")}
+                </CardTitle>
                 {canEditOtherSections && (
                   <Button size="sm" variant="outline" onClick={openWeAdd} data-testid="employee-experience-btn-add">
                     <Plus className="mr-1 h-4 w-4" />
-                    Add
+                    {t("add")}
                   </Button>
                 )}
               </CardHeader>
               <CardContent data-testid="employee-experience-list">
                 {workExperiences.length === 0 ? (
                   <p className="py-4 text-center text-sm text-muted-foreground">
-                    No current employment records
+                    {t("noCurrentEmployment")}
                   </p>
                 ) : (
                   <div className="space-y-3">
@@ -1080,7 +1136,7 @@ export default function EmployeeDetailPage() {
                               </p>
                             )}
                             <p className="mt-0.5 text-xs text-muted-foreground">
-                              {formatDateRange(item.start_date, item.end_date)}
+                              {formatDateRange(t, item.start_date, item.end_date)}
                             </p>
                             {item.description && (
                               <p className="mt-1 text-sm text-muted-foreground">
@@ -1133,19 +1189,19 @@ export default function EmployeeDetailPage() {
             <Card>
               <CardHeader className="flex-row items-center justify-between">
                 <CardTitle className="text-base">
-                  Previous Employment
+                  {t("previousEmployment")}
                 </CardTitle>
                 {canEditOtherSections && (
                   <Button size="sm" variant="outline" onClick={openPeAdd} data-testid="employee-prev-employment-btn-add">
                     <Plus className="mr-1 h-4 w-4" />
-                    Add
+                    {t("add")}
                   </Button>
                 )}
               </CardHeader>
               <CardContent>
                 {prevEmployments.length === 0 ? (
                   <p className="py-4 text-center text-sm text-muted-foreground">
-                    No previous employment records
+                    {t("noPreviousEmployment")}
                   </p>
                 ) : (
                   <div className="space-y-3" data-testid="employee-prev-employment-list">
@@ -1162,7 +1218,7 @@ export default function EmployeeDetailPage() {
                             {item.company_name}
                           </p>
                           <p className="mt-0.5 text-xs text-muted-foreground">
-                            {formatDateRange(item.start_date, item.end_date)}
+                            {formatDateRange(t, item.start_date, item.end_date)}
                           </p>
                           {item.description && (
                             <p className="mt-1 text-sm text-muted-foreground">
@@ -1205,18 +1261,18 @@ export default function EmployeeDetailPage() {
             {/* Formal Education */}
             <Card>
               <CardHeader className="flex-row items-center justify-between">
-                <CardTitle className="text-base">Education</CardTitle>
+                <CardTitle className="text-base">{t("tabEducation")}</CardTitle>
                 {(canEditOtherSections || canEditOwnEducation) && (
                   <Button size="sm" variant="outline" onClick={openEduAdd} data-testid="employee-education-btn-add">
                     <Plus className="mr-1 h-4 w-4" />
-                    Add
+                    {t("add")}
                   </Button>
                 )}
               </CardHeader>
               <CardContent data-testid="employee-education-list">
                 {educationRecords.length === 0 ? (
                   <p className="py-4 text-center text-sm text-muted-foreground">
-                    No education records
+                    {t("noEducation")}
                   </p>
                 ) : (
                   <div className="space-y-3">
@@ -1228,14 +1284,17 @@ export default function EmployeeDetailPage() {
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-medium">
-                              {item.degree} in {item.field_of_study}
+                              {t("degreeInField", {
+                                degree: item.degree,
+                                field: item.field_of_study,
+                              })}
                             </span>
                           </div>
                           <p className="text-sm text-muted-foreground">
                             {item.institution}
                           </p>
                           <p className="mt-0.5 text-xs text-muted-foreground">
-                            {formatDateRange(item.start_date, item.end_date)}
+                            {formatDateRange(t, item.start_date, item.end_date)}
                           </p>
                         </div>
                         {(canEditOtherSections || canEditOwnEducation) && (
@@ -1269,19 +1328,19 @@ export default function EmployeeDetailPage() {
             <Card>
               <CardHeader className="flex-row items-center justify-between">
                 <CardTitle className="text-base">
-                  Courses & Certifications
+                  {t("coursesTitle")}
                 </CardTitle>
                 {(canEditOtherSections || canEditOwnEducation) && (
                   <Button size="sm" variant="outline" onClick={openCourseAdd} data-testid="employee-courses-btn-add">
                     <Plus className="mr-1 h-4 w-4" />
-                    Add
+                    {t("add")}
                   </Button>
                 )}
               </CardHeader>
               <CardContent data-testid="employee-courses-list">
                 {courses.length === 0 ? (
                   <p className="py-4 text-center text-sm text-muted-foreground">
-                    No courses or certifications
+                    {t("noCourses")}
                   </p>
                 ) : (
                   <div className="space-y-3">
@@ -1305,8 +1364,10 @@ export default function EmployeeDetailPage() {
                                 }
                               >
                                 {new Date(item.expiry_date) < new Date()
-                                  ? "Expired"
-                                  : `Expires ${formatDate(item.expiry_date)}`}
+                                  ? t("courseExpired")
+                                  : t("courseExpires", {
+                                      date: formatDate(item.expiry_date),
+                                    })}
                               </Badge>
                             )}
                           </div>
@@ -1317,8 +1378,9 @@ export default function EmployeeDetailPage() {
                           )}
                           {item.completed_date && (
                             <p className="mt-0.5 text-xs text-muted-foreground">
-                              Completed{" "}
-                              {formatDate(item.completed_date)}
+                              {t("courseCompletedOn", {
+                                date: formatDate(item.completed_date),
+                              })}
                             </p>
                           )}
                           {item.certificate_url && (
@@ -1328,7 +1390,7 @@ export default function EmployeeDetailPage() {
                               rel="noopener noreferrer"
                               className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"
                             >
-                              View certificate
+                              {t("viewCertificate")}
                               <ExternalLink className="h-3 w-3" />
                             </a>
                           )}
@@ -1375,18 +1437,20 @@ export default function EmployeeDetailPage() {
         <TabsContent value="compensation">
           <Card>
             <CardHeader className="flex-row items-center justify-between">
-              <CardTitle className="text-base">Compensation History</CardTitle>
+              <CardTitle className="text-base">
+                {t("compensationHistory")}
+              </CardTitle>
               {canEditOtherSections && (
                 <Button size="sm" variant="outline" onClick={openCompAdd} data-testid="employee-compensation-btn-add">
                   <Plus className="mr-1 h-4 w-4" />
-                  Add
+                  {t("add")}
                 </Button>
               )}
             </CardHeader>
             <CardContent data-testid="employee-compensation-list">
               {compensations.length === 0 ? (
                 <p className="py-4 text-center text-sm text-muted-foreground">
-                  No compensation records
+                  {t("noCompensation")}
                 </p>
               ) : (
                 <div className="relative ml-4 border-l-2 border-border pl-6 space-y-6">
@@ -1410,7 +1474,7 @@ export default function EmployeeDetailPage() {
                                   {item.type}
                                 </Badge>
                                 <span className="text-base font-semibold">
-                                  {(item.amount / 100).toLocaleString(undefined, {
+                                  {(item.amount / 100).toLocaleString(locale, {
                                     style: "currency",
                                     currency: item.currency,
                                   })}
@@ -1420,7 +1484,7 @@ export default function EmployeeDetailPage() {
                                 {formatDate(item.effective_date)}
                                 {item.end_date
                                   ? ` — ${formatDate(item.end_date)}`
-                                  : " — Present"}
+                                  : ` — ${t("present")}`}
                               </p>
                               {item.notes && (
                                 <p className="mt-1 text-sm text-muted-foreground">{item.notes}</p>
@@ -1450,21 +1514,21 @@ export default function EmployeeDetailPage() {
         <TabsContent value="assessments" data-testid="employee-assessments-content">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Assessments</CardTitle>
+              <CardTitle className="text-base">{t("assessments")}</CardTitle>
             </CardHeader>
             <CardContent>
               {assessments.length === 0 ? (
                 <p className="py-4 text-center text-sm text-muted-foreground">
-                  No assessments
+                  {t("noAssessments")}
                 </p>
               ) : (
                 <div className="rounded-lg border">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Title</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Status</TableHead>
+                        <TableHead>{t("colTitle")}</TableHead>
+                        <TableHead>{t("colType")}</TableHead>
+                        <TableHead>{t("status")}</TableHead>
                         <TableHead />
                       </TableRow>
                     </TableHeader>
@@ -1484,18 +1548,21 @@ export default function EmployeeDetailPage() {
                                 {a.title || "—"}
                               </Link>
                             </TableCell>
-                            <TableCell>{a.type_title}</TableCell>
+                            <TableCell>{assessmentTypeTitle(tRef, a)}</TableCell>
                             <TableCell>
                               <Badge
                                 data-testid={`employee-assessments-row-${a.id}-status`}
                                 variant="secondary"
                                 className={ASSESSMENT_STATUS_COLORS[a.status_code] || ""}
                               >
-                                {a.status_title}
+                                {assessmentStatusTitle(tRef, a)}
                               </Badge>
                             </TableCell>
                             <TableCell className="text-muted-foreground">
-                              {rowDate.label}: {formatDate(rowDate.iso)}
+                              {tAssessments("rowDateLabeled", {
+                                label: tAssessments(rowDate.labelKey),
+                                date: formatDate(rowDate.iso),
+                              })}
                             </TableCell>
                           </TableRow>
                         );
@@ -1517,21 +1584,23 @@ export default function EmployeeDetailPage() {
         <TabsContent value="development">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Development Plans</CardTitle>
+              <CardTitle className="text-base">
+                {t("developmentPlans")}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               {pdps.length === 0 ? (
                 <p className="py-4 text-center text-sm text-muted-foreground">
-                  No development plans
+                  {t("noDevelopmentPlans")}
                 </p>
               ) : (
                 <div className="rounded-lg border">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Title</TableHead>
-                        <TableHead>Progress</TableHead>
-                        <TableHead>Status</TableHead>
+                        <TableHead>{t("colTitle")}</TableHead>
+                        <TableHead>{t("colProgress")}</TableHead>
+                        <TableHead>{t("status")}</TableHead>
                         <TableHead />
                       </TableRow>
                     </TableHeader>
@@ -1539,10 +1608,10 @@ export default function EmployeeDetailPage() {
                       {sortPdpsForList(pdps).map((p) => {
                         const dateLabel =
                           p.status === "done"
-                            ? "Done"
+                            ? t("pdpDateDone")
                             : p.status === "cancelled"
-                              ? "Cancelled"
-                              : "Created";
+                              ? t("pdpDateCancelled")
+                              : t("pdpDateCreated");
                         const dateIso =
                           (p.status === "done" || p.status === "cancelled")
                             ? p.finished_at
@@ -1569,7 +1638,7 @@ export default function EmployeeDetailPage() {
                             </TableCell>
                             <TableCell>
                               <Badge variant="secondary" className={pdpStatusColor(p.status)}>
-                                {pdpStatusLabel(p.status)}
+                                {translatePdpStatus(tDevelopment, p.status)}
                               </Badge>
                             </TableCell>
                             <TableCell className="text-muted-foreground">
@@ -1599,7 +1668,7 @@ export default function EmployeeDetailPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">
-                  Current position competences
+                  {t("currentPositionCompetences")}
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -1613,7 +1682,7 @@ export default function EmployeeDetailPage() {
                     className="py-4 text-center text-sm text-muted-foreground"
                     data-testid="employee-competences-current-loading"
                   >
-                    Loading competence overview…
+                    {t("competencesLoading")}
                   </p>
                 )}
               </CardContent>
@@ -1621,7 +1690,9 @@ export default function EmployeeDetailPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Other competences</CardTitle>
+                <CardTitle className="text-base">
+                  {t("otherCompetences")}
+                </CardTitle>
               </CardHeader>
               <CardContent data-testid="employee-competences-other-list">
                 {competenceOverview && competenceOverview.other.length > 0 ? (
@@ -1670,7 +1741,7 @@ export default function EmployeeDetailPage() {
                   </div>
                 ) : (
                   <p className="py-4 text-center text-sm text-muted-foreground">
-                    No other assessed competences yet.
+                    {t("noOtherCompetences")}
                   </p>
                 )}
               </CardContent>
@@ -1687,12 +1758,12 @@ export default function EmployeeDetailPage() {
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent data-testid="employee-modal-edit">
           <DialogHeader>
-            <DialogTitle>Edit employee</DialogTitle>
+            <DialogTitle>{t("editEmployee")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label>Name</Label>
+                <Label>{t("name")}</Label>
                 <Input
                   data-testid="employee-modal-edit-input-first-name"
                   value={editForm.first_name}
@@ -1703,7 +1774,7 @@ export default function EmployeeDetailPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Last name</Label>
+                <Label>{t("lastName")}</Label>
                 <Input
                   data-testid="employee-modal-edit-input-last-name"
                   value={editForm.last_name}
@@ -1715,7 +1786,7 @@ export default function EmployeeDetailPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Position</Label>
+              <Label>{t("position")}</Label>
               <PositionCombobox
                 value={editForm.position_id || null}
                 onValueChange={(id) =>
@@ -1724,7 +1795,7 @@ export default function EmployeeDetailPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Division</Label>
+              <Label>{t("division")}</Label>
               <Select
                 value={editForm.division_id}
                 onValueChange={(val) =>
@@ -1732,12 +1803,12 @@ export default function EmployeeDetailPage() {
                 }
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="No division">
+                  <SelectValue placeholder={t("noDivision")}>
                     {(() => { if (!editForm.division_id) return undefined; const d = flatDivisions.find((d) => d.id === editForm.division_id); return d ? `${"—".repeat(d.depth)} ${d.name}` : undefined; })()}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">No division</SelectItem>
+                  <SelectItem value="">{t("noDivision")}</SelectItem>
                   {flatDivisions.map((d) => (
                     <SelectItem key={d.id} value={d.id}>
                       {"—".repeat(d.depth)} {d.name}
@@ -1747,7 +1818,7 @@ export default function EmployeeDetailPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Status</Label>
+              <Label>{t("status")}</Label>
               <Select
                 value={editForm.status}
                 onValueChange={(val) =>
@@ -1755,12 +1826,16 @@ export default function EmployeeDetailPage() {
                 }
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue />
+                  <SelectValue>
+                    {editForm.status
+                      ? employeeStatusLabel(t, editForm.status)
+                      : undefined}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {statusOptions.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {s}
+                      {employeeStatusLabel(t, s)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1773,14 +1848,14 @@ export default function EmployeeDetailPage() {
               onClick={() => setEditOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               data-testid="employee-modal-edit-btn-submit"
               onClick={handleEdit}
               disabled={saving}
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1790,11 +1865,11 @@ export default function EmployeeDetailPage() {
       <Dialog open={eventOpen} onOpenChange={setEventOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add event</DialogTitle>
+            <DialogTitle>{t("addEvent")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Event type</Label>
+              <Label>{t("eventType")}</Label>
               <Select
                 value={eventForm.event_type}
                 onValueChange={(val) =>
@@ -1814,7 +1889,7 @@ export default function EmployeeDetailPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Date</Label>
+              <Label>{t("date")}</Label>
               <DatePicker
                 value={eventForm.event_date}
                 onChange={(value) =>
@@ -1824,14 +1899,14 @@ export default function EmployeeDetailPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Description</Label>
+              <Label>{t("description")}</Label>
               <Textarea
                 value={eventForm.description}
                 onChange={(e) =>
                   setEventForm({ ...eventForm, description: e.target.value })
                 }
                 rows={3}
-                placeholder="Event details..."
+                placeholder={t("eventDescriptionPlaceholder")}
                 data-testid="employee-events-input-description"
               />
             </div>
@@ -1842,10 +1917,10 @@ export default function EmployeeDetailPage() {
               onClick={() => setEventOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button onClick={handleAddEvent} disabled={saving} data-testid="employee-events-btn-save">
-              {saving ? "Adding..." : "Add event"}
+              {saving ? t("adding") : t("addEvent")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1856,12 +1931,12 @@ export default function EmployeeDetailPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {weEditId ? "Edit" : "Add"} current employment
+              {weEditId ? t("weEditTitle") : t("weAddTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Division *</Label>
+              <Label>{t("division")} *</Label>
               <Select
                 value={weForm.division_id}
                 onValueChange={(val) =>
@@ -1869,7 +1944,7 @@ export default function EmployeeDetailPage() {
                 }
               >
                 <SelectTrigger data-testid="employee-experience-division">
-                  <SelectValue placeholder="Select division">
+                  <SelectValue placeholder={t("selectDivision")}>
                     {(value: string | null) => {
                       if (!value) return undefined;
                       const d = flatDivisions.find((dd) => dd.id === value);
@@ -1887,7 +1962,7 @@ export default function EmployeeDetailPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Position *</Label>
+              <Label>{t("position")} *</Label>
               <PositionCombobox
                 value={weForm.position_id || null}
                 onValueChange={(positionId) =>
@@ -1898,7 +1973,7 @@ export default function EmployeeDetailPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Start date *</Label>
+                <Label>{t("startDate")} *</Label>
                 <DatePicker
                   value={weForm.start_date}
                   onChange={(value) =>
@@ -1909,7 +1984,7 @@ export default function EmployeeDetailPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>End date</Label>
+                <Label>{t("endDate")}</Label>
                 <DatePicker
                   value={weForm.end_date}
                   onChange={(value) =>
@@ -1921,14 +1996,14 @@ export default function EmployeeDetailPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Description</Label>
+              <Label>{t("description")}</Label>
               <Textarea
                 value={weForm.description}
                 onChange={(e) =>
                   setWeForm({ ...weForm, description: e.target.value })
                 }
                 rows={3}
-                placeholder="Optional notes about this employment spell..."
+                placeholder={t("weDescriptionPlaceholder")}
               />
             </div>
             {weError && (
@@ -1946,14 +2021,14 @@ export default function EmployeeDetailPage() {
               onClick={() => setWeOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={handleWeSave}
               disabled={saving}
               data-testid="employee-experience-btn-save"
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1964,12 +2039,12 @@ export default function EmployeeDetailPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {peEditId ? "Edit" : "Add"} previous employment
+              {peEditId ? t("peEditTitle") : t("peAddTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Company name *</Label>
+              <Label>{t("companyName")} *</Label>
               <Input
                 value={peForm.company_name}
                 onChange={(e) =>
@@ -1979,7 +2054,7 @@ export default function EmployeeDetailPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Position *</Label>
+              <Label>{t("position")} *</Label>
               <Input
                 value={peForm.position}
                 onChange={(e) =>
@@ -1990,7 +2065,7 @@ export default function EmployeeDetailPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Start date *</Label>
+                <Label>{t("startDate")} *</Label>
                 <DatePicker
                   value={peForm.start_date}
                   onChange={(value) =>
@@ -2001,7 +2076,7 @@ export default function EmployeeDetailPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>End date *</Label>
+                <Label>{t("endDate")} *</Label>
                 <DatePicker
                   value={peForm.end_date}
                   onChange={(value) =>
@@ -2014,7 +2089,7 @@ export default function EmployeeDetailPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Description</Label>
+              <Label>{t("description")}</Label>
               <Textarea
                 value={peForm.description}
                 onChange={(e) =>
@@ -2038,14 +2113,14 @@ export default function EmployeeDetailPage() {
               onClick={() => setPeOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={handlePeSave}
               disabled={saving}
               data-testid="employee-prev-emp-btn-save"
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2056,24 +2131,24 @@ export default function EmployeeDetailPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {eduEditId ? "Edit" : "Add"} education
+              {eduEditId ? t("eduEditTitle") : t("eduAddTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Institution *</Label>
+              <Label>{t("institution")} *</Label>
               <Input
                 value={eduForm.institution}
                 onChange={(e) =>
                   setEduForm({ ...eduForm, institution: e.target.value })
                 }
-                placeholder="e.g. MIT"
+                placeholder={t("institutionPlaceholder")}
                 data-testid="employee-edu-institution"
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Degree *</Label>
+                <Label>{t("degree")} *</Label>
                 <Select
                   value={eduForm.degree}
                   onValueChange={(val) =>
@@ -2081,7 +2156,7 @@ export default function EmployeeDetailPage() {
                   }
                 >
                   <SelectTrigger className="w-full" data-testid="employee-edu-degree">
-                    <SelectValue placeholder="Select degree" />
+                    <SelectValue placeholder={t("selectDegree")} />
                   </SelectTrigger>
                   <SelectContent>
                     {degreeOptions.map((d) => (
@@ -2093,20 +2168,20 @@ export default function EmployeeDetailPage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Field of study *</Label>
+                <Label>{t("fieldOfStudy")} *</Label>
                 <Input
                   value={eduForm.field_of_study}
                   onChange={(e) =>
                     setEduForm({ ...eduForm, field_of_study: e.target.value })
                   }
-                  placeholder="e.g. Computer Science"
+                  placeholder={t("fieldOfStudyPlaceholder")}
                   data-testid="employee-edu-field"
                 />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Start date *</Label>
+                <Label>{t("startDate")} *</Label>
                 <DatePicker
                   value={eduForm.start_date}
                   onChange={(value) =>
@@ -2117,7 +2192,7 @@ export default function EmployeeDetailPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>End date</Label>
+                <Label>{t("endDate")}</Label>
                 <DatePicker
                   value={eduForm.end_date}
                   onChange={(value) =>
@@ -2143,14 +2218,14 @@ export default function EmployeeDetailPage() {
               onClick={() => setEduOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={handleEduSave}
               disabled={saving}
               data-testid="employee-edu-btn-save"
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2161,13 +2236,13 @@ export default function EmployeeDetailPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {compEditId ? "Edit" : "Add"} compensation
+              {compEditId ? t("compEditTitle") : t("compAddTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Type</Label>
+                <Label>{t("colType")}</Label>
                 <Select
                   value={compForm.type}
                   onValueChange={(val) => setCompForm({ ...compForm, type: val })}
@@ -2175,23 +2250,25 @@ export default function EmployeeDetailPage() {
                   <SelectTrigger className="w-full">
                     <SelectValue>
                       {compForm.type === "salary"
-                        ? "Salary"
+                        ? t("compTypeSalary")
                         : compForm.type === "bonus"
-                          ? "Bonus"
+                          ? t("compTypeBonus")
                           : compForm.type === "allowance"
-                            ? "Allowance"
+                            ? t("compTypeAllowance")
                             : ""}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="salary">Salary</SelectItem>
-                    <SelectItem value="bonus">Bonus</SelectItem>
-                    <SelectItem value="allowance">Allowance</SelectItem>
+                    <SelectItem value="salary">{t("compTypeSalary")}</SelectItem>
+                    <SelectItem value="bonus">{t("compTypeBonus")}</SelectItem>
+                    <SelectItem value="allowance">
+                      {t("compTypeAllowance")}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Currency</Label>
+                <Label>{t("currency")}</Label>
                 <Select
                   value={compForm.currency}
                   onValueChange={(val) => setCompForm({ ...compForm, currency: val })}
@@ -2209,19 +2286,19 @@ export default function EmployeeDetailPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Amount</Label>
+              <Label>{t("amount")}</Label>
               <Input
                 type="number"
                 step="0.01"
                 min="0"
                 value={compForm.amount}
                 onChange={(e) => setCompForm({ ...compForm, amount: e.target.value })}
-                placeholder="e.g. 5000.00"
+                placeholder={t("amountPlaceholder")}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Effective date *</Label>
+                <Label>{t("effectiveDate")} *</Label>
                 <DatePicker
                   value={compForm.effective_date}
                   onChange={(value) =>
@@ -2232,7 +2309,7 @@ export default function EmployeeDetailPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>End date</Label>
+                <Label>{t("endDate")}</Label>
                 <DatePicker
                   value={compForm.end_date}
                   onChange={(value) =>
@@ -2247,16 +2324,16 @@ export default function EmployeeDetailPage() {
               compForm.end_date &&
               compForm.end_date < compForm.effective_date && (
                 <p className="text-sm text-destructive">
-                  End date must be on or after effective date.
+                  {t("errorCompEndAfterEffective")}
                 </p>
               )}
             <div className="space-y-2">
-              <Label>Notes</Label>
+              <Label>{t("notes")}</Label>
               <Textarea
                 value={compForm.notes}
                 onChange={(e) => setCompForm({ ...compForm, notes: e.target.value })}
                 rows={2}
-                placeholder="Optional notes..."
+                placeholder={t("notesPlaceholder")}
               />
             </div>
             {compError && (
@@ -2270,7 +2347,7 @@ export default function EmployeeDetailPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCompOpen(false)} disabled={saving}>
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={handleCompSave}
@@ -2281,7 +2358,7 @@ export default function EmployeeDetailPage() {
                 (!!compForm.end_date && compForm.end_date < compForm.effective_date)
               }
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2292,33 +2369,33 @@ export default function EmployeeDetailPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {courseEditId ? "Edit" : "Add"} course / certification
+              {courseEditId ? t("courseEditTitle") : t("courseAddTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Title *</Label>
+              <Label>{t("colTitle")} *</Label>
               <Input
                 value={courseForm.title}
                 onChange={(e) =>
                   setCourseForm({ ...courseForm, title: e.target.value })
                 }
-                placeholder="e.g. AWS Solutions Architect"
+                placeholder={t("courseTitlePlaceholder")}
                 data-testid="employee-course-title"
               />
             </div>
             <div className="space-y-2">
-              <Label>Provider</Label>
+              <Label>{t("provider")}</Label>
               <Input
                 value={courseForm.provider}
                 onChange={(e) =>
                   setCourseForm({ ...courseForm, provider: e.target.value })
                 }
-                placeholder="e.g. Amazon Web Services"
+                placeholder={t("courseProviderPlaceholder")}
               />
             </div>
             <div className="space-y-2">
-              <Label>Certificate URL</Label>
+              <Label>{t("certificateUrl")}</Label>
               <Input
                 value={courseForm.certificate_url}
                 onChange={(e) =>
@@ -2332,7 +2409,7 @@ export default function EmployeeDetailPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Completed date *</Label>
+                <Label>{t("completedDate")} *</Label>
                 <DatePicker
                   value={courseForm.completed_date}
                   onChange={(value) =>
@@ -2343,7 +2420,7 @@ export default function EmployeeDetailPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Expiry date</Label>
+                <Label>{t("expiryDate")}</Label>
                 <DatePicker
                   value={courseForm.expiry_date}
                   onChange={(value) =>
@@ -2356,7 +2433,7 @@ export default function EmployeeDetailPage() {
             </div>
             {competenceTree.length > 0 && (
               <div className="space-y-2">
-                <Label>Competences developed</Label>
+                <Label>{t("competencesDeveloped")}</Label>
                 <CompetenceTreePicker
                   tree={competenceTree}
                   selectedIds={new Set(courseCompetenceIds)}
@@ -2380,10 +2457,10 @@ export default function EmployeeDetailPage() {
               onClick={() => setCourseOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button onClick={handleCourseSave} disabled={saving}>
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>

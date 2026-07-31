@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Candidate } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -17,15 +18,13 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
-
-const sourceOptions = [
-  { value: "manual", label: "Manual" },
-  { value: "resume_upload", label: "Resume upload" },
-  { value: "job_board", label: "Job board" },
-  { value: "referral", label: "Referral" },
-  { value: "agency", label: "Agency" },
-  { value: "other", label: "Other" },
-];
+// HRP-476: labels live in the `recruitment` i18n namespace; the shared
+// dictionary owns the API code → key relation for every source surface.
+import {
+  CANDIDATE_SOURCE_OPTIONS,
+  candidateSourceKey,
+  candidateSourceLabel,
+} from "@/lib/candidate-source";
 
 const emptyForm = {
   first_name: "",
@@ -39,6 +38,8 @@ const emptyForm = {
 
 export default function NewCandidatePage() {
   const router = useRouter();
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
 
@@ -48,7 +49,7 @@ export default function NewCandidatePage() {
 
   async function handleManualSubmit() {
     if (!form.first_name.trim() || !form.last_name.trim()) {
-      toast.error("First name and last name are required");
+      toast.error(t("candidateNameRequired"));
       return;
     }
 
@@ -67,13 +68,13 @@ export default function NewCandidatePage() {
         "/recruitment/candidates",
         payload,
       );
-      toast.success("Candidate created");
+      toast.success(t("candidateToastCreated"));
       router.push(`/recruitment/candidates/${candidate.id}`);
     } catch (err) {
       const message =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: unknown }).message)
-          : "Failed to create candidate";
+          : t("candidateCreateFailed");
       toast.error(message);
     } finally {
       setSaving(false);
@@ -84,23 +85,24 @@ export default function NewCandidatePage() {
     <div data-testid="recruitment-candidate-new" className="space-y-6">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Candidates", href: "/recruitment/candidates" },
-          { label: "New candidate" },
+          { label: t("candidatesTitle"), href: "/recruitment/candidates" },
+          { label: t("candidateNewBreadcrumb") },
         ]}
       />
 
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Add candidate</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {t("candidateAddButton")}
+        </h1>
         <p className="text-sm text-muted-foreground">
-          Create a candidate manually. To bulk-upload resumes, open a vacancy
-          and use the &ldquo;Add candidate&rdquo; modal there.
+          {t("candidateNewDescription")}
         </p>
       </div>
 
       <div className="space-y-5">
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="last_name">Last name *</Label>
+            <Label htmlFor="last_name">{t("candidateLastNameLabel")}</Label>
             <Input
               id="last_name"
               data-testid="recruitment-candidate-input-last-name"
@@ -110,7 +112,7 @@ export default function NewCandidatePage() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="first_name">First name *</Label>
+            <Label htmlFor="first_name">{t("candidateFirstNameLabel")}</Label>
             <Input
               id="first_name"
               data-testid="recruitment-candidate-input-first-name"
@@ -122,7 +124,7 @@ export default function NewCandidatePage() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="middle_name">Middle name</Label>
+          <Label htmlFor="middle_name">{t("candidateMiddleNameLabel")}</Label>
           <Input
             id="middle_name"
             data-testid="recruitment-candidate-input-middle-name"
@@ -134,7 +136,7 @@ export default function NewCandidatePage() {
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">{t("columnEmail")}</Label>
             <Input
               id="email"
               type="email"
@@ -145,7 +147,7 @@ export default function NewCandidatePage() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="phone">Phone</Label>
+            <Label htmlFor="phone">{t("candidateFieldPhone")}</Label>
             <Input
               id="phone"
               data-testid="recruitment-candidate-input-phone"
@@ -157,7 +159,7 @@ export default function NewCandidatePage() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="source">Source</Label>
+          <Label htmlFor="source">{t("columnSource")}</Label>
           <Select
             value={form.source}
             onValueChange={(val) => updateField("source", val)}
@@ -166,15 +168,16 @@ export default function NewCandidatePage() {
               className="w-full sm:w-56"
               data-testid="recruitment-candidate-select-source-new"
             >
-              <SelectValue placeholder="Select source">
-                {sourceOptions.find((s) => s.value === form.source)?.label ??
-                  "Select source"}
+              <SelectValue placeholder={t("candidateSelectSource")}>
+                {candidateSourceKey(form.source)
+                  ? candidateSourceLabel(t, form.source)
+                  : t("candidateSelectSource")}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {sourceOptions.map((s) => (
-                <SelectItem key={s.value} value={s.value}>
-                  {s.label}
+              {CANDIDATE_SOURCE_OPTIONS.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {candidateSourceLabel(t, s)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -182,11 +185,11 @@ export default function NewCandidatePage() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="notes">Notes</Label>
+          <Label htmlFor="notes">{t("candidateFieldNotes")}</Label>
           <Textarea
             id="notes"
             data-testid="recruitment-candidate-input-notes"
-            placeholder="Internal notes about this candidate..."
+            placeholder={t("candidateNotesPlaceholder")}
             value={form.notes}
             onChange={(e) => updateField("notes", e.target.value)}
             rows={4}
@@ -201,14 +204,14 @@ export default function NewCandidatePage() {
             onClick={() => router.push("/recruitment/candidates")}
             disabled={saving}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             data-testid="recruitment-candidate-btn-create"
             onClick={handleManualSubmit}
             disabled={saving}
           >
-            {saving ? "Creating..." : "Create candidate"}
+            {saving ? t("actionCreating") : t("candidateCreateButton")}
           </Button>
         </div>
       </div>

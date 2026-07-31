@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import type {
   ApplyResult,
@@ -86,6 +87,8 @@ function collectAncestorChain(
 }
 
 export function AIReviewModal({ session, onApplied, onCancel }: Props) {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   const [selection, setSelection] = useState<Selection>(() => {
     const raw = (session.selection_state ?? {}) as Record<string, unknown>;
     const next: Selection = {};
@@ -130,16 +133,11 @@ export function AIReviewModal({ session, onApplied, onCancel }: Props) {
   }, [edits]);
 
   const requestClose = useCallback(() => {
-    if (
-      editsDirty &&
-      !window.confirm(
-        "You have unsaved title edits. Close without applying?",
-      )
-    ) {
+    if (editsDirty && !window.confirm(t("reviewUnsavedEditsConfirm"))) {
       return;
     }
     onCancel();
-  }, [editsDirty, onCancel]);
+  }, [editsDirty, onCancel, t]);
 
   const groups = (session.payload?.groups ?? []) as GeneratedGroup[];
   const allTempIds = useMemo(
@@ -227,7 +225,7 @@ export function AIReviewModal({ session, onApplied, onCancel }: Props) {
       // page expected fresh competences). Just hand over the raw counts.
       onApplied(result);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Apply failed");
+      toast.error(err instanceof Error ? err.message : t("toastApplyFailed"));
     } finally {
       setApplying(false);
     }
@@ -240,14 +238,14 @@ export function AIReviewModal({ session, onApplied, onCancel }: Props) {
     >
       <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-md bg-background shadow-lg">
         <header className="flex items-center justify-between border-b px-6 py-4">
-          <h2 className="text-lg font-semibold">Review AI suggestions</h2>
+          <h2 className="text-lg font-semibold">{t("reviewTitle")}</h2>
           <button
             type="button"
             onClick={requestClose}
             className="text-sm text-muted-foreground hover:underline"
             data-testid="ai-review-close"
           >
-            Close
+            {t("close")}
           </button>
         </header>
 
@@ -257,10 +255,17 @@ export function AIReviewModal({ session, onApplied, onCancel }: Props) {
         >
           <span>
             <span className="mr-1">⚡</span>
-            <span data-testid="ai-review-pending-count" className="font-semibold">
-              {pendingCount}
-            </span>{" "}
-            AI suggestion{pendingCount === 1 ? "" : "s"} awaiting review
+            {t.rich("reviewPendingCount", {
+              count: pendingCount,
+              value: (chunks) => (
+                <span
+                  data-testid="ai-review-pending-count"
+                  className="font-semibold"
+                >
+                  {chunks}
+                </span>
+              ),
+            })}
           </span>
           <div className="flex gap-2">
             <button
@@ -269,7 +274,7 @@ export function AIReviewModal({ session, onApplied, onCancel }: Props) {
               data-testid="ai-review-accept-all"
               className="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-green-50"
             >
-              ✓ Accept all
+              {t("acceptAll")}
             </button>
             <button
               type="button"
@@ -277,7 +282,7 @@ export function AIReviewModal({ session, onApplied, onCancel }: Props) {
               data-testid="ai-review-reject-all"
               className="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-red-50"
             >
-              ✕ Reject all
+              {t("rejectAll")}
             </button>
           </div>
         </div>
@@ -285,7 +290,7 @@ export function AIReviewModal({ session, onApplied, onCancel }: Props) {
         <div className="flex-1 space-y-3 overflow-y-auto p-6">
           {groups.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              The model returned no groups. Try refining the prompt.
+              {t("reviewNoGroups")}
             </p>
           )}
           {groups.map((g) => (
@@ -310,7 +315,7 @@ export function AIReviewModal({ session, onApplied, onCancel }: Props) {
             onClick={requestClose}
             className="rounded-md border px-4 py-2 text-sm"
           >
-            Cancel
+            {tc("cancel")}
           </button>
           <button
             type="button"
@@ -319,7 +324,7 @@ export function AIReviewModal({ session, onApplied, onCancel }: Props) {
             data-testid="ai-review-apply"
             className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
-            {applying ? "Applying…" : "Apply selection"}
+            {applying ? t("applying") : t("applySelection")}
           </button>
         </footer>
       </div>
@@ -354,6 +359,8 @@ function RowChrome({
   onSaveEdit,
   testIdPrefix,
 }: RowChromeProps) {
+  const t = useTranslations("company");
+  const tc = useTranslations("common");
   const [draft, setDraft] = useState(title);
   const tone =
     state === "accepted"
@@ -382,7 +389,7 @@ function RowChrome({
             data-testid={`${testIdPrefix}-edit-save`}
             className="rounded bg-primary px-2 py-1 text-xs text-primary-foreground"
           >
-            Save
+            {t("save")}
           </button>
           <button
             type="button"
@@ -393,7 +400,7 @@ function RowChrome({
             data-testid={`${testIdPrefix}-edit-cancel`}
             className="rounded border px-2 py-1 text-xs"
           >
-            Cancel
+            {tc("cancel")}
           </button>
         </div>
       ) : (
@@ -413,7 +420,7 @@ function RowChrome({
         <div className="flex gap-1">
           <button
             type="button"
-            aria-label="Accept"
+            aria-label={t("accept")}
             onClick={onAccept}
             data-testid={`${testIdPrefix}-accept`}
             className={`rounded px-1.5 text-xs ${state === "accepted" ? "bg-green-600 text-white" : "border hover:bg-green-50"}`}
@@ -422,7 +429,7 @@ function RowChrome({
           </button>
           <button
             type="button"
-            aria-label="Edit"
+            aria-label={t("edit")}
             onClick={() => {
               setDraft(title);
               onStartEdit();
@@ -434,7 +441,7 @@ function RowChrome({
           </button>
           <button
             type="button"
-            aria-label="Reject"
+            aria-label={t("reject")}
             onClick={onReject}
             data-testid={`${testIdPrefix}-reject`}
             className={`rounded px-1.5 text-xs ${state === "rejected" ? "bg-red-600 text-white" : "border hover:bg-red-50"}`}

@@ -9,8 +9,11 @@ import { describe, expect, it } from "vitest";
 import {
   deriveEmployeeSummary,
   statusBadgeClass,
-  statusLabel,
 } from "@/components/employee/employee-summary-line";
+import {
+  employeeStatusKey,
+  employeeStatusLabel,
+} from "@/components/employees/employee-status";
 
 describe("deriveEmployeeSummary", () => {
   it("uses user_name when present, trimmed", () => {
@@ -52,10 +55,28 @@ describe("deriveEmployeeSummary", () => {
   });
 });
 
-describe("statusLabel", () => {
-  it("converts snake_case to spaces", () => {
-    expect(statusLabel("on_leave")).toBe("on leave");
-    expect(statusLabel("inactive")).toBe("inactive");
+describe("employeeStatusKey / employeeStatusLabel (i18n)", () => {
+  // The catalogue value itself lives in messages/*.json; the helper only
+  // has to pick the right key and fall back for codes it doesn't know.
+  const t = (key: string) => `t:${key}`;
+
+  it("maps the known status codes onto namespace keys", () => {
+    expect(employeeStatusKey("active")).toBe("statusActive");
+    expect(employeeStatusKey("on_leave")).toBe("statusOnLeave");
+    expect(employeeStatusKey("inactive")).toBe("statusInactive");
+    expect(employeeStatusKey("terminated")).toBe("statusTerminated");
+  });
+
+  it("returns no key for unknown or empty codes", () => {
+    expect(employeeStatusKey("unknown_status")).toBeNull();
+    expect(employeeStatusKey(null)).toBeNull();
+    expect(employeeStatusKey(undefined)).toBeNull();
+  });
+
+  it("translates known codes and falls back to the raw code otherwise", () => {
+    expect(employeeStatusLabel(t, "on_leave")).toBe("t:statusOnLeave");
+    expect(employeeStatusLabel(t, "unknown_status")).toBe("unknown status");
+    expect(employeeStatusLabel(t, null)).toBe("");
   });
 });
 

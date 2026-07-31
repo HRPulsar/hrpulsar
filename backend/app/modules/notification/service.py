@@ -28,6 +28,43 @@ def _serialize_notification(notif: Notification, template_code: str) -> dict:
     }
 
 
+async def resolve_recipient_locale(db: AsyncSession, user_id: uuid.UUID) -> str:
+    """Effective interface locale of an email/notification recipient.
+
+    User.language > Tenant.default_locale > deployment default — the
+    recipient's own chain (i18n F4), never the sender's request locale.
+    Safe in Celery/event contexts: no request object involved.
+    """
+    from app.core.i18n import resolve_locale
+    from app.modules.auth.models import User
+    from app.modules.company.models import Tenant
+
+    user = await db.get(User, user_id)
+    tenant = await db.get(Tenant, user.tenant_id) if user and user.tenant_id else None
+    return resolve_locale(
+        user_language=user.language if user else None,
+        tenant_default=tenant.default_locale if tenant else None,
+    )
+
+
+async def get_template_for_locale(
+    db: AsyncSession, template_code: str, locale: str
+) -> NotificationTemplate | None:
+    """Fetch the template row for a locale, falling back to the en row.
+
+    The en row always exists for shipped codes (migrations seed en first),
+    so the fallback only misses when the code itself is unknown.
+    """
+    result = await db.execute(
+        select(NotificationTemplate).where(
+            NotificationTemplate.code == template_code,
+            NotificationTemplate.locale.in_([locale, "en"]),
+        )
+    )
+    by_locale = {t.locale: t for t in result.scalars().all()}
+    return by_locale.get(locale) or by_locale.get("en")
+
+
 # Default event types with all channels enabled
 DEFAULT_EVENT_TYPES = [
     "assessment_assigned",
@@ -65,17 +102,19 @@ async def send_notification(
     recipient_email: str,
     context: dict,
     event_type: str = "general",
+    locale: str | None = None,
 ) -> None:
     """Send a notification using a template.
 
     Checks user preferences before sending. Email is dispatched via
     enqueue_email — Celery task with inline fallback for self-hosted
-    builds without a broker.
+    builds without a broker. The template row is picked by the
+    recipient's locale (resolved from the recipient when not passed),
+    falling back to the en row.
     """
-    result = await db.execute(
-        select(NotificationTemplate).where(NotificationTemplate.code == template_code)
-    )
-    template = result.scalar_one_or_none()
+    if locale is None:
+        locale = await resolve_recipient_locale(db, recipient_id)
+    template = await get_template_for_locale(db, template_code, locale)
     if not template:
         return
 

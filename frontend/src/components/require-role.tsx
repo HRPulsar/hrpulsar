@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "sonner";
 
@@ -16,15 +17,16 @@ interface RequireRoleProps {
 export function RequireRole({ children, manage, admin }: RequireRoleProps) {
   const { canManage, isAdmin } = usePermissions();
   const router = useRouter();
+  const t = useTranslations("common");
 
   const allowed = admin ? isAdmin : manage ? canManage : true;
 
   useEffect(() => {
     if (!allowed) {
-      toast.error("You don't have permission to access this page");
+      toast.error(t("noPermissionPage"));
       router.replace("/dashboard");
     }
-  }, [allowed, router]);
+  }, [allowed, router, t]);
 
   if (!allowed) return null;
 

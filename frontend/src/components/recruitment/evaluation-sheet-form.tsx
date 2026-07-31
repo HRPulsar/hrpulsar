@@ -6,6 +6,8 @@
 // with an Overall radio row, expandable indicators and a comment — and
 // must stay visually identical, so the JSX lives here once.
 
+import { useTranslations } from "next-intl";
+
 import { Badge } from "@/components/ui/badge";
 import {
   competenceScoreId,
@@ -198,6 +200,7 @@ export function CompetenceScoreList({
   onCompetenceScore,
   onIndicatorScore,
 }: CompetenceScoreListProps) {
+  const t = useTranslations("recruitment");
   return (
     <div className="space-y-2">
       {competences.length === 0 && (
@@ -221,7 +224,7 @@ export function CompetenceScoreList({
                     className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${criticalityConfig[comp.criticality].className}`}
                     data-testid={`assessment-competence-criticality-${comp.id}`}
                   >
-                    {criticalityConfig[comp.criticality].label}
+                    {t(criticalityConfig[comp.criticality].labelKey)}
                   </span>
                 )}
               </span>
@@ -231,14 +234,14 @@ export function CompetenceScoreList({
                   className="ml-2 text-[10px]"
                   data-testid={`assessment-competence-overall-computed-badge-${comp.id}`}
                 >
-                  from indicators
+                  {t("evalSheetFromIndicators")}
                 </Badge>
               )}
             </summary>
             <div className="mt-2 space-y-2">
               {comp.indicators.length > 0 && (
                 <p className="text-[11px] font-semibold uppercase text-muted-foreground">
-                  Overall
+                  {t("evalSheetOverall")}
                 </p>
               )}
               <div className="flex flex-wrap gap-1">
@@ -281,7 +284,7 @@ export function CompetenceScoreList({
                   onClick={() => onCompetenceScore(comp.id, null)}
                   data-testid={`assessment-competence-overall-not-assessed-${comp.id}`}
                 >
-                  Not assessed
+                  {t("evalSheetNotAssessed")}
                 </button>
               </div>
               {comp.indicators.length > 0 && (
@@ -290,7 +293,7 @@ export function CompetenceScoreList({
                   data-testid={`assessment-indicators-${comp.id}`}
                 >
                   <p className="text-[11px] font-semibold uppercase text-muted-foreground">
-                    Indicators
+                    {t("evalSheetIndicators")}
                   </p>
                   {comp.indicators.map((ind) => {
                     const iScore = indicatorScores.find(
@@ -337,7 +340,7 @@ export function CompetenceScoreList({
                             }
                             data-testid={`assessment-indicator-not-assessed-${comp.id}-${ind.id}`}
                           >
-                            Not assessed
+                            {t("evalSheetNotAssessed")}
                           </button>
                         </div>
                       </div>
@@ -355,7 +358,7 @@ export function CompetenceScoreList({
                     e.target.value,
                   )
                 }
-                placeholder="Comment (optional)"
+                placeholder={t("evalSheetCommentPlaceholder")}
                 className="w-full rounded-md border bg-background p-2 text-xs"
                 rows={2}
                 data-testid={`assessment-competence-comment-${comp.id}`}

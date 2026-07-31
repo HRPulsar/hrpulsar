@@ -9,6 +9,7 @@ import {
   type DragEvent,
 } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import {
   CalendarPlus,
   ExternalLink,
@@ -51,6 +52,7 @@ import { formatDate } from "@/lib/date-format";
 import {
   UPLOAD_ACCEPT_ATTR,
   detectKind,
+  UploadError,
   uploadInterviewMedia,
 } from "@/lib/interview-upload";
 import type { ConsentRequest, Interview, InterviewType } from "@/lib/types";
@@ -119,6 +121,7 @@ export function CandidateInterviewsSection({
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [sendingConsent, setSendingConsent] = useState(false);
+  const t = useTranslations("recruitment");
 
   const currentVacancy = useMemo(
     () => vacancyOptions.find((v) => v.id === vacancyId),
@@ -191,13 +194,15 @@ export function CandidateInterviewsSection({
     async (files: File[]) => {
       if (!cvId || files.length === 0) return;
       if (!consentSigned) {
-        toast.error("Get the candidate's recording consent first");
+        toast.error(t("candidateInterviewsConsentRequired"));
         return;
       }
       const invalid = files.filter((f) => detectKind(f) === null);
       if (invalid.length) {
         toast.error(
-          `Unsupported file type: ${invalid.map((f) => f.name).join(", ")}`,
+          t("candidateInterviewsUnsupportedType", {
+            files: invalid.map((f) => f.name).join(", "),
+          }),
         );
         return;
       }
@@ -234,25 +239,37 @@ export function CandidateInterviewsSection({
           failed += 1;
           patchUpload(idx, {
             status: "failed",
-            error: err instanceof Error ? err.message : "Upload failed",
+            // UploadError carries a stable code — show localized text
+            // instead of its technical English message.
+            error:
+              err instanceof UploadError
+                ? err.code === "s3PutFailed"
+                  ? t("uploadS3PutFailed", { status: err.status ?? 0 })
+                  : t("uploadS3NoEtag")
+                : err instanceof Error
+                  ? err.message
+                  : t("candidateInterviewsUploadFailed"),
           });
         }
       }
       setUploading(false);
       if (failed === 0) {
         toast.success(
-          files.length === 1
-            ? "Interview uploaded"
-            : `${files.length} interviews uploaded`,
+          t("candidateInterviewsUploaded", { count: files.length }),
         );
         setUploads([]);
       } else {
-        toast.error(`${failed} of ${files.length} uploads failed`);
+        toast.error(
+          t("candidateInterviewsUploadsFailed", {
+            failed,
+            total: files.length,
+          }),
+        );
       }
       await loadInterviews();
       if (inputRef.current) inputRef.current.value = "";
     },
-    [cvId, consentSigned, autoProcess, loadInterviews],
+    [cvId, consentSigned, autoProcess, loadInterviews, t],
   );
 
   function onDrop(e: DragEvent<HTMLDivElement>) {
@@ -264,7 +281,7 @@ export function CandidateInterviewsSection({
 
   async function sendConsentRequest() {
     if (!candidateEmail) {
-      toast.error("Candidate has no email on file — add one first");
+      toast.error(t("candidateInterviewsNoEmail"));
       return;
     }
     setSendingConsent(true);
@@ -274,10 +291,12 @@ export function CandidateInterviewsSection({
         { email: candidateEmail },
       );
       setConsent(created);
-      toast.success("Consent link sent to the candidate");
+      toast.success(t("candidateInterviewsConsentSent"));
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to send consent link",
+        err instanceof Error
+          ? err.message
+          : t("candidateInterviewsConsentSendFailed"),
       );
     } finally {
       setSendingConsent(false);
@@ -292,7 +311,9 @@ export function CandidateInterviewsSection({
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Mic className="h-5 w-5 text-sky-600" />
-          <h2 className="text-lg font-semibold">Interviews</h2>
+          <h2 className="text-lg font-semibold">
+            {t("candidateInterviewsTitle")}
+          </h2>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {vacancyOptions.length > 1 && (
@@ -301,10 +322,10 @@ export function CandidateInterviewsSection({
                 className="w-64"
                 data-testid="recruitment-candidate-interviews-vacancy-select"
               >
-                <SelectValue placeholder="Select vacancy">
+                <SelectValue placeholder={t("candidateInterviewsSelectVacancy")}>
                   {(value) =>
                     vacancyOptions.find((v) => v.id === value)?.title ??
-                    "Select vacancy"
+                    t("candidateInterviewsSelectVacancy")
                   }
                 </SelectValue>
               </SelectTrigger>
@@ -325,7 +346,7 @@ export function CandidateInterviewsSection({
             data-testid="recruitment-candidate-interviews-schedule-btn"
           >
             <CalendarPlus className="mr-1 h-4 w-4" />
-            Schedule interview
+            {t("candidateInterviewsScheduleButton")}
           </Button>
         </div>
       </header>
@@ -338,8 +359,8 @@ export function CandidateInterviewsSection({
           <span className="inline-flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-amber-600" />
             {consent?.status === "pending"
-              ? "Recording consent link sent — waiting for the candidate to sign. Uploads unlock after signing."
-              : "Recording consent is not signed. Uploads unlock after the candidate signs the consent link."}
+              ? t("candidateInterviewsConsentPending")
+              : t("candidateInterviewsConsentMissing")}
           </span>
           {consent?.status !== "pending" && (
             <Button
@@ -349,7 +370,9 @@ export function CandidateInterviewsSection({
               disabled={sendingConsent}
               data-testid="recruitment-candidate-interviews-consent-send-btn"
             >
-              {sendingConsent ? "Sending…" : "Send consent link"}
+              {sendingConsent
+                ? t("candidateInterviewsSending")
+                : t("candidateInterviewsSendConsent")}
             </Button>
           )}
         </div>
@@ -358,7 +381,7 @@ export function CandidateInterviewsSection({
       <div
         role="button"
         tabIndex={0}
-        aria-label="Upload interview recordings"
+        aria-label={t("candidateInterviewsDropzoneAria")}
         onClick={() => !uploading && consentSigned && inputRef.current?.click()}
         onKeyDown={(e) => {
           if ((e.key === "Enter" || e.key === " ") && !uploading && consentSigned) {
@@ -379,12 +402,10 @@ export function CandidateInterviewsSection({
       >
         <Upload className="mx-auto mb-2 h-6 w-6 text-muted-foreground/60" />
         <p className="text-sm font-medium">
-          Drop interview files here or click to browse
+          {t("candidateInterviewsDropzoneTitle")}
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Multiple files supported — one interview per file. Audio (mp3, wav,
-          m4a), video (mp4, webm, mov, avi) up to 500 MB, transcripts (pdf,
-          txt) up to 10 MB.
+          {t("candidateInterviewsDropzoneHint")}
         </p>
         <input
           ref={inputRef}
@@ -405,7 +426,7 @@ export function CandidateInterviewsSection({
           onCheckedChange={(checked) => setAutoProcess(Boolean(checked))}
           data-testid="recruitment-candidate-interviews-auto-process"
         />
-        Transcribe and run AI analysis automatically after upload
+        {t("candidateInterviewsAutoProcess")}
       </label>
 
       {uploads.length > 0 && (
@@ -423,9 +444,9 @@ export function CandidateInterviewsSection({
               </div>
               <span className="w-20 text-right text-muted-foreground">
                 {u.status === "failed"
-                  ? "Failed"
+                  ? t("candidateInterviewsUploadStatusFailed")
                   : u.status === "done"
-                    ? "Done"
+                    ? t("candidateInterviewsUploadStatusDone")
                     : `${Math.round(u.fraction * 100)}%`}
               </span>
             </div>
@@ -436,18 +457,18 @@ export function CandidateInterviewsSection({
       <Card>
         <CardHeader className="py-3">
           <CardTitle className="text-base">
-            Rounds ({interviews.length})
+            {t("candidateInterviewsRoundsCount", { count: interviews.length })}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           {loading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <p className="text-sm text-muted-foreground">{t("loading")}</p>
           ) : interviews.length === 0 ? (
             <p
               className="text-sm text-muted-foreground"
               data-testid="recruitment-candidate-interviews-empty"
             >
-              No interviews yet. Schedule one or upload a recording.
+              {t("candidateInterviewsEmpty")}
             </p>
           ) : (
             interviews.map((iv) => {
@@ -463,18 +484,26 @@ export function CandidateInterviewsSection({
                     <p className="truncate text-sm font-medium">
                       {iv.title ||
                         (iv.interview_date
-                          ? `Interview ${formatDate(iv.interview_date)}`
-                          : "Interview")}
+                          ? t("candidateInterviewsRowTitleDated", {
+                              date: formatDate(iv.interview_date),
+                            })
+                          : t("interviewBreadcrumb"))}
                     </p>
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant="outline" className="text-xs">
                         {iv.status}
                       </Badge>
-                      {processingBadge("Transcript", iv.transcription_status)}
-                      {processingBadge("AI", iv.analysis_status)}
+                      {processingBadge(
+                        t("candidateInterviewsTranscriptLabel"),
+                        iv.transcription_status,
+                      )}
+                      {processingBadge(
+                        t("candidateInterviewsAiLabel"),
+                        iv.analysis_status,
+                      )}
                       {iv.auto_process && (
                         <Badge variant="secondary" className="text-xs">
-                          auto
+                          {t("candidateInterviewsAutoBadge")}
                         </Badge>
                       )}
                     </div>
@@ -485,7 +514,7 @@ export function CandidateInterviewsSection({
                     render={<Link href={`/recruitment/interviews/${iv.id}`} />}
                     data-testid={`recruitment-candidate-interview-open-${iv.id}`}
                   >
-                    Open
+                    {t("candidateInterviewsOpen")}
                     <ExternalLink className="ml-1 h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -527,6 +556,8 @@ function ScheduleDialog({
   const [type, setType] = useState<InterviewType>("undecided");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
 
   async function submit() {
     if (!cvId) return;
@@ -543,14 +574,16 @@ function ScheduleDialog({
           notes: notes.trim() || null,
         },
       );
-      toast.success("Interview scheduled");
+      toast.success(t("candidateInterviewsScheduled"));
       setTitle("");
       setDate("");
       setNotes("");
       onCreated();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to schedule interview",
+        err instanceof Error
+          ? err.message
+          : t("candidateInterviewsScheduleFailed"),
       );
     } finally {
       setBusy(false);
@@ -564,22 +597,24 @@ function ScheduleDialog({
         data-testid="recruitment-candidate-interviews-schedule-dialog"
       >
         <DialogHeader>
-          <DialogTitle>Schedule interview</DialogTitle>
+          <DialogTitle>{t("candidateInterviewsScheduleButton")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1">
-            <Label htmlFor="iv-title">Title</Label>
+            <Label htmlFor="iv-title">{t("columnTitle")}</Label>
             <Input
               id="iv-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Technical round"
+              placeholder={t("candidateInterviewsTitlePlaceholder")}
               data-testid="recruitment-candidate-interviews-schedule-title"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <Label htmlFor="iv-date">Date &amp; time</Label>
+              <Label htmlFor="iv-date">
+                {t("candidateInterviewsFieldDate")}
+              </Label>
               <Input
                 id="iv-date"
                 type="datetime-local"
@@ -589,7 +624,9 @@ function ScheduleDialog({
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="iv-duration">Duration (min)</Label>
+              <Label htmlFor="iv-duration">
+                {t("candidateInterviewsFieldDuration")}
+              </Label>
               <Input
                 id="iv-duration"
                 type="number"
@@ -600,7 +637,7 @@ function ScheduleDialog({
             </div>
           </div>
           <div className="space-y-1">
-            <Label>Expected recording type</Label>
+            <Label>{t("candidateInterviewsFieldType")}</Label>
             <Select
               value={type}
               onValueChange={(v) => setType(v as InterviewType)}
@@ -609,24 +646,35 @@ function ScheduleDialog({
                 <SelectValue>
                   {(value) =>
                     ({
-                      audio: "Audio",
-                      video: "Video",
-                      text_transcript: "Text transcript",
-                      undecided: "Undecided",
-                    })[value as InterviewType] ?? "Undecided"
+                      audio: t("candidateInterviewsTypeAudio"),
+                      video: t("candidateInterviewsTypeVideo"),
+                      text_transcript: t(
+                        "candidateInterviewsTypeTextTranscript",
+                      ),
+                      undecided: t("candidateInterviewsTypeUndecided"),
+                    })[value as InterviewType] ??
+                    t("candidateInterviewsTypeUndecided")
                   }
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="undecided">Undecided</SelectItem>
-                <SelectItem value="audio">Audio</SelectItem>
-                <SelectItem value="video">Video</SelectItem>
-                <SelectItem value="text_transcript">Text transcript</SelectItem>
+                <SelectItem value="undecided">
+                  {t("candidateInterviewsTypeUndecided")}
+                </SelectItem>
+                <SelectItem value="audio">
+                  {t("candidateInterviewsTypeAudio")}
+                </SelectItem>
+                <SelectItem value="video">
+                  {t("candidateInterviewsTypeVideo")}
+                </SelectItem>
+                <SelectItem value="text_transcript">
+                  {t("candidateInterviewsTypeTextTranscript")}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1">
-            <Label htmlFor="iv-notes">Notes</Label>
+            <Label htmlFor="iv-notes">{t("candidateFieldNotes")}</Label>
             <Textarea
               id="iv-notes"
               rows={2}
@@ -637,14 +685,16 @@ function ScheduleDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={submit}
             disabled={busy || !cvId}
             data-testid="recruitment-candidate-interviews-schedule-save"
           >
-            {busy ? "Saving…" : "Schedule"}
+            {busy
+              ? t("candidateInterviewsSaving")
+              : t("candidateInterviewsSchedule")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -29,6 +29,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.recruitment.models import (
     AIAnalysisRun,
     CandidateFile,
@@ -66,8 +67,8 @@ async def _get_cv_or_404(
         )
     )
     if cv is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "candidate_vacancy not found"
+        raise AppError(
+            "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
         )
     return cv
 
@@ -245,22 +246,22 @@ async def _enqueue_resume_only_unbilled(
     cv = await _get_cv_or_404(db, tenant_id, candidate_vacancy_id)
 
     if await _pending_run(db, tenant_id, candidate_vacancy_id):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Analysis already in progress"
+        raise AppError(
+            "analysis_already_in_progress", status.HTTP_409_CONFLICT
         )
 
     resume = await _latest_parsed_resume(db, tenant_id, cv.candidate_id)
     if resume is None or not (resume.parsed_data or {}):
-        raise HTTPException(
+        raise AppError(
+            "resume_parsing_required",
             status.HTTP_409_CONFLICT,
-            "Resume parsing required before resume-only analysis",
         )
 
     profile = await _vacancy_profile(db, tenant_id, cv.vacancy_id)
     if profile is None or not (profile.profile_data or {}).get("competences"):
-        raise HTTPException(
+        raise AppError(
+            "vacancy_competency_profile_required",
             status.HTTP_409_CONFLICT,
-            "Vacancy competency profile required before AI analysis",
         )
 
     # Per-CV advisory lock keeps two concurrent requests for the same
@@ -274,8 +275,8 @@ async def _enqueue_resume_only_unbilled(
     # Re-check pending after acquiring the lock — a sibling request
     # may have inserted a row between our first check and the lock.
     if await _pending_run(db, tenant_id, candidate_vacancy_id):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Analysis already in progress"
+        raise AppError(
+            "analysis_already_in_progress", status.HTTP_409_CONFLICT
         )
 
     run = AIAnalysisRun(
@@ -499,8 +500,8 @@ async def enqueue_topup_to_full(
     # between, or a concurrent resume-only may have flipped the active
     # run.
     if await _pending_run(db, tenant_id, candidate_vacancy_id):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Analysis already in progress"
+        raise AppError(
+            "analysis_already_in_progress", status.HTTP_409_CONFLICT
         )
 
     interview_id = uuid.UUID(eligibility["interview_id"])
@@ -511,13 +512,13 @@ async def enqueue_topup_to_full(
         )
     )
     if interview is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Interview vanished between checks"
+        raise AppError(
+            "interview_vanished_between_checks", status.HTTP_409_CONFLICT
         )
 
     if interview.analysis_status == "processing":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Analysis already in progress"
+        raise AppError(
+            "analysis_already_in_progress", status.HTTP_409_CONFLICT
         )
 
     prior_run_id = uuid.UUID(eligibility["active_run_id"])
@@ -594,11 +595,12 @@ async def cancel_ai_analysis_run(
         .with_for_update()
     )
     if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis run not found")
+        raise AppError("analysis_run_not_found", status.HTTP_404_NOT_FOUND)
     if run.status not in ("pending", "processing"):
-        raise HTTPException(
+        raise AppError(
+            "analysis_already_terminal",
             status.HTTP_409_CONFLICT,
-            f"Analysis is already {run.status}",
+            run_status=run.status,
         )
 
     # Best-effort Celery revoke — the worker also re-reads the row at
@@ -742,12 +744,10 @@ async def enqueue_bulk_resume_only(
         )
     )
     if vacancy is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Vacancy not found")
+        raise AppError("vacancy_not_found", status.HTTP_404_NOT_FOUND)
 
     if not candidate_vacancy_ids:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "No candidates selected"
-        )
+        raise AppError("no_candidates_selected", status.HTTP_400_BAD_REQUEST)
 
     queued: list[dict] = []
     failed: list[dict] = []
@@ -762,6 +762,12 @@ async def enqueue_bulk_resume_only(
             )
             queued.append({"candidate_vacancy_id": str(cv_id), **res})
         except HTTPException as exc:
+            # F3: per-row eligibility failures are reported inside a 200
+            # response body, not raised — the exception never reaches the
+            # locale-aware handler in ``main.py``. AppError is caught here
+            # too (it subclasses HTTPException) with ``detail`` pre-rendered
+            # from the en catalog, keeping ``BulkAnalyzeFailedRow.error``
+            # byte-identical to the pre-i18n behaviour.
             failed.append(
                 {
                     "candidate_vacancy_id": str(cv_id),

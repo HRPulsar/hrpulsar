@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import type { DivisionPositionsBlock } from "@/lib/api/specializations";
 import {
   Table,
@@ -11,11 +13,13 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 
-const STATUS_LABEL: Record<string, string> = {
-  active: "Active",
-  on_hold: "On hold",
-  frozen: "Frozen",
-  closed: "Closed",
+/** Lifecycle status code → key in the `company` i18n namespace. Unknown
+ * codes fall through to the raw value, as before. */
+const STATUS_LABEL_KEY: Record<string, string> = {
+  active: "positionStatusActive",
+  on_hold: "positionStatusOnHold",
+  frozen: "positionStatusFrozen",
+  closed: "positionStatusClosed",
 };
 
 export function PositionsSummary({
@@ -23,13 +27,14 @@ export function PositionsSummary({
 }: {
   blocks: DivisionPositionsBlock[];
 }) {
+  const t = useTranslations("company");
   if (blocks.length === 0) {
     return (
       <p
         data-testid="specialization-positions-summary-empty"
         className="py-8 text-center text-sm text-muted-foreground"
       >
-        No positions reference this specialization yet.
+        {t("positionsSummaryEmpty")}
       </p>
     );
   }
@@ -56,21 +61,21 @@ export function PositionsSummary({
           >
             <div className="flex items-center justify-between border-b px-4 py-2">
               <h3 className="text-sm font-semibold">
-                {block.division_name ?? "Unassigned"}
+                {block.division_name ?? t("unassigned")}
               </h3>
               <span className="text-xs text-muted-foreground">
-                {assigned}/{headcount} assigned
+                {t("assignedOfPlan", { assigned, headcount })}
               </span>
             </div>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Position</TableHead>
-                  <TableHead>Grade</TableHead>
+                  <TableHead>{t("position")}</TableHead>
+                  <TableHead>{t("grade")}</TableHead>
                   <TableHead className="w-32 text-right">
-                    Assigned / plan
+                    {t("colAssignedPlan")}
                   </TableHead>
-                  <TableHead className="w-24">Status</TableHead>
+                  <TableHead className="w-24">{t("status")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -83,8 +88,9 @@ export function PositionsSummary({
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="capitalize">
-                        {STATUS_LABEL[pos.lifecycle_status] ??
-                          pos.lifecycle_status}
+                        {STATUS_LABEL_KEY[pos.lifecycle_status]
+                          ? t(STATUS_LABEL_KEY[pos.lifecycle_status])
+                          : pos.lifecycle_status}
                       </Badge>
                     </TableCell>
                   </TableRow>

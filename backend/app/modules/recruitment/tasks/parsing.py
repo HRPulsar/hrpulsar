@@ -89,9 +89,11 @@ def parse_resume_task(
                 db.commit()
                 return {"status": "failed", "error": "No text extracted"}
 
+            from app.modules.ai.providers import resolve_generation_target_sync
             from app.modules.recruitment.ai_service import parse_resume_text
 
-            parsed = asyncio.run(parse_resume_text(text))
+            creds = resolve_generation_target_sync(db, resume.tenant_id, None)
+            parsed = asyncio.run(parse_resume_text(text, credentials=creds))
 
             resume.parsed_data = parsed
             resume.raw_text = text

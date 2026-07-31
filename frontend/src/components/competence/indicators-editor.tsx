@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { HelpCircle, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -28,10 +29,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { api } from "@/lib/api";
+import { skillLevelLabel } from "@/lib/reference-labels";
 import type { CompetenceDetail, Indicator, SkillLevel } from "@/lib/types";
-
-const HELP_TEXT =
-  "Indicators describe observable behaviors a person should show at each skill level. Reviewers rate every indicator during assessments — the average per level drives the grade recommendation.";
 
 interface IndicatorsEditorProps {
   competenceId: string;
@@ -49,6 +48,9 @@ export function IndicatorsEditor({
   onGenerateAi,
   onChanged,
 }: IndicatorsEditorProps) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [detail, setDetail] = useState<CompetenceDetail | null>(null);
   const [skillLevels, setSkillLevels] = useState<SkillLevel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -68,7 +70,7 @@ export function IndicatorsEditor({
       setDetail(d);
       setSkillLevels(levels);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load");
+      toast.error(err instanceof Error ? err.message : t("errorLoad"));
     } finally {
       setLoading(false);
     }
@@ -87,7 +89,7 @@ export function IndicatorsEditor({
       const level: SkillLevel =
         skillLevels.find((l) => l.id === ind.skill_level_id) ?? {
           id: ind.skill_level_id,
-          title: ind.skill_level_title || "(unknown level)",
+          title: ind.skill_level_title || t("unknownLevel"),
           sort_index: 999,
           i18n_key: null,
           is_active: true,
@@ -105,7 +107,7 @@ export function IndicatorsEditor({
         (order.get(a.level.id) ?? a.level.sort_index) -
         (order.get(b.level.id) ?? b.level.sort_index),
     );
-  }, [detail, skillLevels]);
+  }, [detail, skillLevels, t]);
 
   function openCreate() {
     setEditing({
@@ -142,23 +144,23 @@ export function IndicatorsEditor({
       skill_level_id: payload.skill_level_id,
     };
     if (!body.title || !body.skill_level_id) {
-      toast.error("Title and skill level are required");
+      toast.error(t("errorTitleAndLevelRequired"));
       return;
     }
     try {
       if (isCreate) {
         await api.post(`/competences/${competenceId}/indicators`, body);
-        toast.success("Indicator added");
+        toast.success(t("toastIndicatorAdded"));
       } else {
         await api.put(`/indicators/${payload.id}`, body);
-        toast.success("Indicator updated");
+        toast.success(t("toastIndicatorUpdated"));
       }
       setEditorOpen(false);
       setEditing(null);
       await refresh();
       onChanged?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("errorSave"));
     }
   }
 
@@ -166,31 +168,33 @@ export function IndicatorsEditor({
     if (!deleting) return;
     try {
       await api.delete(`/indicators/${deleting.id}`);
-      toast.success("Indicator deleted");
+      toast.success(t("toastIndicatorDeleted"));
       setDeleteOpen(false);
       setDeleting(null);
       await refresh();
       onChanged?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(err instanceof Error ? err.message : t("errorDelete"));
     }
   }
 
   return (
     <div data-testid="indicators-editor" className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Label className="text-sm font-medium">Indicators</Label>
+        <Label className="text-sm font-medium">{t("sectionIndicators")}</Label>
         <button
           type="button"
           onClick={() => setShowHelp((v) => !v)}
           className="text-muted-foreground transition-colors hover:text-foreground"
-          aria-label="What are indicators?"
+          aria-label={t("indicatorsEditorHelpAria")}
           data-testid="indicators-editor-help-toggle"
         >
           <HelpCircle className="h-4 w-4" />
         </button>
         <span className="ml-auto text-xs text-muted-foreground">
-          {detail ? detail.indicators.length : 0} total
+          {t("indicatorsEditorTotal", {
+            count: detail ? detail.indicators.length : 0,
+          })}
         </span>
         <Button
           data-testid="indicators-editor-btn-add"
@@ -200,12 +204,12 @@ export function IndicatorsEditor({
           disabled={skillLevels.length === 0}
           title={
             skillLevels.length === 0
-              ? "Create at least one skill level first"
+              ? t("indicatorsEditorNoLevels")
               : undefined
           }
         >
           <Plus className="mr-1 h-3.5 w-3.5" />
-          Add indicator
+          {t("addIndicator")}
         </Button>
         {disabledReason ? (
           <Tooltip>
@@ -218,7 +222,7 @@ export function IndicatorsEditor({
                 disabled
               >
                 <Sparkles className="mr-1 h-3.5 w-3.5" />
-                Generate with AI
+                {t("generateWithAi")}
               </Button>
             </TooltipTrigger>
             <TooltipContent>{disabledReason}</TooltipContent>
@@ -230,7 +234,7 @@ export function IndicatorsEditor({
             onClick={onGenerateAi}
           >
             <Sparkles className="mr-1 h-3.5 w-3.5" />
-            Generate with AI
+            {t("generateWithAi")}
           </Button>
         )}
       </div>
@@ -240,15 +244,17 @@ export function IndicatorsEditor({
           data-testid="indicators-editor-help"
           className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
         >
-          {HELP_TEXT}
+          {t("indicatorsEditorHelp")}
         </p>
       )}
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading indicators…</p>
+        <p className="text-sm text-muted-foreground">
+          {t("loadingIndicators")}
+        </p>
       ) : grouped.length === 0 ? (
         <p className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
-          No indicators yet. Add them manually or generate with AI.
+          {t("indicatorsEditorEmpty")}
         </p>
       ) : (
         <div className="space-y-3">
@@ -259,10 +265,8 @@ export function IndicatorsEditor({
               className="rounded-md border"
             >
               <div className="flex items-center justify-between border-b bg-muted/30 px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                <span>{level.title}</span>
-                <span>
-                  {items.length} {items.length === 1 ? "indicator" : "indicators"}
-                </span>
+                <span>{skillLevelLabel(tRef, level)}</span>
+                <span>{t("indicatorCount", { count: items.length })}</span>
               </div>
               <ul className="divide-y">
                 {items.map((ind) => (
@@ -274,7 +278,7 @@ export function IndicatorsEditor({
                     <span className="flex-1">{ind.title}</span>
                     {ind.weight > 0 && (
                       <span className="text-xs text-muted-foreground">
-                        weight {ind.weight}
+                        {t("weightInline", { value: ind.weight })}
                       </span>
                     )}
                     <Button
@@ -282,7 +286,7 @@ export function IndicatorsEditor({
                       variant="ghost"
                       onClick={() => openEdit(ind)}
                       data-testid={`indicators-editor-item-${ind.id}-edit`}
-                      aria-label="Edit indicator"
+                      aria-label={t("editIndicator")}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
@@ -291,7 +295,7 @@ export function IndicatorsEditor({
                       variant="ghost"
                       onClick={() => openDelete(ind)}
                       data-testid={`indicators-editor-item-${ind.id}-delete`}
-                      aria-label="Delete indicator"
+                      aria-label={t("deleteIndicator")}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -314,12 +318,12 @@ export function IndicatorsEditor({
           <SheetContent className="w-full max-w-md">
             <SheetHeader>
               <SheetTitle>
-                {editing.id ? "Edit indicator" : "Add indicator"}
+                {editing.id ? t("editIndicator") : t("addIndicator")}
               </SheetTitle>
             </SheetHeader>
             <div className="space-y-4 py-2">
               <div className="space-y-2">
-                <Label>Title</Label>
+                <Label>{t("fieldTitle")}</Label>
                 <Input
                   data-testid="indicators-editor-input-title"
                   value={editing.title}
@@ -330,7 +334,7 @@ export function IndicatorsEditor({
                 />
               </div>
               <div className="space-y-2">
-                <Label>Skill level</Label>
+                <Label>{t("fieldSkillLevel")}</Label>
                 <Select
                   value={editing.skill_level_id}
                   onValueChange={(val) =>
@@ -338,22 +342,29 @@ export function IndicatorsEditor({
                   }
                 >
                   <SelectTrigger data-testid="indicators-editor-select-level">
-                    <SelectValue placeholder="Select level">
-                      {skillLevels.find((l) => l.id === editing.skill_level_id)
-                        ?.title || "Select level"}
+                    <SelectValue placeholder={t("selectLevel")}>
+                      {(() => {
+                        const sel = skillLevels.find(
+                          (l) => l.id === editing.skill_level_id,
+                        );
+                        return (
+                          (sel ? skillLevelLabel(tRef, sel) : "") ||
+                          t("selectLevel")
+                        );
+                      })()}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {skillLevels.map((level) => (
                       <SelectItem key={level.id} value={level.id}>
-                        {level.title}
+                        {skillLevelLabel(tRef, level)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Weight (optional)</Label>
+                <Label>{t("fieldWeightOptional")}</Label>
                 <Input
                   type="number"
                   min={0}
@@ -367,8 +378,7 @@ export function IndicatorsEditor({
                   }
                 />
                 <p className="text-xs text-muted-foreground">
-                  Leave at 0 for equal weighting. Higher numbers count more
-                  toward the level score.
+                  {t("indicatorsEditorWeightHint")}
                 </p>
               </div>
             </div>
@@ -380,13 +390,13 @@ export function IndicatorsEditor({
                   setEditing(null);
                 }}
               >
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button
                 data-testid="indicators-editor-btn-save"
                 onClick={() => saveIndicator(editing)}
               >
-                {editing.id ? "Save" : "Add"}
+                {editing.id ? t("save") : t("add")}
               </Button>
             </SheetFooter>
           </SheetContent>
@@ -396,10 +406,10 @@ export function IndicatorsEditor({
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title="Delete indicator?"
+        title={t("deleteIndicatorTitle")}
         description={
           deleting
-            ? `"${deleting.title}" will be removed. Existing assessments keep their snapshot, but the indicator stops being scored from new runs.`
+            ? t("deleteIndicatorDescription", { title: deleting.title })
             : ""
         }
         onConfirm={confirmDelete}

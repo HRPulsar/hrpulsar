@@ -11,12 +11,13 @@ import uuid
 from datetime import date, datetime, timezone
 
 import sqlalchemy as sa
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.access_scope import get_visible_employee_ids
+from app.core.errors import AppError
 from app.modules.auth.models import User
 from app.modules.position.models import Position
 from app.modules.talent_market import common
@@ -191,7 +192,7 @@ async def get_card_detail(
     )
     card = result.scalar_one_or_none()
     if not card:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     # HRP-209: pure-Employee viewers can only open cards they're
     # attached to (Draft only when appointed). Managers + admins keep
     # full visibility.
@@ -211,15 +212,15 @@ async def get_card_detail(
             )
             if not managed:
                 if emp is None:
-                    raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+                    raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
                 cand = next(
                     (ca for ca in card.candidates if ca.employee_id == emp.id),
                     None,
                 )
                 if cand is None:
-                    raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+                    raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
                 if card.status == "draft" and cand.status != "appointed":
-                    raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+                    raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     # HRP-149: viewer-scoped profile-link gating. Skip the lookup when no
     # user is in context (background callers) — defaults to "everyone
     # visible" via `_card_to_detail`'s `None` semantics.
@@ -329,7 +330,7 @@ async def update_card(
 
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     common.assert_card_not_terminal(card)
     patch = data.model_dump(exclude_unset=True)
     # HRP-128: explicit null on match_percent is a no-op — the column is
@@ -339,9 +340,9 @@ async def update_card(
     if patch.get("match_percent") is None and "match_percent" in patch:
         patch.pop("match_percent")
     if "match_percent" in patch and card.is_published:
-        raise HTTPException(
+        raise AppError(
+            "tm_match_percent_read_only",
             status.HTTP_409_CONFLICT,
-            "Match% is read-only after publish.",
         )
     # HRP-92: cross-field date validation after merging the patch — the
     # schema only sees the partial payload, but end_date can be invalid
@@ -350,11 +351,11 @@ async def update_card(
         new_start = patch.get("start_date", card.start_date)
         new_end = patch.get("end_date", card.end_date)
         if new_start is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "start_date is required")
+            raise AppError("tm_start_date_required", status.HTTP_400_BAD_REQUEST)
         if new_end is not None and new_end < new_start:
-            raise HTTPException(
+            raise AppError(
+                "tm_end_date_before_start_date",
                 status.HTTP_400_BAD_REQUEST,
-                "end_date must be on or after start_date",
             )
     match_changed = (
         "match_percent" in patch and patch["match_percent"] != card.match_percent
@@ -370,7 +371,7 @@ async def update_card(
         await _auto_populate_candidates(db, tenant_id, card_id)
         card = await db.get(TalentCard, card_id)
         if card is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+            raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     return _card_to_read(card)
 
 
@@ -379,7 +380,7 @@ async def delete_card(
 ) -> None:
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     # HRP-291: terminal cards are frozen history — the list page already
     # hides the action menu on them (HRP-148), the API now agrees.
     common.assert_card_not_terminal(card)
@@ -399,19 +400,20 @@ async def publish_card(
     """
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     if card.status != "draft":
-        raise HTTPException(
+        raise AppError(
+            "tm_card_publish_invalid_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot publish a card in '{card.status}' status.",
+            state=card.status,
         )
     # HRP-212: recruiters can't accidentally publish a card whose End date
     # has already slipped — today counts as the future. Forces a date edit
     # before the publish action goes through.
     if card.end_date is not None and card.end_date < date.today():
-        raise HTTPException(
+        raise AppError(
+            "tm_end_date_in_past",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "End date is in the past",
         )
     has_competence = (
         await db.execute(
@@ -421,9 +423,9 @@ async def publish_card(
         )
     ).scalar() or 0
     if not has_competence:
-        raise HTTPException(
+        raise AppError(
+            "tm_publish_requires_competence",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Cannot publish: at least one Required competence must be set.",
         )
     has_candidate = (
         await db.execute(
@@ -433,9 +435,9 @@ async def publish_card(
         )
     ).scalar() or 0
     if not has_candidate:
-        raise HTTPException(
+        raise AppError(
+            "tm_publish_requires_candidate",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Cannot publish: at least one Candidate must be attached.",
         )
     card.is_published = True
     card.status = "published"
@@ -461,11 +463,12 @@ async def complete_card(
     """
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     if card.status != "published":
-        raise HTTPException(
+        raise AppError(
+            "tm_card_complete_invalid_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot complete a card in '{card.status}' status.",
+            state=card.status,
         )
     appointed = (
         await db.execute(
@@ -476,9 +479,9 @@ async def complete_card(
         )
     ).scalar() or 0
     if not appointed:
-        raise HTTPException(
+        raise AppError(
+            "tm_complete_requires_appointed",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Cannot complete: at least one Candidate must be appointed.",
         )
     now = datetime.now(timezone.utc)
     card.status = "completed"
@@ -505,11 +508,12 @@ async def cancel_card(
     """
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     if card.status not in {"draft", "published"}:
-        raise HTTPException(
+        raise AppError(
+            "tm_card_cancel_invalid_status",
             status.HTTP_409_CONFLICT,
-            f"Cannot cancel a card in '{card.status}' status.",
+            state=card.status,
         )
     prev_status = card.status
     # HRP-211: snapshot the appointed candidates BEFORE the cancel

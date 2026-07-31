@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMemo } from "react";
+import { useTranslations } from "next-intl";
 import { useAuth } from "@/context/auth-context";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { GlobalSearch } from "@/components/global-search";
 import { NotificationBell } from "@/components/notification-bell";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { MobileSidebar } from "@/components/mobile-sidebar";
 import {
@@ -17,39 +19,78 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-const SEGMENT_LABELS: Record<string, string> = {
-  dashboard: "Dashboard",
-  employees: "Employees",
-  company: "Company",
-  assessments: "Assessments",
-  development: "Development",
-  exams: "Exams",
-  competences: "Competences",
-  dictionaries: "Dictionaries",
-  "talent-market": "Talent Market",
-  analytics: "Analytics",
-  onboarding: "Onboarding",
-  settings: "Settings",
-  profile: "Profile",
-  invitations: "Invitations",
-  import: "Data Import",
-  notifications: "Notifications",
-  billing: "Billing",
+/** URL segment → message key in the `sidebar` namespace (shared with the
+ * sidebar nav so a section is named the same way everywhere). */
+const SEGMENT_KEYS: Record<string, string> = {
+  dashboard: "dashboard",
+  employees: "employees",
+  company: "company",
+  assessments: "assessments",
+  development: "development",
+  exams: "exams",
+  competences: "competences",
+  dictionaries: "dictionaries",
+  "talent-market": "talentMarket",
+  analytics: "analytics",
+  onboarding: "onboarding",
+  settings: "settings",
+  profile: "profile",
+  invitations: "invitations",
+  import: "dataImport",
+  notifications: "notifications",
+  billing: "billing",
+  ai: "aiSettings",
+  recruitment: "recruitment",
+  requisitions: "requisitions",
+  candidates: "candidates",
+  interviews: "interviews",
+  reports: "reports",
+  "audit-log": "auditLog",
+  admin: "admin",
+  "ai-generate": "aiGenerate",
+  "assessment-groups": "assessmentGroups",
+  branding: "branding",
+  canvas: "canvas",
+  compare: "compare",
+  "consent-templates": "consentTemplates",
+  divisions: "divisions",
+  edit: "edit",
+  gdpr: "gdpr",
+  "llm-providers": "llmProviders",
+  matrix: "matrix",
+  new: "new",
+  positions: "positions",
+  "report-templates": "reportTemplates",
+  retention: "retention",
+  roles: "roles",
+  scales: "scales",
+  specializations: "specializations",
+  "transcription-providers": "transcriptionProviders",
+  unassigned: "unassigned",
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function buildCrumbs(pathname: string): { label: string; href: string }[] {
+type Translate = (key: string) => string;
+
+function buildCrumbs(
+  pathname: string,
+  tNav: Translate,
+  tCommon: Translate,
+): { label: string; href: string }[] {
   const parts = pathname.split("/").filter(Boolean);
   const out: { label: string; href: string }[] = [];
   let acc = "";
   for (const p of parts) {
     acc += "/" + p;
     if (UUID_RE.test(p)) {
-      out.push({ label: "Detail", href: acc });
+      out.push({ label: tCommon("detail"), href: acc });
       continue;
     }
-    const label = SEGMENT_LABELS[p] ?? p.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const key = SEGMENT_KEYS[p];
+    const label = key
+      ? tNav(key)
+      : p.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
     out.push({ label, href: acc });
   }
   return out;
@@ -58,7 +99,12 @@ function buildCrumbs(pathname: string): { label: string; href: string }[] {
 export function Header() {
   const { user, signOut } = useAuth();
   const pathname = usePathname();
-  const crumbs = useMemo(() => buildCrumbs(pathname), [pathname]);
+  const t = useTranslations("common");
+  const tNav = useTranslations("sidebar");
+  const crumbs = useMemo(
+    () => buildCrumbs(pathname, tNav, t),
+    [pathname, tNav, t],
+  );
 
   const initials = user
     ? `${user.first_name[0]}${user.last_name[0]}`.toUpperCase()
@@ -69,7 +115,7 @@ export function Header() {
       <MobileSidebar />
 
       <nav
-        aria-label="Breadcrumb"
+        aria-label={t("breadcrumb")}
         className="hidden min-w-0 shrink-0 items-center gap-1.5 text-sm text-muted-foreground sm:flex"
       >
         {crumbs.map((c, i) => {
@@ -92,6 +138,7 @@ export function Header() {
       <GlobalSearch />
 
       <div className="flex items-center gap-2">
+        <LanguageSwitcher />
         <ThemeToggle />
         <NotificationBell />
         <DropdownMenu>
@@ -112,11 +159,11 @@ export function Header() {
             </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem render={<Link href="/settings/profile" />} className="cursor-pointer" data-testid="header-menu-settings">
-              Settings
+              {t("settings")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={signOut} className="cursor-pointer text-destructive" data-testid="header-menu-signout">
-              Sign out
+              {t("signOut")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

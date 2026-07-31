@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 import { ArrowRight, Loader2, Sparkles } from "lucide-react";
 import {
   Dialog,
@@ -18,20 +19,26 @@ import {
   type ActiveSessionRef,
 } from "@/lib/active-ai-session-route";
 
-const SCOPE_LABEL: Record<ActiveSessionRef["scope"], string> = {
-  whole_base: "competence library",
-  group: "competence group",
-  competence_indicators: "competence indicators",
-  specialization_matrix: "specialization matrix",
+/** HRP-476: scope/status codes → keys. Scopes and every status but `error`
+ *  already have wording in the shared `common` namespace (the AI-generation
+ *  banner uses the same vocabulary); `error` reads "errored" here, so it
+ *  keeps its own key in the `competences` namespace. */
+const SCOPE_LABEL_KEYS: Record<ActiveSessionRef["scope"], string> = {
+  whole_base: "generationScopeWholeBase",
+  group: "generationScopeGroup",
+  competence_indicators: "generationScopeIndicators",
+  specialization_matrix: "generationScopeMatrix",
 };
 
-const STATUS_LABEL: Record<ActiveSessionRef["status"], string> = {
-  pending: "queued",
-  running: "in progress",
-  ready: "ready for review",
-  applied: "applied",
-  cancelled: "cancelled",
-  error: "errored",
+const STATUS_LABEL_KEYS: Record<
+  Exclude<ActiveSessionRef["status"], "error">,
+  string
+> = {
+  pending: "generationStatusPending",
+  running: "generationStatusRunning",
+  ready: "generationStatusReady",
+  applied: "generationStatusApplied",
+  cancelled: "generationStatusCancelled",
 };
 
 export interface ActiveSessionConflictDialogProps {
@@ -61,8 +68,22 @@ export function ActiveSessionConflictDialog({
   onClose,
   onRetry,
 }: ActiveSessionConflictDialogProps) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
   const [busy, setBusy] = useState(false);
   const open = session !== null;
+  const scopeLabel = session
+    ? (SCOPE_LABEL_KEYS[session.scope]
+        ? tc(SCOPE_LABEL_KEYS[session.scope])
+        : session.scope)
+    : "";
+  const statusLabel = session
+    ? session.status === "error"
+      ? t("conflictStatusErrored")
+      : STATUS_LABEL_KEYS[session.status]
+        ? tc(STATUS_LABEL_KEYS[session.status])
+        : session.status
+    : "";
 
   async function handleOpen() {
     if (!session) return;
@@ -74,14 +95,12 @@ export function ActiveSessionConflictDialog({
     setBusy(true);
     try {
       await competenceGenerationApi.cancel(session.id);
-      toast.success("Active session cancelled. Starting a new one…");
+      toast.success(t("toastActiveSessionCancelled"));
       onClose();
       onRetry();
     } catch (err) {
       toast.error(
-        err instanceof Error
-          ? err.message
-          : "Failed to cancel active session",
+        err instanceof Error ? err.message : t("errorCancelActiveSession"),
       );
     } finally {
       setBusy(false);
@@ -102,12 +121,10 @@ export function ActiveSessionConflictDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
-            AI generation already in progress
+            {t("preflightTitle")}
           </DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
-            You already have an in-flight AI generation session. Only one
-            session at a time per user — open it to continue, or cancel it to
-            start fresh.
+            {t("conflictDescription")}
           </DialogDescription>
         </DialogHeader>
         {session && (
@@ -116,12 +133,12 @@ export function ActiveSessionConflictDialog({
             className="space-y-1 rounded-md border bg-muted/30 p-3 text-sm"
           >
             <p>
-              <span className="font-medium">Scope:</span>{" "}
-              {SCOPE_LABEL[session.scope] ?? session.scope}
+              <span className="font-medium">{t("conflictScopeLabel")}</span>{" "}
+              {scopeLabel}
             </p>
             <p>
-              <span className="font-medium">Status:</span>{" "}
-              {STATUS_LABEL[session.status] ?? session.status}
+              <span className="font-medium">{t("conflictStatusLabel")}</span>{" "}
+              {statusLabel}
             </p>
           </div>
         )}
@@ -135,10 +152,10 @@ export function ActiveSessionConflictDialog({
             {busy ? (
               <>
                 <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                Cancelling…
+                {t("genCancelling")}
               </>
             ) : (
-              "Cancel active and try again"
+              t("conflictCancelActive")
             )}
           </Button>
           <Button
@@ -146,7 +163,7 @@ export function ActiveSessionConflictDialog({
             onClick={handleOpen}
             disabled={busy}
           >
-            Open active session
+            {t("conflictOpenActive")}
             <ArrowRight className="ml-1 h-4 w-4" />
           </Button>
         </DialogFooter>

@@ -22,6 +22,13 @@ export function uniqueEmail(): string {
  */
 export const SAAS_E2E = process.env.DEPLOYMENT_MODE === "saas";
 
+/** i18n F7 (HRP-481): CI runs the multi-locale deployment shape
+ * (AVAILABLE_LOCALES=de,en on servers AND the Playwright process).
+ * Locale-select/switcher assertions gate on this flag so a local run
+ * against a single-locale stack skips them instead of failing. */
+export const MULTI_LOCALE_E2E =
+  (process.env.AVAILABLE_LOCALES ?? "").split(",").filter(Boolean).length > 1;
+
 // ---------------------------------------------------------------------------
 // Auth helpers
 // ---------------------------------------------------------------------------

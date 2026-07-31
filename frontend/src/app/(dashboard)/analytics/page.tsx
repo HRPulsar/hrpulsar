@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { API_BASE } from "@/lib/api-base";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -70,6 +71,9 @@ interface CompensationBenchmark {
 }
 
 export default function AnalyticsPage() {
+  const t = useTranslations("analytics");
+  const tc = useTranslations("common");
+  const locale = useLocale();
   const [assessmentStats, setAssessmentStats] = useState<AssessmentStats | null>(null);
   const [pdpStats, setPdpStats] = useState<PDPStats | null>(null);
   const [divisionMatrix, setDivisionMatrix] = useState<DivisionMatrix | null>(null);
@@ -106,20 +110,20 @@ export default function AnalyticsPage() {
     URL.revokeObjectURL(url);
   }
 
-  if (loading) return <div className="py-12 text-center text-muted-foreground">Loading...</div>;
+  if (loading) return <div className="py-12 text-center text-muted-foreground">{tc("loading")}</div>;
 
   return (
     <RequireRole manage>
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
-        <p className="text-sm text-muted-foreground">Organization performance overview</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total Assessments</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{t("kpiTotalAssessments")}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">{assessmentStats?.total ?? 0}</div>
@@ -128,7 +132,7 @@ export default function AnalyticsPage() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Avg Assessment Score</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{t("kpiAvgAssessmentScore")}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">{assessmentStats?.avg_score ?? "—"}</div>
@@ -137,7 +141,7 @@ export default function AnalyticsPage() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total PDPs</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{t("kpiTotalPdps")}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">{pdpStats?.total ?? 0}</div>
@@ -146,7 +150,7 @@ export default function AnalyticsPage() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Avg PDP Progress</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{t("kpiAvgPdpProgress")}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">{pdpStats?.avg_progress ?? 0}%</div>
@@ -155,10 +159,10 @@ export default function AnalyticsPage() {
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold mb-3">Exports</h2>
+        <h2 className="text-lg font-semibold mb-3">{t("exports")}</h2>
         <div className="flex gap-3">
           <Button variant="outline" onClick={exportAssessments}>
-            Export Assessments (XLSX)
+            {t("exportAssessments")}
           </Button>
         </div>
       </div>
@@ -166,21 +170,21 @@ export default function AnalyticsPage() {
       {/* GF5: Compensation Benchmark */}
       {benchmark && (benchmark.by_grade.length > 0 || benchmark.by_specialization.length > 0) && (
         <div>
-          <h2 className="text-lg font-semibold mb-3">Compensation Benchmark</h2>
+          <h2 className="text-lg font-semibold mb-3">{t("compensationBenchmark")}</h2>
           <div className="grid gap-4 md:grid-cols-2">
             {benchmark.by_grade.length > 0 && (
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">By Grade</CardTitle>
+                  <CardTitle className="text-sm font-medium text-muted-foreground">{t("byGrade")}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="rounded-lg border">
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Grade</TableHead>
-                          <TableHead className="text-right">Avg Salary</TableHead>
-                          <TableHead className="text-right">Count</TableHead>
+                          <TableHead>{t("columnGrade")}</TableHead>
+                          <TableHead className="text-right">{t("columnAvgSalary")}</TableHead>
+                          <TableHead className="text-right">{t("columnCount")}</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -188,7 +192,7 @@ export default function AnalyticsPage() {
                           <TableRow key={row.grade_id}>
                             <TableCell className="font-medium">{row.grade_title}</TableCell>
                             <TableCell className="text-right">
-                              ${(row.avg_salary / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              ${(row.avg_salary / 100).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </TableCell>
                             <TableCell className="text-right text-muted-foreground">{row.count}</TableCell>
                           </TableRow>
@@ -202,16 +206,16 @@ export default function AnalyticsPage() {
             {benchmark.by_specialization.length > 0 && (
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">By Specialization</CardTitle>
+                  <CardTitle className="text-sm font-medium text-muted-foreground">{t("bySpecialization")}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="rounded-lg border">
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Specialization</TableHead>
-                          <TableHead className="text-right">Avg Salary</TableHead>
-                          <TableHead className="text-right">Count</TableHead>
+                          <TableHead>{t("columnSpecialization")}</TableHead>
+                          <TableHead className="text-right">{t("columnAvgSalary")}</TableHead>
+                          <TableHead className="text-right">{t("columnCount")}</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -219,7 +223,7 @@ export default function AnalyticsPage() {
                           <TableRow key={row.specialization_id}>
                             <TableCell className="font-medium">{row.specialization_title}</TableCell>
                             <TableCell className="text-right">
-                              ${(row.avg_salary / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              ${(row.avg_salary / 100).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </TableCell>
                             <TableCell className="text-right text-muted-foreground">{row.count}</TableCell>
                           </TableRow>
@@ -237,14 +241,14 @@ export default function AnalyticsPage() {
       {/* GF7: Division-Specialization Matrix */}
       {divisionMatrix && divisionMatrix.divisions.length > 0 && divisionMatrix.specializations.length > 0 && (
         <div>
-          <h2 className="text-lg font-semibold mb-3">Division-Specialization Matrix</h2>
+          <h2 className="text-lg font-semibold mb-3">{t("divisionSpecializationMatrix")}</h2>
           <Card>
             <CardContent className="pt-6">
               <div className="overflow-x-auto rounded-lg border">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="sticky left-0 bg-background">Division</TableHead>
+                      <TableHead className="sticky left-0 bg-background">{t("columnDivision")}</TableHead>
                       {divisionMatrix.specializations.map((spec) => (
                         <TableHead key={spec.id} className="text-center whitespace-nowrap">
                           {spec.title}

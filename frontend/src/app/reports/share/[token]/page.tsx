@@ -1,3 +1,5 @@
+/* eslint-disable react/jsx-no-literals -- accepted F2 debt (HRP-476): public
+   share surface for external recipients, deliberately English until localized */
 "use client";
 
 import { use, useEffect, useState } from "react";

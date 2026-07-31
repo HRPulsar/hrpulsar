@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.auth.models import User
 from app.modules.recruitment.common import (
     _FULL_ROLES,
@@ -141,9 +142,7 @@ async def update_report_template(
         )
     ).scalar_one_or_none()
     if not template:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Report template not found"
-        )
+        raise AppError("report_template_not_found", status.HTTP_404_NOT_FOUND)
 
     if data.name is not None:
         template.name = data.name
@@ -187,9 +186,7 @@ async def delete_report_template(
         )
     ).scalar_one_or_none()
     if not template:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Report template not found"
-        )
+        raise AppError("report_template_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(template)
     await db.commit()
 
@@ -275,13 +272,9 @@ async def enqueue_report(
             )
         ).scalar_one_or_none()
         if not template:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND, "Report template not found"
-            )
+            raise AppError("report_template_not_found", status.HTTP_404_NOT_FOUND)
         if not template.is_active:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, "Report template is inactive"
-            )
+            raise AppError("report_template_inactive", status.HTTP_409_CONFLICT)
         if sections is None:
             sections = list(template.sections or [])
 
@@ -376,7 +369,7 @@ async def get_report(
         )
     ).scalar_one_or_none()
     if not export:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+        raise AppError("report_not_found", status.HTTP_404_NOT_FOUND)
 
     template_name: str | None = None
     if export.template_id:
@@ -433,7 +426,7 @@ async def delete_report(
         )
     ).scalar_one_or_none()
     if not export:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+        raise AppError("report_not_found", status.HTTP_404_NOT_FOUND)
 
     file_path: str | None = None
     file_row: File | None = None
@@ -508,12 +501,9 @@ async def get_report_preview(
         )
     ).scalar_one_or_none()
     if not export:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+        raise AppError("report_not_found", status.HTTP_404_NOT_FOUND)
     if export.status != "completed" or export.file_id is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Report is not ready yet",
-        )
+        raise AppError("report_not_ready", status.HTTP_409_CONFLICT)
 
     cache_key = _preview_cache_key(tenant_id, export_id)
     redis_client = None
@@ -538,18 +528,15 @@ async def get_report_preview(
         await db.execute(select(File).where(File.id == export.file_id))
     ).scalar_one_or_none()
     if not file_row:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Report file is missing"
-        )
+        raise AppError("report_file_missing", status.HTTP_404_NOT_FOUND)
 
     from app.config import settings
     from app.core.s3 import get_s3_client
 
     client = get_s3_client()
     if client is None:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Object storage is not configured",
+        raise AppError(
+            "object_storage_not_configured", status.HTTP_503_SERVICE_UNAVAILABLE
         )
 
     import io
@@ -559,9 +546,8 @@ async def get_report_preview(
         body = obj["Body"].read()
     except Exception as exc:  # noqa: BLE001
         logger.exception("report preview: S3 fetch failed for %s", file_row.path)
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Failed to read report from object storage",
+        raise AppError(
+            "report_storage_read_failed", status.HTTP_503_SERVICE_UNAVAILABLE
         ) from exc
 
     from openpyxl import load_workbook
@@ -572,9 +558,8 @@ async def get_report_preview(
         wb = load_workbook(filename=io.BytesIO(body), read_only=True, data_only=True)
     except Exception as exc:  # noqa: BLE001
         logger.exception("report preview: openpyxl failed to parse %s", file_row.path)
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Report file is not a readable XLSX workbook",
+        raise AppError(
+            "report_file_not_readable_xlsx", status.HTTP_422_UNPROCESSABLE_ENTITY
         ) from exc
 
     try:
@@ -642,10 +627,7 @@ async def compare_candidates(
     """
 
     if not candidate_ids:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "At least one candidate id is required",
-        )
+        raise AppError("report_candidate_ids_required", status.HTTP_400_BAD_REQUEST)
     unique_ids: list[uuid.UUID] = []
     seen: set[uuid.UUID] = set()
     for cid in candidate_ids:
@@ -653,9 +635,10 @@ async def compare_candidates(
             unique_ids.append(cid)
             seen.add(cid)
     if len(unique_ids) > _MAX_COMPARISON_CANDIDATES:
-        raise HTTPException(
+        raise AppError(
+            "report_too_many_comparison_candidates",
             status.HTTP_400_BAD_REQUEST,
-            f"At most {_MAX_COMPARISON_CANDIDATES} candidates can be compared",
+            max_candidates=_MAX_COMPARISON_CANDIDATES,
         )
 
     await _get_vacancy(db, tenant_id, vacancy_id)

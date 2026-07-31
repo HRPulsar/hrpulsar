@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.models import Person
 from app.modules.company.models import Tenant
 from app.modules.recruitment.models import (
@@ -68,7 +69,7 @@ async def export_questions_pdf(
     )
     vacancy = vacancy_result.scalar_one_or_none()
     if not vacancy:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Vacancy not found")
+        raise AppError("vacancy_not_found", status.HTTP_404_NOT_FOUND)
 
     candidate_result = await db.execute(
         select(Candidate)
@@ -77,7 +78,7 @@ async def export_questions_pdf(
     )
     candidate = candidate_result.scalar_one_or_none()
     if not candidate:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate not found")
+        raise AppError("candidate_not_found", status.HTTP_404_NOT_FOUND)
 
     questions_result = await db.execute(
         select(CandidateQuestion)

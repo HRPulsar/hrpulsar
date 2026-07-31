@@ -9,10 +9,11 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError, exception_summary
 from app.modules.recruitment.common import (
     _get_vacancy,
     normalize_competence_id,
@@ -235,15 +236,14 @@ async def generate_profile_now(
     )
     for row in blocking_rows:
         if row.status == "running":
-            raise HTTPException(
+            raise AppError(
+                "profile_generation_in_progress",
                 status.HTTP_409_CONFLICT,
-                "Profile generation is already in progress for this vacancy.",
             )
         if (row.result_payload or {}).get("profile_data"):
-            raise HTTPException(
+            raise AppError(
+                "profile_awaiting_review",
                 status.HTTP_409_CONFLICT,
-                "A generated profile is awaiting review for this vacancy — "
-                "apply or discard it first.",
             )
 
     started_at = datetime.now(timezone.utc)
@@ -317,7 +317,10 @@ async def generate_profile_now(
         await db.commit()
 
     try:
-        profile_data = await generate_vacancy_profile(vacancy_data)
+        from app.modules.ai import providers as ai_providers
+
+        creds = await ai_providers.resolve_generation_target(db, tenant_id, None)
+        profile_data = await generate_vacancy_profile(vacancy_data, credentials=creds)
     except Exception as exc:  # noqa: BLE001
         import logging
 
@@ -325,16 +328,17 @@ async def generate_profile_now(
             "generate_vacancy_profile failed for %s", vacancy_id
         )
         await _mark_session_failed(str(exc))
-        raise HTTPException(
+        raise AppError(
+            "profile_generation_failed",
             status.HTTP_502_BAD_GATEWAY,
-            f"AI profile generation failed: {exc}",
+            error=exception_summary(exc),
         )
 
     if not isinstance(profile_data, dict):
         await _mark_session_failed("AI returned non-dict payload")
-        raise HTTPException(
+        raise AppError(
+            "profile_ai_invalid_payload",
             status.HTTP_502_BAD_GATEWAY,
-            "AI returned an unexpected payload (not a JSON object).",
         )
 
     # HRP-134 REDO: a single pre-write status check would only narrow,
@@ -573,12 +577,12 @@ async def apply_profile_session(
         )
     ).scalar_one_or_none()
     if session_row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Generation session not found")
+        raise AppError("profile_session_not_found", status.HTTP_404_NOT_FOUND)
     if session_row.status != "ready":
-        raise HTTPException(
+        raise AppError(
+            "profile_session_not_ready",
             status.HTTP_409_CONFLICT,
-            f"Generation session is not awaiting review "
-            f"(status: {session_row.status}).",
+            session_status=session_row.status,
         )
 
     # Same stable-UUID normalisation as save_profile (HRP-348) — the
@@ -666,10 +670,9 @@ async def save_profile(
         # on (generation applied in another tab, a concurrent edit) would
         # silently discard the newer version.
         if data.base_version is not None and data.base_version != profile.version:
-            raise HTTPException(
+            raise AppError(
+                "profile_version_conflict",
                 status.HTTP_409_CONFLICT,
-                "The profile was updated while you were editing. "
-                "Review the latest version before saving.",
             )
         profile.profile_data = data.profile_data
         profile.version = profile.version + 1

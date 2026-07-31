@@ -21,10 +21,11 @@ import uuid
 from datetime import datetime, timezone
 from statistics import median
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.recruitment.common import _get_applicable_stages
 from app.modules.recruitment.models import (
     AIAssessment,
@@ -44,7 +45,7 @@ async def vacancy_analytics(
         )
     ).scalar_one_or_none()
     if vacancy is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Vacancy not found")
+        raise AppError("vacancy_not_found", status.HTTP_404_NOT_FOUND)
 
     stages = await _get_applicable_stages(db, tenant_id, vacancy_id)
     cv_rows = (

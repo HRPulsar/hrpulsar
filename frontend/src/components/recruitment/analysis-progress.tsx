@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import type { Interview } from "@/lib/types";
 import { Check, Circle, Loader2, X } from "lucide-react";
 
@@ -49,6 +50,7 @@ function StageRow({
 }
 
 export function AnalysisProgress({ interview }: AnalysisProgressProps) {
+  const t = useTranslations("recruitment");
   const hasMedia = !!(interview.audio_file_id || interview.video_file_id);
 
   const upload: StageState = hasMedia ? "done" : "todo";
@@ -94,18 +96,18 @@ export function AnalysisProgress({ interview }: AnalysisProgressProps) {
 
   return (
     <ul className="space-y-1.5">
-      <StageRow state={upload} label="Recording upload" />
+      <StageRow state={upload} label={t("analysisProgressUpload")} />
       <StageRow
         state={transcription}
-        label="Transcription"
+        label={t("analysisProgressTranscription")}
         detail={interview.transcription_error || undefined}
       />
-      <StageRow state={diarization} label="Diarization (speaker labeling)" />
-      <StageRow state={competence} label="Competence scoring" />
-      <StageRow state={blindSpots} label="Blind spots" />
+      <StageRow state={diarization} label={t("analysisProgressDiarization")} />
+      <StageRow state={competence} label={t("analysisProgressCompetence")} />
+      <StageRow state={blindSpots} label={t("analysisProgressBlindSpots")} />
       <StageRow
         state={verdict}
-        label="Final recommendation"
+        label={t("analysisProgressVerdict")}
         detail={interview.analysis_error || undefined}
       />
     </ul>

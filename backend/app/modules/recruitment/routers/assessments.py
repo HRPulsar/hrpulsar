@@ -15,6 +15,7 @@ from fastapi import (
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
@@ -346,9 +347,9 @@ async def get_invite(
     """Public endpoint — no auth, token-based access."""
     invite = await service.get_invite_by_token(db, token)
     if not invite:
-        from fastapi import HTTPException, status
+        from fastapi import status
 
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invite not found or expired")
+        raise AppError("invite_not_found_or_expired", status.HTTP_404_NOT_FOUND)
     return invite
 
 

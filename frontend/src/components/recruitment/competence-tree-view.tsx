@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { cn, newClientId } from "@/lib/utils";
 import { useInlineEdit, inlineEditKeys } from "@/hooks/use-inline-edit";
@@ -106,17 +107,22 @@ function AddRowButton({
 // materialises it into the draft.
 function AddNameControl({
   label,
+  cancelLabel,
   placeholder,
   testId,
   onAdd,
 }: {
   label: string;
+  // Already-translated aria-label for the collapse control — the two
+  // call sites word it differently ("Cancel add group" / "…subgroup").
+  cancelLabel: string;
   placeholder: string;
   testId: string;
   // Returns false when the name is rejected (duplicate section) — the
   // form then stays open so the user can correct it instead of retyping.
   onAdd: (name: string) => boolean;
 }) {
+  const t = useTranslations("recruitment");
   const field = useInlineEdit<string>(() => "");
 
   if (!field.editing) {
@@ -153,7 +159,7 @@ function AddNameControl({
         onClick={submit}
         data-testid={`${testId}-submit`}
       >
-        Add
+        {t("competenceTreeAdd")}
       </Button>
       <Button
         type="button"
@@ -161,7 +167,7 @@ function AddNameControl({
         size="icon"
         className="size-7 text-muted-foreground"
         onClick={field.cancel}
-        aria-label={`Cancel ${label.toLowerCase()}`}
+        aria-label={cancelLabel}
       >
         <X className="size-4" />
       </Button>
@@ -195,28 +201,34 @@ interface CompetenceTreeViewProps {
   onPendingChange?: (hasPending: boolean) => void;
 }
 
-const COMPETENCE_FIELDS: { key: keyof CompetenceItem; label: string }[] = [
-  { key: "why_important", label: "Why Important" },
-  { key: "how_manifests", label: "How It Manifests" },
+// HRP-476: the wording lives in the `recruitment` i18n namespace; the
+// map only owns the field → key relation.
+const COMPETENCE_FIELDS: { key: keyof CompetenceItem; labelKey: string }[] = [
+  { key: "why_important", labelKey: "competenceTreeFieldWhyImportant" },
+  { key: "how_manifests", labelKey: "competenceTreeFieldHowManifests" },
 ];
 
 // HRP-348: also consumed by the manager-assessment sheet so criticality
 // chips render identically on the vacancy page and the candidate card.
+//
+// HRP-476: the wording lives in the `recruitment` namespace — the map
+// only owns the code -> key relation, every consumer resolves it with its
+// own `t` (vacancy profile tree + manager-assessment evaluation sheet).
 export const criticalityConfig = {
   critical: {
     className:
       "bg-[color-mix(in_oklch,var(--rec-red-flag)_15%,transparent)] text-[var(--rec-red-flag)]",
-    label: "Critical",
+    labelKey: "competenceTreeCriticalityCritical",
   },
   important: {
     className:
       "bg-[color-mix(in_oklch,var(--rec-data-partial)_15%,transparent)] text-[var(--rec-data-partial)]",
-    label: "Important",
+    labelKey: "competenceTreeCriticalityImportant",
   },
   desirable: {
     className:
       "bg-[color-mix(in_oklch,var(--rec-data-full)_15%,transparent)] text-[var(--rec-data-full)]",
-    label: "Desirable",
+    labelKey: "competenceTreeCriticalityDesirable",
   },
 } as const;
 
@@ -358,6 +370,7 @@ function CollapsibleSection({
   onDelete?: () => void;
   children: React.ReactNode;
 }) {
+  const t = useTranslations("recruitment");
   const [open, setOpen] = useState(defaultOpen);
 
   return (
@@ -377,7 +390,7 @@ function CollapsibleSection({
           <span className="flex-1">{title}</span>
           {count !== undefined && (
             <span className="text-xs text-muted-foreground">
-              {count} {count === 1 ? "competence" : "competences"}
+              {t("competenceTreeCompetenceCount", { count })}
             </span>
           )}
         </button>
@@ -388,7 +401,7 @@ function CollapsibleSection({
             size="icon"
             className="mr-2 size-7 text-muted-foreground hover:text-destructive"
             onClick={onDelete}
-            aria-label={`Delete ${title}`}
+            aria-label={t("competenceTreeDeleteSection", { title })}
           >
             <Trash2 className="size-4" />
           </Button>
@@ -450,6 +463,7 @@ function IndicatorRow({
   onChange?: (next: string) => void;
   onDelete?: () => void;
 }) {
+  const t = useTranslations("recruitment");
   if (readOnly) {
     return (
       <li className="flex items-start gap-1.5 text-sm">
@@ -473,7 +487,7 @@ function IndicatorRow({
           size="icon"
           className="size-7 text-muted-foreground hover:text-destructive"
           onClick={onDelete}
-          aria-label="Delete indicator"
+          aria-label={t("competenceTreeDeleteIndicator")}
         >
           <Trash2 className="size-4" />
         </Button>
@@ -493,6 +507,7 @@ function QuestionBlock({
   onChange?: (next: CompetenceQuestion) => void;
   onDelete?: () => void;
 }) {
+  const t = useTranslations("recruitment");
   return (
     <div className="space-y-1 rounded border p-2">
       <div className="flex items-start gap-2">
@@ -512,7 +527,7 @@ function QuestionBlock({
             size="icon"
             className="size-7 text-muted-foreground hover:text-destructive"
             onClick={onDelete}
-            aria-label="Delete question"
+            aria-label={t("competenceTreeDeleteQuestion")}
           >
             <Trash2 className="size-4" />
           </Button>
@@ -523,10 +538,10 @@ function QuestionBlock({
           (key) => {
             const label =
               key === "good_answer"
-                ? "Good"
+                ? t("competenceTreeAnswerGood")
                 : key === "acceptable_answer"
-                  ? "Acceptable"
-                  : "Poor";
+                  ? t("competenceTreeAnswerAcceptable")
+                  : t("competenceTreeAnswerPoor");
             const value = question[key] || "";
             return (
               <div key={key} className="space-y-0.5">
@@ -564,6 +579,7 @@ export function CompetenceTreeView({
   onChange,
   onPendingChange,
 }: CompetenceTreeViewProps) {
+  const t = useTranslations("recruitment");
   const items = useMemo<CompetenceItem[]>(() => {
     if (!profileData) return [];
     const competences = profileData.competences;
@@ -689,13 +705,13 @@ export function CompetenceTreeView({
         items.some((c) => groupOf(c) === name) ||
         pendingSections.some((s) => s.group === name);
       if (exists) {
-        toast.info(`Group "${name}" already exists.`);
+        toast.info(t("competenceTreeGroupExists", { name }));
         return false;
       }
       commitPending([...pendingSections, { group: name }]);
       return true;
     },
-    [items, pendingSections, commitPending],
+    [items, pendingSections, commitPending, t],
   );
 
   const addSubgroup = useCallback(
@@ -704,13 +720,13 @@ export function CompetenceTreeView({
         items.some((c) => groupOf(c) === group && subgroupOf(c) === name) ||
         pendingSections.some((s) => s.group === group && s.subgroup === name);
       if (exists) {
-        toast.info(`Subgroup "${name}" already exists in ${group}.`);
+        toast.info(t("competenceTreeSubgroupExists", { name, group }));
         return false;
       }
       commitPending([...pendingSections, { group, subgroup: name }]);
       return true;
     },
-    [items, pendingSections, commitPending],
+    [items, pendingSections, commitPending, t],
   );
 
   const addCompetence = useCallback(
@@ -756,7 +772,7 @@ export function CompetenceTreeView({
         data-testid="recruitment-profile-tree"
         className="flex items-center justify-center rounded-lg border border-dashed p-8 text-sm text-muted-foreground"
       >
-        No competency profile data available.
+        {t("competenceTreeEmpty")}
       </div>
     );
   }
@@ -859,8 +875,8 @@ export function CompetenceTreeView({
                           }
                           aria-label={
                             locked
-                              ? "Already part of the profile"
-                              : "Include in saved profile"
+                              ? t("competenceTreeLockedAria")
+                              : t("competenceTreeIncludeAria")
                           }
                           data-testid={`competence-select-${key}`}
                         />
@@ -870,7 +886,7 @@ export function CompetenceTreeView({
                           <ControlledInput
                             value={comp.name}
                             className="h-8 max-w-md text-sm font-medium"
-                            placeholder="Competence name"
+                            placeholder={t("competenceTreeNamePlaceholder")}
                             onCommit={(next) =>
                               updateCompetence(key, { name: next })
                             }
@@ -894,17 +910,17 @@ export function CompetenceTreeView({
                                 "h-7 w-auto gap-1 rounded-full border-none px-2.5 text-xs font-medium shadow-none",
                                 crit.className,
                               )}
-                              aria-label="Criticality"
+                              aria-label={t("competenceTreeCriticalityAria")}
                               data-testid={`competence-criticality-select-${key}`}
                             >
                               {/* Render the label, not the raw enum value
                                   the primitive falls back to. */}
-                              <SelectValue>{() => crit.label}</SelectValue>
+                              <SelectValue>{() => t(crit.labelKey)}</SelectValue>
                             </SelectTrigger>
                             <SelectContent>
                               {CRITICALITY_LEVELS.map((level) => (
                                 <SelectItem key={level} value={level}>
-                                  {criticalityConfig[level].label}
+                                  {t(criticalityConfig[level].labelKey)}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -916,12 +932,12 @@ export function CompetenceTreeView({
                               crit.className,
                             )}
                           >
-                            {crit.label}
+                            {t(crit.labelKey)}
                           </span>
                         )}
                         {locked && (
                           <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                            Saved
+                            {t("competenceTreeSavedChip")}
                           </span>
                         )}
                       </div>
@@ -932,7 +948,7 @@ export function CompetenceTreeView({
                           size="icon"
                           className="size-7 text-muted-foreground hover:text-destructive"
                           onClick={() => deleteCompetence(key)}
-                          aria-label="Delete competence"
+                          aria-label={t("competenceTreeDeleteCompetence")}
                           data-testid={`competence-delete-${key}`}
                         >
                           <Trash2 className="size-4" />
@@ -945,7 +961,7 @@ export function CompetenceTreeView({
                         <CompetenceFieldView
                           key={field.key}
                           value={(comp[field.key] as string) || ""}
-                          label={field.label}
+                          label={t(field.labelKey)}
                           readOnly={effectiveReadOnly || locked}
                           onChange={(v) =>
                             updateCompetence(key, { [field.key]: v })
@@ -958,7 +974,7 @@ export function CompetenceTreeView({
                       (canAddStructure && !locked)) && (
                       <div className="space-y-1">
                         <p className="text-xs font-medium text-muted-foreground">
-                          Indicators
+                          {t("competenceTreeIndicators")}
                         </p>
                         <ul className="space-y-1">
                           {indicators.map((ind, idx) => (
@@ -988,7 +1004,7 @@ export function CompetenceTreeView({
                         </ul>
                         {canAddStructure && !locked && (
                           <AddRowButton
-                            label="Add indicator"
+                            label={t("competenceTreeAddIndicator")}
                             testId={`competence-add-indicator-${key}`}
                             onClick={() =>
                               updateCompetence(key, {
@@ -1004,7 +1020,7 @@ export function CompetenceTreeView({
                       (canAddStructure && !locked)) && (
                       <div className="space-y-1">
                         <p className="text-xs font-medium text-muted-foreground">
-                          Interview questions
+                          {t("competenceTreeInterviewQuestions")}
                         </p>
                         <div className="space-y-2">
                           {questions.map((q, idx) => (
@@ -1056,7 +1072,7 @@ export function CompetenceTreeView({
                         </div>
                         {canAddStructure && !locked && (
                           <AddRowButton
-                            label="Add question"
+                            label={t("competenceTreeAddQuestion")}
                             testId={`competence-add-question-${key}`}
                             onClick={() =>
                               updateCompetence(key, {
@@ -1080,7 +1096,7 @@ export function CompetenceTreeView({
               })}
               {canAddStructure && (
                 <AddRowButton
-                  label="Add competence"
+                  label={t("competenceTreeAddCompetence")}
                   testId={`competence-add-btn-${testIdSlug(group.name)}-${testIdSlug(subgroup.name)}`}
                   onClick={() => addCompetence(group.name, subgroup.name)}
                 />
@@ -1089,8 +1105,9 @@ export function CompetenceTreeView({
           ))}
           {canAddStructure && (
             <AddNameControl
-              label="Add subgroup"
-              placeholder="Subgroup name"
+              label={t("competenceTreeAddSubgroup")}
+              cancelLabel={t("competenceTreeCancelAddSubgroup")}
+              placeholder={t("competenceTreeSubgroupNamePlaceholder")}
               testId={`competence-add-subgroup-btn-${testIdSlug(group.name)}`}
               onAdd={(name) => addSubgroup(group.name, name)}
             />
@@ -1099,8 +1116,9 @@ export function CompetenceTreeView({
       ))}
       {canAddStructure && (
         <AddNameControl
-          label="Add group"
-          placeholder="Group name"
+          label={t("competenceTreeAddGroup")}
+          cancelLabel={t("competenceTreeCancelAddGroup")}
+          placeholder={t("competenceTreeGroupNamePlaceholder")}
           testId="competence-add-group-btn"
           onAdd={addGroup}
         />

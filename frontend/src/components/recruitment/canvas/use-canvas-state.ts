@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api, ApiError } from "@/lib/api";
 import type { AssessmentConflictState, CanvasData } from "@/lib/types";
 import { toast } from "sonner";
@@ -67,6 +68,7 @@ export function useCanvasState({
   inviteToken,
   autosaveDelay = 500,
 }: UseCanvasStateOptions): UseCanvasStateResult {
+  const t = useTranslations("recruitment");
   const [data, setData] = useState<CanvasData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -118,11 +120,13 @@ export function useCanvasState({
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load canvas");
+      setError(
+        err instanceof Error ? err.message : t("canvasLoadFailed"),
+      );
     } finally {
       setLoading(false);
     }
-  }, [vacancyId, candidateVacancyId, inviteToken]);
+  }, [vacancyId, candidateVacancyId, inviteToken, t]);
 
   useEffect(() => {
     reload();
@@ -224,11 +228,7 @@ export function useCanvasState({
         }
         return next;
       });
-      toast.error(
-        `Failed to save ${failed.length} score${
-          failed.length === 1 ? "" : "s"
-        }. Please try again.`,
-      );
+      toast.error(t("canvasSaveFailedCount", { count: failed.length }));
     }
 
     if (conflicted.length > 0) {
@@ -253,12 +253,10 @@ export function useCanvasState({
         return next;
       });
       toast.warning(
-        `${conflicted.length} cell${
-          conflicted.length === 1 ? " was" : "s were"
-        } edited by someone else — resolve to continue.`,
+        t("canvasConflictToast", { count: conflicted.length }),
       );
     }
-  }, [inviteToken]);
+  }, [inviteToken, t]);
 
   const scheduleFlush = useCallback(() => {
     if (flushTimer.current) clearTimeout(flushTimer.current);

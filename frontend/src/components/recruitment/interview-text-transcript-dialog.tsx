@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Dialog,
   DialogContent,
@@ -30,12 +31,14 @@ export function InterviewTextTranscriptDialog({
   interviewId,
   onSaved,
 }: InterviewTextTranscriptDialogProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit() {
     if (!text.trim()) {
-      toast.error("Enter the transcript text");
+      toast.error(t("textTranscriptEmptyError"));
       return;
     }
     setSubmitting(true);
@@ -44,7 +47,7 @@ export function InterviewTextTranscriptDialog({
         `/recruitment/interviews/${interviewId}/transcript-text`,
         { text },
       );
-      toast.success("Transcript saved");
+      toast.success(t("textTranscriptToastSaved"));
       onSaved?.(updated);
       onOpenChange(false);
       setText("");
@@ -52,7 +55,7 @@ export function InterviewTextTranscriptDialog({
       toast.error(
         err instanceof Error
           ? err.message
-          : "Failed to save transcript",
+          : t("textTranscriptSaveFailed"),
       );
     } finally {
       setSubmitting(false);
@@ -66,23 +69,17 @@ export function InterviewTextTranscriptDialog({
         data-testid="recruitment-interview-text-transcript-dialog"
       >
         <DialogHeader>
-          <DialogTitle>Paste text transcript</DialogTitle>
-          <DialogDescription>
-            Paste the full text. Lines prefixed with
-            &ldquo;Interviewer:&rdquo; / &ldquo;Candidate:&rdquo; will be split into segments for
-            AI analysis.
-          </DialogDescription>
+          <DialogTitle>{t("interviewPasteText")}</DialogTitle>
+          <DialogDescription>{t("textTranscriptDescription")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
-          <Label htmlFor="rec-int-paste">Text</Label>
+          <Label htmlFor="rec-int-paste">{t("textTranscriptTextLabel")}</Label>
           <Textarea
             id="rec-int-paste"
             rows={14}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={
-              "Interviewer: Tell me about yourself…\nCandidate: …"
-            }
+            placeholder={t("textTranscriptPlaceholder")}
             data-testid="recruitment-interview-input-paste-text"
           />
         </div>
@@ -92,7 +89,7 @@ export function InterviewTextTranscriptDialog({
             onClick={() => onOpenChange(false)}
             disabled={submitting}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             onClick={() => void handleSubmit()}
@@ -102,12 +99,12 @@ export function InterviewTextTranscriptDialog({
             {submitting ? (
               <>
                 <Loader2 className="size-4 animate-spin" />
-                Saving…
+                {t("textTranscriptSaving")}
               </>
             ) : (
               <>
                 <Sparkles className="size-4" />
-                Save
+                {t("save")}
               </>
             )}
           </Button>

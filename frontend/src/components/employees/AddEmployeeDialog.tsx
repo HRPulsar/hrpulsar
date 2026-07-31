@@ -16,6 +16,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { Check, HelpCircle, Plus, Search, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { parseFormError } from "@/lib/form-errors";
@@ -85,7 +86,9 @@ export interface AddEmployeeDialogProps {
 interface TransferTarget {
   employeeId: string;
   display: string;
-  fromDivision: string;
+  /** `null` when the source division has no name — rendered as a
+   * translated "another division" placeholder by the confirm dialog. */
+  fromDivision: string | null;
 }
 
 const TAB_EXISTING = "existing";
@@ -111,7 +114,7 @@ export function pickTransferTargets(
       out.push({
         employeeId: emp.id,
         display,
-        fromDivision: emp.division_name?.trim() || "another division",
+        fromDivision: emp.division_name?.trim() || null,
       });
     }
   }
@@ -147,6 +150,8 @@ export function AddEmployeeDialog({
   positions,
   onRefresh,
 }: AddEmployeeDialogProps) {
+  const t = useTranslations("employees");
+  const tc = useTranslations("common");
   const { canInvite } = usePermissions();
   const [tab, setTab] = useState<string>(TAB_EXISTING);
 
@@ -231,7 +236,8 @@ export function AddEmployeeDialog({
           await api.put(`/employees/${emp.id}`, payload);
         } catch (err) {
           const display = emp.user_name?.trim() || emp.user_email || emp.id;
-          const reason = err instanceof Error ? err.message : "request failed";
+          const reason =
+            err instanceof Error ? err.message : t("requestFailed");
           errors.push(`${display}: ${reason}`);
         }
       }
@@ -243,9 +249,7 @@ export function AddEmployeeDialog({
         ? selectedEmployees.length
         : selectedEmployees.length;
       toast.success(
-        moved === 1
-          ? `Added 1 employee to ${divisionName}`
-          : `Added ${moved} employees to ${divisionName}`,
+        t("addedToDivision", { count: moved, division: divisionName }),
       );
       await onRefresh();
       onOpenChange(false);
@@ -288,8 +292,10 @@ export function AddEmployeeDialog({
       const u = availableUsers.find((x) => x.id === createUserId);
       const display = u
         ? `${u.first_name} ${u.last_name}`.trim() || u.email
-        : "Employee";
-      toast.success(`${display} created in ${divisionName}`);
+        : tc("employee");
+      toast.success(
+        t("createdInDivision", { name: display, division: divisionName }),
+      );
       await onRefresh();
       onOpenChange(false);
     } catch (err) {
@@ -306,11 +312,14 @@ export function AddEmployeeDialog({
         className="sm:max-w-2xl"
       >
         <DialogHeader>
-          <DialogTitle>Add employee</DialogTitle>
+          <DialogTitle>{t("addEmployee")}</DialogTitle>
           <DialogDescription>
-            Adding to{" "}
-            <span className="font-medium text-foreground">{divisionName}</span>
-            . Switch tabs to add an existing employee or create a new one.
+            {t.rich("addDialogDescription", {
+              division: divisionName,
+              name: (chunks) => (
+                <span className="font-medium text-foreground">{chunks}</span>
+              ),
+            })}
           </DialogDescription>
         </DialogHeader>
 
@@ -320,26 +329,26 @@ export function AddEmployeeDialog({
               value={TAB_EXISTING}
               data-testid="division-detail-modal-add-employee-tab-existing"
             >
-              Add existing
+              {t("tabAddExisting")}
             </TabsTrigger>
             <TabsTrigger
               value={TAB_NEW}
               data-testid="division-detail-modal-add-employee-tab-new"
             >
-              Create new
+              {t("tabCreateNew")}
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value={TAB_EXISTING} className="space-y-3">
             <div className="space-y-2">
-              <Label htmlFor="add-employee-search">Employees</Label>
+              <Label htmlFor="add-employee-search">{t("employees")}</Label>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   id="add-employee-search"
                   data-testid="division-detail-modal-add-employee-field-employee"
                   className="pl-8"
-                  placeholder="Search by name or email…"
+                  placeholder={t("addSearchPlaceholder")}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
@@ -351,8 +360,8 @@ export function AddEmployeeDialog({
                     className="px-2 py-3 text-center text-xs text-muted-foreground"
                   >
                     {search
-                      ? "No matches — try a different query"
-                      : "No eligible employees"}
+                      ? t("addNoMatches")
+                      : t("addNoEligibleEmployees")}
                   </li>
                 ) : (
                   candidates.map((emp) => {
@@ -411,7 +420,7 @@ export function AddEmployeeDialog({
                         {display}
                         <button
                           type="button"
-                          aria-label={`Remove ${display}`}
+                          aria-label={t("removeSelected", { name: display })}
                           className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-background/40"
                           onClick={() => toggleSelection(emp.id)}
                         >
@@ -425,7 +434,7 @@ export function AddEmployeeDialog({
             </div>
 
             <div className="space-y-2">
-              <Label>Position (optional)</Label>
+              <Label>{t("positionOptional")}</Label>
               <Select
                 value={existingPositionId}
                 onValueChange={setExistingPositionId}
@@ -438,15 +447,15 @@ export function AddEmployeeDialog({
                       serialising the raw UUID when no <SelectItem> has
                       matched the current value yet (same trap as HRP-59
                       on the division Manager picker). */}
-                  <SelectValue placeholder="Keep current position">
+                  <SelectValue placeholder={t("keepCurrentPosition")}>
                     {existingPositionId
                       ? positions.find((p) => p.id === existingPositionId)
-                          ?.title ?? "Keep current position"
-                      : "Keep current position"}
+                          ?.title ?? t("keepCurrentPosition")
+                      : t("keepCurrentPosition")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Keep current position</SelectItem>
+                  <SelectItem value="">{t("keepCurrentPosition")}</SelectItem>
                   {positions.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
                       {p.title}
@@ -460,7 +469,7 @@ export function AddEmployeeDialog({
           <TabsContent value={TAB_NEW} className="space-y-3">
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <Label htmlFor="add-employee-user">User</Label>
+                <Label htmlFor="add-employee-user">{t("user")}</Label>
                 {/* HRP-174 REDO: explain who actually appears in the list
                     (signed-up users without an employee card) so the
                     operator doesn't wonder why an invited person is
@@ -470,7 +479,7 @@ export function AddEmployeeDialog({
                     render={
                       <button
                         type="button"
-                        aria-label="Who is listed here?"
+                        aria-label={t("userPickerHelpAria")}
                         data-testid="division-detail-modal-add-employee-user-help"
                         className="inline-flex h-4 w-4 items-center justify-center text-muted-foreground hover:text-foreground"
                       />
@@ -479,10 +488,7 @@ export function AddEmployeeDialog({
                     <HelpCircle className="h-3.5 w-3.5" />
                   </TooltipTrigger>
                   <TooltipContent className="max-w-sm text-left">
-                    Users who already signed up but do not yet have an
-                    employee card. Check the Invitations page if you
-                    have access, or ask an administrator to invite
-                    them first.
+                    {t("userPickerHelp")}
                   </TooltipContent>
                 </Tooltip>
                 {canInvite ? (
@@ -497,7 +503,7 @@ export function AddEmployeeDialog({
                     onClick={() => onOpenChange(false)}
                   >
                     <Plus className="mr-1 h-3 w-3" />
-                    Invite
+                    {t("invite")}
                   </Button>
                 ) : null}
               </div>
@@ -511,7 +517,7 @@ export function AddEmployeeDialog({
                       Without explicit children the trigger renders the
                       raw user id whenever the value is set before the
                       <SelectItem> for it has mounted. */}
-                  <SelectValue placeholder="Pick an existing user">
+                  <SelectValue placeholder={t("pickExistingUser")}>
                     {(() => {
                       if (!createUserId) return undefined;
                       const u = availableUsers.find(
@@ -527,7 +533,7 @@ export function AddEmployeeDialog({
                 <SelectContent>
                   {availableUsers.length === 0 ? (
                     <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-                      No users available — invite one first
+                      {t("noUsersAvailable")}
                     </div>
                   ) : (
                     availableUsers.map((u) => {
@@ -546,7 +552,7 @@ export function AddEmployeeDialog({
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label htmlFor="add-employee-hire-date">Hire date</Label>
+                <Label htmlFor="add-employee-hire-date">{t("hireDate")}</Label>
                 <DatePicker
                   id="add-employee-hire-date"
                   data-testid="division-detail-modal-add-employee-field-hire-date"
@@ -555,7 +561,7 @@ export function AddEmployeeDialog({
                 />
               </div>
               <div className="space-y-2">
-                <Label>Division</Label>
+                <Label>{t("division")}</Label>
                 <Input
                   value={divisionName}
                   disabled
@@ -564,13 +570,13 @@ export function AddEmployeeDialog({
                   // context; surfaced as disabled input with helper text.
                 />
                 <p className="text-xs text-muted-foreground">
-                  Adding to this division
+                  {t("addingToThisDivision")}
                 </p>
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label>Position (optional)</Label>
+              <Label>{t("positionOptional")}</Label>
               <Select
                 value={createPositionId}
                 onValueChange={setCreatePositionId}
@@ -581,15 +587,15 @@ export function AddEmployeeDialog({
                 >
                   {/* HRP-174: same UUID-leak fix — without children the
                       trigger renders the raw position id. */}
-                  <SelectValue placeholder="None">
+                  <SelectValue placeholder={t("positionNone")}>
                     {createPositionId
                       ? positions.find((p) => p.id === createPositionId)
-                          ?.title ?? "None"
-                      : "None"}
+                          ?.title ?? t("positionNone")
+                      : t("positionNone")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None</SelectItem>
+                  <SelectItem value="">{t("positionNone")}</SelectItem>
                   {positions.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
                       {p.title}
@@ -613,7 +619,7 @@ export function AddEmployeeDialog({
             disabled={submitting}
             data-testid="division-detail-modal-add-employee-cancel"
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           {tab === TAB_EXISTING ? (
             <Button
@@ -622,10 +628,10 @@ export function AddEmployeeDialog({
               disabled={submitting || selectedIds.length === 0}
             >
               {submitting
-                ? "Adding…"
+                ? t("addDialogAdding")
                 : selectedIds.length > 1
-                  ? `Add ${selectedIds.length} employees`
-                  : "Add employee"}
+                  ? t("addNEmployees", { count: selectedIds.length })
+                  : t("addEmployee")}
             </Button>
           ) : (
             <Button
@@ -633,7 +639,7 @@ export function AddEmployeeDialog({
               onClick={handleCreateSubmit}
               disabled={submitting || !createUserId || !createHireDate}
             >
-              {submitting ? "Creating…" : "Create employee"}
+              {submitting ? t("addDialogCreating") : t("createEmployee")}
             </Button>
           )}
         </DialogFooter>
@@ -654,26 +660,28 @@ export function AddEmployeeDialog({
         >
           <DialogHeader>
             <DialogTitle>
-              Move{" "}
-              {transferTargets && transferTargets.length === 1
-                ? "1 employee"
-                : `${transferTargets?.length ?? 0} employees`}{" "}
-              to this division?
+              {t("transferConfirmTitle", {
+                count: transferTargets?.length ?? 0,
+              })}
             </DialogTitle>
             <DialogDescription>
-              The following employees will be moved from their current
-              divisions.
+              {t("transferConfirmDescription")}
             </DialogDescription>
           </DialogHeader>
           <ul className="space-y-1 text-sm">
-            {(transferTargets ?? []).map((t) => (
+            {(transferTargets ?? []).map((target) => (
               <li
-                key={t.employeeId}
-                data-testid={`division-detail-transfer-confirm-target-${t.employeeId}`}
+                key={target.employeeId}
+                data-testid={`division-detail-transfer-confirm-target-${target.employeeId}`}
                 className="text-muted-foreground"
               >
-                <span className="text-foreground">{t.display}</span>
-                <span> (currently in &ldquo;{t.fromDivision}&rdquo;)</span>
+                <span className="text-foreground">{target.display}</span>
+                <span>
+                  {" "}
+                  {t("transferCurrentlyIn", {
+                    division: target.fromDivision ?? t("anotherDivision"),
+                  })}
+                </span>
               </li>
             ))}
           </ul>
@@ -684,14 +692,14 @@ export function AddEmployeeDialog({
               disabled={submitting}
               data-testid="division-detail-transfer-confirm-cancel"
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={confirmTransfer}
               disabled={submitting}
               data-testid="division-detail-transfer-confirm-move"
             >
-              {submitting ? "Moving…" : "Move"}
+              {submitting ? t("addDialogMoving") : t("transferMove")}
             </Button>
           </DialogFooter>
         </DialogContent>

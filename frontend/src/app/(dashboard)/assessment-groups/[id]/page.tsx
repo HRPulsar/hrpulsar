@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Check, Pencil, Plus, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
@@ -18,6 +19,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CriteriaSummary } from "@/components/assessment/criteria-summary";
 import { Input } from "@/components/ui/input";
+import {
+  answerScaleDescription,
+  answerScaleLabel,
+  assessmentStatusTitle,
+  assessmentTypeTitle,
+  scaleOptionDescription,
+  scaleOptionLabel,
+} from "@/lib/reference-labels";
 import { scaleOptionSuffix } from "@/lib/scale-option-label";
 import {
   Select,
@@ -48,6 +57,9 @@ function isGroupDraft(group: AssessmentGroupDetail): boolean {
 
 export default function AssessmentGroupPage() {
   const { id } = useParams<{ id: string }>();
+  const t = useTranslations("assessments");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const { canManage } = usePermissions();
   const [group, setGroup] = useState<AssessmentGroupDetail | null>(null);
   const [recommendations, setRecommendations] = useState<
@@ -94,11 +106,11 @@ export default function AssessmentGroupPage() {
       }
       setRecommendations(next);
     } catch {
-      toast.error("Failed to load group");
+      toast.error(t("errorLoadGroup"));
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     load();
@@ -106,14 +118,14 @@ export default function AssessmentGroupPage() {
 
   async function saveCriteria(payload: CriteriaUpdate) {
     await api.put(`/assessment-groups/${id}/criteria`, payload);
-    toast.success("Evaluation criteria saved");
+    toast.success(t("toastCriteriaSaved"));
     await load();
   }
 
   async function saveTitle() {
     const next = titleDraft.trim();
     if (!next) {
-      toast.error("Title cannot be empty");
+      toast.error(t("errorTitleEmpty"));
       return;
     }
     setSavingTitle(true);
@@ -122,7 +134,7 @@ export default function AssessmentGroupPage() {
       setTitleEditing(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update title");
+      toast.error(err instanceof Error ? err.message : t("errorTitleUpdateFailed"));
     } finally {
       setSavingTitle(false);
     }
@@ -131,24 +143,30 @@ export default function AssessmentGroupPage() {
   async function saveScale(scaleId: string | null) {
     try {
       await api.put(`/assessment-groups/${id}/scale`, { scale_id: scaleId });
-      toast.success("Rating scale updated");
+      toast.success(t("toastRatingScaleUpdated"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save scale");
+      toast.error(err instanceof Error ? err.message : t("errorScaleSaveFailed"));
       throw err;
     }
   }
 
   if (loading) {
-    return <div className="py-12 text-center text-muted-foreground">Loading…</div>;
+    return (
+      <div className="py-12 text-center text-muted-foreground">
+        {t("loadingEllipsis")}
+      </div>
+    );
   }
   if (!group) {
     return (
       <div className="space-y-4">
         <Button variant="ghost" size="sm" render={<Link href="/assessments" />}>
-          <ArrowLeft className="mr-1 h-4 w-4" /> Back to assessments
+          <ArrowLeft className="mr-1 h-4 w-4" /> {t("backToAssessments")}
         </Button>
-        <div className="py-12 text-center text-muted-foreground">Group not found</div>
+        <div className="py-12 text-center text-muted-foreground">
+          {t("groupNotFound")}
+        </div>
       </div>
     );
   }
@@ -207,15 +225,21 @@ export default function AssessmentGroupPage() {
             </h1>
           )}
           <p className="text-sm text-muted-foreground">
-            {group.type_title ?? ""} · {group.assessment_count} employee
-            {group.assessment_count === 1 ? "" : "s"}
+            {group.type_code && group.type_title
+              ? assessmentTypeTitle(tRef, {
+                  type_code: group.type_code,
+                  type_title: group.type_title,
+                })
+              : group.type_title ?? ""}{" "}
+            ·{" "}
+            {t("employeesCount", { count: group.assessment_count })}
           </p>
         </div>
       </div>
 
       <Card data-testid="group-criteria-card">
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Evaluation criteria</CardTitle>
+          <CardTitle className="text-base">{t("evaluationCriteria")}</CardTitle>
           {canManage && isGroupDraft(group) && (
             <Button
               data-testid="group-criteria-btn-edit"
@@ -224,7 +248,7 @@ export default function AssessmentGroupPage() {
               onClick={() => setCriteriaOpen(true)}
             >
               <Pencil className="mr-1 h-4 w-4" />
-              {group.criteria_type ? "Change" : "Select"}
+              {group.criteria_type ? t("change") : t("select")}
             </Button>
           )}
         </CardHeader>
@@ -233,6 +257,8 @@ export default function AssessmentGroupPage() {
             criteriaType={group.criteria_type}
             specializationTitle={group.specialization_title}
             gradeTitle={group.grade_title}
+            specializationI18nKey={group.specialization_i18n_key}
+            gradeI18nKey={group.grade_i18n_key}
             gradeId={group.grade_id}
             competences={group.competences}
             isMassParent
@@ -242,7 +268,7 @@ export default function AssessmentGroupPage() {
 
       <Card data-testid="group-scale-card">
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Rating scale</CardTitle>
+          <CardTitle className="text-base">{t("ratingScale")}</CardTitle>
           {canManage && isGroupDraft(group) && group.scale && (
             <Button
               data-testid="group-scale-btn-change"
@@ -251,31 +277,35 @@ export default function AssessmentGroupPage() {
               onClick={() => setScaleOpen(true)}
             >
               <Pencil className="mr-1 h-4 w-4" />
-              Change
+              {t("change")}
             </Button>
           )}
         </CardHeader>
         <CardContent>
           {group.scale ? (
             <div className="space-y-2">
-              <p className="text-sm font-medium">{group.scale.title}</p>
-              {group.scale.description && (
+              <p className="text-sm font-medium">
+                {answerScaleLabel(tRef, group.scale)}
+              </p>
+              {answerScaleDescription(tRef, group.scale) && (
                 <p className="text-xs text-muted-foreground">
-                  {group.scale.description}
+                  {answerScaleDescription(tRef, group.scale)}
                 </p>
               )}
               <div className="flex flex-wrap gap-2 pt-1">
                 {[...group.scale.options]
                   .sort((a, b) => a.sort_index - b.sort_index)
                   .map((opt) => {
-                    const suffix = scaleOptionSuffix(opt, { showScore: canManage });
+                    const suffix = scaleOptionSuffix(t, opt, {
+                      showScore: canManage,
+                    });
                     return (
                       <Badge
                         key={opt.id}
                         variant="outline"
-                        title={opt.description ?? undefined}
+                        title={scaleOptionDescription(tRef, opt) ?? undefined}
                       >
-                        {opt.title}
+                        {scaleOptionLabel(tRef, opt)}
                         {suffix && (
                           <span className="ml-1 text-muted-foreground">{suffix}</span>
                         )}
@@ -287,7 +317,7 @@ export default function AssessmentGroupPage() {
           ) : (
             <div className="flex flex-col items-center gap-3 py-4 text-center">
               <p className="text-sm text-muted-foreground">
-                No rating scale assigned to this mass assessment.
+                {t("noScaleGroup")}
               </p>
               {canManage && isGroupDraft(group) && (
                 <Button
@@ -296,7 +326,7 @@ export default function AssessmentGroupPage() {
                   onClick={() => setScaleOpen(true)}
                 >
                   <Plus className="mr-1 h-4 w-4" />
-                  Add scale
+                  {t("addScale")}
                 </Button>
               )}
             </div>
@@ -306,7 +336,7 @@ export default function AssessmentGroupPage() {
 
       <Card>
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Group assessments</CardTitle>
+          <CardTitle className="text-base">{t("groupAssessments")}</CardTitle>
           {(() => {
             const gradeOptions = Object.values(recommendations).reduce(
               (acc, rec) => {
@@ -324,17 +354,17 @@ export default function AssessmentGroupPage() {
                   className="w-56"
                   data-testid="assessment-group-filter-grade"
                 >
-                  <SelectValue placeholder="All recommended grades">
+                  <SelectValue placeholder={t("allRecommendedGrades")}>
                     {(value) =>
                       !value
-                        ? "All recommended grades"
+                        ? t("allRecommendedGrades")
                         : gradeOptions.find((g) => g.id === value)?.title ??
-                          "All recommended grades"
+                          t("allRecommendedGrades")
                     }
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All recommended grades</SelectItem>
+                  <SelectItem value="">{t("allRecommendedGrades")}</SelectItem>
                   {gradeOptions.map((g) => (
                     <SelectItem key={g.id} value={g.id}>
                       {g.title}
@@ -350,9 +380,9 @@ export default function AssessmentGroupPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Recommended grade</TableHead>
+                  <TableHead>{tc("employee")}</TableHead>
+                  <TableHead>{t("status")}</TableHead>
+                  <TableHead>{t("colRecommendedGrade")}</TableHead>
                   <TableHead className="w-20" />
                 </TableRow>
               </TableHeader>
@@ -368,7 +398,9 @@ export default function AssessmentGroupPage() {
                       <TableRow key={a.id}>
                         <TableCell>{a.employee_name}</TableCell>
                         <TableCell>
-                          <Badge variant="outline">{a.status_title}</Badge>
+                          <Badge variant="outline">
+                            {assessmentStatusTitle(tRef, a)}
+                          </Badge>
                         </TableCell>
                         <TableCell
                           data-testid={`assessment-group-recommended-grade-${a.employee_id}`}
@@ -402,7 +434,7 @@ export default function AssessmentGroupPage() {
                             variant="ghost"
                             render={<Link href={`/assessments/${a.id}`} />}
                           >
-                            Open
+                            {t("open")}
                           </Button>
                         </TableCell>
                       </TableRow>

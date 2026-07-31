@@ -135,6 +135,8 @@ class PositionIndicatorRead(BaseModel):
     sort_index: int
     skill_level_id: uuid.UUID
     skill_level_title: str | None = None
+    # HRP-479: origin levels localize via reference.skillLevel.*.
+    skill_level_i18n_key: str | None = None
 
 
 class PositionCompetenceRead(BaseModel):
@@ -145,6 +147,7 @@ class PositionCompetenceRead(BaseModel):
     group_title: str | None = None
     skill_level_id: uuid.UUID
     skill_level_title: str | None = None
+    skill_level_i18n_key: str | None = None
     indicators: list[PositionIndicatorRead] = []
 
 

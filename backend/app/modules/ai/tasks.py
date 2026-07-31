@@ -66,6 +66,7 @@ async def _generate_json_with_retries(
     system: str,
     tenant_settings: Any,
     max_retries: int,
+    credentials: Any = None,
 ) -> Any:
     """Call generate_json, retrying on JSON parse errors up to max_retries times.
 
@@ -81,7 +82,10 @@ async def _generate_json_with_retries(
     for attempt in range(attempts):
         try:
             return await llm_client.generate_json(
-                prompt, system=system, tenant_settings=tenant_settings
+                prompt,
+                system=system,
+                tenant_settings=tenant_settings,
+                credentials=credentials,
             )
         except (json.JSONDecodeError, ValueError) as exc:
             last_exc = exc
@@ -106,6 +110,25 @@ async def _load_settings(
 
     async with session_factory() as db:
         return await ai_settings_service.get_or_default(db, tenant_id)
+
+
+async def _load_credentials(
+    session_factory: async_sessionmaker[AsyncSession],
+    tenant_id: uuid.UUID | None,
+    tenant_settings: Any,
+) -> Any:
+    """Resolve the tenant's BYOK/local generation target (HRP-465), or None.
+
+    Uses a short-lived session from the task's own factory — the worker
+    event loop owns it, so no cross-loop connection reuse."""
+    if tenant_id is None:
+        return None
+    from app.modules.ai import providers
+    from app.modules.ai_settings.service import get_effective_model
+
+    model = get_effective_model(tenant_settings) if tenant_settings else None
+    async with session_factory() as db:
+        return await providers.resolve_generation_target(db, tenant_id, model)
 
 
 def _retry_budget(tenant_settings: Any, fallback: int) -> int:
@@ -137,6 +160,9 @@ def generate_positions_task(
         from app.modules.position.service import _position_to_read
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
+        credentials = await _load_credentials(
+            session_factory, tenant_id, tenant_settings
+        )
 
         async with session_factory() as db:
             ctx = await service._collect_context_for_positions(db, tenant_id)
@@ -146,6 +172,7 @@ def generate_positions_task(
             ctx["prompt"],
             system=prompts.build_system_position(tenant_settings),
             tenant_settings=tenant_settings,
+            credentials=credentials,
             max_retries=_retry_budget(tenant_settings, fallback=2),
         )
         items = result if isinstance(result, list) else [result]
@@ -208,6 +235,9 @@ def suggest_pdp_task(
         from app.modules.ai import prompts, service
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
+        credentials = await _load_credentials(
+            session_factory, tenant_id, tenant_settings
+        )
 
         async with session_factory() as db:
             prompt = await service._collect_context_for_pdp(db, assessment_id)
@@ -216,6 +246,7 @@ def suggest_pdp_task(
             prompt,
             system=prompts.build_system_competence(tenant_settings),
             tenant_settings=tenant_settings,
+            credentials=credentials,
             max_retries=_retry_budget(tenant_settings, fallback=2),
         )
         items = result if isinstance(result, list) else [result]
@@ -267,6 +298,9 @@ def generate_competences_task(
         from app.modules.ai import prompts
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
+        credentials = await _load_credentials(
+            session_factory, tenant_id, tenant_settings
+        )
 
         prompt = prompts.GENERATE_COMPETENCES.format(
             specialization=specialization,
@@ -277,6 +311,7 @@ def generate_competences_task(
             prompt,
             system=prompts.build_system_competence(tenant_settings),
             tenant_settings=tenant_settings,
+            credentials=credentials,
             max_retries=_retry_budget(tenant_settings, fallback=2),
         )
         items = result if isinstance(result, list) else [result]
@@ -323,6 +358,9 @@ def generate_indicators_task(
         from app.modules.ai import prompts
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
+        credentials = await _load_credentials(
+            session_factory, tenant_id, tenant_settings
+        )
 
         prompt = prompts.GENERATE_INDICATORS.format(
             competence_title=competence_title,
@@ -332,6 +370,7 @@ def generate_indicators_task(
             prompt,
             system=prompts.build_system_competence(tenant_settings),
             tenant_settings=tenant_settings,
+            credentials=credentials,
             max_retries=_retry_budget(tenant_settings, fallback=2),
         )
         items = result if isinstance(result, list) else [result]
@@ -434,3 +473,29 @@ def batch_embed_task(self, items: list[dict]) -> dict:
         raise self.retry(exc=exc)
     finally:
         engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Model catalog refresh (HRP-466)
+# ---------------------------------------------------------------------------
+
+
+@celery.task(bind=True, max_retries=0)
+def refresh_model_catalog_task(self) -> dict[str, Any]:
+    """Daily discovery sweep over every provider with a configured key.
+
+    Core beat schedule entry ``refresh-model-catalog`` (24h) — community
+    installs with keys get fresh models without a redeploy too. Each
+    provider runs inside its own try/except: an API outage skips that
+    provider and never touches existing catalog rows.
+    """
+
+    async def _run(session_factory: async_sessionmaker[AsyncSession]) -> dict[str, Any]:
+        from app.modules.ai import model_catalog_service
+
+        async with session_factory() as db:
+            summary = await model_catalog_service.run_discovery_sweep(db)
+        logger.info("model catalog refresh: %s", summary)
+        return summary
+
+    return _run_with_async_session(_run)

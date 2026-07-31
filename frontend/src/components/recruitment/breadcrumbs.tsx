@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -25,8 +26,9 @@ function truncateLabel(label: string, max = 40): string {
 }
 
 export function RecruitmentBreadcrumbs({ segments }: RecruitmentBreadcrumbsProps) {
+  const t = useTranslations("recruitment");
   const allSegments: BreadcrumbSegment[] = [
-    { label: "Recruitment", href: "/recruitment" },
+    { label: t("breadcrumbRecruitment"), href: "/recruitment" },
     ...segments,
   ];
 

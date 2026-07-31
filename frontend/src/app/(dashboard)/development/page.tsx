@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import {
@@ -9,9 +10,10 @@ import {
   isManualBlockedPDPStatus,
   isTerminalPDPStatus,
   pdpStatusColor,
-  pdpStatusLabel,
+  translatePdpStatus,
 } from "@/lib/pdp-status";
 import { formatDate } from "@/lib/date-format";
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type {
   DictionaryItem,
   Employee,
@@ -59,6 +61,9 @@ const emptyForm = {
 };
 
 export default function DevelopmentPage() {
+  const t = useTranslations("development");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const router = useRouter();
   const [pdps, setPdps] = useState<PDP[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -81,6 +86,9 @@ export default function DevelopmentPage() {
         (s) => s.is_active || s.id === form.specialization_id,
       ),
     [specializations, form.specialization_id],
+  );
+  const selectedSpec = specializations.find(
+    (s) => s.id === form.specialization_id,
   );
 
   const [statusOpen, setStatusOpen] = useState(false);
@@ -193,15 +201,15 @@ export default function DevelopmentPage() {
 
   async function handleCreate() {
     if (!form.title.trim()) {
-      toast.error("Title is required");
+      toast.error(t("errorTitleRequired"));
       return;
     }
     if (!form.employee_id) {
-      toast.error("Employee is required");
+      toast.error(t("errorEmployeeRequired"));
       return;
     }
     if (isPastDeadline(form.deadline)) {
-      toast.error("Deadline cannot be in the past");
+      toast.error(t("errorDeadlineInPast"));
       return;
     }
     setSaving(true);
@@ -213,13 +221,13 @@ export default function DevelopmentPage() {
         grade_id: form.grade_id || null,
         deadline: form.deadline || null,
       });
-      toast.success("Development plan created");
+      toast.success(t("toastCreated"));
       setCreateOpen(false);
       setForm(emptyForm);
       setSpecGrades([]);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create");
+      toast.error(err instanceof Error ? err.message : t("errorCreateFailed"));
     } finally {
       setSaving(false);
     }
@@ -236,17 +244,19 @@ export default function DevelopmentPage() {
     setSaving(true);
     try {
       await api.post(`/pdp/${statusTarget.id}/status`, { status_code: newStatus });
-      toast.success("Status updated");
+      toast.success(t("toastStatusUpdated"));
       setStatusOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update status");
+      toast.error(
+        err instanceof Error ? err.message : t("errorStatusUpdateFailed"),
+      );
     } finally {
       setSaving(false);
     }
   }
 
-  if (loading) return <div className="py-12 text-center text-muted-foreground">Loading...</div>;
+  if (loading) return <div className="py-12 text-center text-muted-foreground">{tc("loading")}</div>;
 
   const filters = { searchQuery, filterStatuses };
   // HRP-222: list order — active first (by Created desc), then Done by
@@ -258,14 +268,14 @@ export default function DevelopmentPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight" data-testid="development-heading">Development Plans</h1>
+          <h1 className="text-2xl font-semibold tracking-tight" data-testid="development-heading">{t("title")}</h1>
           {/* HRP-290: counter respects active filters (Assessments parity). */}
-          <p className="text-sm text-muted-foreground" data-testid="development-count">{filtered.length} plan{filtered.length !== 1 ? "s" : ""}</p>
+          <p className="text-sm text-muted-foreground" data-testid="development-count">{t("plansCount", { count: filtered.length })}</p>
         </div>
         {canManage && (
           <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="development-btn-create">
             <Plus className="mr-1 h-4 w-4" />
-            Create plan
+            {t("createPlan")}
           </Button>
         )}
       </div>
@@ -277,7 +287,7 @@ export default function DevelopmentPage() {
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             data-testid="development-input-search"
-            placeholder="Search by title..."
+            placeholder={t("searchPlaceholder")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8"
@@ -285,10 +295,13 @@ export default function DevelopmentPage() {
         </div>
         <MultiSelectFilter
           data-testid="development-multi-statuses"
-          options={PDP_STATUS_OPTIONS.map((s) => ({ value: s, label: pdpStatusLabel(s) }))}
+          options={PDP_STATUS_OPTIONS.map((s) => ({
+            value: s,
+            label: translatePdpStatus(t, s),
+          }))}
           value={filterStatuses}
           onChange={setFilterStatuses}
-          placeholder="All statuses"
+          placeholder={t("allStatuses")}
           className="w-40"
         />
         {filtersActive && (
@@ -299,15 +312,15 @@ export default function DevelopmentPage() {
             onClick={() => { setSearchQuery(""); setFilterStatuses([]); }}
           >
             <X className="mr-1 h-3 w-3" />
-            Clear
+            {t("clear")}
           </Button>
         )}
       </div>
 
       {pdps.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="development-empty">No development plans yet</div>
+        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="development-empty">{t("empty")}</div>
       ) : filtered.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="development-empty-filtered">No development plans match the filters</div>
+        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="development-empty-filtered">{t("emptyFiltered")}</div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="development-table">
           {filtered.map((p) => {
@@ -321,14 +334,14 @@ export default function DevelopmentPage() {
                       <Link href={`/development/${p.id}`} className="hover:underline" onClick={(e) => e.stopPropagation()} data-testid={`development-row-${p.id}-title`}>{p.title}</Link>
                     </CardTitle>
                     <div className="flex items-center gap-1">
-                      <Badge variant="secondary" className={pdpStatusColor(p.status)} data-testid={`development-row-${p.id}-status`}>{pdpStatusLabel(p.status)}</Badge>
+                      <Badge variant="secondary" className={pdpStatusColor(p.status)} data-testid={`development-row-${p.id}-status`}>{translatePdpStatus(t, p.status)}</Badge>
                       {showActions && (
                         <DropdownMenu>
                           <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" data-testid={`development-row-${p.id}-actions`} />}>
                             <MoreHorizontal className="h-4 w-4" />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => openStatus(p)}>Change status</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => openStatus(p)}>{t("changeStatus")}</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       )}
@@ -350,7 +363,7 @@ export default function DevelopmentPage() {
                       />
                     )}
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Progress</span>
+                      <span className="text-muted-foreground">{t("progress")}</span>
                       <span className="font-medium">{p.total_progress}%</span>
                     </div>
                     <div className="h-2 rounded-full bg-muted" data-testid={`development-row-${p.id}-progress`}>
@@ -363,13 +376,19 @@ export default function DevelopmentPage() {
                     {(() => {
                       if (p.status === "done" || p.status === "cancelled") {
                         if (!p.finished_at) return null;
-                        const label = p.status === "done" ? "Completed at" : "Cancelled at";
+                        const label =
+                          p.status === "done"
+                            ? t("completedAt")
+                            : t("cancelledAt");
                         return (
                           <p
                             className="text-xs text-muted-foreground"
                             data-testid={`development-row-${p.id}-finished-at`}
                           >
-                            {label}: {formatDate(p.finished_at)}
+                            {t("rowDateLabeled", {
+                              label,
+                              date: formatDate(p.finished_at),
+                            })}
                           </p>
                         );
                       }
@@ -378,7 +397,10 @@ export default function DevelopmentPage() {
                           className={`text-xs ${deadlineOverdue ? "font-medium text-destructive" : "text-muted-foreground"}`}
                           data-testid={`development-row-${p.id}-deadline`}
                         >
-                          Deadline: {formatDate(p.deadline)}
+                          {t("rowDateLabeled", {
+                            label: t("deadline"),
+                            date: formatDate(p.deadline),
+                          })}
                         </p>
                       ) : null;
                     })()}
@@ -393,23 +415,23 @@ export default function DevelopmentPage() {
       {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Create development plan</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t("createTitle")}</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Title</Label>
+              <Label>{t("fieldTitle")}</Label>
               <Input
                 data-testid="development-create-title"
                 value={form.title}
                 onChange={(e) => setForm({ ...form, title: e.target.value })}
-                placeholder="e.g. Senior Backend growth plan"
+                placeholder={t("titlePlaceholder")}
                 maxLength={100}
               />
             </div>
             <div className="space-y-2">
-              <Label>Employee</Label>
+              <Label>{tc("employee")}</Label>
               <Select value={form.employee_id} onValueChange={(val) => handleEmployeeChange(val ?? "")}>
                 <SelectTrigger className="w-full" data-testid="development-create-employee">
-                  <SelectValue placeholder="Select employee">
+                  <SelectValue placeholder={t("selectEmployee")}>
                     {(() => { const emp = employees.find((e) => e.id === form.employee_id); return emp ? (emp.user_name?.trim() || emp.user_email || emp.position_title) : undefined; })()}
                   </SelectValue>
                 </SelectTrigger>
@@ -421,25 +443,27 @@ export default function DevelopmentPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Development specialization</Label>
+              <Label>{t("fieldSpecialization")}</Label>
               <Select
                 value={form.specialization_id}
                 onValueChange={(val) => handleSpecializationChange(val ?? "")}
               >
                 <SelectTrigger className="w-full" data-testid="development-create-specialization">
-                  <SelectValue placeholder="No specialization">
-                    {specializations.find((s) => s.id === form.specialization_id)?.title}
+                  <SelectValue placeholder={t("noSpecialization")}>
+                    {selectedSpec ? dictionaryItemLabel(tRef, selectedSpec) : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {specOptions.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.title}</SelectItem>
+                    <SelectItem key={s.id} value={s.id}>
+                      {dictionaryItemLabel(tRef, s)}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Development grade</Label>
+              <Label>{t("fieldGrade")}</Label>
               {/* HRP-293: disabled until a specialization is chosen;
                   options are the specialization's configured grades. */}
               <Select
@@ -451,22 +475,29 @@ export default function DevelopmentPage() {
                   <SelectValue
                     placeholder={
                       form.specialization_id
-                        ? "No grade"
-                        : "Select specialization first"
+                        ? t("noGrade")
+                        : t("selectSpecializationFirst")
                     }
                   >
-                    {specGrades.find((g) => g.id === form.grade_id)?.title}
+                    {(() => {
+                      const g = specGrades.find((x) => x.id === form.grade_id);
+                      return g
+                        ? dictionaryItemLabel(tRef, { ...g, type: "grade" })
+                        : undefined;
+                    })()}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {specGrades.map((g) => (
-                    <SelectItem key={g.id} value={g.id}>{g.title}</SelectItem>
+                    <SelectItem key={g.id} value={g.id}>
+                      {dictionaryItemLabel(tRef, { ...g, type: "grade" })}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Deadline</Label>
+              <Label>{t("deadline")}</Label>
               {/* HRP-335: shared DatePicker (HRP-152) instead of the
                   native date input. */}
               <DatePicker
@@ -476,13 +507,13 @@ export default function DevelopmentPage() {
                 data-testid="development-create-deadline"
               />
               {isPastDeadline(form.deadline) && (
-                <p className="text-xs text-destructive">Deadline cannot be in the past</p>
+                <p className="text-xs text-destructive">{t("errorDeadlineInPast")}</p>
               )}
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={saving}>{saving ? "Creating..." : "Create"}</Button>
+            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>{tc("cancel")}</Button>
+            <Button onClick={handleCreate} disabled={saving}>{saving ? t("creating") : t("create")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -492,12 +523,12 @@ export default function DevelopmentPage() {
           fires when the owner ticks an item from ``Sent``. */}
       <Dialog open={statusOpen} onOpenChange={setStatusOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Change status</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t("changeStatus")}</DialogTitle></DialogHeader>
           <div className="space-y-2">
-            <Label>New status</Label>
+            <Label>{t("newStatus")}</Label>
             <Select value={newStatus} onValueChange={setNewStatus}>
               <SelectTrigger className="w-full" data-testid="development-change-status-select">
-                <SelectValue>{newStatus ? pdpStatusLabel(newStatus) : undefined}</SelectValue>
+                <SelectValue>{newStatus ? translatePdpStatus(t, newStatus) : undefined}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {PDP_STATUS_OPTIONS.map((s) => {
@@ -510,7 +541,7 @@ export default function DevelopmentPage() {
                       data-testid={`development-change-status-option-${s}`}
                     >
                       <span className="inline-flex items-center gap-1.5">
-                        {pdpStatusLabel(s)}
+                        {translatePdpStatus(t, s)}
                         {manualBlocked && (
                           // HRP-197 REDO: hover the (i) icon to see why
                           // the option is greyed out. The disabled
@@ -523,7 +554,7 @@ export default function DevelopmentPage() {
                                 <span
                                   className="pointer-events-auto inline-flex"
                                   data-testid={`development-change-status-option-${s}-info`}
-                                  aria-label="Manual transition is not allowed"
+                                  aria-label={t("manualTransitionNotAllowed")}
                                   onPointerDown={(e) => e.stopPropagation()}
                                   onClick={(e) => e.preventDefault()}
                                 />
@@ -532,7 +563,7 @@ export default function DevelopmentPage() {
                               <Info className="h-3 w-3 text-muted-foreground" />
                             </TooltipTrigger>
                             <TooltipContent>
-                              Manual transition is not allowed
+                              {t("manualTransitionNotAllowed")}
                             </TooltipContent>
                           </Tooltip>
                         )}
@@ -547,17 +578,17 @@ export default function DevelopmentPage() {
                 className="text-xs text-muted-foreground"
                 data-testid="development-change-status-blocked-hint"
               >
-                Manual transition is not allowed
+                {t("manualTransitionNotAllowed")}
               </p>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setStatusOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setStatusOpen(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button
               onClick={handleStatus}
               disabled={saving || isManualBlockedPDPStatus(newStatus)}
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>

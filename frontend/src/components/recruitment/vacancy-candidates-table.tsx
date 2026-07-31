@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -160,6 +161,8 @@ export function VacancyCandidatesTable({
   reloadToken,
   onRowCountChange,
 }: VacancyCandidatesTableProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [rows, setRows] = useState<CandidateVacancyEnrichedRow[]>([]);
   const [stages, setStages] = useState<VacancyStage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -189,12 +192,14 @@ export function VacancyCandidatesTable({
       onRowCountChange?.(list.length);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to load candidates",
+        err instanceof Error
+          ? err.message
+          : t("candidatesTableLoadFailed"),
       );
     } finally {
       setLoading(false);
     }
-  }, [vacancyId, onRowCountChange]);
+  }, [vacancyId, onRowCountChange, t]);
 
   useEffect(() => {
     load();
@@ -213,21 +218,23 @@ export function VacancyCandidatesTable({
           { headers: { "If-Match": `W/"${row.version}"` } },
         );
         setRows((prev) => prev.map((r) => (r.id === row.id ? updated : r)));
-        toast.success(`Moved to ${targetStage.name}`);
+        toast.success(
+          t("candidatesTableToastMovedTo", { stage: targetStage.name }),
+        );
       } catch (err) {
         const msg =
           err instanceof ApiError && err.status === 412
-            ? "Candidate row changed since load — reloading."
+            ? t("candidatesTableRowChanged")
             : err instanceof Error
               ? err.message
-              : "Failed to change stage";
+              : t("candidatesTableStageChangeFailed");
         toast.error(msg);
         if (err instanceof ApiError && err.status === 412) {
           load();
         }
       }
     },
-    [load],
+    [load, t],
   );
 
   const onStageSelected = useCallback(
@@ -259,15 +266,19 @@ export function VacancyCandidatesTable({
       await api.delete(`/recruitment/candidate-vacancies/${deleting.cvId}`);
       setRows((prev) => prev.filter((r) => r.id !== deleting.cvId));
       onRowCountChange?.(rows.length - 1);
-      toast.success(`Removed ${deleting.candidateName} from this vacancy`);
+      toast.success(
+        t("candidatesTableToastRemoved", { name: deleting.candidateName }),
+      );
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to remove candidate",
+        err instanceof Error
+          ? err.message
+          : t("candidatesTableRemoveFailed"),
       );
     } finally {
       setDeleting(null);
     }
-  }, [deleting, onRowCountChange, rows.length]);
+  }, [deleting, onRowCountChange, rows.length, t]);
 
   const pendingCandidate = useMemo(
     () => (pending ? rows.find((r) => r.id === pending.cvId) : null),
@@ -383,7 +394,8 @@ export function VacancyCandidatesTable({
         className="flex items-center justify-center py-8 text-sm text-muted-foreground"
         data-testid="vacancy-candidates-table-loading"
       >
-        <Loader2 className="mr-2 size-4 animate-spin" /> Loading candidates...
+        <Loader2 className="mr-2 size-4 animate-spin" />{" "}
+        {t("candidatesTableLoading")}
       </div>
     );
   }
@@ -394,8 +406,7 @@ export function VacancyCandidatesTable({
         className="py-6 text-center text-sm text-muted-foreground"
         data-testid="vacancy-candidates-table-empty"
       >
-        No candidates yet. Use Add candidate to upload resumes or enter someone
-        manually.
+        {t("candidatesTableEmpty")}
       </p>
     );
   }
@@ -427,17 +438,38 @@ export function VacancyCandidatesTable({
         <table className="min-w-[1200px] w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-medium">Candidate</th>
-              <th className="px-3 py-2 font-medium">Last position</th>
-              <th className="px-3 py-2 text-right font-medium">Exp.</th>
-              <th className="px-3 py-2 font-medium">Stage</th>
-              <th className="px-3 py-2 text-center font-medium">Manager</th>
-              <th className="px-3 py-2 text-center font-medium">AI</th>
-              <th className="px-3 py-2 text-center font-medium">Divergence</th>
-              <th className="px-3 py-2 text-center font-medium">AI data</th>
-              <th className="px-3 py-2 font-medium">AI verdict</th>
-              <th className="px-3 py-2 text-right font-medium">Added</th>
-              <th className="px-3 py-2 text-right font-medium" aria-label="Actions" />
+              <th className="px-3 py-2 font-medium">{tc("candidate")}</th>
+              <th className="px-3 py-2 font-medium">
+                {t("candidatesTableColLastPosition")}
+              </th>
+              <th className="px-3 py-2 text-right font-medium">
+                {t("candidatesTableColExp")}
+              </th>
+              <th className="px-3 py-2 font-medium">
+                {t("candidatesTableColStage")}
+              </th>
+              <th className="px-3 py-2 text-center font-medium">
+                {t("candidatesTableColManager")}
+              </th>
+              <th className="px-3 py-2 text-center font-medium">
+                {t("candidatesTableColAi")}
+              </th>
+              <th className="px-3 py-2 text-center font-medium">
+                {t("candidatesTableColDivergence")}
+              </th>
+              <th className="px-3 py-2 text-center font-medium">
+                {t("candidatesTableColAiData")}
+              </th>
+              <th className="px-3 py-2 font-medium">
+                {t("candidatesTableColAiVerdict")}
+              </th>
+              <th className="px-3 py-2 text-right font-medium">
+                {t("candidatesTableColAdded")}
+              </th>
+              <th
+                className="px-3 py-2 text-right font-medium"
+                aria-label={t("columnActions")}
+              />
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -482,11 +514,16 @@ export function VacancyCandidatesTable({
         }}
         title={
           pending
-            ? `Move ${pendingCandidate?.candidate_name ?? "candidate"} to ${pending.targetStage.name}?`
+            ? t("candidatesTableMoveTitle", {
+                name:
+                  pendingCandidate?.candidate_name ??
+                  t("candidatesTableCandidateFallback"),
+                stage: pending.targetStage.name,
+              })
             : ""
         }
-        description="This is a terminal stage. The candidate will leave the active funnel."
-        confirmLabel="Move"
+        description={t("candidatesTableTerminalDescription")}
+        confirmLabel={t("candidatesTableConfirmMove")}
         destructive={pending?.targetStage.stage_type === "terminal_negative"}
         onConfirm={confirmTerminal}
         testId="vacancy-stage-terminal-confirm-modal"
@@ -498,11 +535,13 @@ export function VacancyCandidatesTable({
         }}
         title={
           deleting
-            ? `Remove ${deleting.candidateName} from this vacancy?`
+            ? t("candidatesTableRemoveTitle", {
+                name: deleting.candidateName,
+              })
             : ""
         }
-        description="The candidate stays in the system. Only the link to this vacancy is removed."
-        confirmLabel="Remove"
+        description={t("candidatesTableRemoveDescription")}
+        confirmLabel={t("candidatesTableConfirmRemove")}
         destructive
         onConfirm={confirmDelete}
         testId="vacancy-candidate-delete-confirm-modal"
@@ -528,6 +567,7 @@ function Row({
   onDelete,
   aiScoreView,
 }: RowProps) {
+  const t = useTranslations("recruitment");
   const stageTone = stageToneFor(row.stage);
   const divergent = row.score_divergence;
   return (
@@ -561,12 +601,12 @@ function Row({
             className={cn("min-w-[140px] border", stageTone)}
             data-testid={`vacancy-candidates-row-${row.id}-stage-select`}
           >
-            <SelectValue placeholder="Set stage">
+            <SelectValue placeholder={t("candidatesTableSetStage")}>
               {/* HRP-181 REDO #2: render the stage name, not the raw uuid */}
               {(value) =>
                 stages.find((s) => s.id === value)?.name ??
                 row.stage?.name ??
-                "Set stage"
+                t("candidatesTableSetStage")
               }
             </SelectValue>
           </SelectTrigger>
@@ -651,7 +691,9 @@ function Row({
           type="button"
           onClick={() => onDelete(row.id, row.candidate_name)}
           className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-          aria-label={`Remove ${row.candidate_name} from this vacancy`}
+          aria-label={t("candidatesTableRemoveAria", {
+            name: row.candidate_name,
+          })}
           data-testid={`vacancy-candidates-row-${row.id}-delete-btn`}
         >
           <Trash2 className="size-4" />
@@ -678,6 +720,7 @@ function MobileCard({
   onDelete,
   aiScoreView,
 }: MobileCardProps) {
+  const t = useTranslations("recruitment");
   const stageTone = stageToneFor(row.stage);
   return (
     <div
@@ -704,7 +747,9 @@ function MobileCard({
       </div>
       <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
         <div>
-          <p className="uppercase tracking-wide">Exp</p>
+          <p className="uppercase tracking-wide">
+            {t("candidatesTableMobileExp")}
+          </p>
           <p className="text-foreground tabular-nums">
             {row.years_of_experience !== null
               ? `${row.years_of_experience}y`
@@ -712,7 +757,9 @@ function MobileCard({
           </p>
         </div>
         <div>
-          <p className="uppercase tracking-wide">Manager</p>
+          <p className="uppercase tracking-wide">
+            {t("candidatesTableColManager")}
+          </p>
           <p className="text-foreground tabular-nums">
             {row.manager_score !== null ? row.manager_score.toFixed(1) : "—"}
           </p>
@@ -724,7 +771,9 @@ function MobileCard({
           </p>
         </div>
         <div>
-          <p className="uppercase tracking-wide">AI</p>
+          <p className="uppercase tracking-wide">
+            {t("candidatesTableColAi")}
+          </p>
           <p
             className="text-foreground tabular-nums"
             data-testid={`vacancy-candidates-mobile-row-${row.id}-ai-score-value`}
@@ -754,11 +803,11 @@ function MobileCard({
             className={cn("border", stageTone)}
             data-testid={`vacancy-candidates-mobile-row-${row.id}-stage-select`}
           >
-            <SelectValue placeholder="Set stage">
+            <SelectValue placeholder={t("candidatesTableSetStage")}>
               {(value) =>
                 stages.find((s) => s.id === value)?.name ??
                 row.stage?.name ??
-                "Set stage"
+                t("candidatesTableSetStage")
               }
             </SelectValue>
           </SelectTrigger>
@@ -786,7 +835,9 @@ function MobileCard({
           type="button"
           onClick={() => onDelete(row.id, row.candidate_name)}
           className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-          aria-label={`Remove ${row.candidate_name} from this vacancy`}
+          aria-label={t("candidatesTableRemoveAria", {
+            name: row.candidate_name,
+          })}
           data-testid={`vacancy-candidates-mobile-row-${row.id}-delete-btn`}
         >
           <Trash2 className="size-4" />
@@ -841,30 +892,33 @@ function SortButton<TValue extends string>({
 }
 
 function SortControl({ sortBy, sortDir, onChange }: SortControlProps) {
+  const t = useTranslations("recruitment");
   const selectBy = (next: SortBy) => onChange(next, sortDir);
   return (
     <div
       className="flex flex-wrap items-center gap-2 px-1 pb-2 text-xs"
       data-testid="vacancy-candidates-sort-control"
     >
-      <span className="text-muted-foreground">Sort by:</span>
+      <span className="text-muted-foreground">
+        {t("candidatesTableSortBy")}
+      </span>
       <SortButton
         value="manager"
-        label="By Manager"
+        label={t("candidatesTableSortByManager")}
         testid="vacancy-candidates-sort-by-manager"
         active={sortBy === "manager"}
         onSelect={selectBy}
       />
       <SortButton
         value="ai"
-        label="By AI"
+        label={t("candidatesTableSortByAi")}
         testid="vacancy-candidates-sort-by-ai"
         active={sortBy === "ai"}
         onSelect={selectBy}
       />
       <SortButton
         value="custom"
-        label="Custom"
+        label={t("candidatesTableSortCustom")}
         testid="vacancy-candidates-sort-custom"
         active={sortBy === "custom"}
         onSelect={selectBy}
@@ -876,7 +930,7 @@ function SortControl({ sortBy, sortDir, onChange }: SortControlProps) {
         }
         disabled={sortBy === "custom"}
         className="ml-1 inline-flex size-7 items-center justify-center rounded-md border text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
-        aria-label={`Toggle sort direction (currently ${sortDir})`}
+        aria-label={t("candidatesTableSortDirAria", { dir: sortDir })}
         data-testid="vacancy-candidates-sort-dir-toggle"
       >
         {sortBy === "custom" ? (
@@ -898,22 +952,25 @@ interface AiScoreViewToggleProps {
 }
 
 function AiScoreViewToggle({ view, onChange }: AiScoreViewToggleProps) {
+  const t = useTranslations("recruitment");
   return (
     <div
       className="flex flex-wrap items-center gap-2 px-1 pb-2 text-xs"
       data-testid="vacancy-candidates-ai-score-view-toggle"
     >
-      <span className="text-muted-foreground">AI score:</span>
+      <span className="text-muted-foreground">
+        {t("candidatesTableAiScore")}
+      </span>
       <SortButton<AiScoreView>
         value="raw"
-        label="Raw"
+        label={t("candidatesTableAiScoreRaw")}
         testid="vacancy-candidates-ai-score-view-raw"
         active={view === "raw"}
         onSelect={onChange}
       />
       <SortButton<AiScoreView>
         value="normalized"
-        label="Normalized"
+        label={t("candidatesTableAiScoreNormalized")}
         testid="vacancy-candidates-ai-score-view-normalized"
         active={view === "normalized"}
         onSelect={onChange}
@@ -928,6 +985,7 @@ interface DivergenceBadgeProps {
 }
 
 function DivergenceBadge({ row, vacancyId }: DivergenceBadgeProps) {
+  const t = useTranslations("recruitment");
   const count = row.divergence_count ?? 0;
   if (count === 0) {
     return (
@@ -942,14 +1000,20 @@ function DivergenceBadge({ row, vacancyId }: DivergenceBadgeProps) {
   const tooltipLines = (row.divergence_top ?? []).map((c) => {
     const m = c.manager_score === null ? "—" : c.manager_score.toFixed(1);
     const ai = c.ai_score === null ? "—" : c.ai_score.toFixed(1);
-    return `${c.competence_name}: M ${m} vs AI ${ai}`;
+    return t("candidatesTableDivergenceLine", {
+      name: c.competence_name,
+      manager: m,
+      ai,
+    });
   });
   const tooltipText =
     tooltipLines.length === 0
-      ? `${count} divergent competence${count === 1 ? "" : "s"}`
+      ? t("candidatesTableDivergentCount", { count })
       : tooltipLines.join("\n") +
         (count > tooltipLines.length
-          ? `\n…and ${count - tooltipLines.length} more`
+          ? `\n${t("candidatesTableDivergenceMore", {
+              count: count - tooltipLines.length,
+            })}`
           : "");
   // Canvas page does not consume ?focus / ?filter yet — wiring those
   // params is its own ticket. For now the badge opens the plain Canvas
@@ -959,7 +1023,7 @@ function DivergenceBadge({ row, vacancyId }: DivergenceBadgeProps) {
       href={`/recruitment/requisitions/${vacancyId}/canvas`}
       title={tooltipText}
       data-testid={`vacancy-candidates-row-${row.id}-divergence-badge`}
-      aria-label={`${count} divergent competences — open Canvas`}
+      aria-label={t("candidatesTableDivergenceAria", { count })}
     >
       <Badge className="border-amber-400 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-200">
         <AlertTriangle className="mr-1 size-3" />
@@ -987,6 +1051,7 @@ function BulkAnalyzeBar({
   eligibleRows,
   onDone,
 }: BulkAnalyzeBarProps) {
+  const t = useTranslations("recruitment");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -1006,16 +1071,16 @@ function BulkAnalyzeBar({
       const queued = res.queued.length;
       const failed = res.failed.length;
       if (failed > 0) {
-        toast(`Queued ${queued}, ${failed} skipped (see candidate cards).`);
+        toast(t("candidatesTableBulkQueuedPartial", { queued, failed }));
       } else {
-        toast.success(`Queued resume-only analysis for ${queued} candidate(s).`);
+        toast.success(t("candidatesTableBulkQueued", { count: queued }));
       }
       onDone();
     } catch (err) {
       toast.error(
         err instanceof ApiError
           ? err.message
-          : "Failed to start bulk analysis",
+          : t("candidatesTableBulkFailed"),
       );
     } finally {
       setBusy(false);
@@ -1029,9 +1094,12 @@ function BulkAnalyzeBar({
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-amber-700" aria-hidden />
           <span>
-            <span className="font-medium">{eligibleRows.length}</span>{" "}
-            candidate{eligibleRows.length === 1 ? "" : "s"} have a parsed
-            resume but no AI analysis yet.
+            {t.rich("candidatesTableBulkBanner", {
+              count: eligibleRows.length,
+              strong: (chunks) => (
+                <span className="font-medium">{chunks}</span>
+              ),
+            })}
           </span>
         </div>
         <button
@@ -1046,15 +1114,19 @@ function BulkAnalyzeBar({
           ) : (
             <Sparkles className="size-3.5" aria-hidden />
           )}
-          Bulk analyze ({totalCost} cr)
+          {t("candidatesTableBulkAnalyzeBtn", { cost: totalCost })}
         </button>
       </div>
       <ConfirmDialog
         open={open}
         onOpenChange={setOpen}
-        title="Bulk resume-only analysis"
-        description={`Will start resume-only analysis for ${eligibleRows.length} candidate(s) at ${AI_ANALYSIS_PRICING.resume_only} cr each = ${totalCost} cr total.`}
-        confirmLabel="Run analysis"
+        title={t("candidatesTableBulkTitle")}
+        description={t("candidatesTableBulkDescription", {
+          count: eligibleRows.length,
+          price: AI_ANALYSIS_PRICING.resume_only,
+          total: totalCost,
+        })}
+        confirmLabel={t("candidatesTableBulkConfirm")}
         onConfirm={confirm}
         testId="vacancy-candidates-bulk-analyze-modal"
       />

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Interview, InterviewSegment } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,8 @@ export function TranscriptViewer({
   onSeek,
   onSegmentChange,
 }: TranscriptViewerProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [editingSegId, setEditingSegId] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
   const [draftSpeaker, setDraftSpeaker] = useState("");
@@ -85,12 +88,12 @@ export function TranscriptViewer({
           speaker: draftSpeaker,
         },
       );
-      toast.success("Segment updated");
+      toast.success(t("transcriptViewerToastSegmentUpdated"));
       onSegmentChange?.(updated);
       cancelEdit();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save",
+        err instanceof Error ? err.message : t("transcriptViewerSaveFailed"),
       );
     } finally {
       setSaving(false);
@@ -102,7 +105,7 @@ export function TranscriptViewer({
       return (
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground">
-            Transcript without diarization (not split into segments).
+            {t("transcriptViewerNoDiarization")}
           </p>
           <div className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-sm">
             {interview.transcript}
@@ -113,8 +116,8 @@ export function TranscriptViewer({
     return (
       <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
         {interview.transcription_status === "processing"
-          ? "Transcription in progress. This takes 1–5 minutes."
-          : "Transcript has not been generated yet."}
+          ? t("transcriptViewerTranscribing")
+          : t("transcriptViewerEmpty")}
       </div>
     );
   }
@@ -148,7 +151,7 @@ export function TranscriptViewer({
                   type="button"
                   onClick={() => onSeek(seg.start_sec)}
                   className="font-mono text-muted-foreground hover:text-foreground hover:underline"
-                  title="Jump to timestamp"
+                  title={t("transcriptViewerJumpToTimestamp")}
                 >
                   {formatTime(seg.start_sec)}
                 </button>
@@ -159,7 +162,7 @@ export function TranscriptViewer({
                   size="icon-sm"
                   className="opacity-0 transition-opacity group-hover:opacity-100"
                   onClick={() => startEdit(seg)}
-                  aria-label="Edit segment"
+                  aria-label={t("transcriptViewerEditSegment")}
                 >
                   <Pencil className="size-3.5" />
                 </Button>
@@ -170,7 +173,7 @@ export function TranscriptViewer({
                     size="icon-sm"
                     onClick={cancelEdit}
                     disabled={saving}
-                    aria-label="Cancel"
+                    aria-label={tc("cancel")}
                   >
                     <X className="size-3.5" />
                   </Button>
@@ -179,7 +182,7 @@ export function TranscriptViewer({
                     size="icon-sm"
                     onClick={() => saveEdit(seg)}
                     disabled={saving}
-                    aria-label="Save"
+                    aria-label={t("save")}
                   >
                     <Save className="size-3.5" />
                   </Button>
@@ -192,7 +195,7 @@ export function TranscriptViewer({
                   className="h-7 w-full rounded border border-input bg-transparent px-2 text-xs"
                   value={draftSpeaker}
                   onChange={(e) => setDraftSpeaker(e.target.value)}
-                  placeholder="Speaker"
+                  placeholder={t("transcriptViewerSpeakerPlaceholder")}
                 />
                 <Textarea
                   rows={3}

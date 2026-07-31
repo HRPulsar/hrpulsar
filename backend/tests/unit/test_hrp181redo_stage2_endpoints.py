@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from app.core.errors import AppError
 from app.modules.recruitment import service
 from app.modules.recruitment.models import (
     Candidate,
@@ -128,7 +129,7 @@ class TestManualAdd:
         )
 
         vacancy2 = await _make_vacancy(db, tenant.id, user.id, "V2")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(AppError) as exc:
             await service.add_candidate_to_vacancy_manual(
                 db,
                 tenant.id,
@@ -140,8 +141,10 @@ class TestManualAdd:
                 ),
             )
         assert exc.value.status_code == 409
-        assert exc.value.detail["code"] == "candidate_email_conflict"
-        assert "existing_candidate_id" in exc.value.detail
+        # i18n F3: the object-shaped detail is rendered by the handler from
+        # ``code`` + ``detail_extra``; the wire shape is unchanged.
+        assert exc.value.code == "candidate_email_conflict"
+        assert "existing_candidate_id" in exc.value.detail_extra
 
     async def test_duplicate_against_archived_is_allowed(
         self, db: AsyncSession, tenant, user

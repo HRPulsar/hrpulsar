@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import {
   Dialog,
   DialogContent,
@@ -41,12 +42,15 @@ export function ConfirmDialog({
   description,
   onConfirm,
   loading,
-  confirmLabel = "Delete",
+  confirmLabel,
   loadingLabel,
   confirmVariant = "destructive",
   children,
   confirmDisabled,
 }: ConfirmDialogProps) {
+  const t = useTranslations("common");
+  const resolvedConfirmLabel = confirmLabel ?? t("delete");
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md" data-testid="confirm-dialog">
@@ -62,7 +66,7 @@ export function ConfirmDialog({
             disabled={loading}
             data-testid="confirm-dialog-btn-cancel"
           >
-            Cancel
+            {t("cancel")}
           </Button>
           <Button
             variant={confirmVariant}
@@ -71,8 +75,8 @@ export function ConfirmDialog({
             data-testid="confirm-dialog-btn-confirm"
           >
             {loading
-              ? (loadingLabel ?? `${confirmLabel}...`)
-              : confirmLabel}
+              ? (loadingLabel ?? `${resolvedConfirmLabel}...`)
+              : resolvedConfirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

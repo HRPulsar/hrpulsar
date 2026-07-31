@@ -1,9 +1,9 @@
 """EMP1: PUT /auth/me strict allowlist.
 
-`UserUpdate` has `extra='forbid'` and only `first_name` / `last_name` are
-written by `update_profile`. Privileged fields (status, role_code,
-is_active, email, tenant_id, id) must never be settable through this
-endpoint. Sending them yields a 422.
+`UserUpdate` has `extra='forbid'` and only `first_name` / `last_name` /
+`language` (i18n F0) are written by `update_profile`. Privileged fields
+(status, role_code, is_active, email, tenant_id, id) must never be
+settable through this endpoint. Sending them yields a 422.
 """
 
 import pytest

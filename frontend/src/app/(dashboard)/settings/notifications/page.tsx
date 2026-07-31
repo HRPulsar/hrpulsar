@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Notification } from "@/lib/types";
 import { formatDateTime } from "@/lib/date-format";
@@ -32,6 +33,8 @@ const statusColors: Record<string, string> = {
 };
 
 export default function NotificationsPage() {
+  const t = useTranslations("settings");
+  const tc = useTranslations("common");
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -54,9 +57,9 @@ export default function NotificationsPage() {
     try {
       await api.post("/notifications/mark-read", {});
       setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
-      toast.success("All notifications marked as read");
+      toast.success(t("notifAllRead"));
     } catch {
-      toast.error("Failed to mark notifications as read");
+      toast.error(t("notifMarkReadFailed"));
     }
   }
 
@@ -74,37 +77,45 @@ export default function NotificationsPage() {
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
   if (loading) {
-    return <div className="flex items-center justify-center py-12 text-muted-foreground">Loading...</div>;
+    return (
+      <div className="flex items-center justify-center py-12 text-muted-foreground">
+        {tc("loading")}
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Notifications</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {tc("notifications")}
+          </h1>
           <p className="text-sm text-muted-foreground">
-            {notifications.length} notification{notifications.length !== 1 ? "s" : ""}
-            {unreadCount > 0 && ` (${unreadCount} unread)`}
+            {t("notifCount", { count: notifications.length })}
+            {unreadCount > 0 && ` ${t("notifUnread", { count: unreadCount })}`}
           </p>
         </div>
         {unreadCount > 0 && (
           <Button size="sm" variant="outline" onClick={markAllRead}>
             <CheckCheck className="mr-1 h-4 w-4" />
-            Mark all read
+            {tc("markAllRead")}
           </Button>
         )}
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>All notifications</CardTitle>
-          <CardDescription>Your notification history</CardDescription>
+          <CardTitle>{t("notifAllTitle")}</CardTitle>
+          <CardDescription>{t("notifHistoryDescription")}</CardDescription>
         </CardHeader>
         <CardContent>
           {notifications.length === 0 ? (
             <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-12 text-center">
               <Bell className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">No notifications yet</p>
+              <p className="text-sm text-muted-foreground">
+                {t("notifEmpty")}
+              </p>
             </div>
           ) : (
             <div className="rounded-lg border">
@@ -112,9 +123,9 @@ export default function NotificationsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8" />
-                    <TableHead>Message</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Date</TableHead>
+                    <TableHead>{t("notifColMessage")}</TableHead>
+                    <TableHead>{t("notifColStatus")}</TableHead>
+                    <TableHead>{t("notifColDate")}</TableHead>
                     <TableHead className="w-20" />
                   </TableRow>
                 </TableHeader>
@@ -128,7 +139,9 @@ export default function NotificationsPage() {
                       </TableCell>
                       <TableCell>
                         <p className={`text-sm ${n.is_read ? "" : "font-medium"}`}>
-                          {(n.context?.title as string) || (n.context?.message as string) || "Notification"}
+                          {(n.context?.title as string) ||
+                            (n.context?.message as string) ||
+                            tc("notification")}
                         </p>
                         {typeof n.context?.description === "string" && (
                           <p className="mt-0.5 text-xs text-muted-foreground">
@@ -151,7 +164,7 @@ export default function NotificationsPage() {
                             variant="ghost"
                             onClick={() => markRead([n.id])}
                           >
-                            Read
+                            {t("notifRead")}
                           </Button>
                         )}
                       </TableCell>
@@ -167,36 +180,42 @@ export default function NotificationsPage() {
       {/* Email settings */}
       <Card>
         <CardHeader>
-          <CardTitle>Email notifications</CardTitle>
-          <CardDescription>
-            Configure which notifications you receive by email
-          </CardDescription>
+          <CardTitle>{t("notifEmailTitle")}</CardTitle>
+          <CardDescription>{t("notifEmailDescription")}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium">Assessment assigned</p>
-                <p className="text-xs text-muted-foreground">Get notified when an assessment is assigned to you</p>
+                <p className="text-sm font-medium">
+                  {t("notifAssessmentAssigned")}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {t("notifAssessmentAssignedHint")}
+                </p>
               </div>
-              <Badge variant="secondary">Enabled</Badge>
+              <Badge variant="secondary">{t("notifEnabled")}</Badge>
             </div>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium">PDP deadline reminder</p>
-                <p className="text-xs text-muted-foreground">Receive reminders about upcoming PDP deadlines</p>
+                <p className="text-sm font-medium">{t("notifPdpReminder")}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t("notifPdpReminderHint")}
+                </p>
               </div>
-              <Badge variant="secondary">Enabled</Badge>
+              <Badge variant="secondary">{t("notifEnabled")}</Badge>
             </div>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium">Exam invitation</p>
-                <p className="text-xs text-muted-foreground">Get notified when assigned to an exam</p>
+                <p className="text-sm font-medium">{t("notifExamInvitation")}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t("notifExamInvitationHint")}
+                </p>
               </div>
-              <Badge variant="secondary">Enabled</Badge>
+              <Badge variant="secondary">{t("notifEnabled")}</Badge>
             </div>
             <p className="text-xs text-muted-foreground pt-2">
-              Email notification preferences will be configurable in a future update.
+              {t("notifEmailFuture")}
             </p>
           </div>
         </CardContent>

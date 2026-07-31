@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { api } from "@/lib/api";
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type {
   DictionaryItem,
   Division,
@@ -60,18 +62,21 @@ import { formatDate } from "@/lib/date-format";
 import { isPastDeadline, todayLocalISO } from "@/lib/deadline";
 import {
   STATUS_CHIP_COLOR,
-  STATUS_LABELS,
   statusLabel,
 } from "../status";
 
+// HRP-476: the wording lives in the `exams` i18n namespace — this map only
+// owns the code → key relation (mirrors `lib/assessment-status.ts`).
 const questionTypes = [
-  { value: "single_choice", label: "Single choice" },
-  { value: "multiple_choice", label: "Multiple choice" },
-  { value: "essay", label: "Essay" },
+  { value: "single_choice", labelKey: "typeSingleChoice" },
+  { value: "multiple_choice", labelKey: "typeMultipleChoice" },
+  { value: "essay", labelKey: "typeEssay" },
 ];
 
-const questionTypeLabel = (code: string) =>
-  questionTypes.find((t) => t.value === code)?.label ?? code;
+const questionTypeLabel = (t: (key: string) => string, code: string) => {
+  const match = questionTypes.find((qt) => qt.value === code);
+  return match ? t(match.labelKey) : code;
+};
 
 interface OptionForm {
   title: string;
@@ -79,6 +84,9 @@ interface OptionForm {
 }
 
 export default function ExamDetailPage() {
+  const t = useTranslations("exams");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const { id } = useParams<{ id: string }>();
   const [exam, setExam] = useState<MassExamDetail | null>(null);
   const [results, setResults] = useState<ExamResult[]>([]);
@@ -120,6 +128,9 @@ export default function ExamDetailPage() {
   const [filterDivision, setFilterDivision] = useState("");
   const [filterPosition, setFilterPosition] = useState("");
   const [filterSpecialization, setFilterSpecialization] = useState("");
+  const selectedFilterSpec = filterSpecialization
+    ? specializations.find((s) => s.id === filterSpecialization)
+    : undefined;
 
   // Deadline edit
   const [deadlineOpen, setDeadlineOpen] = useState(false);
@@ -156,11 +167,11 @@ export default function ExamDetailPage() {
       setExam(detail);
       setResults(resultsData);
     } catch {
-      toast.error("Failed to load exam");
+      toast.error(t("errorLoadExam"));
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     load();
@@ -170,10 +181,12 @@ export default function ExamDetailPage() {
     setSaving(true);
     try {
       await api.post(`/mass-exams/${id}/status`, { status_code: status });
-      toast.success(`Status changed to ${STATUS_LABELS[status] ?? status}`);
+      toast.success(
+        t("toastStatusChanged", { status: statusLabel(t, status) }),
+      );
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
     }
@@ -183,7 +196,7 @@ export default function ExamDetailPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      toast.error("Please select an image file");
+      toast.error(t("errorSelectImage"));
       return;
     }
     setQImageUploading(true);
@@ -191,7 +204,9 @@ export default function ExamDetailPage() {
       const res = await api.upload<{ id: string; original_name: string; url: string }>("/files/upload", file);
       setQImage({ id: res.id, name: res.original_name, url: res.url || "" });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to upload image");
+      toast.error(
+        err instanceof Error ? err.message : t("errorImageUploadFailed"),
+      );
     } finally {
       setQImageUploading(false);
       e.target.value = "";
@@ -227,14 +242,14 @@ export default function ExamDetailPage() {
               sort_index: i,
             })),
       });
-      toast.success("Question added");
+      toast.success(t("toastQuestionAdded"));
       setQOpen(false);
       setQForm({ title: "", description: "", question_type: "single_choice", weight: 1 });
       setOptions([{ title: "", is_correct: false }, { title: "", is_correct: false }]);
       setQImage(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
     }
@@ -264,17 +279,17 @@ export default function ExamDetailPage() {
       };
       if (pmEditingId) {
         await api.patch(`/mass-exams/${id}/pass-marks/${pmEditingId}`, payload);
-        toast.success("Pass mark updated");
+        toast.success(t("toastPassMarkUpdated"));
       } else {
         await api.post(`/mass-exams/${id}/pass-marks`, payload);
-        toast.success("Pass mark added");
+        toast.success(t("toastPassMarkAdded"));
       }
       setPmOpen(false);
       setPmEditingId(null);
       setPmForm({ min_score_percent: "", min_score_points: "" });
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
     }
@@ -284,10 +299,10 @@ export default function ExamDetailPage() {
     setSaving(true);
     try {
       await api.delete(`/mass-exams/${id}/pass-marks/${passMarkId}`);
-      toast.success("Pass mark removed");
+      toast.success(t("toastPassMarkRemoved"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
     }
@@ -341,11 +356,13 @@ export default function ExamDetailPage() {
       setEmployees(data.items);
     } catch (err) {
       if (seq !== assignReqSeq.current) return;
-      toast.error(err instanceof Error ? err.message : "Failed to load employees");
+      toast.error(
+        err instanceof Error ? err.message : t("errorLoadEmployees"),
+      );
     } finally {
       if (seq === assignReqSeq.current) setEmployeesLoading(false);
     }
-  }, [filterDivision, filterPosition, filterSpecialization]);
+  }, [filterDivision, filterPosition, filterSpecialization, t]);
 
   useEffect(() => {
     if (assignOpen) void loadAssignEmployees();
@@ -417,19 +434,19 @@ export default function ExamDetailPage() {
   async function assignEmployees() {
     const ids = Array.from(selectedEmployeeIds);
     if (ids.length === 0) {
-      toast.error("Select at least one employee");
+      toast.error(t("errorSelectEmployee"));
       return;
     }
     setSaving(true);
     try {
       await api.post(`/mass-exams/${id}/employees`, ids);
-      toast.success("Employees assigned");
+      toast.success(t("toastEmployeesAssigned"));
       setAssignOpen(false);
       setSelectedEmployeeIds(new Set());
       setEmployeeFilter("");
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
     }
@@ -466,17 +483,17 @@ export default function ExamDetailPage() {
   async function saveTitle() {
     const trimmed = titleDraft.trim();
     if (!trimmed) {
-      toast.error("Title is required");
+      toast.error(t("errorTitleRequired"));
       return;
     }
     setSaving(true);
     try {
       await api.patch(`/mass-exams/${id}`, { title: trimmed });
-      toast.success("Title updated");
+      toast.success(t("toastTitleUpdated"));
       setTitleOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
     }
@@ -493,11 +510,11 @@ export default function ExamDetailPage() {
       await api.patch(`/mass-exams/${id}`, {
         description: descDraft.trim() || null,
       });
-      toast.success("Description updated");
+      toast.success(t("toastDescriptionUpdated"));
       setDescOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
     }
@@ -534,7 +551,7 @@ export default function ExamDetailPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      toast.error("Please select an image file");
+      toast.error(t("errorSelectImage"));
       return;
     }
     setQEditImageUploading(true);
@@ -542,7 +559,9 @@ export default function ExamDetailPage() {
       const res = await api.upload<{ id: string; original_name: string; url: string }>("/files/upload", file);
       setQEditImage({ id: res.id, name: res.original_name, url: res.url || "" });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to upload image");
+      toast.error(
+        err instanceof Error ? err.message : t("errorImageUploadFailed"),
+      );
     } finally {
       setQEditImageUploading(false);
       e.target.value = "";
@@ -599,11 +618,11 @@ export default function ExamDetailPage() {
               sort_index: i,
             })),
       });
-      toast.success("Question updated");
+      toast.success(t("toastQuestionUpdated"));
       closeQuestionEditor();
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
     }
@@ -614,11 +633,11 @@ export default function ExamDetailPage() {
     setSaving(true);
     try {
       await api.delete(`/mass-exams/${id}/questions/${qDeleteId}`);
-      toast.success("Question removed");
+      toast.success(t("toastQuestionRemoved"));
       setQDeleteId(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
     }
@@ -631,7 +650,7 @@ export default function ExamDetailPage() {
 
   async function saveDeadline() {
     if (deadlineDraft && isPastDeadline(deadlineDraft)) {
-      toast.error("Deadline cannot be in the past");
+      toast.error(t("errorDeadlineInPast"));
       return;
     }
     setSaving(true);
@@ -639,18 +658,18 @@ export default function ExamDetailPage() {
       await api.patch(`/mass-exams/${id}`, {
         ended_at: deadlineDraft ? new Date(deadlineDraft).toISOString() : null,
       });
-      toast.success("Deadline updated");
+      toast.success(t("toastDeadlineUpdated"));
       setDeadlineOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
     }
   }
 
   if (loading) {
-    return <div className="flex items-center justify-center py-12 text-muted-foreground">Loading...</div>;
+    return <div className="flex items-center justify-center py-12 text-muted-foreground">{tc("loading")}</div>;
   }
 
   if (!exam) {
@@ -658,9 +677,9 @@ export default function ExamDetailPage() {
       <div className="space-y-4">
         <Button variant="ghost" size="sm" render={<Link href="/exams" />}>
           <ArrowLeft className="mr-1 h-4 w-4" />
-          Back to exams
+          {t("backToExams")}
         </Button>
-        <div className="py-12 text-center text-muted-foreground">Exam not found</div>
+        <div className="py-12 text-center text-muted-foreground">{t("notFound")}</div>
       </div>
     );
   }
@@ -672,26 +691,38 @@ export default function ExamDetailPage() {
   const canEditQuestions = exam.status === "draft";
 
   // HRP-236 task 3: per-status action buttons in Details.
-  const actionButtons: { code: string; label: string; disabled?: boolean; hint?: string }[] = [];
+  // HRP-476: ``testId`` stays an English literal — data-testid must not be
+  // derived from a translated label.
+  const actionButtons: {
+    code: string;
+    testId: string;
+    label: string;
+    disabled?: boolean;
+    hint?: string;
+  }[] = [];
   if (exam.status === "draft") {
     const missing: string[] = [];
-    if (exam.questions.length === 0) missing.push("add a question");
-    if (exam.assigned_count === 0) missing.push("assign an employee");
+    if (exam.questions.length === 0) missing.push(t("sendMissingQuestion"));
+    if (exam.assigned_count === 0) missing.push(t("sendMissingEmployee"));
     // HRP-237 redo: a past deadline does NOT disable Send — same as
     // Assessments / Development plans, the click surfaces the backend
     // "Deadline in the past" error while the date itself renders red.
     actionButtons.push({
       code: "sent",
-      label: "send",
+      testId: "send",
+      label: t("actionSend"),
       disabled: missing.length > 0,
-      hint: missing.length > 0 ? `To send: ${missing.join(", ")}` : undefined,
+      hint:
+        missing.length > 0
+          ? t("sendHint", { missing: missing.join(", ") })
+          : undefined,
     });
-    actionButtons.push({ code: "cancelled", label: "cancel" });
+    actionButtons.push({ code: "cancelled", testId: "cancel", label: t("actionCancel") });
   } else if (exam.status === "sent") {
-    actionButtons.push({ code: "cancelled", label: "cancel" });
+    actionButtons.push({ code: "cancelled", testId: "cancel", label: t("actionCancel") });
   } else if (exam.status === "in_progress") {
-    actionButtons.push({ code: "done", label: "complete" });
-    actionButtons.push({ code: "cancelled", label: "cancel" });
+    actionButtons.push({ code: "done", testId: "complete", label: t("actionComplete") });
+    actionButtons.push({ code: "cancelled", testId: "cancel", label: t("actionCancel") });
   }
 
   return (
@@ -709,7 +740,7 @@ export default function ExamDetailPage() {
                 type="button"
                 onClick={openTitleEditor}
                 className="text-muted-foreground hover:text-foreground"
-                aria-label="Edit title"
+                aria-label={t("editTitle")}
                 data-testid="exam-title-edit"
               >
                 <Pencil className="h-4 w-4" />
@@ -723,7 +754,7 @@ export default function ExamDetailPage() {
             ) : (
               canEditMeta && (
                 <span className="italic" data-testid="exam-description-empty">
-                  No description yet
+                  {t("noDescriptionYet")}
                 </span>
               )
             )}
@@ -732,7 +763,7 @@ export default function ExamDetailPage() {
                 type="button"
                 onClick={openDescriptionEditor}
                 className="text-muted-foreground hover:text-foreground"
-                aria-label="Edit description"
+                aria-label={t("editDescription")}
                 data-testid="exam-description-edit"
               >
                 <Pencil className="h-3 w-3" />
@@ -741,33 +772,33 @@ export default function ExamDetailPage() {
           </p>
         </div>
         <Badge variant="secondary" className={STATUS_CHIP_COLOR[exam.status] || ""}>
-          {statusLabel(exam.status)}
+          {statusLabel(t, exam.status)}
         </Badge>
       </div>
 
       {/* Info */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Details</CardTitle>
+          <CardTitle className="text-base">{t("details")}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
             <div>
-              <p className="text-muted-foreground">Status</p>
+              <p className="text-muted-foreground">{t("colStatus")}</p>
               <Badge variant="secondary" className={STATUS_CHIP_COLOR[exam.status] || ""}>
-                {statusLabel(exam.status)}
+                {statusLabel(t, exam.status)}
               </Badge>
             </div>
             <div>
-              <p className="text-muted-foreground">Questions</p>
+              <p className="text-muted-foreground">{t("questions")}</p>
               <p className="font-medium">{exam.questions.length}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Assigned</p>
+              <p className="text-muted-foreground">{t("colAssigned")}</p>
               <p className="font-medium">{exam.assigned_count}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Created</p>
+              <p className="text-muted-foreground">{t("dateCreated")}</p>
               <p className="font-medium">{formatDate(exam.created_at)}</p>
             </div>
             {/* HRP-233 task 2: terminal exams show Completed / Cancelled +
@@ -776,21 +807,21 @@ export default function ExamDetailPage() {
             <div>
               {exam.status === "done" ? (
                 <>
-                  <p className="text-muted-foreground">Completed</p>
+                  <p className="text-muted-foreground">{t("dateCompleted")}</p>
                   <p className="font-medium" data-testid="exam-finished-at">
                     {exam.finished_at ? formatDate(exam.finished_at) : "—"}
                   </p>
                 </>
               ) : exam.status === "cancelled" ? (
                 <>
-                  <p className="text-muted-foreground">Cancelled</p>
+                  <p className="text-muted-foreground">{t("dateCancelled")}</p>
                   <p className="font-medium" data-testid="exam-finished-at">
                     {exam.finished_at ? formatDate(exam.finished_at) : "—"}
                   </p>
                 </>
               ) : (
                 <>
-                  <p className="text-muted-foreground">Deadline</p>
+                  <p className="text-muted-foreground">{t("fieldDeadline")}</p>
                   <p className="flex items-center gap-1.5 font-medium">
                     {exam.ended_at ? (
                       <span
@@ -806,7 +837,7 @@ export default function ExamDetailPage() {
                       type="button"
                       onClick={openDeadlineEditor}
                       className="text-muted-foreground hover:text-foreground"
-                      aria-label="Edit deadline"
+                      aria-label={t("editDeadline")}
                       data-testid="exam-deadline-edit"
                     >
                       <Pencil className="h-3 w-3" />
@@ -825,7 +856,7 @@ export default function ExamDetailPage() {
                 onClick={() => changeStatus(btn.code)}
                 disabled={saving || btn.disabled}
                 title={btn.hint}
-                data-testid={`exam-btn-${btn.label}`}
+                data-testid={`exam-btn-${btn.testId}`}
               >
                 {btn.code === "sent" && <Send className="mr-1 h-4 w-4" />}
                 {btn.label}
@@ -833,7 +864,7 @@ export default function ExamDetailPage() {
             ))}
             {exam.status === "draft" && (
               <Button size="sm" variant="outline" onClick={openAssignDialog}>
-                Assign employees
+                {t("assignEmployees")}
               </Button>
             )}
           </div>
@@ -843,17 +874,17 @@ export default function ExamDetailPage() {
       {/* Questions */}
       <Card>
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Questions</CardTitle>
+          <CardTitle className="text-base">{t("questions")}</CardTitle>
           {exam.status === "draft" && (
             <Button size="sm" variant="outline" onClick={() => setQOpen(true)}>
               <Plus className="mr-1 h-4 w-4" />
-              Add question
+              {t("addQuestion")}
             </Button>
           )}
         </CardHeader>
         <CardContent>
           {exam.questions.length === 0 ? (
-            <p className="py-4 text-center text-sm text-muted-foreground">No questions yet</p>
+            <p className="py-4 text-center text-sm text-muted-foreground">{t("noQuestions")}</p>
           ) : (
             <div className="space-y-3">
               {exam.questions
@@ -879,11 +910,11 @@ export default function ExamDetailPage() {
                         )}
                         {q.image_url && (
                           // eslint-disable-next-line @next/next/no-img-element -- dynamic user-uploaded image
-                          <img src={q.image_url} alt="Question image" className="mt-2 max-h-48 rounded-md border" />
+                          <img src={q.image_url} alt={t("questionImageAlt")} className="mt-2 max-h-48 rounded-md border" />
                         )}
                         <div className="mt-1 flex gap-1">
-                          <Badge variant="outline" className="text-[10px]">{questionTypeLabel(q.question_type)}</Badge>
-                          <Badge variant="outline" className="text-[10px]">weight: {q.weight}</Badge>
+                          <Badge variant="outline" className="text-[10px]">{questionTypeLabel(t, q.question_type)}</Badge>
+                          <Badge variant="outline" className="text-[10px]">{t("weightBadge", { weight: q.weight })}</Badge>
                         </div>
                         {q.options.length > 0 && (
                           <div className="mt-2 space-y-1">
@@ -903,7 +934,7 @@ export default function ExamDetailPage() {
                             size="icon-xs"
                             variant="ghost"
                             onClick={() => openQuestionEditor(q)}
-                            aria-label="Edit question"
+                            aria-label={t("editQuestion")}
                             data-testid={`exam-question-${q.id}-edit`}
                           >
                             <Pencil className="h-3.5 w-3.5" />
@@ -912,7 +943,7 @@ export default function ExamDetailPage() {
                             size="icon-xs"
                             variant="ghost"
                             onClick={() => setQDeleteId(q.id)}
-                            aria-label="Delete question"
+                            aria-label={t("deleteQuestion")}
                             data-testid={`exam-question-${q.id}-delete`}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -930,18 +961,18 @@ export default function ExamDetailPage() {
       {/* Pass mark (HRP-226: at most one) */}
       <Card>
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Pass Mark</CardTitle>
+          <CardTitle className="text-base">{t("passMark")}</CardTitle>
           {/* HRP-226 redo: pass mark editable on any non-terminal exam. */}
           {!hasPassMark && !isTerminal && (
             <Button size="sm" variant="outline" onClick={openPassMarkAdd} data-testid="exam-passmark-add">
               <Plus className="mr-1 h-4 w-4" />
-              Add
+              {t("add")}
             </Button>
           )}
         </CardHeader>
         <CardContent>
           {!hasPassMark ? (
-            <p className="py-4 text-center text-sm text-muted-foreground">No pass mark configured (default: 60%)</p>
+            <p className="py-4 text-center text-sm text-muted-foreground">{t("noPassMark")}</p>
           ) : (
             <div className="space-y-2">
               {exam.pass_marks.map((pm) => (
@@ -952,13 +983,29 @@ export default function ExamDetailPage() {
                 >
                   <div className="flex items-center gap-4">
                     {pm.min_score_percent != null && (
-                      <span>Min score: <span className="font-medium">{pm.min_score_percent}%</span></span>
+                      <span>
+                        {t.rich("passMarkMinScore", {
+                          value: pm.min_score_percent,
+                          strong: (chunks) => (
+                            <span className="font-medium">{chunks}</span>
+                          ),
+                        })}
+                      </span>
                     )}
                     {pm.min_score_points != null && (
-                      <span>Min points: <span className="font-medium">{pm.min_score_points}</span></span>
+                      <span>
+                        {t.rich("passMarkMinPoints", {
+                          value: pm.min_score_points,
+                          strong: (chunks) => (
+                            <span className="font-medium">{chunks}</span>
+                          ),
+                        })}
+                      </span>
                     )}
                     {pm.grade_id && (
-                      <Badge variant="outline" className="text-xs">grade: {pm.grade_id.slice(0, 8)}</Badge>
+                      <Badge variant="outline" className="text-xs">
+                        {t("passMarkGradeBadge", { grade: pm.grade_id.slice(0, 8) })}
+                      </Badge>
                     )}
                   </div>
                   {!isTerminal && (
@@ -967,7 +1014,7 @@ export default function ExamDetailPage() {
                         size="icon-xs"
                         variant="ghost"
                         onClick={() => openPassMarkEdit(pm)}
-                        aria-label="Edit pass mark"
+                        aria-label={t("editPassMark")}
                         data-testid="exam-passmark-edit"
                       >
                         <Pencil className="h-3.5 w-3.5" />
@@ -976,7 +1023,7 @@ export default function ExamDetailPage() {
                         size="icon-xs"
                         variant="ghost"
                         onClick={() => deletePassMark(pm.id)}
-                        aria-label="Remove pass mark"
+                        aria-label={t("removePassMark")}
                         data-testid="exam-passmark-delete"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -993,26 +1040,26 @@ export default function ExamDetailPage() {
       {/* Results */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Results</CardTitle>
+          <CardTitle className="text-base">{t("results")}</CardTitle>
         </CardHeader>
         <CardContent>
           {results.length === 0 ? (
-            <p className="py-4 text-center text-sm text-muted-foreground">No results yet</p>
+            <p className="py-4 text-center text-sm text-muted-foreground">{t("noResults")}</p>
           ) : (
             <div className="rounded-lg border">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Employee</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Score</TableHead>
-                    <TableHead>Result</TableHead>
-                    <TableHead>Finished</TableHead>
+                    <TableHead>{tc("employee")}</TableHead>
+                    <TableHead>{t("colStatus")}</TableHead>
+                    <TableHead>{t("colScore")}</TableHead>
+                    <TableHead>{t("colResult")}</TableHead>
+                    <TableHead>{t("colFinished")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {results.map((r) => {
-                    const display = r.employee_name ?? "Unknown";
+                    const display = r.employee_name ?? tc("unknown");
                     return (
                       <TableRow key={r.id}>
                         <TableCell className="text-sm">
@@ -1045,12 +1092,18 @@ export default function ExamDetailPage() {
                             variant="secondary"
                             className={STATUS_CHIP_COLOR[r.status] ?? "bg-muted text-muted-foreground"}
                           >
-                            {statusLabel(r.status)}
+                            {statusLabel(t, r.status)}
                           </Badge>
                         </TableCell>
                         <TableCell>
                           {r.score != null && r.max_score != null ? (
-                            <span className="font-medium">{r.score}/{r.max_score} ({Math.round(r.score / r.max_score * 100)}%)</span>
+                            <span className="font-medium">
+                              {t("scoreWithPercent", {
+                                score: r.score,
+                                max: r.max_score,
+                                percent: Math.round((r.score / r.max_score) * 100),
+                              })}
+                            </span>
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
@@ -1058,12 +1111,12 @@ export default function ExamDetailPage() {
                         <TableCell>
                           {r.passed === true && (
                             <span className="inline-flex items-center gap-1 text-sm text-green-700">
-                              <CheckCircle2 className="h-4 w-4" /> Passed
+                              <CheckCircle2 className="h-4 w-4" /> {t("resultPassed")}
                             </span>
                           )}
                           {r.passed === false && (
                             <span className="inline-flex items-center gap-1 text-sm text-red-600">
-                              <XCircle className="h-4 w-4" /> Failed
+                              <XCircle className="h-4 w-4" /> {t("resultFailed")}
                             </span>
                           )}
                           {r.passed == null && <span className="text-muted-foreground">—</span>}
@@ -1085,12 +1138,12 @@ export default function ExamDetailPage() {
       <Dialog open={qOpen} onOpenChange={setQOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Add question</DialogTitle>
+            <DialogTitle>{t("addQuestion")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>
-                Question <span className="text-destructive">*</span>
+                {t("fieldQuestion")} <span className="text-destructive">*</span>
               </Label>
               <Textarea
                 value={qForm.title}
@@ -1099,7 +1152,7 @@ export default function ExamDetailPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Description (optional)</Label>
+              <Label>{t("fieldDescriptionOptional")}</Label>
               <Input
                 value={qForm.description}
                 onChange={(e) => setQForm({ ...qForm, description: e.target.value })}
@@ -1107,20 +1160,20 @@ export default function ExamDetailPage() {
             </div>
             <div className="flex gap-4">
               <div className="flex-1 space-y-2">
-                <Label>Type</Label>
+                <Label>{t("fieldType")}</Label>
                 <Select value={qForm.question_type} onValueChange={(val) => setQForm({ ...qForm, question_type: val })}>
                   <SelectTrigger className="w-full">
-                    <SelectValue>{questionTypeLabel(qForm.question_type)}</SelectValue>
+                    <SelectValue>{questionTypeLabel(t, qForm.question_type)}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {questionTypes.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                    {questionTypes.map((qt) => (
+                      <SelectItem key={qt.value} value={qt.value}>{t(qt.labelKey)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="w-24 space-y-2">
-                <Label>Weight</Label>
+                <Label>{t("fieldWeight")}</Label>
                 <Input
                   type="number"
                   min={1}
@@ -1130,18 +1183,18 @@ export default function ExamDetailPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Image (optional)</Label>
+              <Label>{t("fieldImageOptional")}</Label>
               {qImage ? (
                 <div className="space-y-2">
                   {/* eslint-disable-next-line @next/next/no-img-element -- preview of user-uploaded image */}
                   <img src={qImage.url} alt={qImage.name} className="max-h-32 rounded-md border" />
-                  <button onClick={() => setQImage(null)} className="text-xs text-destructive hover:underline">Remove image</button>
+                  <button onClick={() => setQImage(null)} className="text-xs text-destructive hover:underline">{t("removeImage")}</button>
                 </div>
               ) : (
                 <div>
                   <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-muted transition-colors">
                     <ImagePlus className="h-4 w-4" />
-                    {qImageUploading ? "Uploading..." : "Add image"}
+                    {qImageUploading ? t("uploading") : t("addImage")}
                     <input type="file" accept="image/*" className="hidden" onChange={handleQuestionImageUpload} disabled={qImageUploading} />
                   </label>
                 </div>
@@ -1150,11 +1203,12 @@ export default function ExamDetailPage() {
             {!isEssay && (
               <div className="space-y-2">
                 <Label>
-                  Options <span className="text-destructive">*</span>
+                  {t("fieldOptions")} <span className="text-destructive">*</span>
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  At least 2 options, at least 1 marked correct
-                  {qForm.question_type === "single_choice" ? " (exactly one)" : ""}
+                  {qForm.question_type === "single_choice"
+                    ? t("optionsHintSingle")
+                    : t("optionsHint")}
                 </p>
                 <div className="space-y-2">
                   {options.map((opt, i) => (
@@ -1165,7 +1219,7 @@ export default function ExamDetailPage() {
                       />
                       <Input
                         className="flex-1"
-                        placeholder={`Option ${i + 1}`}
+                        placeholder={t("optionPlaceholder", { index: i + 1 })}
                         value={opt.title}
                         onChange={(e) => updateOption(i, { title: e.target.value })}
                       />
@@ -1178,16 +1232,16 @@ export default function ExamDetailPage() {
                   ))}
                   <Button size="sm" variant="ghost" onClick={addOption}>
                     <Plus className="mr-1 h-3 w-3" />
-                    Add option
+                    {t("addOption")}
                   </Button>
                 </div>
               </div>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setQOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setQOpen(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button onClick={addQuestion} disabled={saving || !questionFormValid}>
-              {saving ? "Adding..." : "Add question"}
+              {saving ? t("adding") : t("addQuestion")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1197,11 +1251,11 @@ export default function ExamDetailPage() {
       <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Select employees</DialogTitle>
+            <DialogTitle>{t("selectEmployeesTitle")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <Input
-              placeholder="Search by name, email, division..."
+              placeholder={t("employeeSearchPlaceholder")}
               value={employeeFilter}
               onChange={(e) => setEmployeeFilter(e.target.value)}
             />
@@ -1209,14 +1263,14 @@ export default function ExamDetailPage() {
             <div className="grid grid-cols-3 gap-2">
               <Select value={filterDivision} onValueChange={setFilterDivision}>
                 <SelectTrigger className="w-full" data-testid="exam-assign-select-division">
-                  <SelectValue placeholder="Division">
+                  <SelectValue placeholder={t("filterDivision")}>
                     {filterDivision
                       ? flatDivisions.find((d) => d.id === filterDivision)?.name
                       : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All divisions</SelectItem>
+                  <SelectItem value="">{t("allDivisions")}</SelectItem>
                   {flatDivisions.map((d) => (
                     <SelectItem key={d.id} value={d.id}>
                       {"  ".repeat(d.depth)}{d.name}
@@ -1226,14 +1280,14 @@ export default function ExamDetailPage() {
               </Select>
               <Select value={filterPosition} onValueChange={setFilterPosition}>
                 <SelectTrigger className="w-full" data-testid="exam-assign-select-position">
-                  <SelectValue placeholder="Position">
+                  <SelectValue placeholder={t("filterPosition")}>
                     {filterPosition
                       ? positions.find((p) => p.id === filterPosition)?.title
                       : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All positions</SelectItem>
+                  <SelectItem value="">{t("allPositions")}</SelectItem>
                   {positions.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
                       {p.title}
@@ -1246,17 +1300,17 @@ export default function ExamDetailPage() {
                 onValueChange={setFilterSpecialization}
               >
                 <SelectTrigger className="w-full" data-testid="exam-assign-select-specialization">
-                  <SelectValue placeholder="Specialization">
-                    {filterSpecialization
-                      ? specializations.find((s) => s.id === filterSpecialization)?.title
+                  <SelectValue placeholder={t("filterSpecialization")}>
+                    {selectedFilterSpec
+                      ? dictionaryItemLabel(tRef, selectedFilterSpec)
                       : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All</SelectItem>
+                  <SelectItem value="">{t("allSpecializations")}</SelectItem>
                   {specializations.map((s) => (
                     <SelectItem key={s.id} value={s.id}>
-                      {s.title}
+                      {dictionaryItemLabel(tRef, s)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1271,13 +1325,13 @@ export default function ExamDetailPage() {
                   onCheckedChange={toggleAllSelectable}
                 />
                 <span className="text-sm text-muted-foreground">
-                  Select all ({selectableEmployees.length})
+                  {t("selectAll", { count: selectableEmployees.length })}
                 </span>
               </div>
               {employeesLoading ? (
-                <p className="p-4 text-center text-sm text-muted-foreground">Loading...</p>
+                <p className="p-4 text-center text-sm text-muted-foreground">{tc("loading")}</p>
               ) : filteredEmployees.length === 0 ? (
-                <p className="p-4 text-center text-sm text-muted-foreground">No employees match filters</p>
+                <p className="p-4 text-center text-sm text-muted-foreground">{t("noEmployeesMatch")}</p>
               ) : (
                 <ul className="divide-y">
                   {filteredEmployees.map((emp) => {
@@ -1300,7 +1354,7 @@ export default function ExamDetailPage() {
                           </p>
                         </div>
                         {isAssigned && (
-                          <span className="text-xs text-muted-foreground">already assigned</span>
+                          <span className="text-xs text-muted-foreground">{t("alreadyAssigned")}</span>
                         )}
                       </li>
                     );
@@ -1309,13 +1363,13 @@ export default function ExamDetailPage() {
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              {selectedEmployeeIds.size} selected
+              {t("selectedCount", { count: selectedEmployeeIds.size })}
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAssignOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setAssignOpen(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button onClick={assignEmployees} disabled={saving || selectedEmployeeIds.size === 0}>
-              {saving ? "Assigning..." : "Assign"}
+              {saving ? t("assigning") : t("assign")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1331,39 +1385,39 @@ export default function ExamDetailPage() {
       >
         <DialogContent data-testid="exam-passmark-modal">
           <DialogHeader>
-            <DialogTitle>{pmEditingId ? "Edit pass mark" : "Add pass mark"}</DialogTitle>
+            <DialogTitle>{pmEditingId ? t("editPassMark") : t("addPassMark")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Minimum score (%)</Label>
+              <Label>{t("fieldMinScorePercent")}</Label>
               <Input
                 type="number"
                 min={0}
                 max={100}
-                placeholder="e.g. 60"
+                placeholder={t("placeholderMinScorePercent")}
                 value={pmForm.min_score_percent}
                 onChange={(e) => setPmForm({ ...pmForm, min_score_percent: e.target.value })}
               />
             </div>
             <div className="space-y-2">
-              <Label>Minimum score (points)</Label>
+              <Label>{t("fieldMinScorePoints")}</Label>
               <Input
                 type="number"
                 min={0}
-                placeholder="e.g. 15"
+                placeholder={t("placeholderMinScorePoints")}
                 value={pmForm.min_score_points}
                 onChange={(e) => setPmForm({ ...pmForm, min_score_points: e.target.value })}
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPmOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setPmOpen(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button
               onClick={savePassMark}
               disabled={saving || (!pmForm.min_score_percent && !pmForm.min_score_points)}
               data-testid="exam-passmark-modal-btn-submit"
             >
-              {saving ? "Saving..." : pmEditingId ? "Save" : "Add"}
+              {saving ? t("saving") : pmEditingId ? t("save") : t("add")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1373,11 +1427,11 @@ export default function ExamDetailPage() {
       <Dialog open={titleOpen} onOpenChange={setTitleOpen}>
         <DialogContent data-testid="exam-title-modal">
           <DialogHeader>
-            <DialogTitle>Edit title</DialogTitle>
+            <DialogTitle>{t("editTitle")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2">
             <Label>
-              Title <span className="text-destructive">*</span>
+              {t("fieldTitle")} <span className="text-destructive">*</span>
             </Label>
             <Input
               value={titleDraft}
@@ -1386,17 +1440,17 @@ export default function ExamDetailPage() {
               data-testid="exam-title-input"
             />
             {!titleDraft.trim() && (
-              <p className="text-xs text-destructive">Title is required</p>
+              <p className="text-xs text-destructive">{t("errorTitleRequired")}</p>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTitleOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setTitleOpen(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button
               onClick={saveTitle}
               disabled={saving || !titleDraft.trim()}
               data-testid="exam-title-save"
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1406,10 +1460,10 @@ export default function ExamDetailPage() {
       <Dialog open={descOpen} onOpenChange={setDescOpen}>
         <DialogContent data-testid="exam-description-modal">
           <DialogHeader>
-            <DialogTitle>Edit description</DialogTitle>
+            <DialogTitle>{t("editDescription")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2">
-            <Label>Description</Label>
+            <Label>{t("fieldDescription")}</Label>
             <Textarea
               value={descDraft}
               onChange={(e) => setDescDraft(e.target.value)}
@@ -1419,13 +1473,13 @@ export default function ExamDetailPage() {
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDescOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setDescOpen(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button
               onClick={saveDescription}
               disabled={saving}
               data-testid="exam-description-save"
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1438,12 +1492,12 @@ export default function ExamDetailPage() {
       >
         <DialogContent className="max-w-lg" data-testid="exam-question-edit-modal">
           <DialogHeader>
-            <DialogTitle>Edit question</DialogTitle>
+            <DialogTitle>{t("editQuestion")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>
-                Question <span className="text-destructive">*</span>
+                {t("fieldQuestion")} <span className="text-destructive">*</span>
               </Label>
               <Textarea
                 value={qEditForm.title}
@@ -1453,7 +1507,7 @@ export default function ExamDetailPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Description (optional)</Label>
+              <Label>{t("fieldDescriptionOptional")}</Label>
               <Input
                 value={qEditForm.description}
                 onChange={(e) => setQEditForm({ ...qEditForm, description: e.target.value })}
@@ -1461,7 +1515,7 @@ export default function ExamDetailPage() {
             </div>
             <div className="flex gap-4">
               <div className="flex-1 space-y-2">
-                <Label>Type</Label>
+                <Label>{t("fieldType")}</Label>
                 <Select
                   value={qEditForm.question_type}
                   onValueChange={(val) =>
@@ -1469,17 +1523,17 @@ export default function ExamDetailPage() {
                   }
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue>{questionTypeLabel(qEditForm.question_type)}</SelectValue>
+                    <SelectValue>{questionTypeLabel(t, qEditForm.question_type)}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {questionTypes.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                    {questionTypes.map((qt) => (
+                      <SelectItem key={qt.value} value={qt.value}>{t(qt.labelKey)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="w-24 space-y-2">
-                <Label>Weight</Label>
+                <Label>{t("fieldWeight")}</Label>
                 <Input
                   type="number"
                   min={1}
@@ -1491,7 +1545,7 @@ export default function ExamDetailPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Image (optional)</Label>
+              <Label>{t("fieldImageOptional")}</Label>
               {qEditImage ? (
                 <div className="space-y-2">
                   {/* eslint-disable-next-line @next/next/no-img-element -- preview of user-uploaded image */}
@@ -1500,14 +1554,14 @@ export default function ExamDetailPage() {
                     onClick={() => setQEditImage(null)}
                     className="text-xs text-destructive hover:underline"
                   >
-                    Remove image
+                    {t("removeImage")}
                   </button>
                 </div>
               ) : (
                 <div>
                   <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-muted transition-colors">
                     <ImagePlus className="h-4 w-4" />
-                    {qEditImageUploading ? "Uploading..." : "Add image"}
+                    {qEditImageUploading ? t("uploading") : t("addImage")}
                     <input
                       type="file"
                       accept="image/*"
@@ -1522,11 +1576,12 @@ export default function ExamDetailPage() {
             {!qEditIsEssay && (
               <div className="space-y-2">
                 <Label>
-                  Options <span className="text-destructive">*</span>
+                  {t("fieldOptions")} <span className="text-destructive">*</span>
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  At least 2 options, at least 1 marked correct
-                  {qEditForm.question_type === "single_choice" ? " (exactly one)" : ""}
+                  {qEditForm.question_type === "single_choice"
+                    ? t("optionsHintSingle")
+                    : t("optionsHint")}
                 </p>
                 <div className="space-y-2">
                   {qEditOptions.map((opt, i) => (
@@ -1537,7 +1592,7 @@ export default function ExamDetailPage() {
                       />
                       <Input
                         className="flex-1"
-                        placeholder={`Option ${i + 1}`}
+                        placeholder={t("optionPlaceholder", { index: i + 1 })}
                         value={opt.title}
                         onChange={(e) => updateEditOption(i, { title: e.target.value })}
                       />
@@ -1550,20 +1605,20 @@ export default function ExamDetailPage() {
                   ))}
                   <Button size="sm" variant="ghost" onClick={addEditOption}>
                     <Plus className="mr-1 h-3 w-3" />
-                    Add option
+                    {t("addOption")}
                   </Button>
                 </div>
               </div>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={closeQuestionEditor} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={closeQuestionEditor} disabled={saving}>{tc("cancel")}</Button>
             <Button
               onClick={saveQuestionEdit}
               disabled={saving || !qEditValid}
               data-testid="exam-question-edit-save"
             >
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1576,20 +1631,20 @@ export default function ExamDetailPage() {
       >
         <DialogContent data-testid="exam-question-delete-modal">
           <DialogHeader>
-            <DialogTitle>Delete question?</DialogTitle>
+            <DialogTitle>{t("deleteQuestionTitle")}</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            This will remove the question and all of its options. The action cannot be undone.
+            {t("deleteQuestionDescription")}
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setQDeleteId(null)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setQDeleteId(null)} disabled={saving}>{tc("cancel")}</Button>
             <Button
               variant="destructive"
               onClick={confirmDeleteQuestion}
               disabled={saving}
               data-testid="exam-question-delete-confirm"
             >
-              {saving ? "Deleting..." : "Delete"}
+              {saving ? t("deleting") : tc("delete")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1599,10 +1654,10 @@ export default function ExamDetailPage() {
       <Dialog open={deadlineOpen} onOpenChange={setDeadlineOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit deadline</DialogTitle>
+            <DialogTitle>{t("editDeadline")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2">
-            <Label>Deadline</Label>
+            <Label>{t("fieldDeadline")}</Label>
             {/* HRP-335: shared DatePicker (HRP-152) instead of the
                 native date input. */}
             <DatePicker
@@ -1612,13 +1667,13 @@ export default function ExamDetailPage() {
               data-testid="exam-deadline-input"
             />
             {deadlineDraft && isPastDeadline(deadlineDraft) && (
-              <p className="text-xs text-destructive">Deadline cannot be in the past</p>
+              <p className="text-xs text-destructive">{t("errorDeadlineInPast")}</p>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeadlineOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="outline" onClick={() => setDeadlineOpen(false)} disabled={saving}>{tc("cancel")}</Button>
             <Button onClick={saveDeadline} disabled={saving}>
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>

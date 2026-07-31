@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { clearLocaleCookie } from "@/i18n/config";
 import type {
   TokenResponse,
   TenantInfo,
@@ -40,6 +41,10 @@ function clearTokens() {
   document.cookie = "has_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
   document.cookie =
     "demo_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  // i18n (F1): the locale cookie mirrors the account preference — drop
+  // it on logout so the next user on a shared device starts from
+  // Accept-Language instead of inheriting the previous user's language.
+  clearLocaleCookie();
 }
 
 export async function login(

@@ -90,15 +90,37 @@ export function effectiveMime(file: File): string {
   );
 }
 
-async function putChunk(url: string, chunk: Blob, attempt = 0): Promise<string> {
+/** Chunk-upload failure with a stable code so toast boundaries can
+ * localize it (recruitment.uploadS3PutFailed / uploadS3NoEtag); the
+ * message keeps the technical English for logs and debugging. */
+export class UploadError extends Error {
+  constructor(
+    public readonly code: "s3PutFailed" | "s3NoEtag",
+    message: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = "UploadError";
+  }
+}
+
+export async function putChunk(
+  url: string,
+  chunk: Blob,
+  attempt = 0,
+): Promise<string> {
   try {
     const res = await fetch(url, { method: "PUT", body: chunk });
     if (!res.ok) {
-      throw new Error(`S3 PUT failed (HTTP ${res.status})`);
+      throw new UploadError(
+        "s3PutFailed",
+        `S3 PUT failed (HTTP ${res.status})`,
+        res.status,
+      );
     }
     const etag = res.headers.get("ETag") || res.headers.get("etag");
     if (!etag) {
-      throw new Error("S3 did not return an ETag");
+      throw new UploadError("s3NoEtag", "S3 did not return an ETag");
     }
     return etag.replace(/"/g, "");
   } catch (err) {

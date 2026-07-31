@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { Sparkles } from "lucide-react";
 
 import {
@@ -39,6 +40,7 @@ interface Props {
  * it's a no-op until the user returns from the spec flow.
  */
 export function PositionAIGenerationCard({ position }: Props) {
+  const t = useTranslations("company");
   const { all: activeSessions } = useActiveAiSessions();
   const liveSession = findMatrixSessionForSpec(
     activeSessions,
@@ -71,13 +73,9 @@ export function PositionAIGenerationCard({ position }: Props) {
         <div>
           <CardTitle className="flex items-center gap-2 text-base">
             <Sparkles className="h-4 w-4 text-primary" />
-            AI Generate competences
+            {t("aiGenerateCompetences")}
           </CardTitle>
-          <CardDescription>
-            Matrix generation happens on the specialization page so all
-            grades stay together. You&apos;ll be redirected; results return
-            you here on Apply.
-          </CardDescription>
+          <CardDescription>{t("aiGenerateCardDescription")}</CardDescription>
         </div>
         {liveSessionHref ? (
           <Button
@@ -87,7 +85,7 @@ export function PositionAIGenerationCard({ position }: Props) {
             render={<Link href={liveSessionHref} />}
           >
             <Sparkles className="mr-1 h-4 w-4" />
-            Open active session
+            {t("openActiveSession")}
           </Button>
         ) : generateHref ? (
           <Button
@@ -96,7 +94,7 @@ export function PositionAIGenerationCard({ position }: Props) {
             render={<Link href={generateHref} />}
           >
             <Sparkles className="mr-1 h-4 w-4" />
-            AI Generate
+            {t("aiGenerate")}
           </Button>
         ) : (
           <Button
@@ -105,7 +103,7 @@ export function PositionAIGenerationCard({ position }: Props) {
             disabled
           >
             <Sparkles className="mr-1 h-4 w-4" />
-            AI Generate
+            {t("aiGenerate")}
           </Button>
         )}
       </CardHeader>
@@ -115,8 +113,7 @@ export function PositionAIGenerationCard({ position }: Props) {
             data-testid="position-ai-generation-blocked"
             className="text-sm text-muted-foreground"
           >
-            Set a specialization on this position before running AI
-            generation — the matrix is keyed off it.
+            {t("aiGenerateBlocked")}
           </p>
         </CardContent>
       ) : null}

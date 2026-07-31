@@ -9,6 +9,11 @@ prompt so they survive across the OpenAI/Anthropic/Gemini message split.
 Output contract is enforced by `GeneratedTreeSchema` /
 `GeneratedIndicatorsSchema` — `llm_client.generate_json(..., schema=...)`
 appends the JSON Schema to whatever system prompt we produce here.
+
+The output-language directive is NOT part of these templates: tasks.py
+appends `ai_settings_service.build_language_directive(...)` to the built
+system prompt, so generated content follows the tenant's
+`content_language` while the prompt text itself stays English (HRP-480).
 """
 
 from __future__ import annotations
@@ -51,8 +56,7 @@ _TREE_RULES = (
     "- Each competence must declare a `type` from: hard_skill, soft_skill, "
     "unique_skill.\n"
     "- HRP-144: when indicators are requested, every competence must carry "
-    "AT LEAST 3 indicators per skill level — see the indicator rules below.\n"
-    "- Generate ALL textual content in English."
+    "AT LEAST 3 indicators per skill level — see the indicator rules below."
 )
 
 _INDICATOR_RULES = (
@@ -77,8 +81,7 @@ _INDICATOR_RULES = (
     "ahead of time, strengthens the team around them.\n"
     "- Each indicator must start with an action verb (Knows, Understands, "
     "Applies, Designs, Coaches, ...).\n"
-    "- Do not repeat indicators that already exist on the competence.\n"
-    "- Generate ALL textual content in English."
+    "- Do not repeat indicators that already exist on the competence."
 )
 
 
@@ -233,8 +236,7 @@ def build_group_prompt(
             "itself in your answer with only the *new* competences "
             "underneath. "
             + (
-                "Each competence must include AT LEAST 3 indicators per "
-                "skill level."
+                "Each competence must include AT LEAST 3 indicators per " "skill level."
                 if with_indicators
                 else "Do not include indicators."
             )
@@ -286,8 +288,7 @@ _MATRIX_RULES = (
     "- Indicator phrasing must follow the indicator rules: observable on "
     "real work, action-verb first, calibrated per level (basic = correct "
     "minimum / intermediate = stable + autonomous / advanced = influence "
-    "on outcomes), with each higher level implicitly including lower ones.\n"
-    "- Generate ALL textual content in English."
+    "on outcomes), with each higher level implicitly including lower ones."
 )
 
 

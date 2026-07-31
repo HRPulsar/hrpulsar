@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Gauge, Info } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -18,12 +19,6 @@ interface Props {
 const MIN = 0;
 const MAX = 5;
 
-const TOOLTIP_TEXT =
-  "Weight determines how strongly this indicator contributes to the overall level assessment. 0 = informational only (not counted). 1 = standard weight. 2–5 = emphasized; counts proportionally more.";
-
-const ZERO_HINT =
-  "This indicator is informational only and doesn't count toward scoring.";
-
 /**
  * Semantic display + inline editor for indicator weight.
  *
@@ -33,6 +28,7 @@ const ZERO_HINT =
  * competence.
  */
 export function IndicatorWeight({ value, editable, testIdPrefix, onChange }: Props) {
+  const t = useTranslations("competences");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string>(String(value));
   const [saving, setSaving] = useState(false);
@@ -90,7 +86,7 @@ export function IndicatorWeight({ value, editable, testIdPrefix, onChange }: Pro
         data-testid={`${testIdPrefix}-edit`}
       >
         <Gauge className="size-3.5 text-muted-foreground" aria-hidden />
-        <span className="text-xs text-muted-foreground">Weight:</span>
+        <span className="text-xs text-muted-foreground">{t("weightLabel")}</span>
         <input
           ref={inputRef}
           type="number"
@@ -130,7 +126,9 @@ export function IndicatorWeight({ value, editable, testIdPrefix, onChange }: Pro
         className={cn("size-3.5", isZero ? "text-muted-foreground/60" : "text-muted-foreground")}
         aria-hidden
       />
-      <span className="hidden sm:inline text-muted-foreground">Weight:</span>
+      <span className="hidden sm:inline text-muted-foreground">
+        {t("weightLabel")}
+      </span>
       <button
         type="button"
         disabled={!editable}
@@ -140,7 +138,11 @@ export function IndicatorWeight({ value, editable, testIdPrefix, onChange }: Pro
           editable && "rounded px-0.5 hover:bg-muted/60 focus:bg-muted/60 focus:outline-none",
         )}
         data-testid={`${testIdPrefix}-value`}
-        aria-label={`Weight ${value}${editable ? " — click to edit" : ""}`}
+        aria-label={
+          editable
+            ? t("weightValueEditableAria", { value })
+            : t("weightValueAria", { value })
+        }
       >
         {value}
       </button>
@@ -150,7 +152,7 @@ export function IndicatorWeight({ value, editable, testIdPrefix, onChange }: Pro
           className="ml-0.5 h-4 px-1 text-[10px] font-normal text-muted-foreground"
           data-testid={`${testIdPrefix}-informational-badge`}
         >
-          informational
+          {t("weightInformational")}
         </Badge>
       )}
       <Tooltip>
@@ -160,7 +162,7 @@ export function IndicatorWeight({ value, editable, testIdPrefix, onChange }: Pro
               tabIndex={0}
               className="inline-flex cursor-help text-muted-foreground/70 hover:text-muted-foreground"
               data-testid={`${testIdPrefix}-info`}
-              aria-label="Weight explanation"
+              aria-label={t("weightExplanationAria")}
             />
           }
         >
@@ -170,7 +172,7 @@ export function IndicatorWeight({ value, editable, testIdPrefix, onChange }: Pro
           className="max-w-xs"
           data-testid={`${testIdPrefix}-tooltip`}
         >
-          {isZero ? ZERO_HINT : TOOLTIP_TEXT}
+          {isZero ? t("weightZeroHint") : t("weightTooltip")}
         </TooltipContent>
       </Tooltip>
     </span>

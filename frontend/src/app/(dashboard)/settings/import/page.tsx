@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { ImportJob, ImportJobList } from "@/lib/types";
 import { formatDate } from "@/lib/date-format";
@@ -42,9 +43,10 @@ import { BADGE_COLOR } from "@/lib/badge-tones";
 
 const PAGE_SIZE = 20;
 
+/** Import type → key in the `settings` message namespace. */
 const importTypes = [
-  { value: "employees", label: "Employees", description: "Import employees from Excel file" },
-  { value: "dictionaries", label: "Dictionaries", description: "Import dictionary items from Excel file" },
+  { value: "employees", labelKey: "importTypeEmployees" },
+  { value: "dictionaries", labelKey: "importTypeDictionaries" },
 ];
 
 const statusColors: Record<string, string> = {
@@ -128,10 +130,15 @@ function parseCSV(text: string): string[][] {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Validation problems are stored as codes and rendered through the
+ * message catalog, so the preview grid stays translatable. */
+type CellErrorCode = "required" | "email" | "date";
+
 interface CellError {
   row: number;
   col: number;
-  message: string;
+  code: CellErrorCode;
+  column: string;
 }
 
 function validatePreview(
@@ -149,17 +156,17 @@ function validatePreview(
       const val = rows[r]?.[c] ?? "";
 
       if (tmpl.required.includes(col) && !val) {
-        errors.push({ row: r, col: c, message: `${col} is required` });
+        errors.push({ row: r, col: c, code: "required", column: col });
         continue;
       }
 
       if (!val) continue;
 
       if (col === "email" && !EMAIL_RE.test(val)) {
-        errors.push({ row: r, col: c, message: "Invalid email format" });
+        errors.push({ row: r, col: c, code: "email", column: col });
       }
       if (col === "hire_date" && !DATE_RE.test(val)) {
-        errors.push({ row: r, col: c, message: "Date must be YYYY-MM-DD" });
+        errors.push({ row: r, col: c, code: "date", column: col });
       }
     }
   }
@@ -168,6 +175,8 @@ function validatePreview(
 }
 
 export default function ImportPage() {
+  const t = useTranslations("settings");
+  const tc = useTranslations("common");
   const [jobs, setJobs] = useState<ImportJob[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -231,7 +240,7 @@ export default function ImportPage() {
       if (typeof text !== "string") return;
       const parsed = parseCSV(text);
       if (parsed.length < 2) {
-        toast.error("File must have a header row and at least one data row");
+        toast.error(t("importFileNeedsRows"));
         return;
       }
       const headers = parsed[0];
@@ -257,12 +266,12 @@ export default function ImportPage() {
     setUploading(true);
     try {
       await api.upload<ImportJob>(`/import/${importType}`, previewFile);
-      toast.success("Import started");
+      toast.success(t("importStarted"));
       clearPreview();
       setPage(1);
       await loadJobs(1);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to start import");
+      toast.error(err instanceof Error ? err.message : t("importFailed"));
     } finally {
       setUploading(false);
     }
@@ -291,14 +300,22 @@ export default function ImportPage() {
     setDragOver(false);
   }
 
-  function getCellError(row: number, col: number): string | undefined {
-    return previewErrors.find((e) => e.row === row && e.col === col)?.message;
+  function getCellError(row: number, col: number): CellError | undefined {
+    return previewErrors.find((e) => e.row === row && e.col === col);
+  }
+
+  function cellErrorMessage(error: CellError): string {
+    if (error.code === "required") {
+      return t("importRequiredColumn", { column: error.column });
+    }
+    if (error.code === "email") return t("importInvalidEmail");
+    return t("importInvalidDate");
   }
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -310,39 +327,42 @@ export default function ImportPage() {
     <RequireRole admin>
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Data Import</h1>
-        <p className="text-sm text-muted-foreground">
-          Import employees and dictionaries from Excel or CSV files
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {t("importTitle")}
+        </h1>
+        <p className="text-sm text-muted-foreground">{t("importSubtitle")}</p>
       </div>
 
       {/* Upload section */}
       <Card>
         <CardHeader>
-          <CardTitle>Upload file</CardTitle>
-          <CardDescription>
-            Select import type, download a template, then upload your file
-          </CardDescription>
+          <CardTitle>{t("importUploadTitle")}</CardTitle>
+          <CardDescription>{t("importUploadDescription")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center gap-4">
             <Select value={importType} onValueChange={(val) => { setImportType(val); clearPreview(); }}>
               <SelectTrigger className="w-48">
                 <SelectValue>
-                  {importTypes.find((t) => t.value === importType)?.label ?? ""}
+                  {(() => {
+                    const entry = importTypes.find(
+                      (item) => item.value === importType,
+                    );
+                    return entry ? t(entry.labelKey) : "";
+                  })()}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {importTypes.map((t) => (
-                  <SelectItem key={t.value} value={t.value}>
-                    {t.label}
+                {importTypes.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {t(item.labelKey)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             <Button variant="outline" size="sm" onClick={() => downloadTemplate(importType)}>
               <Download className="mr-1 h-4 w-4" />
-              Download template
+              {t("importDownloadTemplate")}
             </Button>
           </div>
 
@@ -359,18 +379,21 @@ export default function ImportPage() {
             >
               <Upload className="mb-3 h-8 w-8 text-muted-foreground" />
               <p className="text-sm font-medium">
-                Drag and drop your file here, or{" "}
-                <button
-                  type="button"
-                  className="text-primary underline underline-offset-2"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                >
-                  browse
-                </button>
+                {t.rich("importDropzone", {
+                  browse: (chunks) => (
+                    <button
+                      type="button"
+                      className="text-primary underline underline-offset-2"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                    >
+                      {chunks}
+                    </button>
+                  ),
+                })}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Supports .xlsx and .csv files
+                {t("importSupportedFormats")}
               </p>
               <input
                 ref={fileInputRef}
@@ -385,7 +408,14 @@ export default function ImportPage() {
 
           <div className="rounded-md bg-muted/50 p-3">
             <p className="text-xs font-medium text-muted-foreground">
-              Expected columns for {importTypes.find((t) => t.value === importType)?.label}:
+              {t("importExpectedColumns", {
+                type: (() => {
+                  const entry = importTypes.find(
+                    (item) => item.value === importType,
+                  );
+                  return entry ? t(entry.labelKey) : "";
+                })(),
+              })}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               {templates[importType]?.columns.join(", ")}
@@ -399,18 +429,20 @@ export default function ImportPage() {
         <Card>
           <CardHeader className="flex-row items-center justify-between">
             <div>
-              <CardTitle>Preview: {previewFile.name}</CardTitle>
+              <CardTitle>
+                {t("importPreviewTitle", { name: previewFile.name })}
+              </CardTitle>
               <CardDescription>
-                {previewRows.length} row{previewRows.length !== 1 ? "s" : ""} found
+                {t("importRowsFound", { count: previewRows.length })}
                 {hasErrors ? (
                   <span className="ml-2 text-destructive">
                     <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
-                    {errorCount} error{errorCount !== 1 ? "s" : ""} detected
+                    {t("importErrorsDetected", { count: errorCount })}
                   </span>
                 ) : (
                   <span className="ml-2 text-green-600">
                     <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
-                    All rows valid
+                    {t("importAllValid")}
                   </span>
                 )}
               </CardDescription>
@@ -418,11 +450,11 @@ export default function ImportPage() {
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={clearPreview} disabled={uploading}>
                 <X className="mr-1 h-4 w-4" />
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button size="sm" onClick={confirmImport} disabled={uploading}>
                 <Upload className="mr-1 h-4 w-4" />
-                {uploading ? "Importing..." : "Import"}
+                {uploading ? t("importUploading") : t("importAction")}
               </Button>
             </div>
           </CardHeader>
@@ -462,7 +494,7 @@ export default function ImportPage() {
                               </span>
                               {cellErr && (
                                 <span className="block text-xs text-destructive mt-0.5">
-                                  {cellErr}
+                                  {cellErrorMessage(cellErr)}
                                 </span>
                               )}
                             </TableCell>
@@ -476,7 +508,7 @@ export default function ImportPage() {
             </div>
             {hasErrors && (
               <p className="mt-3 text-xs text-muted-foreground">
-                Rows with errors will likely fail during import. You can still proceed — the server will report detailed errors after processing.
+                {t("importErrorsWarning")}
               </p>
             )}
           </CardContent>
@@ -486,27 +518,27 @@ export default function ImportPage() {
       {/* Import history */}
       <Card>
         <CardHeader>
-          <CardTitle>Import history</CardTitle>
+          <CardTitle>{t("importHistoryTitle")}</CardTitle>
           <CardDescription>
-            {total} import job{total !== 1 ? "s" : ""}
+            {t("importJobsCount", { count: total })}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {jobs.length === 0 ? (
             <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-              No import jobs yet
+              {t("importNoJobs")}
             </div>
           ) : (
             <div className="rounded-lg border">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>File</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Progress</TableHead>
-                    <TableHead>Errors</TableHead>
-                    <TableHead>Date</TableHead>
+                    <TableHead>{t("importColFile")}</TableHead>
+                    <TableHead>{t("importColType")}</TableHead>
+                    <TableHead>{t("importColStatus")}</TableHead>
+                    <TableHead>{t("importColProgress")}</TableHead>
+                    <TableHead>{t("importColErrors")}</TableHead>
+                    <TableHead>{t("importColDate")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -541,7 +573,7 @@ export default function ImportPage() {
                             className="text-sm text-destructive underline underline-offset-2"
                             onClick={() => setErrorJob(job)}
                           >
-                            {job.error_rows} error{job.error_rows !== 1 ? "s" : ""}
+                            {t("importErrorCount", { count: job.error_rows })}
                           </button>
                         ) : (
                           <span className="text-sm text-muted-foreground">—</span>
@@ -565,7 +597,9 @@ export default function ImportPage() {
       <Dialog open={!!errorJob} onOpenChange={(open) => !open && setErrorJob(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Import errors — {errorJob?.file_name}</DialogTitle>
+            <DialogTitle>
+              {t("importErrorsTitle", { name: errorJob?.file_name ?? "" })}
+            </DialogTitle>
           </DialogHeader>
           <div className="max-h-80 overflow-y-auto">
             {errorJob?.errors?.rows && errorJob.errors.rows.length > 0 ? (
@@ -573,8 +607,8 @@ export default function ImportPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-20">Row</TableHead>
-                      <TableHead>Error</TableHead>
+                      <TableHead className="w-20">{t("importColRow")}</TableHead>
+                      <TableHead>{t("importColError")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -589,7 +623,7 @@ export default function ImportPage() {
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                {errorJob?.error_rows} row(s) failed but no detailed error info is available.
+                {t("importNoErrorDetails", { count: errorJob?.error_rows ?? 0 })}
               </p>
             )}
           </div>

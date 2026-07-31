@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.client_ip import client_ip
+from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
@@ -26,6 +27,8 @@ async def _require_saas_deployment() -> None:
     # HRP-391: the public-demo sandbox is enterprise-only. Community /
     # self-hosted deployments (deployment_mode=onprem) must not expose
     # any demo endpoint — 404, not 403, so the surface is invisible.
+    # Deliberately a bare HTTPException, not AppError: an error code would
+    # fingerprint the hidden surface.
     if settings.deployment_mode != "saas":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
 
@@ -94,9 +97,9 @@ async def save_demo_access(
     Tenant (the demo sandbox keeps living until its TTL expires).
     """
     if not await is_demo_tenant(db, current_user.tenant_id):
-        raise HTTPException(
+        raise AppError(
+            "demo_capture_requires_demo_session",
             status.HTTP_403_FORBIDDEN,
-            "Only demo sessions can capture access.",
         )
     create_payload = SignupRequestCreate(
         email=payload.email,
@@ -112,6 +115,7 @@ async def save_demo_access(
         remote_ip=_client_ip(request),
         source="demo",
         demo_tenant_id_snapshot=current_user.tenant_id,
+        accept_language=request.headers.get("accept-language"),
     )
     return DemoSaveAccessResponse(
         signup_request_id=row.id,

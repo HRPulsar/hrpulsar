@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   Archive,
   ArchiveRestore,
@@ -28,6 +29,7 @@ type Props = {
 };
 
 export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
+  const t = useTranslations("recruitment");
   const router = useRouter();
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -40,10 +42,10 @@ export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
   async function handleRestore() {
     try {
       await api.post(`/recruitment/vacancies/${vacancy.id}/restore`);
-      toast.success("Vacancy restored");
+      toast.success(t("vacancyToastRestored"));
       onChanged?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to restore");
+      toast.error(err instanceof Error ? err.message : t("vacancyRestoreFailed"));
     }
   }
 
@@ -55,7 +57,7 @@ export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="Vacancy actions"
+              aria-label={t("vacancyActionsAria")}
               data-testid={`vacancy-actions-menu-trigger-${vacancy.id}`}
               onClick={(e) => e.stopPropagation()}
             />
@@ -73,7 +75,7 @@ export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
               }}
             >
               <Pencil />
-              Edit
+              {t("actionEdit")}
             </DropdownMenuItem>
           )}
           {!isArchived && (
@@ -85,7 +87,7 @@ export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
               }}
             >
               <Archive />
-              Archive
+              {t("actionArchive")}
             </DropdownMenuItem>
           )}
           {isArchived && (
@@ -97,7 +99,7 @@ export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
               }}
             >
               <ArchiveRestore />
-              Restore
+              {t("actionRestore")}
             </DropdownMenuItem>
           )}
           {canDelete && (
@@ -110,7 +112,7 @@ export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
               }}
             >
               <Trash2 />
-              Delete permanently
+              {t("vacancyDeletePermanently")}
             </DropdownMenuItem>
           )}
         </DropdownMenuContent>

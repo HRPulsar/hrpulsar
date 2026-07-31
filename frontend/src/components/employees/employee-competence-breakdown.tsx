@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Info } from "lucide-react";
 
 import {
@@ -33,6 +34,7 @@ export function EmployeeCompetenceBreakdown({
   breakdown,
   testIdPrefix,
 }: EmployeeCompetenceBreakdownProps) {
+  const t = useTranslations("employees");
   const [open, setOpen] = useState(false);
   // No breakdown rows yet -> render an inert placeholder so the row
   // alignment doesn't jump around when some rows have data and others
@@ -59,7 +61,7 @@ export function EmployeeCompetenceBreakdown({
             type="button"
             className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
             data-testid={`${testIdPrefix}-info-${competenceId}`}
-            aria-label={`Per-level breakdown for ${competenceTitle}`}
+            aria-label={t("breakdownAria", { competence: competenceTitle })}
           />
         }
       >
@@ -74,8 +76,8 @@ export function EmployeeCompetenceBreakdown({
         <table className="w-full text-sm" data-testid={`${testIdPrefix}-breakdown-table`}>
           <thead>
             <tr className="border-b text-left text-xs uppercase text-muted-foreground">
-              <th className="py-1.5">Skill level</th>
-              <th className="py-1.5 text-right">Percent</th>
+              <th className="py-1.5">{t("breakdownColSkillLevel")}</th>
+              <th className="py-1.5 text-right">{t("breakdownColPercent")}</th>
             </tr>
           </thead>
           <tbody>

@@ -9,11 +9,12 @@ canonical functions.
 import logging
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.competence.models import Competence, SkillLevel
 from app.modules.dictionary.models import DictionaryItem
 from app.modules.grade_system.models import GradeSpecialization
@@ -68,11 +69,12 @@ async def _get_draft_card(
     """
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     if card.status != "draft":
-        raise HTTPException(
+        raise AppError(
+            "tm_card_requirements_read_only",
             status.HTTP_409_CONFLICT,
-            f"Card is {card.status} — requirements are read-only.",
+            state=card.status,
         )
     return card
 
@@ -94,16 +96,16 @@ async def _validate_spec_grade(
     """
     spec = await db.get(DictionaryItem, specialization_id)
     if not spec or spec.type != "specialization":
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "Specialization not found"
+        raise AppError(
+            "specialization_not_found", status.HTTP_422_UNPROCESSABLE_ENTITY
         )
     grade = await db.get(DictionaryItem, grade_id)
     if not grade or grade.type != "grade":
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Grade not found")
+        raise AppError("tm_grade_not_found", status.HTTP_422_UNPROCESSABLE_ENTITY)
     if spec.tenant_id is not None and spec.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Specialization not found")
+        raise AppError("specialization_not_found", status.HTTP_404_NOT_FOUND)
     if grade.tenant_id is not None and grade.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Grade not found")
+        raise AppError("tm_grade_not_found", status.HTTP_404_NOT_FOUND)
 
     pair = (
         await db.execute(
@@ -117,10 +119,9 @@ async def _validate_spec_grade(
         )
     ).scalar_one_or_none()
     if pair is None:
-        raise HTTPException(
+        raise AppError(
+            "tm_grade_not_configured_for_specialization",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Grade is not configured for this specialization. "
-            "Add it on the specialization page first.",
         )
     return pair
 
@@ -253,7 +254,7 @@ async def update_required_specialization(
     await _get_draft_card(db, tenant_id, card_id)
     row = await db.get(TalentCardSpecialization, link_id)
     if not row or row.card_id != card_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Specialization link not found")
+        raise AppError("tm_specialization_link_not_found", status.HTTP_404_NOT_FOUND)
     await _validate_spec_grade(
         db,
         tenant_id=tenant_id,
@@ -288,7 +289,7 @@ async def delete_required_specialization(
     await _get_draft_card(db, tenant_id, card_id)
     row = await db.get(TalentCardSpecialization, link_id)
     if not row or row.card_id != card_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Specialization link not found")
+        raise AppError("tm_specialization_link_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(row)
     await db.flush()
     # HRP-171 REDO 2.2: dropping a spec drops its derived competences too.
@@ -333,15 +334,17 @@ async def add_required_competences(
         # Validate competence + skill level exist within tenant scope.
         comp = await db.get(Competence, item.competence_id)
         if not comp or comp.tenant_id != tenant_id:
-            raise HTTPException(
+            raise AppError(
+                "tm_competence_id_not_found",
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"Competence {item.competence_id} not found",
+                competence_id=item.competence_id,
             )
         sl = await db.get(SkillLevel, item.skill_level_id)
         if not sl or (sl.tenant_id is not None and sl.tenant_id != tenant_id):
-            raise HTTPException(
+            raise AppError(
+                "tm_skill_level_id_not_found",
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"Skill level {item.skill_level_id} not found",
+                skill_level_id=item.skill_level_id,
             )
 
         key = (item.competence_id, item.skill_level_id)
@@ -386,17 +389,13 @@ async def update_required_competence(
     await _get_draft_card(db, tenant_id, card_id)
     row = await db.get(TalentCardCompetence, link_id)
     if not row or row.card_id != card_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence link not found")
+        raise AppError("tm_competence_link_not_found", status.HTTP_404_NOT_FOUND)
     comp = await db.get(Competence, data.competence_id)
     if not comp or comp.tenant_id != tenant_id:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "Competence not found"
-        )
+        raise AppError("competence_not_found", status.HTTP_422_UNPROCESSABLE_ENTITY)
     sl = await db.get(SkillLevel, data.skill_level_id)
     if not sl or (sl.tenant_id is not None and sl.tenant_id != tenant_id):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "Skill level not found"
-        )
+        raise AppError("skill_level_not_found", status.HTTP_422_UNPROCESSABLE_ENTITY)
     row.competence_id = data.competence_id
     row.skill_level_id = data.skill_level_id
     await db.commit()
@@ -419,7 +418,7 @@ async def delete_required_competence(
     await _get_draft_card(db, tenant_id, card_id)
     row = await db.get(TalentCardCompetence, link_id)
     if not row or row.card_id != card_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence link not found")
+        raise AppError("tm_competence_link_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(row)
     await db.commit()
     await _auto_populate_candidates(db, tenant_id, card_id)
@@ -444,11 +443,11 @@ async def recompute_card_candidates(
     """
     card = await db.get(TalentCard, card_id)
     if not card or card.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     # HRP-291: one source of truth for what "terminal" means.
     assert_card_not_terminal(card)
     await _auto_populate_candidates(db, tenant_id, card_id)
     card = await db.get(TalentCard, card_id)
     if card is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Card not found")
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     return _card_to_read(card)

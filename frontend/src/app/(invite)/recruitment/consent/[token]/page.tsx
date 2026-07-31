@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { API_BASE } from "@/lib/api";
 import type { ConsentTokenView } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -46,6 +47,7 @@ function formatDetail(detail: unknown, fallback: string): string {
 }
 
 export default function ConsentSignPage() {
+  const t = useTranslations("auth");
   const { token } = useParams<{ token: string }>();
   const [view, setView] = useState<ConsentTokenView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,7 +66,7 @@ export default function ConsentSignPage() {
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(
-          formatDetail(data.detail, "Link unavailable"),
+          formatDetail(data.detail, t("linkUnavailable")),
         );
       }
       const data = (await res.json()) as ConsentTokenView;
@@ -77,12 +79,12 @@ export default function ConsentSignPage() {
       }
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to load the page",
+        err instanceof Error ? err.message : t("pageLoadFailed"),
       );
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, t]);
 
   useEffect(() => {
     void load();
@@ -103,7 +105,7 @@ export default function ConsentSignPage() {
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(
-          formatDetail(data.detail, "Failed to save consent"),
+          formatDetail(data.detail, t("consentSaveFailed")),
         );
       }
       const result = (await res.json()) as SignResult;
@@ -112,7 +114,7 @@ export default function ConsentSignPage() {
       // Don't set the page-level ``error`` — the user already loaded the
       // template successfully, we just want an inline error next to the
       // sign button so they can retry without losing the body text.
-      setSignError(err instanceof Error ? err.message : "Error");
+      setSignError(err instanceof Error ? err.message : t("genericError"));
     } finally {
       setSigning(false);
     }
@@ -122,7 +124,7 @@ export default function ConsentSignPage() {
     return (
       <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" />
-        Loading…
+        {t("loadingEllipsis")}
       </div>
     );
   }
@@ -134,9 +136,9 @@ export default function ConsentSignPage() {
         className="rounded-lg border border-dashed p-12 text-center text-sm"
       >
         <ShieldAlert className="mx-auto mb-3 size-10 text-amber-500" />
-        <p className="text-base font-medium">Link unavailable</p>
+        <p className="text-base font-medium">{t("linkUnavailable")}</p>
         <p className="mt-2 text-muted-foreground">
-          {error || "The link has expired or is invalid."}
+          {error || t("linkExpiredOrInvalid")}
         </p>
       </div>
     );
@@ -149,9 +151,9 @@ export default function ConsentSignPage() {
         className={`rounded-lg border p-12 text-center text-sm ${ALERT_TONE.emerald}`}
       >
         <ShieldCheck className="mx-auto mb-3 size-10 text-emerald-600 dark:text-emerald-400" />
-        <p className="text-base font-medium">Thank you, your consent has been recorded</p>
+        <p className="text-base font-medium">{t("consentRecorded")}</p>
         <p className="mt-2">
-          Signed on: {formatDateTime(signed.signed_at)}
+          {t("signedOn", { date: formatDateTime(signed.signed_at) })}
         </p>
       </div>
     );
@@ -163,10 +165,12 @@ export default function ConsentSignPage() {
     <div data-testid="consent-page" className="space-y-4">
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Personal data processing consent
+          {t("consentPageTitle")}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Candidate: {view.candidate_name}
+          {t("candidateLabel", {
+            name: view.candidate_name || t("unnamedCandidate"),
+          })}
         </p>
       </header>
 
@@ -186,7 +190,7 @@ export default function ConsentSignPage() {
 
       {isExpired ? (
         <div className={`rounded-md border p-3 text-xs ${ALERT_TONE.amber}`}>
-          The link has expired. Ask HR for a new confirmation link.
+          {t("consentLinkExpired")}
         </div>
       ) : (
         <div className="space-y-2">
@@ -201,8 +205,7 @@ export default function ConsentSignPage() {
           )}
           <div className="flex items-center justify-between gap-3 rounded-md border bg-card p-3">
             <p className="text-xs text-muted-foreground">
-              By signing this consent, you confirm that you have read the terms
-              for processing personal data and recording the interview.
+              {t("consentDisclaimer")}
             </p>
             <Button
               onClick={handleSign}
@@ -214,7 +217,7 @@ export default function ConsentSignPage() {
               ) : (
                 <ShieldCheck className="size-4" />
               )}
-              Sign consent
+              {t("signConsent")}
             </Button>
           </div>
         </div>

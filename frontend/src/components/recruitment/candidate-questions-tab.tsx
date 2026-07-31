@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type {
   CandidateQuestion,
@@ -79,6 +80,8 @@ export function CandidateQuestionsTab({
   vacancyOptions,
   initialVacancyId,
 }: CandidateQuestionsTabProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [vacancyId, setVacancyId] = useState<string | undefined>(
     initialVacancyId || vacancyOptions[0]?.id,
   );
@@ -200,12 +203,12 @@ export function CandidateQuestionsTab({
         { timeoutMs: 120_000 },
       );
       await loadQuestions();
-      toast.success("AI questions ready");
+      toast.success(t("candidateQuestionsToastGenerated"));
     } catch (err) {
       const message =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: unknown }).message)
-          : "Failed to generate";
+          : t("candidateQuestionsGenerateFailed");
       toast.error(message);
     } finally {
       setGenerating(false);
@@ -243,7 +246,7 @@ export function CandidateQuestionsTab({
         setQuestions((prev) =>
           prev.map((q) => (q.id === updated.id ? updated : q)),
         );
-        toast.success("Question saved");
+        toast.success(t("candidateQuestionsToastSaved"));
       } else {
         const created = await api.post<CandidateQuestion>(
           `/recruitment/candidates/${candidateId}/vacancies/${vacancyId}/questions`,
@@ -259,14 +262,14 @@ export function CandidateQuestionsTab({
           },
         );
         setQuestions((prev) => [...prev, created]);
-        toast.success("Question added");
+        toast.success(t("candidateQuestionsToastAdded"));
       }
       setSheetOpen(false);
     } catch (err) {
       const message =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: unknown }).message)
-          : "Failed to save question";
+          : t("candidateQuestionsSaveFailed");
       toast.error(message);
     } finally {
       setSaving(false);
@@ -284,14 +287,14 @@ export function CandidateQuestionsTab({
     try {
       await api.delete(`/recruitment/questions/${question.id}`);
       setQuestions((prev) => prev.filter((q) => q.id !== question.id));
-      toast.success("Question deleted");
+      toast.success(t("candidateQuestionsToastDeleted"));
       setSheetOpen(false);
       setPendingDelete(null);
     } catch (err) {
       const message =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: unknown }).message)
-          : "Failed to delete";
+          : t("candidateQuestionsDeleteFailed");
       toast.error(message);
     } finally {
       setSaving(false);
@@ -308,10 +311,10 @@ export function CandidateQuestionsTab({
                 className="w-64"
                 data-testid="questions-vacancy-select"
               >
-                <SelectValue placeholder="Select vacancy">
+                <SelectValue placeholder={t("candidateQuestionsSelectVacancy")}>
                   {(value) =>
                     vacancyOptions.find((v) => v.id === value)?.title ??
-                    "Select vacancy"
+                    t("candidateQuestionsSelectVacancy")
                   }
                 </SelectValue>
               </SelectTrigger>
@@ -340,7 +343,9 @@ export function CandidateQuestionsTab({
             data-testid="questions-btn-regenerate"
           >
             <Sparkles className="mr-1 size-4" />
-            {generating ? "Queued..." : "Generate"}
+            {generating
+              ? t("candidateQuestionsQueued")
+              : t("vacancyCompetencesGenerate")}
           </Button>
           <Button
             variant="outline"
@@ -350,7 +355,7 @@ export function CandidateQuestionsTab({
             data-testid="questions-btn-add"
           >
             <Plus className="mr-1 size-4" />
-            Add
+            {t("llmAddButton")}
           </Button>
           <Button
             size="sm"
@@ -359,7 +364,7 @@ export function CandidateQuestionsTab({
             data-testid="questions-btn-export"
           >
             <Download className="mr-1 size-4" />
-            Export PDF
+            {t("candidateQuestionsExportPdf")}
           </Button>
         </div>
       </div>
@@ -370,9 +375,12 @@ export function CandidateQuestionsTab({
           data-testid="questions-mandatory-checklist"
         >
           <h3 className="mb-2 flex items-center justify-between text-sm font-medium">
-            Mandatory questions before offer
+            {t("candidateQuestionsMandatoryTitle")}
             <span className="text-xs text-muted-foreground">
-              {askedIds.size} / {mustQuestions.length} asked
+              {t("candidateQuestionsAskedCount", {
+                asked: String(askedIds.size),
+                total: String(mustQuestions.length),
+              })}
             </span>
           </h3>
           <div className="space-y-2">
@@ -395,22 +403,23 @@ export function CandidateQuestionsTab({
       )}
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading questions…</p>
+        <p className="text-sm text-muted-foreground">
+          {t("candidateQuestionsLoading")}
+        </p>
       ) : questions.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
           <FileQuestion className="mx-auto mb-3 size-10 opacity-40" />
-          <p className="text-sm font-medium">No questions yet</p>
-          <p className="mt-1 text-xs">
-            Generate AI-suggested questions or add them manually.
-          </p>
+          <p className="text-sm font-medium">{t("candidateQuestionsEmpty")}</p>
+          <p className="mt-1 text-xs">{t("candidateQuestionsEmptyHint")}</p>
         </div>
       ) : (
         <div className="space-y-3">
           {Array.from(grouped.entries()).map(([key, qs]) => {
             const groupName =
               key === "__general__"
-                ? "General"
-                : competenceLookup.get(key) || "Competency";
+                ? t("candidateQuestionsGroupGeneral")
+                : competenceLookup.get(key) ||
+                  t("candidateQuestionsGroupFallback");
             return (
               <details
                 key={key}
@@ -464,10 +473,10 @@ export function CandidateQuestionsTab({
       <ConfirmDialog
         open={pendingDelete !== null}
         onOpenChange={(o) => !o && setPendingDelete(null)}
-        title="Delete question?"
-        description="This action cannot be undone."
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
+        title={t("candidateQuestionsDeleteTitle")}
+        description={t("candidateQuestionsDeleteDescription")}
+        confirmLabel={tc("delete")}
+        cancelLabel={tc("cancel")}
         destructive
         onConfirm={confirmDelete}
         testId="question-delete-confirm"

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { AlertTriangle, ExternalLink, Info, Loader2 } from "lucide-react";
 
 import { api } from "@/lib/api";
@@ -26,18 +27,24 @@ interface SelectedCell {
   cell: AssessmentMatrixCell;
 }
 
-// en-US keeps the rendering identical between SSR and client — the
-// Compact matrix only shows scores and percentages, both ASCII-safe.
-const NUM_FMT = new Intl.NumberFormat("en-US", {
-  maximumFractionDigits: 1,
-});
-
-function formatScore(value: number | null): string {
-  return value === null ? "—" : NUM_FMT.format(value);
+// Scores follow the app locale; SSR and client resolve the same
+// NEXT_LOCALE cookie, so hydration stays consistent. Cached per locale.
+const numFmtCache = new Map<string, Intl.NumberFormat>();
+function numFmt(locale: string): Intl.NumberFormat {
+  let fmt = numFmtCache.get(locale);
+  if (!fmt) {
+    fmt = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
+    numFmtCache.set(locale, fmt);
+  }
+  return fmt;
 }
 
-function formatPercent(value: number | null): string {
-  return value === null ? "—" : `${NUM_FMT.format(value)}%`;
+function formatScore(locale: string, value: number | null): string {
+  return value === null ? "—" : numFmt(locale).format(value);
+}
+
+function formatPercent(locale: string, value: number | null): string {
+  return value === null ? "—" : `${numFmt(locale).format(value)}%`;
 }
 
 function cellTone(cell: AssessmentMatrixCell): string {
@@ -47,14 +54,21 @@ function cellTone(cell: AssessmentMatrixCell): string {
   return "";
 }
 
-function renderAIScore(cell: AssessmentMatrixCell): string {
-  if (cell.ai_status === "not_covered") return "n/a";
-  if (cell.ai_status === "missing") return formatScore(cell.ai_score);
-  if (cell.ai_status !== "ready" && cell.ai_score === null) return "fail";
-  return formatScore(cell.ai_score);
+function renderAIScore(
+  t: (key: string) => string,
+  locale: string,
+  cell: AssessmentMatrixCell,
+): string {
+  if (cell.ai_status === "not_covered") return t("assessmentsTabScoreNa");
+  if (cell.ai_status === "missing") return formatScore(locale, cell.ai_score);
+  if (cell.ai_status !== "ready" && cell.ai_score === null)
+    return t("assessmentsTabScoreFail");
+  return formatScore(locale, cell.ai_score);
 }
 
 export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
+  const t = useTranslations("recruitment");
+  const locale = useLocale();
   const [data, setData] = useState<AssessmentMatrixData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +96,7 @@ export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
         setError(
           err instanceof Error
             ? err.message
-            : "Failed to load the assessment matrix",
+            : t("assessmentsTabLoadFailed"),
         );
       })
       .finally(() => {
@@ -91,7 +105,7 @@ export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
     return () => {
       cancelled = true;
     };
-  }, [vacancyId]);
+  }, [vacancyId, t]);
 
   const loadCellDetail = useCallback(
     async (sel: SelectedCell) => {
@@ -149,7 +163,7 @@ export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
     return (
       <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" />
-        Loading the assessment matrix…
+        {t("assessmentsTabLoading")}
       </div>
     );
   }
@@ -168,8 +182,7 @@ export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
         data-testid="assessment-compact-matrix-empty"
         className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground"
       >
-        Generate the vacancy competency profile first — there is nothing to
-        score against yet.
+        {t("assessmentsTabEmptyNoProfile")}
       </div>
     );
   }
@@ -187,8 +200,7 @@ export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
           data-testid="assessment-compact-matrix-empty"
           className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground"
         >
-          Attach at least one candidate to this vacancy to populate the
-          matrix.
+          {t("assessmentsTabEmptyNoCandidates")}
         </div>
       </div>
     );
@@ -215,10 +227,10 @@ export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
                 className="sticky left-0 z-30 min-w-[14rem] border-b border-r bg-card px-3 py-2 text-left font-medium"
                 rowSpan={1}
               >
-                Candidate
+                {t("assessmentsTabColCandidate")}
               </th>
               <th className="border-b border-r bg-card px-3 py-2 text-left font-medium">
-                % match
+                {t("assessmentsTabColMatch")}
               </th>
               {competencesPayload.map((c) => (
                 <th
@@ -259,16 +271,23 @@ export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
                     <Badge
                       variant="outline"
                       className="font-mono"
-                      title={`Manager scored ${cand.manager_scored_competences}/${competencesPayload.length} competences`}
+                      title={t("assessmentsTabManagerScoredTitle", {
+                        scored: String(cand.manager_scored_competences),
+                        total: String(competencesPayload.length),
+                      })}
                     >
-                      M&nbsp;{formatPercent(cand.manager_percent)}
+                      M&nbsp;{formatPercent(locale, cand.manager_percent)}
                     </Badge>
                     <Badge
                       variant="outline"
                       className="font-mono"
-                      title={`AI scored ${cand.ai_scored_competences}/${competencesPayload.length} (${cand.ai_not_covered_competences} skipped)`}
+                      title={t("assessmentsTabAiScoredTitle", {
+                        scored: String(cand.ai_scored_competences),
+                        total: String(competencesPayload.length),
+                        skipped: String(cand.ai_not_covered_competences),
+                      })}
                     >
-                      AI&nbsp;{formatPercent(cand.ai_percent)}
+                      AI&nbsp;{formatPercent(locale, cand.ai_percent)}
                     </Badge>
                     {cand.divergence_count > 0 && (
                       <Badge
@@ -319,7 +338,7 @@ export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
                         className="flex w-full flex-col items-center gap-0.5 px-2 py-1.5 text-center font-mono text-xs hover:bg-accent/10"
                       >
                         <span>
-                          M:{formatScore(cell.manager_score)}
+                          M:{formatScore(locale, cell.manager_score)}
                           {cell.manager_evaluator_count > 1 && (
                             <span className="ml-0.5 text-[9px] text-muted-foreground">
                               ×{cell.manager_evaluator_count}
@@ -327,10 +346,10 @@ export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
                           )}
                         </span>
                         <span className="flex items-center gap-1">
-                          AI:{renderAIScore(cell)}
+                          AI:{renderAIScore(t, locale, cell)}
                           {cell.divergence && (
                             <AlertTriangle
-                              aria-label="Manager vs AI divergence"
+                              aria-label={t("assessmentsTabDivergenceAria")}
                               className="size-3 text-amber-600"
                             />
                           )}
@@ -368,14 +387,18 @@ function CompactToolbar({
   totalCompetences,
   candidateCount,
 }: CompactToolbarProps) {
+  const t = useTranslations("recruitment");
+  const locale = useLocale();
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="text-xs text-muted-foreground">
-        Candidates: <strong>{candidateCount}</strong> · Competences:{" "}
-        <strong>{totalCompetences}</strong> · M↔AI divergence threshold:{" "}
-        <strong className="font-mono">
-          {NUM_FMT.format(divergenceThreshold)}
-        </strong>
+        {t.rich("assessmentsTabToolbarSummary", {
+          strong: (chunks) => <strong>{chunks}</strong>,
+          mono: (chunks) => <strong className="font-mono">{chunks}</strong>,
+          candidates: String(candidateCount),
+          competences: String(totalCompetences),
+          threshold: numFmt(locale).format(divergenceThreshold),
+        })}
       </div>
       <Button
         variant="outline"
@@ -386,7 +409,7 @@ function CompactToolbar({
             data-testid="assessment-canvas-open-fullscreen-btn"
           >
             <ExternalLink className="mr-1 size-4" />
-            Open fullscreen
+            {t("assessmentsTabOpenFullscreen")}
           </Link>
         }
       />
@@ -407,6 +430,8 @@ function CompactFooter({
   loading,
   vacancyId,
 }: CompactFooterProps) {
+  const t = useTranslations("recruitment");
+  const locale = useLocale();
   if (!selected) {
     return (
       <div
@@ -414,8 +439,7 @@ function CompactFooter({
         className="flex items-start gap-2 rounded-lg border border-dashed p-3 text-xs text-muted-foreground"
       >
         <Info className="mt-0.5 size-3.5" />
-        Click any cell to inspect every evaluator&apos;s score and the
-        AI&apos;s reasoning.
+        {t("assessmentsTabFooterHint")}
       </div>
     );
   }
@@ -437,30 +461,32 @@ function CompactFooter({
         <span>{selected.competence.name}</span>
         {selected.cell.divergence && (
           <Badge className="border-amber-400 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-            divergence
+            {t("assessmentsTabBadgeDivergence")}
           </Badge>
         )}
       </div>
       {loading && (
         <div className="flex items-center text-muted-foreground">
           <Loader2 className="mr-2 size-3 animate-spin" />
-          Loading details…
+          {t("assessmentsTabLoadingDetails")}
         </div>
       )}
       {detail && !loading && (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <section>
-            <div className="mb-1 font-medium">Manager scores</div>
+            <div className="mb-1 font-medium">
+              {t("assessmentsTabManagerScores")}
+            </div>
             {detail.manager_entries.length === 0 ? (
               <div className="text-muted-foreground">
-                No manager has scored this cell yet.
+                {t("assessmentsTabNoManagerScore")}
               </div>
             ) : (
               <ul className="space-y-1">
                 {detail.manager_entries.map((e, idx) => (
                   <li key={idx} className="flex items-baseline gap-2">
                     <Badge variant="outline" className="font-mono">
-                      {formatScore(e.score)}
+                      {formatScore(locale, e.score)}
                     </Badge>
                     <span>{e.evaluator_label}</span>
                     {e.comment && (
@@ -474,16 +500,18 @@ function CompactFooter({
             )}
           </section>
           <section>
-            <div className="mb-1 font-medium">AI score</div>
+            <div className="mb-1 font-medium">{t("assessmentsTabAiScore")}</div>
             {detail.ai_latest === null ? (
-              <div className="text-muted-foreground">No AI score yet.</div>
+              <div className="text-muted-foreground">
+                {t("assessmentsTabNoAiScore")}
+              </div>
             ) : (
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <Badge variant="outline" className="font-mono">
                     {detail.ai_latest.status === "not_covered"
-                      ? "n/a"
-                      : formatScore(detail.ai_latest.score)}
+                      ? t("assessmentsTabScoreNa")
+                      : formatScore(locale, detail.ai_latest.score)}
                   </Badge>
                   <span className="text-muted-foreground">
                     {detail.ai_latest.status}

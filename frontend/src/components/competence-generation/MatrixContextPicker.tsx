@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link2, Plus, Search, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -51,6 +52,7 @@ export function MatrixContextPicker({
   excludes,
   onChange,
 }: MatrixContextPickerProps) {
+  const t = useTranslations("competences");
   const [data, setData] = useState<ContextOptions | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -70,9 +72,7 @@ export function MatrixContextPicker({
         if (!cancelled) setData(res);
       } catch (err) {
         if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load context",
-          );
+          setError(err instanceof Error ? err.message : t("errorLoadContext"));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -82,7 +82,7 @@ export function MatrixContextPicker({
     return () => {
       cancelled = true;
     };
-  }, [targetId]);
+  }, [targetId, t]);
 
   function toggle(key: string) {
     const next = new Set(excludes);
@@ -115,7 +115,7 @@ export function MatrixContextPicker({
         data-testid="matrix-context-loading"
         className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground"
       >
-        Loading available context…
+        {t("contextLoading")}
       </div>
     );
   }
@@ -125,7 +125,7 @@ export function MatrixContextPicker({
         data-testid="matrix-context-error"
         className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive"
       >
-        {error || "No context available."}
+        {error || t("contextUnavailable")}
       </div>
     );
   }
@@ -144,7 +144,7 @@ export function MatrixContextPicker({
     >
       <div className="flex items-center justify-between">
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Context sent to the model
+          {t("contextSentToModel")}
         </Label>
       </div>
 
@@ -155,8 +155,8 @@ export function MatrixContextPicker({
       />
 
       <ChipSection
-        title="Positions"
-        subtitle="Job positions linked to this specialization."
+        title={t("sectionPositions")}
+        subtitle={t("matrixPositionsSubtitle")}
         items={positions.map((p) => ({
           key: `position:${p.id}`,
           label: p.title,
@@ -165,7 +165,7 @@ export function MatrixContextPicker({
         excludes={excludes}
         onToggle={toggle}
         onBulk={(include) => setBulk([...positionKeys, "positions"], include)}
-        emptyHint="No positions linked to this specialization."
+        emptyHint={t("matrixPositionsEmpty")}
         testIdSuffix="positions"
       />
 
@@ -182,8 +182,8 @@ export function MatrixContextPicker({
       />
 
       <ChipSection
-        title="Existing competences"
-        subtitle="Competences already present in this matrix. Useful as context for the model — toggle off any you want excluded."
+        title={t("sectionExistingCompetences")}
+        subtitle={t("matrixExistingCompetencesSubtitle")}
         items={existingCompetences.map((c) => ({
           key: `competence:${c.id}`,
           label: c.title,
@@ -194,7 +194,7 @@ export function MatrixContextPicker({
         onBulk={(include) =>
           setBulk([...competenceKeys, "existing_competences"], include)
         }
-        emptyHint="Matrix is empty — no competences yet."
+        emptyHint={t("matrixExistingCompetencesEmpty")}
         testIdSuffix="existing_competences"
       />
     </div>
@@ -229,6 +229,7 @@ function ChipSection({
   emptyHint,
   testIdSuffix,
 }: ChipSectionProps) {
+  const t = useTranslations("competences");
   const categoryDropped = excludes.has(categoryKey);
   const active = items.filter((i) => !categoryDropped && !excludes.has(i.key));
   const removed = items.filter(
@@ -256,7 +257,9 @@ function ChipSection({
             className="h-6 px-2 text-xs"
             onClick={() => onBulk(categoryDropped || active.length === 0)}
           >
-            {categoryDropped || active.length === 0 ? "Add all back" : "Remove all"}
+            {categoryDropped || active.length === 0
+              ? t("contextAddAllBack")
+              : t("contextRemoveAll")}
           </Button>
         )}
       </div>
@@ -264,7 +267,7 @@ function ChipSection({
         <span className="text-xs text-muted-foreground">{emptyHint}</span>
       ) : categoryDropped ? (
         <span className="text-xs text-muted-foreground">
-          Category dropped. Use “Add all back” to include items again.
+          {t("contextCategoryDropped")}
         </span>
       ) : (
         <>
@@ -274,7 +277,7 @@ function ChipSection({
                 data-testid={`matrix-context-empty-${testIdSuffix}`}
                 className="text-xs text-muted-foreground"
               >
-                All items removed.
+                {t("contextAllItemsRemoved")}
               </span>
             )}
             {active.map((item) => (
@@ -284,7 +287,7 @@ function ChipSection({
                 data-testid={`matrix-context-chip-${item.key}`}
                 onClick={() => onToggle(item.key)}
                 className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-foreground hover:bg-destructive/10 hover:border-destructive/40"
-                title="Remove from context"
+                title={t("contextRemoveFromContext")}
               >
                 {item.label}
                 <X className="h-3 w-3" />
@@ -293,7 +296,9 @@ function ChipSection({
           </div>
           {removed.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 pt-1">
-              <span className="text-xs text-muted-foreground">Add back:</span>
+              <span className="text-xs text-muted-foreground">
+                {t("contextAddBack")}
+              </span>
               {removed.map((item) => (
                 <button
                   key={item.key}
@@ -323,14 +328,15 @@ function SpecializationDescriptionSection({
   excluded: boolean;
   onToggle: () => void;
 }) {
+  const t = useTranslations("competences");
   if (!description) {
     return (
       <div className="space-y-1.5">
         <Label className="text-xs font-medium text-foreground">
-          Specialization description
+          {t("sectionSpecializationDescription")}
         </Label>
         <span className="text-xs text-muted-foreground">
-          No description set on this specialization.
+          {t("matrixNoSpecializationDescription")}
         </span>
       </div>
     );
@@ -341,7 +347,7 @@ function SpecializationDescriptionSection({
       className="space-y-1.5"
     >
       <Label className="text-xs font-medium text-foreground">
-        Specialization description
+        {t("sectionSpecializationDescription")}
       </Label>
       {excluded ? (
         <button
@@ -351,7 +357,7 @@ function SpecializationDescriptionSection({
           className="inline-flex items-center gap-1 rounded-md border border-dashed bg-background px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <Plus className="h-3 w-3" />
-          Add specialization description
+          {t("matrixAddSpecializationDescription")}
         </button>
       ) : (
         <button
@@ -359,7 +365,7 @@ function SpecializationDescriptionSection({
           data-testid="matrix-context-chip-specialization_description"
           onClick={onToggle}
           className="group flex w-full items-start gap-2 rounded-md border bg-background px-2 py-1.5 text-left text-xs text-foreground hover:bg-destructive/10 hover:border-destructive/40"
-          title="Remove from context"
+          title={t("contextRemoveFromContext")}
         >
           <span className="flex-1 leading-snug">{description}</span>
           <X className="mt-0.5 h-3 w-3 shrink-0" />
@@ -378,14 +384,15 @@ function CompanyDescriptionSection({
   excluded: boolean;
   onToggle: () => void;
 }) {
+  const t = useTranslations("competences");
   if (!description) {
     return (
       <div className="space-y-1.5">
         <Label className="text-xs font-medium text-foreground">
-          Company description
+          {t("sectionCompanyDescription")}
         </Label>
         <span className="text-xs text-muted-foreground">
-          No description set on the tenant profile.
+          {t("contextNoCompanyDescription")}
         </span>
       </div>
     );
@@ -396,7 +403,7 @@ function CompanyDescriptionSection({
       className="space-y-1.5"
     >
       <Label className="text-xs font-medium text-foreground">
-        Company description
+        {t("sectionCompanyDescription")}
       </Label>
       {excluded ? (
         <button
@@ -406,7 +413,7 @@ function CompanyDescriptionSection({
           className="inline-flex items-center gap-1 rounded-md border border-dashed bg-background px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <Plus className="h-3 w-3" />
-          Add company description
+          {t("contextAddCompanyDescription")}
         </button>
       ) : (
         <button
@@ -414,7 +421,7 @@ function CompanyDescriptionSection({
           data-testid="matrix-context-chip-company"
           onClick={onToggle}
           className="group flex w-full items-start gap-2 rounded-md border bg-background px-2 py-1.5 text-left text-xs text-foreground hover:bg-destructive/10 hover:border-destructive/40"
-          title="Remove from context"
+          title={t("contextRemoveFromContext")}
         >
           <span className="flex-1 leading-snug">{description}</span>
           <X className="mt-0.5 h-3 w-3 shrink-0" />
@@ -456,6 +463,7 @@ function DivisionsLinkedAwareSection({
   excludes,
   onChange,
 }: DivisionsLinkedAwareSectionProps) {
+  const t = useTranslations("competences");
   const [search, setSearch] = useState("");
   const [linkedOnly, setLinkedOnly] = useState(false);
   // Seed `excludes` on first render so unlinked divisions stay unchecked
@@ -529,12 +537,19 @@ function DivisionsLinkedAwareSection({
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="flex flex-col">
           <Label className="text-xs font-medium text-foreground">
-            Divisions ({selectedCount} of {divisions.length} selected
-            {linkedTotal > 0 ? `, ${linkedTotal} linked` : ""})
+            {linkedTotal > 0
+              ? t("matrixDivisionsCounterLinked", {
+                  selected: selectedCount,
+                  total: divisions.length,
+                  linked: linkedTotal,
+                })
+              : t("matrixDivisionsCounter", {
+                  selected: selectedCount,
+                  total: divisions.length,
+                })}
           </Label>
           <span className="text-[11px] text-muted-foreground">
-            Every tenant division is listed. Linked entries (through this
-            specialization&apos;s positions) are pre-checked.
+            {t("matrixDivisionsSubtitle")}
           </span>
         </div>
         {showControls ? (
@@ -547,14 +562,14 @@ function DivisionsLinkedAwareSection({
                 checked={linkedOnly}
                 onCheckedChange={(v) => setLinkedOnly(Boolean(v))}
               />
-              <span>Show linked only</span>
+              <span>{t("contextShowLinkedOnly")}</span>
             </label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search…"
+                placeholder={t("searchShort")}
                 className="h-7 w-44 pl-7 text-xs"
                 data-testid="ai-generate-matrix-divisions-search"
               />
@@ -569,7 +584,9 @@ function DivisionsLinkedAwareSection({
             className="h-6 px-2 text-xs"
             onClick={() => toggleCategory(categoryDropped || selectedCount === 0)}
           >
-            {categoryDropped || selectedCount === 0 ? "Add all back" : "Remove all"}
+            {categoryDropped || selectedCount === 0
+              ? t("contextAddAllBack")
+              : t("contextRemoveAll")}
           </Button>
         ) : null}
       </div>
@@ -582,15 +599,15 @@ function DivisionsLinkedAwareSection({
       </div>
       {divisions.length === 0 ? (
         <span className="text-xs text-muted-foreground">
-          No divisions configured for this tenant.
+          {t("contextDivisionsEmpty")}
         </span>
       ) : categoryDropped ? (
         <span className="text-xs text-muted-foreground">
-          Category dropped. Use “Add all back” to include items again.
+          {t("contextCategoryDropped")}
         </span>
       ) : visible.length === 0 ? (
         <span className="text-xs text-muted-foreground">
-          Nothing matches the current filter.
+          {t("contextNothingMatchesFilter")}
         </span>
       ) : (
         <div className="flex flex-wrap gap-1.5">
@@ -620,7 +637,7 @@ function DivisionsLinkedAwareSection({
                       render={
                         <span
                           data-testid={`ai-generate-matrix-divisions-item-${d.id}-linked-marker`}
-                          aria-label="Linked via positions"
+                          aria-label={t("matrixLinkedViaPositions")}
                           className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-primary"
                         >
                           <Link2 className="h-3 w-3" />
@@ -628,7 +645,7 @@ function DivisionsLinkedAwareSection({
                       }
                     />
                     <TooltipContent side="top" className="text-xs">
-                      Linked through this specialization&apos;s positions
+                      {t("matrixLinkedThroughPositions")}
                     </TooltipContent>
                   </Tooltip>
                 ) : null}

@@ -1,8 +1,23 @@
 import { api } from "../api";
 
-export type ContentLanguage = "en";
+export type ContentLanguage = "en" | "de";
+/** Languages the AI may generate content in. Adding one: widen the
+ * ContentLanguage union here and the backend Literal in
+ * ai_settings/schemas.py (no DB migration — HRP-480 dropped the CHECK).
+ * Deliberately NOT tied to AVAILABLE_LOCALES: the content language is
+ * orthogonal to the interface locale, so an en-only UI deployment may
+ * still generate AI content in German. */
+export const CONTENT_LANGUAGES: ContentLanguage[] = ["en", "de"];
 export type EffortLevel = "fast" | "balanced" | "thorough" | "custom";
 export type LLMProvider = "anthropic" | "openai" | "gemini";
+
+export interface ProviderStatus {
+  provider: string;
+  label: string;
+  configured: boolean;
+  source: "global" | "byok" | "local" | null;
+  supports_local: boolean;
+}
 
 export interface AISettings {
   id: string;
@@ -14,7 +29,8 @@ export interface AISettings {
   max_retries: number;
   company_context: string | null;
   effective_model: string;
-  effective_provider: LLMProvider;
+  // Not a closed set anymore: discovered/local providers (HRP-465).
+  effective_provider: string;
   effective_temperature: number;
   effective_max_retries: number;
   effective_credit_multiplier: number;
@@ -23,7 +39,7 @@ export interface AISettings {
 }
 
 export interface AllowedModel {
-  provider: LLMProvider;
+  provider: string;
   model: string;
   label: string;
   credit_multiplier: number;
@@ -54,4 +70,5 @@ export const aiSettingsApi = {
   reset: () => api.post<AISettings>(`${BASE}/reset`),
   presets: () => api.get<EffortPreset[]>(`${BASE}/presets`),
   models: () => api.get<AllowedModel[]>(`${BASE}/models`),
+  providers: () => api.get<ProviderStatus[]>(`${BASE}/providers`),
 };

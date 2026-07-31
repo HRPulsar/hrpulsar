@@ -189,6 +189,7 @@ class TestMatrixSessionLLMInvariants:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             captured["tenant_settings"] = tenant_settings
             captured["system"] = system
@@ -232,6 +233,7 @@ class TestApplyMatrix:
             tenant_settings=None,
             schema=None,
             max_tokens=None,
+            **kwargs,
         ):
             return GeneratedMatrixSchema.model_validate(_FAKE_MATRIX_PAYLOAD)
 

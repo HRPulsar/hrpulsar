@@ -55,6 +55,10 @@ class AnswerScale(BaseModel):
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # HRP-479: stable key for the seeded default scale, carried through
+    # snapshot copies (is_default flips to false there, so the flag alone
+    # can't identify the origin scale). Tenant scales keep NULL.
+    i18n_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tenants.id", ondelete="CASCADE"),

@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { AssessmentList, CandidateList, EmployeeList, VacancyList } from "@/lib/types";
+import {
+  assessmentStatusTitle,
+  assessmentTypeTitle,
+} from "@/lib/reference-labels";
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
 
@@ -16,6 +21,8 @@ interface SearchResult {
 }
 
 export function GlobalSearch() {
+  const t = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -51,7 +58,7 @@ export function GlobalSearch() {
         .map((e) => ({
           type: "employee",
           id: e.id,
-          title: e.user_name || e.user_email || "Employee",
+          title: e.user_name || e.user_email || t("employee"),
           subtitle: e.position_title || "",
           href: `/employees/${e.id}`,
         }));
@@ -62,8 +69,8 @@ export function GlobalSearch() {
         .map((a) => ({
           type: "assessment",
           id: a.id,
-          title: a.title || "Untitled",
-          subtitle: `${a.type_title} — ${a.status_title}`,
+          title: a.title || t("untitled"),
+          subtitle: `${assessmentTypeTitle(tRef, a)} — ${assessmentStatusTitle(tRef, a)}`,
           href: `/assessments/${a.id}`,
         }));
 
@@ -98,7 +105,7 @@ export function GlobalSearch() {
           return {
             type: "candidate" as const,
             id: c.id,
-            title: name || "(unnamed)",
+            title: name || t("unnamed"),
             subtitle: c.email || c.person?.email || c.source || "",
             href: `/recruitment/candidates/${c.id}`,
           };
@@ -111,7 +118,7 @@ export function GlobalSearch() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t, tRef]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -158,10 +165,10 @@ export function GlobalSearch() {
   }, []);
 
   const typeLabels: Record<string, string> = {
-    employee: "Employee",
-    assessment: "Assessment",
-    vacancy: "Vacancy",
-    candidate: "Candidate",
+    employee: t("employee"),
+    assessment: t("assessment"),
+    vacancy: t("vacancy"),
+    candidate: t("candidate"),
   };
 
   return (
@@ -170,7 +177,7 @@ export function GlobalSearch() {
         <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           ref={inputRef}
-          placeholder="Search or jump to…"
+          placeholder={t("searchPlaceholder")}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -194,9 +201,9 @@ export function GlobalSearch() {
           {/* Results dropdown */}
           <div className="absolute left-0 top-full z-50 mt-1 w-80 rounded-lg border bg-background shadow-lg">
             {loading ? (
-              <div className="p-3 text-center text-sm text-muted-foreground">Searching...</div>
+              <div className="p-3 text-center text-sm text-muted-foreground">{t("searching")}</div>
             ) : results.length === 0 ? (
-              <div className="p-3 text-center text-sm text-muted-foreground">No results</div>
+              <div className="p-3 text-center text-sm text-muted-foreground">{t("noResults")}</div>
             ) : (
               <div className="max-h-72 overflow-y-auto p-1">
                 {results.map((r, i) => (

@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.competence.models import (
     Competence,
     Material,
@@ -38,9 +39,9 @@ async def _load_competence_for_tenant(
 ) -> Competence:
     comp = await db.get(Competence, competence_id)
     if not comp:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
     if comp.tenant_id is not None and comp.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competence not found")
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
     return comp
 
 
@@ -49,9 +50,9 @@ async def _load_specialization_for_tenant(
 ) -> DictionaryItem:
     spec = await db.get(DictionaryItem, specialization_id)
     if not spec or spec.type != "specialization":
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Specialization not found")
+        raise AppError("specialization_not_found", status.HTTP_404_NOT_FOUND)
     if spec.tenant_id is not None and spec.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Specialization not found")
+        raise AppError("specialization_not_found", status.HTTP_404_NOT_FOUND)
     return spec
 
 
@@ -63,14 +64,14 @@ async def _load_material_for_competence(
 ) -> Material:
     mat = await db.get(Material, material_id)
     if not mat:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Material not found")
+        raise AppError("material_not_found", status.HTTP_404_NOT_FOUND)
     if mat.competence_id != competence_id:
-        raise HTTPException(
+        raise AppError(
+            "material_not_in_competence",
             status.HTTP_400_BAD_REQUEST,
-            "Material does not belong to this competence",
         )
     if mat.tenant_id is not None and mat.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Material not found")
+        raise AppError("material_not_found", status.HTTP_404_NOT_FOUND)
     return mat
 
 
@@ -192,9 +193,10 @@ async def add_material_override(
     mode: str,
 ) -> MaterialSpecializationOverride:
     if mode not in ALLOWED_MODES:
-        raise HTTPException(
+        raise AppError(
+            "material_override_invalid_mode",
             status.HTTP_400_BAD_REQUEST,
-            f"Invalid mode '{mode}'. Allowed: hide, add",
+            mode=mode,
         )
 
     await _load_competence_for_tenant(db, tenant_id, competence_id)
@@ -235,11 +237,11 @@ async def remove_material_override(
 
     override = await db.get(MaterialSpecializationOverride, override_id)
     if override is None or override.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Override not found")
+        raise AppError("material_override_not_found", status.HTTP_404_NOT_FOUND)
 
     material = await db.get(Material, override.material_id)
     if material is None or material.competence_id != competence_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Override not found")
+        raise AppError("material_override_not_found", status.HTTP_404_NOT_FOUND)
 
     await db.delete(override)
     await db.commit()

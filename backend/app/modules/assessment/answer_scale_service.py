@@ -14,11 +14,12 @@ builders.
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.assessment.models import (
     AnswerOption,
     AnswerScale,
@@ -51,19 +52,19 @@ def _validate_options_payload(options: list) -> None:
     neutral_count = sum(1 for o in options if o.is_neutral)
     non_neutral_count = len(options) - neutral_count
     if neutral_count > 1:
-        raise HTTPException(
+        raise AppError(
+            "answer_scale_one_neutral_only",
             status.HTTP_400_BAD_REQUEST,
-            "Only one neutral option is allowed per scale",
         )
     if non_neutral_count < 2:
-        raise HTTPException(
+        raise AppError(
+            "answer_scale_min_two_options",
             status.HTTP_400_BAD_REQUEST,
-            "At least 2 scoring options are required",
         )
     if non_neutral_count > 10:
-        raise HTTPException(
+        raise AppError(
+            "answer_scale_max_ten_options",
             status.HTTP_400_BAD_REQUEST,
-            "At most 10 scoring options are allowed",
         )
 
 
@@ -72,32 +73,32 @@ def _validate_levels_payload(levels: list) -> None:
     if not levels:
         return
     if len(levels) > 100:
-        raise HTTPException(
+        raise AppError(
+            "answer_scale_max_levels",
             status.HTTP_400_BAD_REQUEST,
-            "At most 100 levels are allowed",
         )
     for lvl in levels:
         if lvl.percent_from > lvl.percent_to:
-            raise HTTPException(
+            raise AppError(
+                "answer_scale_level_range_invalid",
                 status.HTTP_400_BAD_REQUEST,
-                "Level percent_from must be <= percent_to",
             )
     ordered = sorted(levels, key=lambda lv: (lv.sort_index, lv.percent_from))
     if ordered[0].percent_from != 0:
-        raise HTTPException(
+        raise AppError(
+            "answer_scale_first_level_start",
             status.HTTP_400_BAD_REQUEST,
-            "First level must start at 0",
         )
     if ordered[-1].percent_to != 100:
-        raise HTTPException(
+        raise AppError(
+            "answer_scale_last_level_end",
             status.HTTP_400_BAD_REQUEST,
-            "Last level must end at 100",
         )
     for prev, cur in zip(ordered, ordered[1:], strict=False):
         if cur.percent_from != prev.percent_to + 1:
-            raise HTTPException(
+            raise AppError(
+                "answer_scale_levels_must_cover_range",
                 status.HTTP_400_BAD_REQUEST,
-                "Levels must cover [0..100] without gaps or overlaps",
             )
 
 
@@ -107,6 +108,7 @@ async def _scale_detail_dict(db: AsyncSession, scale: AnswerScale) -> dict:
         "id": scale.id,
         "title": scale.title,
         "description": scale.description,
+        "i18n_key": scale.i18n_key,
         "tenant_id": scale.tenant_id,
         "is_default": scale.is_default,
         "is_snapshot": scale.is_snapshot,
@@ -128,6 +130,10 @@ async def _scale_detail_dict(db: AsyncSession, scale: AnswerScale) -> dict:
                 "id": lv.id,
                 "percent_from": lv.percent_from,
                 "percent_to": lv.percent_to,
+                # HRP-479: system_code was dropped here (and the frontend
+                # label shim collapsed origin levels — whose system_title
+                # is NULL — to an empty string).
+                "system_code": lv.system_code,
                 "system_title": lv.system_title,
                 "description": lv.description,
                 "sort_index": lv.sort_index,
@@ -236,7 +242,7 @@ async def update_answer_scale(
         or scale.is_snapshot
         or scale.deleted_at is not None
     ):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Answer scale not found")
+        raise AppError("answer_scale_not_found", status.HTTP_404_NOT_FOUND)
 
     _validate_options_payload(data.options)
     _validate_levels_payload(data.levels)
@@ -263,7 +269,7 @@ async def delete_answer_scale(
         or scale.is_snapshot
         or scale.deleted_at is not None
     ):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Answer scale not found")
+        raise AppError("answer_scale_not_found", status.HTTP_404_NOT_FOUND)
 
     default_result = await db.execute(
         select(AnswerScale).where(
@@ -300,9 +306,9 @@ async def get_answer_scale(
     """
     scale = await _load_scale_full(db, scale_id)
     if scale is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Answer scale not found")
+        raise AppError("answer_scale_not_found", status.HTTP_404_NOT_FOUND)
     if scale.tenant_id is not None and scale.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Answer scale not found")
+        raise AppError("answer_scale_not_found", status.HTTP_404_NOT_FOUND)
     return await _scale_detail_dict(db, scale)
 
 
@@ -326,6 +332,7 @@ async def snapshot_scale_for_assessment(
         tenant_id=None,
         title=source.title,
         description=source.description,
+        i18n_key=source.i18n_key,
         is_default=False,
         is_snapshot=True,
     )

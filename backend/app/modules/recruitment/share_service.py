@@ -16,11 +16,12 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.errors import AppError
 from app.modules.recruitment import audit_service
 from app.modules.recruitment.models import (
     ConsolidatedReport,
@@ -93,7 +94,7 @@ async def _get_report(
         )
     ).scalar_one_or_none()
     if report is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+        raise AppError("report_not_found", status.HTTP_404_NOT_FOUND)
     return report
 
 
@@ -110,9 +111,9 @@ async def create_share(
     """Create a share row, email recipients, write audit log."""
     report = await _get_report(db, tenant_id, report_id)
     if report.status != "completed" or report.file_id is None:
-        raise HTTPException(
+        raise AppError(
+            "share_report_not_ready",
             status.HTTP_409_CONFLICT,
-            "Report is not ready to share",
         )
 
     token = secrets.token_urlsafe(32)
@@ -142,34 +143,50 @@ async def create_share(
     # logged but never block the share creation — the token is already
     # usable and visible to the recruiter.
     if recipients:
-        from jinja2 import Template
-
         from app.core.email import enqueue_email
+        from app.core.i18n import resolve_locale, translate
+        from app.modules.company.models import Tenant
 
-        subject_tpl = Template(
-            "{{ shared_by_name }} shared a recruitment report"
+        # Recipients are bare email addresses of people without an
+        # account (i18n F4), so the tenant default is the only locale
+        # signal available — never the sharing recruiter's own locale.
+        tenant = await db.get(Tenant, tenant_id)
+        locale = resolve_locale(
+            tenant_default=tenant.default_locale if tenant else None
         )
-        body_tpl = Template(
-            "<p>A recruitment report"
-            "{% if vacancy_title %} for <b>{{ vacancy_title }}</b>{% endif %}"
-            " is ready for review.</p>"
-            "<p><a href='{{ share_url }}'>Open report</a></p>"
-            "<p>This link expires on {{ expires_at }}.</p>"
-            "{% if message %}<blockquote>{{ message }}</blockquote>{% endif %}"
+        vacancy_line = (
+            translate(
+                "email.report_share.vacancy_line",
+                locale,
+                vacancy_title=vacancy_title,
+            )
+            if vacancy_title
+            else ""
         )
-        context = {
-            "shared_by_name": f"{settings.brand_name} Recruiting",
-            "vacancy_title": vacancy_title,
-            "share_url": _share_url(token),
-            "expires_at": share.expires_at.isoformat(),
-            "message": message or "",
-        }
+        message_block = (
+            translate("email.report_share.message_block", locale, message=message)
+            if message
+            else ""
+        )
+        subject = translate(
+            "email.report_share.subject",
+            locale,
+            shared_by_name=f"{settings.brand_name} Recruiting",
+        )
+        body = translate(
+            "email.report_share.body",
+            locale,
+            vacancy_line=vacancy_line,
+            share_url=_share_url(token),
+            expires_at=share.expires_at.isoformat(),
+            message_block=message_block,
+        )
         for email in recipients:
             try:
                 enqueue_email(
                     email,
-                    subject_tpl.render(**context),
-                    body_tpl.render(**context),
+                    subject,
+                    body,
                     tenant_id=str(tenant_id),
                     template_code="recruitment.report_shared",
                 )
@@ -230,7 +247,7 @@ async def revoke_share(
         )
     ).scalar_one_or_none()
     if share is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Share link not found")
+        raise AppError("share_link_not_found", status.HTTP_404_NOT_FOUND)
     if share.revoked_at is not None:
         return
     share.revoked_at = datetime.now(timezone.utc)
@@ -256,11 +273,11 @@ async def open_share(db: AsyncSession, token: str) -> dict:
         )
     ).scalar_one_or_none()
     if share is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Share link not found")
+        raise AppError("share_link_not_found", status.HTTP_404_NOT_FOUND)
     if share.revoked_at is not None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Share link revoked")
+        raise AppError("share_link_revoked", status.HTTP_404_NOT_FOUND)
     if share.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status.HTTP_410_GONE, "Share link has expired")
+        raise AppError("share_link_expired", status.HTTP_410_GONE)
 
     report = (
         await db.execute(
@@ -270,9 +287,7 @@ async def open_share(db: AsyncSession, token: str) -> dict:
         )
     ).scalar_one_or_none()
     if report is None or report.status != "completed" or not report.file_id:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Report unavailable"
-        )
+        raise AppError("share_report_unavailable", status.HTTP_404_NOT_FOUND)
 
     vacancy = (
         await db.execute(

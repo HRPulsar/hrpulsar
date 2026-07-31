@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Employee, EmployeeList, Position } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -32,13 +33,17 @@ export default function UnassignedEmployeesPage() {
 }
 
 function UnassignedEmployeesView() {
+  const t = useTranslations("admin");
+  const tc = useTranslations("common");
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [pendingPos, setPendingPos] = useState<Record<string, string>>({});
 
-  async function load() {
+  // HRP-476: memoised because the error fallback now closes over the
+  // translator — an inline function would re-run the effect on every render.
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [empRes, posRes] = await Promise.all([
@@ -50,29 +55,29 @@ function UnassignedEmployeesView() {
         posRes.items.filter((p) => p.lifecycle_status !== "closed"),
       );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load");
+      toast.error(err instanceof Error ? err.message : t("toastLoadFailed"));
     } finally {
       setLoading(false);
     }
-  }
+  }, [t]);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   async function assign(emp: Employee) {
     const positionId = pendingPos[emp.id];
     if (!positionId) {
-      toast.error("Pick a position first");
+      toast.error(t("toastPickPositionFirst"));
       return;
     }
     setSavingId(emp.id);
     try {
       await api.put(`/employees/${emp.id}`, { position_id: positionId });
-      toast.success("Position assigned");
+      toast.success(t("toastPositionAssigned"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to assign");
+      toast.error(err instanceof Error ? err.message : t("toastAssignFailed"));
     } finally {
       setSavingId(null);
     }
@@ -81,7 +86,7 @@ function UnassignedEmployeesView() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
-        Loading...
+        {tc("loading")}
       </div>
     );
   }
@@ -90,21 +95,20 @@ function UnassignedEmployeesView() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">
-          Unassigned employees
+          {t("unassignedTitle")}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Employees without a position. Assign them to a staff record so
-          headcount and competence matrix flows can pick them up.
+          {t("unassignedSubtitle")}
         </p>
       </div>
 
       <Table data-testid="unassigned-table">
         <TableHeader>
           <TableRow>
-            <TableHead>Employee</TableHead>
-            <TableHead>Division</TableHead>
-            <TableHead>Hire date</TableHead>
-            <TableHead>Position</TableHead>
+            <TableHead>{tc("employee")}</TableHead>
+            <TableHead>{t("columnDivision")}</TableHead>
+            <TableHead>{t("columnHireDate")}</TableHead>
+            <TableHead>{t("position")}</TableHead>
             <TableHead className="w-32" />
           </TableRow>
         </TableHeader>
@@ -116,7 +120,7 @@ function UnassignedEmployeesView() {
                 data-testid="unassigned-empty"
                 className="py-8 text-center text-muted-foreground"
               >
-                Every employee has a position assigned.
+                {t("unassignedEmpty")}
               </TableCell>
             </TableRow>
           ) : (
@@ -132,7 +136,7 @@ function UnassignedEmployeesView() {
                 <TableCell>{emp.hire_date}</TableCell>
                 <TableCell>
                   <div className="space-y-1">
-                    <Label className="sr-only">Position</Label>
+                    <Label className="sr-only">{t("position")}</Label>
                     <Select
                       value={pendingPos[emp.id] || ""}
                       onValueChange={(val) =>
@@ -143,7 +147,7 @@ function UnassignedEmployeesView() {
                         data-testid={`unassigned-row-${emp.id}-select`}
                         className="w-full"
                       >
-                        <SelectValue placeholder="Pick a position">
+                        <SelectValue placeholder={t("pickPosition")}>
                           {(() => {
                             const id = pendingPos[emp.id];
                             if (!id) return undefined;
@@ -170,7 +174,7 @@ function UnassignedEmployeesView() {
                     onClick={() => assign(emp)}
                     disabled={savingId === emp.id || !pendingPos[emp.id]}
                   >
-                    {savingId === emp.id ? "Saving..." : "Assign"}
+                    {savingId === emp.id ? t("saving") : t("assign")}
                   </Button>
                 </TableCell>
               </TableRow>

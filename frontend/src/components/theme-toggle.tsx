@@ -1,11 +1,13 @@
 "use client";
 
 import { useTheme } from "next-themes";
+import { useTranslations } from "next-intl";
 import { useSyncExternalStore } from "react";
 
 const emptySubscribe = () => () => {};
 
 export function ThemeToggle() {
+  const t = useTranslations("common");
   const { theme, setTheme } = useTheme();
   const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
 
@@ -21,7 +23,9 @@ export function ThemeToggle() {
     <button
       onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
       className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted transition-colors"
-      title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      title={
+        theme === "dark" ? t("switchToLightMode") : t("switchToDarkMode")
+      }
       data-testid="header-btn-theme"
     >
       {theme === "dark" ? (

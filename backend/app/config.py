@@ -2,6 +2,7 @@ import logging
 import re
 from pathlib import Path
 from typing import ClassVar, Literal
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings
@@ -41,6 +42,15 @@ class Settings(BaseSettings):
     # Base URL used to build tokenised share links (e.g. report sharing).
     # Empty → falls back to the first CORS origin.
     frontend_url: str = ""
+
+    # Interface locales (i18n). AVAILABLE_LOCALES — comma-separated list of
+    # UI locales offered by this deployment (which catalogs the language
+    # switcher shows), e.g. "de,en". DEFAULT_LOCALE — fallback locale for
+    # users/tenants without an explicit choice; must be listed in
+    # AVAILABLE_LOCALES. Frontend counterparts: NEXT_PUBLIC_AVAILABLE_LOCALES
+    # / NEXT_PUBLIC_DEFAULT_LOCALE (read via lib/locale.ts).
+    available_locales: str = "en"
+    default_locale: str = "en"
 
     # White-label branding (HRP-393). Defaults reproduce the stock HRPulsar
     # brand; self-hosted operators override via env (docs/core/docs/
@@ -201,6 +211,17 @@ class Settings(BaseSettings):
     # to the front-end edge (Cloudflare ranges, ingress LB CIDR, etc.).
     demo_trusted_proxies: str = ""
 
+    # Billing localization (HRP-451). Core never reads these beyond
+    # exposing them; the enterprise billing-profile loader
+    # (ee/billing_profile.py) resolves the effective per-site money
+    # layer. Empty profile path -> stock USD profile from ee/credits.yaml.
+    billing_currency: str = "USD"
+    billing_locale: str = "en-US"
+    billing_payment_provider: Literal[
+        "manual_invoice", "stripe", "yookassa", "none"
+    ] = "manual_invoice"
+    billing_profile_path: str = ""
+
     # Sentry (optional)
     sentry_dsn: str = ""
     sentry_traces_sample_rate: float = 0.1
@@ -225,6 +246,45 @@ class Settings(BaseSettings):
     max_upload_mb: int = 10
 
     model_config = {"env_file": "../.env", "extra": "ignore"}
+
+    @property
+    def available_locales_list(self) -> list[str]:
+        """AVAILABLE_LOCALES parsed into an ordered, normalized list."""
+        return [
+            loc.strip().lower()
+            for loc in self.available_locales.split(",")
+            if loc.strip()
+        ]
+
+    @model_validator(mode="after")
+    def _validate_locales(self) -> "Settings":
+        """Fail fast on a broken locale config instead of serving a UI
+        whose language switcher and catalogs disagree with the backend.
+
+        Blank env values mean "unset" (compose files pass locale vars as
+        ``${VAR:-}``), not a misconfiguration — coalesce to defaults
+        before validating.
+        """
+        if not self.available_locales.strip():
+            self.available_locales = "en"
+        locales = self.available_locales_list
+        if not locales:
+            raise ValueError("AVAILABLE_LOCALES must list at least one locale")
+        for loc in locales:
+            if not re.fullmatch(r"[a-z]{2}", loc):
+                raise ValueError(
+                    f"AVAILABLE_LOCALES entry {loc!r} is not a two-letter "
+                    "ISO 639-1 code (e.g. 'en', 'de')"
+                )
+        self.default_locale = self.default_locale.strip().lower()
+        if not self.default_locale:
+            self.default_locale = locales[0]
+        if self.default_locale not in locales:
+            raise ValueError(
+                f"DEFAULT_LOCALE {self.default_locale!r} is not listed in "
+                f"AVAILABLE_LOCALES ({self.available_locales!r})"
+            )
+        return self
 
     @model_validator(mode="after")
     def _resolve_version(self) -> "Settings":
@@ -326,6 +386,38 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"S3_SECRET_KEY must be set when S3_ENDPOINT is configured in "
                 f"'{env}' environment."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _s3_internal_requires_public_endpoint(self) -> "Settings":
+        """Refuse to boot when presigned URLs would point at an internal host.
+
+        SigV4 URLs are host-bound and signed against ``s3_endpoint`` when
+        ``s3_public_endpoint`` is empty (see ``app.core.s3``). A bare
+        Docker-network hostname like ``minio:9000`` is unreachable from a
+        browser, so every logo/avatar/attachment link silently 404s — the
+        exact failure of the 2026-07-20 self-hosted smoke. A hostname
+        without dots (other than ``localhost``, valid in single-machine
+        dev) can only be a container-network name; fail fast instead of
+        serving broken links.
+        """
+        if not self.s3_endpoint or self.s3_public_endpoint:
+            return self
+        endpoint = self.s3_endpoint
+        if "://" not in endpoint:
+            # Schemeless "minio:9000": urlsplit would treat "minio" as the
+            # scheme and report no hostname — parse it as a netloc instead.
+            endpoint = f"//{endpoint}"
+        host = urlsplit(endpoint).hostname or ""
+        if host and "." not in host and host not in {"localhost", "::1"}:
+            raise ValueError(
+                f"S3_ENDPOINT '{self.s3_endpoint}' is an internal-only "
+                "hostname: browsers cannot reach it, so presigned file "
+                "URLs (logos, avatars, attachments) would be broken. Set "
+                "S3_PUBLIC_ENDPOINT to the public base URL that proxies "
+                "to storage (self-hosted: your app domain — the bundled "
+                "Caddyfile forwards /<S3_BUCKET>/* to MinIO)."
             )
         return self
 

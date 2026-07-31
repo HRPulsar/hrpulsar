@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Sparkles, Zap } from "lucide-react";
+import { useTranslations } from "next-intl";
 import {
   Dialog,
   DialogContent,
@@ -58,6 +59,8 @@ export function GenerationConfirmDialog({
   targetId,
   onSubmit,
 }: GenerationConfirmDialogProps) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
   const [withIndicators, setWithIndicators] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   // HRP-123: only surfaced for whole_base preflight; other scopes stay simple.
@@ -96,17 +99,21 @@ export function GenerationConfirmDialog({
 
   const title =
     scope === "whole_base"
-      ? "AI generation: competence library"
+      ? t("confirmTitleWholeBase")
       : scope === "group"
-        ? `AI generation: group${targetTitle ? ` "${targetTitle}"` : ""}`
-        : `AI generation: indicators${targetTitle ? ` for "${targetTitle}"` : ""}`;
+        ? targetTitle
+          ? t("confirmTitleGroupNamed", { title: targetTitle })
+          : t("confirmTitleGroup")
+        : targetTitle
+          ? t("confirmTitleIndicatorsNamed", { title: targetTitle })
+          : t("confirmTitleIndicators");
 
   const helpText =
     scope === "whole_base"
-      ? "Builds a full competence tree (groups → competences → optional indicators) tailored to your specializations and divisions. You can review and edit every node before publishing."
+      ? t("confirmHelpWholeBase")
       : scope === "group"
-        ? "Adds new competences to this group based on the existing structure of your library. Existing competences stay intact — only new branches are proposed."
-        : "Generates behavioral indicators for this competence at every skill level. Existing indicators stay locked — only new ones are proposed.";
+        ? t("confirmHelpGroup")
+        : t("confirmHelpIndicators");
 
   async function handleSubmit() {
     setSubmitting(true);
@@ -168,11 +175,10 @@ export function GenerationConfirmDialog({
               />
               <span className="text-sm">
                 <Label className="font-medium">
-                  Also generate indicators
+                  {t("confirmAlsoIndicators")}
                 </Label>
                 <span className="block text-xs text-muted-foreground">
-                  Uncheck to get only the competence list without
-                  indicators.
+                  {t("confirmAlsoIndicatorsHint")}
                 </span>
               </span>
             </label>
@@ -187,12 +193,10 @@ export function GenerationConfirmDialog({
               />
               <span className="text-sm">
                 <Label className="font-medium">
-                  Augment existing items in the group
+                  {t("confirmAugmentLabel")}
                 </Label>
                 <span className="block text-xs text-muted-foreground">
-                  Add new competences to existing subgroups and new
-                  indicators to existing competences. Off by default —
-                  the model would otherwise only invent fresh branches.
+                  {t("confirmAugmentHint")}
                 </span>
               </span>
             </label>
@@ -217,12 +221,12 @@ export function GenerationConfirmDialog({
                 htmlFor="compgen-confirm-refinement"
                 className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
               >
-                Refinement notes (optional)
+                {t("confirmRefinementLabel")}
               </Label>
               <Textarea
                 id="compgen-confirm-refinement"
                 data-testid="compgen-confirm-refinement"
-                placeholder="Tell the model what to emphasise, exclude, or how to phrase the output."
+                placeholder={t("confirmRefinementPlaceholder")}
                 value={refinement}
                 onChange={(e) => setRefinement(e.target.value)}
                 rows={3}
@@ -230,8 +234,7 @@ export function GenerationConfirmDialog({
                 className="text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                Same field as the in-session refinement panel — set it now if
-                you already know what to nudge.
+                {t("confirmRefinementHint")}
               </p>
             </div>
           )}
@@ -248,15 +251,16 @@ export function GenerationConfirmDialog({
               <Zap className="mt-0.5 h-4 w-4 text-primary" />
               <div className="space-y-0.5">
                 <p>
-                  <span className="font-mono font-semibold">
-                    {cost.cost} {cost.cost === 1 ? "credit" : "credits"}
-                  </span>{" "}
-                  will be charged when generation starts.
+                  {t.rich("confirmCostLine", {
+                    credits: tc("credits", { count: cost.cost }),
+                    amount: (chunks) => (
+                      <span className="font-mono font-semibold">{chunks}</span>
+                    ),
+                  })}
                 </p>
                 {cost.requiresConfirmation && (
                   <p className="text-xs text-muted-foreground">
-                    Above your {cost.threshold}-credit warning threshold.
-                    Adjust it in Settings → Billing → Settings.
+                    {t("confirmCostThreshold", { threshold: cost.threshold })}
                   </p>
                 )}
               </div>
@@ -270,7 +274,7 @@ export function GenerationConfirmDialog({
             onClick={() => onOpenChange(false)}
             disabled={submitting}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             data-testid="compgen-confirm-btn-start"
@@ -278,10 +282,10 @@ export function GenerationConfirmDialog({
             disabled={submitting}
           >
             {submitting
-              ? "Starting…"
+              ? t("confirmStarting")
               : cost.requiresConfirmation
-                ? `Confirm & start (${cost.cost} credits)`
-                : "Start"}
+                ? t("confirmStartWithCost", { count: cost.cost ?? 0 })
+                : t("confirmStart")}
           </Button>
         </DialogFooter>
       </DialogContent>

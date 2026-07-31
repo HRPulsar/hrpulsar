@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Sparkles, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -55,20 +56,21 @@ function rememberDismissal(sessionId: string): void {
   }
 }
 
-const SCOPE_LABEL: Record<SessionScope, string> = {
-  whole_base: "competence library",
-  group: "competence group",
-  competence_indicators: "competence indicators",
-  specialization_matrix: "specialization matrix",
+/** Scope / status → key in the `common` message namespace. */
+const SCOPE_LABEL_KEY: Record<SessionScope, string> = {
+  whole_base: "generationScopeWholeBase",
+  group: "generationScopeGroup",
+  competence_indicators: "generationScopeIndicators",
+  specialization_matrix: "generationScopeMatrix",
 };
 
-const STATUS_LABEL: Record<SessionStatus, string> = {
-  pending: "queued",
-  running: "in progress",
-  ready: "ready for review",
-  error: "failed",
-  applied: "applied",
-  cancelled: "cancelled",
+const STATUS_LABEL_KEY: Record<SessionStatus, string> = {
+  pending: "generationStatusPending",
+  running: "generationStatusRunning",
+  ready: "generationStatusReady",
+  error: "generationStatusError",
+  applied: "generationStatusApplied",
+  cancelled: "generationStatusCancelled",
 };
 
 /**
@@ -85,6 +87,7 @@ const STATUS_LABEL: Record<SessionStatus, string> = {
  * the generation.
  */
 export function AIGenerationBanner() {
+  const t = useTranslations("common");
   const [session, setSession] = useState<CompetenceGenerationSession | null>(
     null,
   );
@@ -135,8 +138,10 @@ export function AIGenerationBanner() {
   // the inline status card on that page already covers them.
   if (pathname && route.startsWith(pathname.split("?")[0])) return null;
 
-  const scopeLabel = SCOPE_LABEL[session.scope] ?? "AI generation";
-  const statusLabel = STATUS_LABEL[session.status] ?? session.status;
+  const scopeKey = SCOPE_LABEL_KEY[session.scope];
+  const scopeLabel = scopeKey ? t(scopeKey) : t("aiGeneration");
+  const statusKey = STATUS_LABEL_KEY[session.status];
+  const statusLabel = statusKey ? t(statusKey) : session.status;
 
   return (
     <div
@@ -146,7 +151,11 @@ export function AIGenerationBanner() {
       <div className="flex items-center gap-2 min-w-0">
         <Sparkles className="h-4 w-4 shrink-0 text-primary" />
         <span className="truncate">
-          AI generation for <strong>{scopeLabel}</strong> is {statusLabel}.
+          {t.rich("aiGenerationBanner", {
+            scope: scopeLabel,
+            status: statusLabel,
+            strong: (chunks) => <strong>{chunks}</strong>,
+          })}
         </span>
       </div>
       <div className="flex items-center gap-1 shrink-0">
@@ -156,12 +165,12 @@ export function AIGenerationBanner() {
           data-testid="ai-generation-banner-open"
           render={<Link href={route} />}
         >
-          Open session
+          {t("openSession")}
         </Button>
         <Button
           size="icon"
           variant="ghost"
-          aria-label="Dismiss"
+          aria-label={t("dismiss")}
           data-testid="ai-generation-banner-dismiss"
           onClick={() => {
             rememberDismissal(session.id);

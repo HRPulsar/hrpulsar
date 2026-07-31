@@ -35,12 +35,22 @@ const PUBLIC_ENV_KEYS = [
   // build-time inline. Without it the handoff branch never fires and the
   // demo lands on /login.
   "NEXT_PUBLIC_APP_DOMAIN",
-  // White-label branding (HRP-393) — read by lib/brand.ts.
+  // White-label branding (HRP-393, HRP-463) — read by lib/brand.ts.
   "NEXT_PUBLIC_BRAND_NAME",
   "NEXT_PUBLIC_LOGO_URL",
   "NEXT_PUBLIC_LOGO_DARK_URL",
   "NEXT_PUBLIC_BRAND_ACCENT_COLOR",
   "NEXT_PUBLIC_FAVICON_URL",
+  // Interface locales (i18n F0, HRP-474) — read by lib/locale.ts.
+  "NEXT_PUBLIC_AVAILABLE_LOCALES",
+  "NEXT_PUBLIC_DEFAULT_LOCALE",
+  "NEXT_PUBLIC_SIDEBAR_LOGO_HEIGHT",
+  "NEXT_PUBLIC_BRAND_THEME",
+  "NEXT_PUBLIC_BRAND_AUTH_BG_COLOR",
+  "NEXT_PUBLIC_BRAND_AUTH_BG_URL",
+  // Per-site billing currency/locale (HRP-451) — read by lib/currency.ts.
+  "NEXT_PUBLIC_BILLING_CURRENCY",
+  "NEXT_PUBLIC_BILLING_LOCALE",
 ] as const;
 
 type PublicEnvKey = (typeof PUBLIC_ENV_KEYS)[number];

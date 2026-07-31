@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api, ApiError } from "@/lib/api";
 import type {
   CandidateVacancy,
@@ -30,6 +31,8 @@ const POLL_INTERVAL = 3000;
 
 export default function InterviewDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [interview, setInterview] = useState<Interview | null>(null);
   const [media, setMedia] = useState<InterviewMediaURL | null>(null);
   const [profile, setProfile] = useState<VacancyProfile | null>(null);
@@ -65,11 +68,11 @@ export default function InterviewDetailPage() {
       return data;
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
-        toast.error("Interview not found");
+        toast.error(t("interviewNotFoundToast"));
       }
       return null;
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     void (async () => {
@@ -171,11 +174,13 @@ export default function InterviewDetailPage() {
       await api.post(
         `/recruitment/interviews/${interview.id}/transcribe`,
       );
-      toast.success("Transcription started");
+      toast.success(t("interviewToastTranscriptionStarted"));
       await refresh();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to start transcription",
+        err instanceof Error
+          ? err.message
+          : t("interviewTranscriptionStartFailed"),
       );
     } finally {
       setBusyAction(null);
@@ -189,11 +194,11 @@ export default function InterviewDetailPage() {
       await api.post(
         `/recruitment/interviews/${interview.id}/analyze`,
       );
-      toast.success("AI analysis started");
+      toast.success(t("interviewToastAnalysisStarted"));
       await refresh();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to start analysis",
+        err instanceof Error ? err.message : t("interviewAnalysisStartFailed"),
       );
     } finally {
       setBusyAction(null);
@@ -204,44 +209,44 @@ export default function InterviewDetailPage() {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground">
         <Loader2 className="size-4 animate-spin" />
-        Loading…
+        {t("loading")}
       </div>
     );
   }
   if (!interview) {
     return (
       <div className="rounded-md border border-dashed p-12 text-center text-muted-foreground">
-        Interview not found or deleted.
+        {t("interviewNotFoundOrDeleted")}
       </div>
     );
   }
 
-  const candidateName = cvCtx?.candidate_name || "Candidate";
+  const candidateName = cvCtx?.candidate_name || tc("candidate");
 
   return (
     <div data-testid="recruitment-interview-detail" className="space-y-5">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Candidates", href: "/recruitment/candidates" },
+          { label: t("candidatesTitle"), href: "/recruitment/candidates" },
           cvCtx?.candidate_id
             ? {
                 label: candidateName,
                 href: `/recruitment/candidates/${cvCtx.candidate_id}`,
               }
             : { label: candidateName },
-          { label: "Interview" },
+          { label: t("interviewBreadcrumb") },
         ]}
       />
 
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">
-            Interview with {candidateName}
+            {t("interviewHeading", { name: candidateName })}
           </h1>
           <p className="text-sm text-muted-foreground">
             {interview.interview_date
               ? formatDateTime(interview.interview_date)
-              : "Date not set"}
+              : t("interviewDateNotSet")}
             {cvCtx?.vacancy_title && ` · ${cvCtx.vacancy_title}`}
           </p>
         </div>
@@ -258,7 +263,7 @@ export default function InterviewDetailPage() {
             }
             disabled={!cvCtx?.candidate_id}
           >
-            Back to candidate
+            {t("interviewBackToCandidate")}
           </Button>
         </div>
       </header>
@@ -273,8 +278,7 @@ export default function InterviewDetailPage() {
             !interview.transcript_file_id ? (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  Recording not uploaded yet. The system will start
-                  transcription automatically once it is uploaded.
+                  {t("interviewNoRecording")}
                 </p>
                 <InterviewUploadZone
                   interviewId={interview.id}
@@ -285,7 +289,7 @@ export default function InterviewDetailPage() {
                   }}
                 />
                 <div className="flex items-center justify-center text-xs text-muted-foreground">
-                  or
+                  {t("interviewOr")}
                 </div>
                 <div className="flex items-center justify-center">
                   <Button
@@ -295,14 +299,14 @@ export default function InterviewDetailPage() {
                     data-testid="recruitment-interview-btn-paste-text"
                   >
                     <FileText className="size-4" />
-                    Paste text transcript
+                    {t("interviewPasteText")}
                   </Button>
                 </div>
               </div>
             ) : !media ? (
               <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />
-                Fetching recording link…
+                {t("interviewFetchingLink")}
               </div>
             ) : media.kind === "text_transcript" ? (
               <object
@@ -317,7 +321,7 @@ export default function InterviewDetailPage() {
                   rel="noopener noreferrer"
                   className="text-sm text-muted-foreground underline"
                 >
-                  Open transcript file
+                  {t("interviewOpenTranscriptFile")}
                 </a>
               </object>
             ) : (
@@ -334,7 +338,9 @@ export default function InterviewDetailPage() {
 
           <section className="space-y-2">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium">Transcript</h2>
+              <h2 className="text-sm font-medium">
+                {t("interviewTranscriptHeading")}
+              </h2>
               <Button
                 variant="ghost"
                 size="sm"
@@ -343,7 +349,7 @@ export default function InterviewDetailPage() {
                 data-testid="recruitment-interview-btn-edit-transcript"
               >
                 <Pencil className="size-3.5" />
-                Edit entire transcript
+                {t("interviewEditTranscript")}
               </Button>
             </div>
             <TranscriptViewer
@@ -359,7 +365,7 @@ export default function InterviewDetailPage() {
         <aside className="space-y-4 lg:col-span-2">
           <section className="rounded-lg border bg-card p-3">
             <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Progress
+              {t("interviewProgressHeading")}
             </h2>
             <AnalysisProgress interview={interview} />
             <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -380,8 +386,8 @@ export default function InterviewDetailPage() {
                   <Wand2 className="size-4" />
                 )}
                 {interview.transcription_status === "completed"
-                  ? "Re-transcribe"
-                  : "Transcribe"}
+                  ? t("interviewRetranscribe")
+                  : t("interviewTranscribe")}
               </Button>
               <Button
                 size="sm"
@@ -398,14 +404,14 @@ export default function InterviewDetailPage() {
                 ) : (
                   <Sparkles className="size-4" />
                 )}
-                Analyze
+                {t("interviewAnalyze")}
               </Button>
             </div>
           </section>
 
           <section>
             <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              AI analysis
+              {t("interviewAiAnalysisHeading")}
             </h2>
             <InterviewAnalysisPanel
               interview={interview}

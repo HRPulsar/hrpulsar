@@ -1,11 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
 import type { AnswerScaleDetail } from "@/lib/types";
-import { scaleLevelLabel } from "@/lib/scale-levels-i18n";
+import {
+  answerScaleDescription,
+  answerScaleLabel,
+  scaleLevelLabel,
+  scaleOptionDescription,
+  scaleOptionLabel,
+} from "@/lib/reference-labels";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -35,6 +42,8 @@ export function ScalePreviewDialog({
   scaleId,
   initial,
 }: ScalePreviewDialogProps) {
+  const t = useTranslations("assessments");
+  const tRef = useTranslations("reference");
   const [fetched, setFetched] = useState<{
     id: string;
     scale: AnswerScaleDetail;
@@ -52,14 +61,14 @@ export function ScalePreviewDialog({
       .catch((err) => {
         if (alive) {
           toast.error(
-            err instanceof Error ? err.message : "Failed to load scale",
+            err instanceof Error ? err.message : t("errorLoadScale"),
           );
         }
       });
     return () => {
       alive = false;
     };
-  }, [open, scaleId, useInitial]);
+  }, [open, scaleId, useInitial, t]);
 
   const scale = useInitial
     ? initial ?? null
@@ -82,41 +91,44 @@ export function ScalePreviewDialog({
         data-testid="assessment-scale-preview-modal"
       >
         <DialogHeader>
-          <DialogTitle>{scale?.title ?? "Scale preview"}</DialogTitle>
+          <DialogTitle>
+            {scale ? answerScaleLabel(tRef, scale) : t("scalePreviewTitle")}
+          </DialogTitle>
         </DialogHeader>
         {loading || !scale ? (
           <p className="py-6 text-center text-sm text-muted-foreground">
-            Loading…
+            {t("loadingEllipsis")}
           </p>
         ) : (
           <div className="max-h-[70vh] space-y-5 overflow-y-auto pr-1">
-            {scale.description && (
-              <p className="text-sm text-muted-foreground">
-                {scale.description}
-              </p>
-            )}
+            {(() => {
+              const description = answerScaleDescription(tRef, scale);
+              return description ? (
+                <p className="text-sm text-muted-foreground">{description}</p>
+              ) : null;
+            })()}
 
             <section className="space-y-2">
-              <h3 className="text-sm font-medium">Answer options</h3>
+              <h3 className="text-sm font-medium">{t("answerOptions")}</h3>
               <div className="space-y-1.5">
                 {sortedOptions.map((opt) => (
                   <div
                     key={opt.id}
                     className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
                   >
-                    <span className="flex-1">{opt.title}</span>
+                    <span className="flex-1">{scaleOptionLabel(tRef, opt)}</span>
                     {opt.is_neutral ? (
                       <Badge variant="outline" className="text-xs">
-                        Excluded from score
+                        {t("excludedFromScore")}
                       </Badge>
                     ) : (
                       <Badge variant="secondary" className="text-xs">
-                        Score: {opt.weight ?? "—"}
+                        {t("scoreValue", { value: opt.weight ?? "—" })}
                       </Badge>
                     )}
-                    {opt.description && (
+                    {scaleOptionDescription(tRef, opt) && (
                       <span className="text-xs text-muted-foreground">
-                        {opt.description}
+                        {scaleOptionDescription(tRef, opt)}
                       </span>
                     )}
                   </div>
@@ -126,15 +138,15 @@ export function ScalePreviewDialog({
 
             {sortedLevels.length > 0 && (
               <section className="space-y-2">
-                <h3 className="text-sm font-medium">Match-percent levels</h3>
+                <h3 className="text-sm font-medium">{t("matchPercentLevels")}</h3>
                 <div className="rounded-md border">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>From, %</TableHead>
-                        <TableHead>To, %</TableHead>
-                        <TableHead>Title</TableHead>
-                        <TableHead>Description</TableHead>
+                        <TableHead>{t("colFrom")}</TableHead>
+                        <TableHead>{t("colTo")}</TableHead>
+                        <TableHead>{t("fieldTitle")}</TableHead>
+                        <TableHead>{t("fieldDescription")}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -143,7 +155,7 @@ export function ScalePreviewDialog({
                           <TableCell>{lvl.percent_from}</TableCell>
                           <TableCell>{lvl.percent_to}</TableCell>
                           <TableCell className="font-medium">
-                            {scaleLevelLabel(lvl)}
+                            {scaleLevelLabel(tRef, lvl)}
                           </TableCell>
                           <TableCell className="text-muted-foreground">
                             {lvl.description ?? "—"}

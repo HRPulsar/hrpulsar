@@ -31,6 +31,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.errors import AppError
+from app.core.i18n import resolve_locale
 from app.core.security import (
     create_magic_login_token,
     create_signup_verify_token,
@@ -120,19 +122,16 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
             pipe.expire(key, 3600)
             count, _ = await pipe.execute()
         if count > limit:
-            raise HTTPException(
-                status.HTTP_429_TOO_MANY_REQUESTS,
-                "Too many signup attempts from this address; please try again later.",
-            )
+            raise AppError("signup_rate_limited", status.HTTP_429_TOO_MANY_REQUESTS)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         logger.exception(
             "signup rate-limit: redis unavailable, refusing request"
         )
-        raise HTTPException(
+        raise AppError(
+            "signup_temporarily_unavailable",
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Signup temporarily unavailable; please try again in a minute.",
         ) from exc
     finally:
         if client is not None:
@@ -157,6 +156,7 @@ async def create_signup_request(
     remote_ip: str | None,
     source: str = "landing",
     demo_tenant_id_snapshot: uuid.UUID | None = None,
+    accept_language: str | None = None,
 ) -> SignupRequest:
     """Create a fresh SignupRequest and email a verification link.
 
@@ -169,9 +169,7 @@ async def create_signup_request(
     ``lower(email)`` via a Postgres unique index.
     """
     if not await _verify_turnstile(data.turnstile_token, remote_ip=remote_ip):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Bot guard challenge failed."
-        )
+        raise AppError("signup_bot_guard_failed", status.HTTP_400_BAD_REQUEST)
     await _enforce_rate_limit(remote_ip)
 
     email_norm = data.email.lower().strip()
@@ -182,15 +180,12 @@ async def create_signup_request(
             # Neutral 409 — don't leak whether the address was let in
             # or rejected (avoids handing an enumeration oracle to a
             # scripted scraper).
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "A signup request for this email already exists.",
-            )
+            raise AppError("signup_request_already_exists", status.HTTP_409_CONFLICT)
         # Pending row: re-send the verify email but keep the existing
         # created_at + id. ``status`` stays whatever it was — a click
         # on the old link must still flip a pending_email_verify row
         # to pending_moderation; a click on the new link is harmless.
-        await _send_signup_verify_email(existing)
+        await _send_signup_verify_email(existing, accept_language=accept_language)
         return existing
 
     row = SignupRequest(
@@ -207,17 +202,29 @@ async def create_signup_request(
     await db.commit()
     await db.refresh(row)
 
-    await _send_signup_verify_email(row)
+    await _send_signup_verify_email(row, accept_language=accept_language)
     return row
 
 
-async def _send_signup_verify_email(row: SignupRequest) -> None:
-    """Best-effort send of the verify-email link. Never raises."""
+async def _send_signup_verify_email(
+    row: SignupRequest, *, accept_language: str | None = None
+) -> None:
+    """Best-effort send of the verify-email link. Never raises.
+
+    i18n F4: a landing-form visitor has neither an account nor a tenant,
+    so the browser's Accept-Language is the whole chain — it falls
+    through to the deployment default when the header is absent or names
+    no supported locale.
+    """
     try:
         from app.core.email import send_signup_verify_email
 
         token = create_signup_verify_token(str(row.id))
-        send_signup_verify_email(row.email, token)
+        send_signup_verify_email(
+            row.email,
+            token,
+            locale=resolve_locale(accept_language=accept_language),
+        )
     except Exception:
         logger.exception(
             "signup: failed to send verify email for request %s", row.id
@@ -237,23 +244,19 @@ async def verify_signup_request(
     try:
         payload = decode_token(token)
     except JWTError as exc:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Verification link is invalid or expired."
+        raise AppError(
+            "signup_verify_link_invalid_or_expired", status.HTTP_401_UNAUTHORIZED
         ) from exc
     if payload.get("type") != "signup_verify":
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Verification link is invalid."
-        )
+        raise AppError("signup_verify_link_invalid", status.HTTP_401_UNAUTHORIZED)
     sub = payload.get("sub")
     if not sub:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Verification link is invalid."
-        )
+        raise AppError("signup_verify_link_invalid", status.HTTP_401_UNAUTHORIZED)
     try:
         request_id = uuid.UUID(str(sub))
     except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Verification link is invalid."
+        raise AppError(
+            "signup_verify_link_invalid", status.HTTP_401_UNAUTHORIZED
         ) from exc
 
     # SELECT ... FOR UPDATE + populate_existing is the standard remedy for
@@ -273,9 +276,7 @@ async def verify_signup_request(
         )
     ).scalar_one_or_none()
     if row is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Signup request not found."
-        )
+        raise AppError("signup_request_not_found", status.HTTP_404_NOT_FOUND)
 
     if row.status == "pending_email_verify":
         row.email_verified_at = datetime.now(timezone.utc)
@@ -292,10 +293,7 @@ async def verify_signup_request(
         return row, True
 
     # approved / rejected / expired — the request is no longer pending.
-    raise HTTPException(
-        status.HTTP_409_CONFLICT,
-        "This signup request has already been processed.",
-    )
+    raise AppError("signup_request_already_processed", status.HTTP_409_CONFLICT)
 
 
 async def _publish_email_verified(row: SignupRequest) -> None:
@@ -356,13 +354,10 @@ async def approve_signup(
 
     row = await db.get(SignupRequest, signup_request_id)
     if row is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Signup request not found."
-        )
+        raise AppError("signup_request_not_found", status.HTTP_404_NOT_FOUND)
     if row.status != "pending_moderation":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Signup request is not awaiting moderation.",
+        raise AppError(
+            "signup_request_not_awaiting_moderation", status.HTTP_409_CONFLICT
         )
 
     # ── Tenant ----------------------------------------------------------
@@ -398,14 +393,12 @@ async def approve_signup(
             # ladders the same SignupRequest instance.
             row = await db.get(SignupRequest, signup_request_id)
             if row is None or row.status != "pending_moderation":
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    "Signup request is not awaiting moderation.",
+                raise AppError(
+                    "signup_request_not_awaiting_moderation", status.HTTP_409_CONFLICT
                 ) from exc
     if tenant is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Could not assign a unique tenant slug after several attempts.",
+        raise AppError(
+            "signup_tenant_slug_unavailable", status.HTTP_409_CONFLICT
         ) from last_error
 
     # HRP-181 REDO mirror: seed the canonical 9-stage recruitment funnel,
@@ -489,13 +482,10 @@ async def reject_signup(
     """
     row = await db.get(SignupRequest, signup_request_id)
     if row is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Signup request not found."
-        )
+        raise AppError("signup_request_not_found", status.HTTP_404_NOT_FOUND)
     if row.status != "pending_moderation":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Signup request is not awaiting moderation.",
+        raise AppError(
+            "signup_request_not_awaiting_moderation", status.HTTP_409_CONFLICT
         )
 
     reason_clean = (reason or "").strip() or None
@@ -509,10 +499,13 @@ async def reject_signup(
     await db.refresh(row)
 
     # Best-effort notification to the visitor — never blocks reject.
+    # i18n F4: Slack moderation has no HTTP request behind it and the
+    # rejected visitor never got a tenant, so the deployment default is
+    # the only signal (the moderator's own locale is irrelevant here).
     try:
         from app.core.email import send_signup_rejected_email
 
-        send_signup_rejected_email(row.email, reason_clean)
+        send_signup_rejected_email(row.email, reason_clean, locale=resolve_locale())
     except Exception:
         logger.exception(
             "signup: failed to send rejection email for request %s", row.id

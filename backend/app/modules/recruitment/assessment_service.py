@@ -11,11 +11,12 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException, Request, status
+from fastapi import Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.auth.models import User
 from app.modules.recruitment import audit_service
 from app.modules.recruitment.common import (
@@ -160,7 +161,7 @@ async def update_question(
     )
     q = result.scalar_one_or_none()
     if not q:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
+        raise AppError("question_not_found", status.HTTP_404_NOT_FOUND)
 
     updates = data.model_dump(exclude_unset=True)
     for field, value in updates.items():
@@ -184,7 +185,7 @@ async def delete_question(
     )
     q = result.scalar_one_or_none()
     if not q:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
+        raise AppError("question_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(q)
     await db.commit()
 
@@ -294,9 +295,7 @@ async def record_human_assessment(
         )
     )
     if not cv_result.scalar_one_or_none():
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Candidate-vacancy link not found"
-        )
+        raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
 
     # SELECT FOR UPDATE serialises concurrent writers on the same
     # (cv, competence, evaluator) triple — without it two callers both
@@ -319,10 +318,11 @@ async def record_human_assessment(
     if existing:
         # ETag 412 — caller saw version N but DB advanced past it.
         if expected_version is not None and expected_version != existing.version:
-            raise HTTPException(
+            raise AppError(
+                "assessment_stale_version",
                 status.HTTP_412_PRECONDITION_FAILED,
-                f"Assessment was updated by another writer "
-                f"(expected version {expected_version}, current {existing.version}).",
+                expected=expected_version,
+                current=existing.version,
             )
         old_score = existing.score
         old_comment = existing.comment
@@ -357,10 +357,10 @@ async def record_human_assessment(
     # First write — refuse a stale precondition (e.g. another writer
     # raced and inserted between the caller's GET and POST).
     if expected_version is not None:
-        raise HTTPException(
+        raise AppError(
+            "assessment_created_by_another_writer",
             status.HTTP_412_PRECONDITION_FAILED,
-            "Assessment was created by another writer "
-            f"(no row existed when you read; expected version {expected_version}).",
+            expected=expected_version,
         )
 
     ha = HumanAssessment(
@@ -433,14 +433,15 @@ async def update_human_assessment(
     )
     ha = result.scalar_one_or_none()
     if not ha:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Assessment not found")
+        raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     expected_version = parse_assessment_if_match(if_match)
     if expected_version is not None and expected_version != ha.version:
-        raise HTTPException(
+        raise AppError(
+            "assessment_stale_version",
             status.HTTP_412_PRECONDITION_FAILED,
-            f"Assessment was updated by another writer "
-            f"(expected version {expected_version}, current {ha.version}).",
+            expected=expected_version,
+            current=ha.version,
         )
 
     old_score = ha.score
@@ -519,7 +520,7 @@ async def revert_human_assessment(
         )
     ).scalar_one_or_none()
     if audit_row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Audit event not found")
+        raise AppError("audit_event_not_found", status.HTTP_404_NOT_FOUND)
     payload = audit_row.payload_diff or {}
     # Spec: revert only applies to Manager-side cells. Invite-only audit
     # rows (no evaluator_id) are surfaced for context but cannot be
@@ -527,19 +528,16 @@ async def revert_human_assessment(
     # BEFORE the (cv, comp, evaluator) match so the user gets the right
     # message instead of a generic 404 hiding the real reason.
     if payload.get("evaluator_id") is None:
-        raise HTTPException(
+        raise AppError(
+            "assessment_invited_scores_not_revertible",
             status.HTTP_409_CONFLICT,
-            "Invited-evaluator scores cannot be reverted",
         )
     if (
         payload.get("candidate_vacancy_id") != str(cv_id)
         or payload.get("competence_id") != str(competence_id)
         or payload.get("evaluator_id") != str(evaluator_id)
     ):
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            "Audit event does not match the requested cell",
-        )
+        raise AppError("audit_event_cell_mismatch", status.HTTP_404_NOT_FOUND)
 
     target_score = payload.get("old_score")
     target_comment = payload.get("old_comment")
@@ -567,28 +565,24 @@ async def revert_human_assessment(
         and expected_version is not None
         and expected_version != existing.version
     ):
-        raise HTTPException(
+        raise AppError(
+            "assessment_stale_version_snapshot",
             status.HTTP_412_PRECONDITION_FAILED,
-            f"Assessment was updated by another writer since this "
-            f"Versions snapshot (expected version {expected_version}, "
-            f"current {existing.version}).",
+            expected=expected_version,
+            current=existing.version,
         )
 
     if existing is None:
         if expected_version is not None:
-            raise HTTPException(
+            raise AppError(
+                "assessment_removed_since_snapshot",
                 status.HTTP_412_PRECONDITION_FAILED,
-                "Assessment was removed by another writer since this "
-                "Versions snapshot.",
             )
         # Revert-to-nothing on a row that has since been cleared is a
         # no-op; revert-to-score creates a fresh entry attributed to the
         # initiator. Either way we get a clean audit trail of the action.
         if target_score is None:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "Nothing to revert: the cell is already empty",
-            )
+            raise AppError("assessment_nothing_to_revert", status.HTTP_409_CONFLICT)
         existing = HumanAssessment(
             tenant_id=tenant_id,
             candidate_vacancy_id=cv_id,
@@ -844,9 +838,7 @@ async def create_assessment_invite(
     )
     cv = result.scalar_one_or_none()
     if not cv:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Candidate-vacancy link not found"
-        )
+        raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
 
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)
@@ -867,14 +859,25 @@ async def create_assessment_invite(
     try:
         from app.core.email import enqueue_email
         from app.core.email_templates import render_recruitment_invite_email
+        from app.core.i18n import resolve_locale, translate
+        from app.modules.company.models import Tenant
 
-        candidate_name = candidate_display_name(cv.candidate, fallback="(unnamed)")
         vacancy_title = cv.vacancy.title if cv.vacancy else None
+        # i18n F4: the external evaluator has no account, so the tenant
+        # default is the only locale signal for this recipient.
+        tenant = await db.get(Tenant, tenant_id)
+        locale = resolve_locale(
+            tenant_default=tenant.default_locale if tenant else None
+        )
+        candidate_name = candidate_display_name(
+            cv.candidate, fallback=translate("email.fallback.unnamed", locale)
+        )
         subject, html_body = render_recruitment_invite_email(
             token,
             candidate_name,
             vacancy_title,
             expires_in_days=data.expires_in_days,
+            locale=locale,
         )
         enqueue_email(
             data.email,
@@ -911,11 +914,11 @@ async def _resolve_invite(db: AsyncSession, token: str) -> AssessmentInvite:
     )
     invite = result.scalar_one_or_none()
     if not invite:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invite not found")
+        raise AppError("invite_not_found", status.HTTP_404_NOT_FOUND)
     if invite.expires_at < datetime.now(timezone.utc):
         invite.status = "expired"
         await db.commit()
-        raise HTTPException(status.HTTP_410_GONE, "Invite expired")
+        raise AppError("invite_expired", status.HTTP_410_GONE)
     return invite
 
 
@@ -935,9 +938,11 @@ async def get_invite_context(db: AsyncSession, token: str) -> dict:
     )
     cv = cv_result.scalar_one_or_none()
     if not cv:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate-vacancy not found")
+        raise AppError("candidate_vacancy_not_found", status.HTTP_404_NOT_FOUND)
 
-    candidate_name = candidate_display_name(cv.candidate, fallback="(unnamed)")
+    # i18n F7: no English "(unnamed)" on the wire — the public invite page
+    # localizes the empty-name fallback itself.
+    candidate_name = candidate_display_name(cv.candidate, fallback="")
 
     resume_result = await db.execute(
         select(CandidateFile)
@@ -987,7 +992,7 @@ async def get_invite_canvas(db: AsyncSession, token: str) -> dict:
     )
     cv = result.scalar_one_or_none()
     if not cv:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate-vacancy not found")
+        raise AppError("candidate_vacancy_not_found", status.HTTP_404_NOT_FOUND)
     canvas = await get_canvas(db, cv.tenant_id, cv.vacancy_id)
     canvas["candidates"] = [
         c
@@ -1022,17 +1027,17 @@ async def record_invite_assessment(db: AsyncSession, token: str, payload: dict) 
     comment = payload.get("comment")
 
     if not competence_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "competence_id is required")
+        raise AppError("competence_id_required", status.HTTP_400_BAD_REQUEST)
 
     if cv_id_raw and str(cv_id_raw) != str(invite.candidate_vacancy_id):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Token does not match candidate-vacancy"
+        raise AppError(
+            "invite_token_candidate_vacancy_mismatch", status.HTTP_403_FORBIDDEN
         )
 
     try:
         competence_uuid = uuid.UUID(str(competence_id))
     except (ValueError, TypeError):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "competence_id must be a UUID")
+        raise AppError("competence_id_must_be_uuid", status.HTTP_400_BAD_REQUEST)
 
     # Validate that competence belongs to the vacancy's profile so anonymous
     # evaluators can't pollute human_assessments with arbitrary UUIDs.
@@ -1059,9 +1064,9 @@ async def record_invite_assessment(db: AsyncSession, token: str, payload: dict) 
                     if norm is not None:
                         allowed_ids.add(str(norm))
         if allowed_ids and str(competence_uuid) not in allowed_ids:
-            raise HTTPException(
+            raise AppError(
+                "competence_id_not_in_vacancy_profile",
                 status.HTTP_400_BAD_REQUEST,
-                "competence_id is not part of the vacancy profile",
             )
 
     score_value = float(score) if score is not None else None
@@ -1768,9 +1773,7 @@ async def get_assessment_matrix_cell_detail(
         )
     ).scalar_one_or_none()
     if cv is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "Candidate-vacancy link not found"
-        )
+        raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
 
     human_rows = (
         (

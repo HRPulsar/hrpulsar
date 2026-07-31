@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Sidebar } from "@/components/sidebar";
 
 export function MobileSidebar() {
+  const t = useTranslations("common");
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const [prevPathname, setPrevPathname] = useState(pathname);
@@ -32,7 +34,7 @@ export function MobileSidebar() {
       <button
         onClick={() => setOpen(true)}
         className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted lg:hidden"
-        aria-label="Open menu"
+        aria-label={t("openMenu")}
         data-testid="header-btn-mobile-menu"
       >
         <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">

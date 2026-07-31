@@ -6,13 +6,15 @@
 
 import { BADGE_COLOR } from "@/lib/badge-tones";
 
-export const STATUS_LABELS: Record<string, string> = {
-  draft: "Draft",
-  sent: "Sent",
-  assigned: "Assigned",
-  in_progress: "In progress",
-  done: "Completed",
-  cancelled: "Cancelled",
+// HRP-476: only the code → key relation lives here; the wording is in the
+// `exams` i18n namespace (same shape as `lib/assessment-status.ts`).
+export const STATUS_KEYS: Record<string, string> = {
+  draft: "statusDraft",
+  sent: "statusSent",
+  assigned: "statusAssigned",
+  in_progress: "statusInProgress",
+  done: "statusDone",
+  cancelled: "statusCancelled",
 };
 
 export const STATUS_CHIP_COLOR: Record<string, string> = {
@@ -36,8 +38,18 @@ export const STATUS_TRANSITIONS: Record<string, string[]> = {
   cancelled: [],
 };
 
-export function statusLabel(code: string): string {
-  return STATUS_LABELS[code] ?? code;
+/** i18n key for a known status code, or `null` for anything unexpected. */
+export function statusKey(code: string): string | null {
+  return STATUS_KEYS[code] ?? null;
+}
+
+/** Translated status label with a raw-code fallback for unknown statuses. */
+export function statusLabel(
+  t: (key: string) => string,
+  code: string,
+): string {
+  const key = statusKey(code);
+  return key ? t(key) : code;
 }
 
 export function isTerminalStatus(code: string): boolean {

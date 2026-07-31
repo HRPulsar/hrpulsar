@@ -26,9 +26,11 @@ def check_certificate_expiry() -> None:
 
     from app.config import settings
     from app.core.email import send_email
+    from app.core.i18n import resolve_locale
     from app.core.tasks import _tenant_is_demo_sync, send_email_task
     from app.database import make_sync_engine
     from app.modules.auth.models import User
+    from app.modules.company.models import Tenant
     from app.modules.employee.models import Course, Employee
 
     engine = make_sync_engine(settings.database_url)
@@ -51,14 +53,30 @@ def check_certificate_expiry() -> None:
 
             from app.core.email_templates import render_certificate_expiry_email
 
+            # i18n F4: one Tenant row per tenant per run — the batch can
+            # span many employees of the same company.
+            tenant_defaults: dict[object, str | None] = {}
+
             for course, _employee, user in courses:
                 days_left = (course.expiry_date - today).days
                 employee_name = f"{user.first_name} {user.last_name}"
+                tenant_default: str | None = None
+                if user.tenant_id is not None:
+                    if user.tenant_id not in tenant_defaults:
+                        tenant = db.get(Tenant, user.tenant_id)
+                        tenant_defaults[user.tenant_id] = (
+                            tenant.default_locale if tenant else None
+                        )
+                    tenant_default = tenant_defaults[user.tenant_id]
                 subject, body = render_certificate_expiry_email(
                     course_title=course.title,
                     expiry_date=course.expiry_date.isoformat(),
                     days_left=days_left,
                     employee_name=employee_name,
+                    locale=resolve_locale(
+                        user_language=user.language,
+                        tenant_default=tenant_default,
+                    ),
                 )
                 # HRP-253 (D5): tenant_id keeps the demo gate effective when
                 # a demo seed grows a Course row — the in-task guard only

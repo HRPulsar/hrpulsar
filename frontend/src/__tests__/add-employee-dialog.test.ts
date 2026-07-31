@@ -123,7 +123,7 @@ describe("pickTransferTargets (HRP-174)", () => {
     expect(targets[1].display).toBe("anon");
   });
 
-  it("uses 'another division' when source division name is missing", () => {
+  it("leaves fromDivision null when source division name is missing", () => {
     const employees = [
       emp({
         id: "lost",
@@ -133,6 +133,7 @@ describe("pickTransferTargets (HRP-174)", () => {
       }),
     ];
     const targets = pickTransferTargets(["lost"], employees, TARGET_DIVISION);
-    expect(targets[0].fromDivision).toBe("another division");
+    // The dialog renders a translated "another division" placeholder.
+    expect(targets[0].fromDivision).toBeNull();
   });
 });

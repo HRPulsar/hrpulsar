@@ -13,6 +13,7 @@
 import * as React from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { Input } from "@/components/ui/input";
 import { DATE_PLACEHOLDER } from "@/lib/date-format";
@@ -102,6 +103,7 @@ export function DatePicker({
   "data-testid": testId,
   clearable = true,
 }: DatePickerProps) {
+  const t = useTranslations("common");
   const [open, setOpen] = React.useState(false);
   const selected = React.useMemo(() => parseIso(value), [value]);
   const [viewMonth, setViewMonth] = React.useState<Date>(
@@ -224,7 +226,7 @@ export function DatePicker({
             type="button"
             tabIndex={-1}
             disabled={disabled}
-            aria-label="Open calendar"
+            aria-label={t("openCalendar")}
             data-testid={testId ? `${testId}-trigger` : undefined}
             className={cn(
               "absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50",
@@ -253,7 +255,7 @@ export function DatePicker({
                 else shiftYear(-YEAR_GRID_SIZE);
               }}
               className="rounded p-1 hover:bg-accent"
-              aria-label="Previous"
+              aria-label={t("previous")}
               data-testid={testId ? `${testId}-prev` : undefined}
             >
               <ChevronLeft className="h-4 w-4" />
@@ -303,7 +305,7 @@ export function DatePicker({
                 else shiftYear(YEAR_GRID_SIZE);
               }}
               className="rounded p-1 hover:bg-accent"
-              aria-label="Next"
+              aria-label={t("next")}
               data-testid={testId ? `${testId}-next` : undefined}
             >
               <ChevronRight className="h-4 w-4" />
@@ -415,7 +417,7 @@ export function DatePicker({
                 }}
                 className="text-xs text-muted-foreground hover:text-foreground"
               >
-                Clear
+                {t("clear")}
               </button>
             </div>
           )}

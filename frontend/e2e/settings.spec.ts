@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { registerUser, setAuthTokens, createInvitation } from "./helpers";
+import {
+  registerUser,
+  setAuthTokens,
+  createInvitation,
+  MULTI_LOCALE_E2E,
+} from "./helpers";
 
 test.describe("Profile settings", () => {
   let accessToken: string;
@@ -28,6 +33,40 @@ test.describe("Profile settings", () => {
     await expect(
       page.getByTestId("settings-profile-info-email"),
     ).toBeVisible({ timeout: 10000 });
+  });
+
+  test("interface-language select visible on multi-locale deployments", async ({
+    page,
+  }) => {
+    // F7 (HRP-481): CI runs multi-locale (AVAILABLE_LOCALES=de,en); on a
+    // single-locale stack the select is hidden, so the check is gated.
+    test.skip(!MULTI_LOCALE_E2E, "requires AVAILABLE_LOCALES=de,en");
+    await page.goto("/settings/profile");
+    await expect(
+      page.getByTestId("settings-profile-select-language"),
+    ).toBeVisible({ timeout: 10000 });
+  });
+
+  test("language switcher flips the interface to German and back", async ({
+    page,
+  }) => {
+    test.skip(!MULTI_LOCALE_E2E, "requires AVAILABLE_LOCALES=de,en");
+    await page.goto("/settings/profile");
+    const trigger = page.getByTestId("header-btn-language");
+    await expect(trigger).toBeVisible({ timeout: 10000 });
+    // The trigger's aria-label is t(common.changeLanguage) — it re-renders
+    // in the selected locale after router.refresh(), which makes it a
+    // stable signal that the de catalog actually took over.
+    await trigger.click();
+    await page.getByTestId("header-menu-language-de").click();
+    await expect(trigger).toHaveAttribute("aria-label", "Sprache ändern", {
+      timeout: 10000,
+    });
+    await trigger.click();
+    await page.getByTestId("header-menu-language-en").click();
+    await expect(trigger).toHaveAttribute("aria-label", "Change language", {
+      timeout: 10000,
+    });
   });
 
   test("profile inputs have values", async ({ page }) => {

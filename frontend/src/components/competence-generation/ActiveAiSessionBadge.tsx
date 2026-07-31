@@ -1,6 +1,7 @@
 "use client";
 
 import { Loader2, Sparkles } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -32,6 +33,8 @@ export function ActiveAiSessionBadge({
   testIdSuffix,
   className,
 }: ActiveAiSessionBadgeProps) {
+  // Hook stays above the early return so hook order is stable across renders.
+  const t = useTranslations("competences");
   if (!sessions.length) return null;
   const own = sessions.find((s) => s.kind === "own");
   const target = own ?? sessions[0];
@@ -42,12 +45,12 @@ export function ActiveAiSessionBadge({
     (s): s is Extract<ActiveAiSession, { kind: "other" }> => s.kind === "other",
   );
   const labelTitle = own
-    ? "Your AI generation is in progress"
-    : `${others[0].user_full_name} is running AI generation`;
+    ? t("activeBadgeOwn")
+    : t("activeBadgeOther", { name: others[0].user_full_name });
   // "+N more" — N = others not already named in labelTitle.
   const namedOthers = own ? 0 : 1;
   const extraCount = others.length - namedOthers;
-  const labelExtra = extraCount > 0 ? ` (+${extraCount} more)` : "";
+  const labelExtra = extraCount > 0 ? t("activeBadgeExtra", { count: extraCount }) : "";
 
   return (
     <Tooltip>

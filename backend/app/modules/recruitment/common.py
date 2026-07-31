@@ -10,11 +10,12 @@ into a sibling service module.
 import logging
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import AppError
 from app.modules.recruitment.models import (
     Candidate,
     Vacancy,
@@ -85,7 +86,7 @@ async def _get_vacancy(
     )
     vacancy = result.scalar_one_or_none()
     if not vacancy:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Vacancy not found")
+        raise AppError("vacancy_not_found", status.HTTP_404_NOT_FOUND)
     return vacancy
 
 
@@ -100,7 +101,7 @@ async def _get_candidate(
     )
     candidate = result.scalar_one_or_none()
     if not candidate:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Candidate not found")
+        raise AppError("candidate_not_found", status.HTTP_404_NOT_FOUND)
     return candidate
 
 

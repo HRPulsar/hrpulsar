@@ -149,12 +149,16 @@ async def _pick_anchor_division(
     to return first.
     """
     rows = (
-        await db.execute(
-            select(Division)
-            .where(Division.tenant_id == tenant_id)
-            .order_by(Division.created_at, Division.id)
+        (
+            await db.execute(
+                select(Division)
+                .where(Division.tenant_id == tenant_id)
+                .order_by(Division.created_at, Division.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for d in rows:
         if any(token in d.name for token in ("Engineering", "Engineer", "Dev")):
             return d
@@ -266,14 +270,18 @@ async def _seed_company_structure(
     # inserted without cleanup.
     for spec in GRADES:
         origin = (
-            await db.execute(
-                select(DictionaryItem).where(
-                    DictionaryItem.tenant_id.is_(None),
-                    DictionaryItem.type == "grade",
-                    DictionaryItem.title == spec["title"],
+            (
+                await db.execute(
+                    select(DictionaryItem).where(
+                        DictionaryItem.tenant_id.is_(None),
+                        DictionaryItem.type == "grade",
+                        DictionaryItem.title == spec["title"],
+                    )
                 )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if origin is not None:
             ctx.grades[spec["key"]] = origin
             continue
@@ -380,9 +388,7 @@ async def _seed_company_structure(
         )
         db.add(gs)
         await db.flush()
-        ctx.grade_specializations[
-            (spec["grade_key"], spec["specialization_key"])
-        ] = gs
+        ctx.grade_specializations[(spec["grade_key"], spec["specialization_key"])] = gs
 
     return ctx
 
@@ -409,13 +415,17 @@ async def _seed_competences(
     # the seed only needs a foreign-key target.
     for spec in SKILL_LEVELS:
         sl = (
-            await db.execute(
-                select(SkillLevel).where(
-                    SkillLevel.tenant_id.is_(None),
-                    SkillLevel.title == spec["title"],
+            (
+                await db.execute(
+                    select(SkillLevel).where(
+                        SkillLevel.tenant_id.is_(None),
+                        SkillLevel.title == spec["title"],
+                    )
                 )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if sl is None:
             # Origin ladder absent (unlikely outside fresh test DBs without
             # the data migration). Skip rather than insert tenant clutter.
@@ -706,9 +716,7 @@ async def _seed_employees(
         ctx.employees.append(employee)
 
     # ── Wire division leadership ────────────────────────────────────────
-    for assignment, employee in zip(
-        EMPLOYEE_ASSIGNMENTS, ctx.employees, strict=True
-    ):
+    for assignment, employee in zip(EMPLOYEE_ASSIGNMENTS, ctx.employees, strict=True):
         role = assignment["manager_role"]
         if role is None:
             continue
@@ -757,9 +765,7 @@ async def _seed_assessments_and_pdps(
     # ``c3fc300775f8``. If any of them are missing (e.g. a stripped-
     # down test database that didn't run those migrations) bail out —
     # the seed still produces a useful tenant without assessments.
-    status_rows = (
-        await db.execute(select(AssessmentStatus))
-    ).scalars().all()
+    status_rows = (await db.execute(select(AssessmentStatus))).scalars().all()
     statuses_by_code = {s.code: s for s in status_rows}
     type_rows = (await db.execute(select(AssessmentType))).scalars().all()
     types_by_code = {t.code: t for t in type_rows}
@@ -857,7 +863,9 @@ async def _seed_assessments_and_pdps(
             assessment_grade_id = None
             assessment_passing_score = None
         else:
-            assessment_specialization_id = ctx.specializations[spec["specialization_key"]].id
+            assessment_specialization_id = ctx.specializations[
+                spec["specialization_key"]
+            ].id
             assessment_grade_id = ctx.grades[spec["grade_key"]].id
             assessment_passing_score = 75
         assessment = Assessment(
@@ -968,8 +976,7 @@ async def _seed_assessments_and_pdps(
 
         if scoring_participants and scoring_options:
             avg_by_competence = {
-                comp_key: avg
-                for comp_key, avg, _ in spec.get("result_overrides", [])
+                comp_key: avg for comp_key, avg, _ in spec.get("result_overrides", [])
             }
             for comp_key in spec["competence_keys"]:
                 competence = ctx.competences.get(comp_key)
@@ -1012,9 +1019,10 @@ async def _seed_assessments_and_pdps(
                             # sort_index in the default 5-point scale),
                             # keyed on indicator + participant index so
                             # re-runs stay stable.
-                            target_weight = (
-                                ind_idx + part_idx * 2
-                            ) % max(1, len(scoring_options))
+                            target_weight = (ind_idx + part_idx * 2) % max(
+                                1, len(scoring_options)
+                            )
+
                         def _option_key(
                             o: AnswerOption, t: int = target_weight
                         ) -> tuple[int, int]:
@@ -1056,7 +1064,11 @@ async def _seed_assessments_and_pdps(
             started_at = now - timedelta(days=90)
             finished_at = now - timedelta(days=7)
 
-        deadline = now + timedelta(days=60) if spec["status"] not in {"done", "cancelled"} else None
+        deadline = (
+            now + timedelta(days=60)
+            if spec["status"] not in {"done", "cancelled"}
+            else None
+        )
 
         items = spec.get("items", [])
         passed = sum(1 for it in items if it.get("is_passed"))
@@ -1283,9 +1295,7 @@ async def _seed_talent_market(
         completed_at = now - timedelta(days=4) if status == "completed" else None
         cancelled_at = now - timedelta(days=10) if status == "cancelled" else None
         last_matched_at = (
-            now - timedelta(days=2)
-            if status in {"published", "completed"}
-            else None
+            now - timedelta(days=2) if status in {"published", "completed"} else None
         )
 
         card = TalentCard(
@@ -1301,7 +1311,11 @@ async def _seed_talent_market(
             completed_at=completed_at,
             cancelled_at=cancelled_at,
             start_date=today - timedelta(days=30),
-            end_date=today + timedelta(days=90) if status != "cancelled" else today - timedelta(days=5),
+            end_date=(
+                today + timedelta(days=90)
+                if status != "cancelled"
+                else today - timedelta(days=5)
+            ),
             match_percent=spec["match_percent"],
             last_matched_at=last_matched_at,
         )
@@ -1602,12 +1616,20 @@ async def _seed_misc(
     # Cache template lookups so the loop doesn't do 10 round-trips.
     template_codes = {n["template_code"] for n in NOTIFICATIONS}
     template_rows = (
-        await db.execute(
-            select(NotificationTemplate).where(
-                NotificationTemplate.code.in_(template_codes)
+        (
+            await db.execute(
+                select(NotificationTemplate).where(
+                    NotificationTemplate.code.in_(template_codes),
+                    # Demo content is English; without the locale filter the
+                    # per-locale rows (i18n F4) would shadow each other in
+                    # the code-keyed cache below.
+                    NotificationTemplate.locale == "en",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     templates_by_code = {t.code: t for t in template_rows}
 
     notification_count = 0
@@ -1615,13 +1637,17 @@ async def _seed_misc(
         template = templates_by_code.get(spec["template_code"])
         if template is None:
             continue
-        sent_at = now - timedelta(days=spec["days_ago"]) if spec["status"] == "sent" else None
+        sent_at = (
+            now - timedelta(days=spec["days_ago"]) if spec["status"] == "sent" else None
+        )
         # ``recipient_index`` lets a future NOTIFICATIONS entry target a
         # non-owner recipient (e.g. an employee user) without making the
         # dedup check miss and grow duplicate rows on every reseed. The
         # default points at the demo owner.
         recipient_index = spec.get("recipient_index")
-        if recipient_index is None or not (0 <= recipient_index < len(ctx.employee_users)):
+        if recipient_index is None or not (
+            0 <= recipient_index < len(ctx.employee_users)
+        ):
             recipient_id = owner_user_id
         else:
             recipient_id = ctx.employee_users[recipient_index].id
@@ -1784,7 +1810,12 @@ async def _create_candidates(
 
 
 def _build_elena_interview(
-    *, tenant_id: uuid.UUID, cv: CandidateVacancy, owner_user_id: uuid.UUID, now: datetime, transcript: str
+    *,
+    tenant_id: uuid.UUID,
+    cv: CandidateVacancy,
+    owner_user_id: uuid.UUID,
+    now: datetime,
+    transcript: str,
 ) -> Interview:
     return Interview(
         tenant_id=tenant_id,
@@ -1806,7 +1837,11 @@ def _build_elena_interview(
 
 
 def _build_tomas_interview(
-    *, tenant_id: uuid.UUID, cv: CandidateVacancy, owner_user_id: uuid.UUID, now: datetime
+    *,
+    tenant_id: uuid.UUID,
+    cv: CandidateVacancy,
+    owner_user_id: uuid.UUID,
+    now: datetime,
 ) -> Interview:
     return Interview(
         tenant_id=tenant_id,
@@ -1851,9 +1886,7 @@ async def _maybe_seed_analysis_cache(
     )
 
     try:
-        cache_key = await compute_cache_key_for_interview(
-            db, tenant_id, interview
-        )
+        cache_key = await compute_cache_key_for_interview(db, tenant_id, interview)
     except Exception:  # noqa: BLE001
         logger.exception(
             "demo seed: cache-key compute failed for interview %s", interview.id
@@ -1961,9 +1994,7 @@ async def clone_seed_into_demo_tenant(
     """
     if require_demo_tenant:
         is_demo = (
-            await db.execute(
-                select(Tenant.is_demo).where(Tenant.id == tenant_id)
-            )
+            await db.execute(select(Tenant.is_demo).where(Tenant.id == tenant_id))
         ).scalar_one_or_none()
         if is_demo is None:
             raise ValueError(f"Tenant {tenant_id} not found.")

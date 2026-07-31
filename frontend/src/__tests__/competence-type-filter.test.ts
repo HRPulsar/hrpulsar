@@ -17,6 +17,7 @@ function ct(
     type: "competence_type",
     title,
     description: null,
+    i18n_key: null,
     is_active,
     sort_index: 0,
     tenant_id: null,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -10,6 +11,7 @@ import {
   talentMarketApi,
 } from "@/lib/api/talent-market";
 import type { SpecializationGrade } from "@/lib/api/specializations";
+import { dictionaryItemLabel, skillLevelLabel } from "@/lib/reference-labels";
 import type {
   Competence,
   CompetenceGroupTree,
@@ -77,6 +79,9 @@ export function RequiredSpecializationsBlock({
   readOnly = false,
   onChanged,
 }: RequiredSpecializationsBlockProps) {
+  const t = useTranslations("talentMarket");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<TalentRequiredSpecialization | null>(
     null,
@@ -96,13 +101,29 @@ export function RequiredSpecializationsBlock({
   const [pendingSpecConfirm, setPendingSpecConfirm] = useState(false);
 
   const specTitle = useCallback(
-    (id: string) => specializations.find((s) => s.id === id)?.title ?? "—",
-    [specializations],
+    (id: string) => {
+      const item = specializations.find((s) => s.id === id);
+      return item ? dictionaryItemLabel(tRef, item) : "—";
+    },
+    [specializations, tRef],
   );
   const gradeTitle = useCallback(
-    (id: string | null) =>
-      id ? (grades.find((g) => g.id === id)?.title ?? "—") : "—",
-    [grades],
+    (id: string | null) => {
+      const item = id ? grades.find((g) => g.id === id) : undefined;
+      return item ? dictionaryItemLabel(tRef, item) : "—";
+    },
+    [grades, tRef],
+  );
+  // HRP-479: the ladder API ships a flat ``grade_title``; resolve the
+  // dictionary row by id so the picker matches the localized label shown
+  // in the list above, and fall back to the stored title when the grade
+  // is missing from the dictionary payload.
+  const gradeOptionTitle = useCallback(
+    (option: SpecializationGrade) => {
+      const item = grades.find((g) => g.id === option.grade_id);
+      return item ? dictionaryItemLabel(tRef, item) : option.grade_title;
+    },
+    [grades, tRef],
   );
 
   // Pull the spec → grades mapping from the configured ladder. Falls back to
@@ -156,7 +177,7 @@ export function RequiredSpecializationsBlock({
 
   function submit() {
     if (!form.specialization_id || !form.grade_id) {
-      toast.error("Specialization and Grade are required");
+      toast.error(t("toastSpecGradeRequired"));
       return;
     }
     // HRP-171: warn before mutating Required specializations on a
@@ -190,12 +211,12 @@ export function RequiredSpecializationsBlock({
       } else {
         await talentMarketApi.addRequiredSpecialization(card.id, payload);
       }
-      toast.success(editing ? "Specialization updated" : "Specialization added");
+      toast.success(t(editing ? "toastSpecUpdated" : "toastSpecAdded"));
       setPendingSpecConfirm(false);
       setDialogOpen(false);
       await onChanged();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("toastFailed"));
     } finally {
       setSaving(false);
     }
@@ -209,7 +230,7 @@ export function RequiredSpecializationsBlock({
       setDeleting(null);
       await onChanged();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("toastFailed"));
     } finally {
       setRemoving(false);
     }
@@ -230,7 +251,7 @@ export function RequiredSpecializationsBlock({
         {/* HRP-171: title is plural — recruiters can attach more than one
             spec, and adding/editing/removing any of them recomputes the
             Required Competencies block. */}
-        <CardTitle className="text-base">Required specializations</CardTitle>
+        <CardTitle className="text-base">{t("reqSpecsTitle")}</CardTitle>
         {!readOnly && (
           <Button
             size="sm"
@@ -239,14 +260,14 @@ export function RequiredSpecializationsBlock({
             data-testid="talent-card-required-specs-btn-add"
           >
             <Plus className="mr-1 h-4 w-4" />
-            Add
+            {t("add")}
           </Button>
         )}
       </CardHeader>
       <CardContent>
         {items.length === 0 ? (
           <p className="py-4 text-center text-sm text-muted-foreground">
-            No required specializations
+            {t("reqSpecsEmpty")}
           </p>
         ) : (
           <div className="space-y-2">
@@ -267,7 +288,9 @@ export function RequiredSpecializationsBlock({
                   {row.min_experience_years != null &&
                     row.min_experience_years > 0 && (
                       <div className="text-xs text-muted-foreground">
-                        Min. experience: {row.min_experience_years} year(s)
+                        {t("reqSpecMinExperience", {
+                          count: row.min_experience_years,
+                        })}
                       </div>
                     )}
                 </div>
@@ -301,12 +324,12 @@ export function RequiredSpecializationsBlock({
         <DialogContent data-testid="talent-card-required-spec-dialog">
           <DialogHeader>
             <DialogTitle>
-              {editing ? "Edit required specialization" : "Add required specialization"}
+              {t(editing ? "reqSpecEditTitle" : "reqSpecAddTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label>Specialization</Label>
+              <Label>{t("fieldSpecialization")}</Label>
               <Select
                 value={form.specialization_id}
                 onValueChange={(v) =>
@@ -317,11 +340,13 @@ export function RequiredSpecializationsBlock({
                   data-testid="talent-card-required-spec-dialog-select-spec"
                   className="w-full"
                 >
-                  <SelectValue placeholder="Pick a specialization">
-                    {(value) =>
-                      specializations.find((s) => s.id === value)?.title ??
-                      "Pick a specialization"
-                    }
+                  <SelectValue placeholder={t("pickSpecialization")}>
+                    {(value) => {
+                      const item = specializations.find((s) => s.id === value);
+                      return item
+                        ? dictionaryItemLabel(tRef, item)
+                        : t("pickSpecialization");
+                    }}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
@@ -334,14 +359,14 @@ export function RequiredSpecializationsBlock({
                     )
                     .map((s) => (
                       <SelectItem key={s.id} value={s.id}>
-                        {s.title}
+                        {dictionaryItemLabel(tRef, s)}
                       </SelectItem>
                     ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Grade</Label>
+              <Label>{t("fieldGrade")}</Label>
               <Select
                 value={form.grade_id}
                 onValueChange={(v) => setForm({ ...form, grade_id: v })}
@@ -354,33 +379,34 @@ export function RequiredSpecializationsBlock({
                   <SelectValue
                     placeholder={
                       loadingGrades
-                        ? "Loading grades…"
-                        : "Pick a grade for the specialization"
+                        ? t("loadingGrades")
+                        : t("pickGradeForSpecialization")
                     }
                   >
-                    {(value) =>
-                      gradeOptions.find((g) => g.grade_id === value)?.grade_title ??
-                      "Pick a grade"
-                    }
+                    {(value) => {
+                      const option = gradeOptions.find(
+                        (g) => g.grade_id === value,
+                      );
+                      return option ? gradeOptionTitle(option) : t("pickGrade");
+                    }}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {visibleGrades.map((g) => (
                     <SelectItem key={g.grade_id} value={g.grade_id}>
-                      {g.grade_title}
+                      {gradeOptionTitle(g)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               {form.specialization_id && !loadingGrades && visibleGrades.length === 0 && (
                 <p className="text-xs text-amber-600">
-                  No grades configured for this specialization. Set them up on
-                  the specialization page first.
+                  {t("noGradesConfigured")}
                 </p>
               )}
             </div>
             <div className="space-y-1.5">
-              <Label>Min. experience (years, optional)</Label>
+              <Label>{t("fieldMinExperience")}</Label>
               <Input
                 type="number"
                 min={0}
@@ -398,14 +424,18 @@ export function RequiredSpecializationsBlock({
               onClick={() => setDialogOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={submit}
               disabled={saving || !form.specialization_id || !form.grade_id}
               data-testid="talent-card-required-spec-dialog-btn-save"
             >
-              {saving ? "Saving…" : editing ? "Save" : "Add"}
+              {saving
+                ? t("savingEllipsis")
+                : editing
+                  ? t("save")
+                  : t("add")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -416,12 +446,13 @@ export function RequiredSpecializationsBlock({
       <ConfirmDialog
         open={deleting !== null}
         onOpenChange={(o) => !o && setDeleting(null)}
-        title="Delete required specialization"
+        title={t("deleteSpecTitle")}
         description={
           deleting
-            ? `Remove ${specTitle(deleting.specialization_id)} · ${gradeTitle(
-                deleting.grade_id,
-              )}? Required competencies will be recomputed without this row. This action cannot be undone.`
+            ? t("deleteSpecConfirm", {
+                spec: specTitle(deleting.specialization_id),
+                grade: gradeTitle(deleting.grade_id),
+              })
             : ""
         }
         onConfirm={confirmRemove}
@@ -435,10 +466,10 @@ export function RequiredSpecializationsBlock({
       <ConfirmDialog
         open={pendingSpecConfirm}
         onOpenChange={(o) => !o && setPendingSpecConfirm(false)}
-        title={editing ? "Edit required specialization" : "Add required specialization"}
-        description="Required competencies will be recomputed based on the updated Required specializations. Continue?"
-        confirmLabel="Continue"
-        loadingLabel="Saving..."
+        title={t(editing ? "reqSpecEditTitle" : "reqSpecAddTitle")}
+        description={t("recomputeWarning")}
+        confirmLabel={t("continueLabel")}
+        loadingLabel={t("saving")}
         confirmVariant="default"
         onConfirm={runSubmit}
         loading={saving}
@@ -474,6 +505,9 @@ export function RequiredCompetencesBlock({
   readOnly = false,
   onChanged,
 }: RequiredCompetencesBlockProps) {
+  const t = useTranslations("talentMarket");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<1 | 2>(1);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -552,11 +586,11 @@ export function RequiredCompetencesBlock({
         })),
       };
       await talentMarketApi.addRequiredCompetences(card.id, body);
-      toast.success("Required competences saved");
+      toast.success(t("toastReqCompsSaved"));
       setOpen(false);
       await onChanged();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("toastFailed"));
     } finally {
       setSaving(false);
     }
@@ -565,7 +599,7 @@ export function RequiredCompetencesBlock({
   return (
     <Card data-testid="talent-card-required-competences">
       <CardHeader className="flex-row items-center justify-between">
-        <CardTitle className="text-base">Required competencies</CardTitle>
+        <CardTitle className="text-base">{t("requiredCompetencies")}</CardTitle>
         {!readOnly && (
           <Button
             size="sm"
@@ -582,14 +616,14 @@ export function RequiredCompetencesBlock({
             ) : (
               <Plus className="mr-1 h-4 w-4" />
             )}
-            {hasItems ? "Change" : "Add"}
+            {hasItems ? t("change") : t("add")}
           </Button>
         )}
       </CardHeader>
       <CardContent>
         {items.length === 0 ? (
           <p className="py-4 text-center text-sm text-muted-foreground">
-            No required competences
+            {t("reqCompsEmpty")}
           </p>
         ) : (
           <div
@@ -608,7 +642,7 @@ export function RequiredCompetencesBlock({
                   {comp?.title ?? "—"}
                   {lv && (
                     <span className="ml-1 text-muted-foreground">
-                      · {lv.title}
+                      · {skillLevelLabel(tRef, lv)}
                     </span>
                   )}
                 </Badge>
@@ -625,10 +659,10 @@ export function RequiredCompetencesBlock({
         >
           <DialogHeader>
             <DialogTitle>
-              {hasItems
-                ? "Change required competences"
-                : "Add required competences"}
-              {" — "}step {step} of 2
+              {t(
+                hasItems ? "compsDialogChangeStep" : "compsDialogAddStep",
+                { step },
+              )}
             </DialogTitle>
           </DialogHeader>
 
@@ -665,17 +699,21 @@ export function RequiredCompetencesBlock({
                       className="w-40"
                       data-testid={`talent-card-required-competences-step-2-${row.competence_id}`}
                     >
-                      <SelectValue placeholder="Level">
-                        {(value) =>
-                          orderedLevels.find((lv) => lv.id === value)?.title ??
-                          "Level"
-                        }
+                      <SelectValue placeholder={t("levelPlaceholder")}>
+                        {(value) => {
+                          const level = orderedLevels.find(
+                            (lv) => lv.id === value,
+                          );
+                          return level
+                            ? skillLevelLabel(tRef, level)
+                            : t("levelPlaceholder");
+                        }}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {orderedLevels.map((lv) => (
                         <SelectItem key={lv.id} value={lv.id}>
-                          {lv.title}
+                          {skillLevelLabel(tRef, lv)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -691,7 +729,7 @@ export function RequiredCompetencesBlock({
               onClick={() => (step === 1 ? setOpen(false) : setStep(1))}
               disabled={saving}
             >
-              {step === 1 ? "Cancel" : "Back"}
+              {step === 1 ? tc("cancel") : t("back")}
             </Button>
             {step === 1 && (
               <Button
@@ -699,7 +737,7 @@ export function RequiredCompetencesBlock({
                 disabled={selectedIds.size === 0}
                 data-testid="talent-card-required-competences-btn-next-1"
               >
-                Next
+                {t("next")}
               </Button>
             )}
             {step === 2 && (
@@ -708,7 +746,7 @@ export function RequiredCompetencesBlock({
                 disabled={!step2Ready || saving}
                 data-testid="talent-card-required-competences-btn-save"
               >
-                {saving ? "Saving…" : "Save"}
+                {saving ? t("savingEllipsis") : t("save")}
               </Button>
             )}
           </DialogFooter>

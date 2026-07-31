@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   Briefcase,
   Download,
@@ -39,20 +40,26 @@ import type {
   CandidateCanonicalCard,
 } from "@/lib/recruitment-types";
 
+// HRP-476: labels live in the `recruitment` i18n namespace; this list only
+// owns the payload key → input type → key relation.
 const PERSONAL_FIELDS: Array<{
   key: keyof PersonalEditState;
-  label: string;
+  labelKey: string;
   type?: "email" | "url" | "text" | "number" | "textarea";
 }> = [
-  { key: "full_name", label: "Full name" },
-  { key: "email", label: "Email", type: "email" },
-  { key: "phone", label: "Phone" },
-  { key: "linkedin_url", label: "LinkedIn URL", type: "url" },
-  { key: "location", label: "Location" },
-  { key: "current_position", label: "Current position" },
-  { key: "years_of_experience", label: "Years of experience", type: "number" },
-  { key: "source", label: "Source" },
-  { key: "notes", label: "Notes", type: "textarea" },
+  { key: "full_name", labelKey: "candidateFieldFullName" },
+  { key: "email", labelKey: "columnEmail", type: "email" },
+  { key: "phone", labelKey: "candidateFieldPhone" },
+  { key: "linkedin_url", labelKey: "candidateFieldLinkedinUrl", type: "url" },
+  { key: "location", labelKey: "candidateFieldLocation" },
+  { key: "current_position", labelKey: "candidateFieldCurrentPosition" },
+  {
+    key: "years_of_experience",
+    labelKey: "candidateFieldYearsExperience",
+    type: "number",
+  },
+  { key: "source", labelKey: "columnSource" },
+  { key: "notes", labelKey: "candidateFieldNotes", type: "textarea" },
 ];
 
 interface PersonalEditState {
@@ -86,6 +93,8 @@ function toEditState(c: CandidateCanonical): PersonalEditState {
 
 export default function CandidateDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const searchParams = useSearchParams();
   const router = useRouter();
   // HRP-181 REDO: candidate cards are reached from a vacancy funnel.
@@ -123,11 +132,13 @@ export default function CandidateDetailPage() {
     () =>
       (card?.vacancy_applications ?? []).map((a) => ({
         id: a.vacancy_id,
-        title: a.vacancy_title ?? `Vacancy ${a.vacancy_id.slice(0, 8)}`,
+        title:
+          a.vacancy_title ??
+          t("candidateVacancyFallback", { id: a.vacancy_id.slice(0, 8) }),
         candidate_vacancy_id: a.cv_id,
         has_parsed_resume: Boolean(card?.parsed_resume_jsonb),
       })),
-    [card?.vacancy_applications, card?.parsed_resume_jsonb],
+    [card?.vacancy_applications, card?.parsed_resume_jsonb, t],
   );
 
   // Mirrors backend resolve_user_role: full-payload roles win before the
@@ -165,11 +176,11 @@ export default function CandidateDetailPage() {
       setCard(data);
       setEtag(headers.get("ETag"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load candidate");
+      setError(err instanceof Error ? err.message : t("candidateLoadFailed"));
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     load();
@@ -177,20 +188,22 @@ export default function CandidateDetailPage() {
 
   if (loading && !card) {
     return (
-      <div className="py-12 text-center text-muted-foreground">Loading...</div>
+      <div className="py-12 text-center text-muted-foreground">
+        {tc("loading")}
+      </div>
     );
   }
 
   if (!card) {
     return (
       <div className="space-y-3 py-12 text-center text-muted-foreground">
-        <p>{error || "Candidate not found"}</p>
+        <p>{error || t("candidateNotFound")}</p>
         <Button
           variant="outline"
           size="sm"
           onClick={() => router.push(backHref)}
         >
-          Back
+          {t("actionBack")}
         </Button>
       </div>
     );
@@ -289,6 +302,7 @@ function Header({
   card: CandidateCanonicalCard;
   backHref: string;
 }) {
+  const t = useTranslations("recruitment");
   const isArchived = !!card.archived_at;
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -327,13 +341,13 @@ function Header({
           )}
           {isArchived && (
             <Badge variant="outline" className="border-rose-200 text-rose-700">
-              Archived
+              {t("statusArchived")}
             </Badge>
           )}
         </p>
       </div>
       <Button variant="outline" render={<Link href={backHref} />}>
-        Back
+        {t("actionBack")}
       </Button>
     </div>
   );
@@ -346,6 +360,8 @@ interface PersonalCardProps {
 }
 
 function PersonalCard({ card, etag, onSaved }: PersonalCardProps) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<PersonalEditState>(() => toEditState(card));
   const [busy, setBusy] = useState(false);
@@ -359,7 +375,7 @@ function PersonalCard({ card, etag, onSaved }: PersonalCardProps) {
     if (!trimmedFullName) {
       // Backend Candidate.full_name is NOT NULL — block here so the user
       // gets a clear inline error instead of a 500 IntegrityError.
-      toast.error("Full name is required.");
+      toast.error(t("candidateFullNameRequired"));
       return;
     }
     setBusy(true);
@@ -387,22 +403,24 @@ function PersonalCard({ card, etag, onSaved }: PersonalCardProps) {
       );
       onSaved(data, headers.get("ETag"));
       setEditing(false);
-      toast.success("Candidate updated");
+      toast.success(t("candidateToastUpdated"));
     } catch (err) {
       if (err instanceof ApiError && err.status === 412) {
-        toast.error("Card was modified by someone else. Reloading.");
+        toast.error(t("candidateConflictReload"));
       } else {
-        toast.error(err instanceof Error ? err.message : "Failed to save");
+        toast.error(
+          err instanceof Error ? err.message : t("candidateSaveFailed"),
+        );
       }
     } finally {
       setBusy(false);
     }
-  }, [card.id, etag, form, onSaved]);
+  }, [card.id, etag, form, onSaved, t]);
 
   return (
     <Card data-testid="candidate-card-section-personal">
       <CardHeader className="flex flex-row items-center justify-between gap-2">
-        <CardTitle className="text-sm">Personal info</CardTitle>
+        <CardTitle className="text-sm">{t("candidatePersonalInfo")}</CardTitle>
         {!editing ? (
           <Button
             variant="ghost"
@@ -410,7 +428,7 @@ function PersonalCard({ card, etag, onSaved }: PersonalCardProps) {
             onClick={() => setEditing(true)}
             data-testid="candidate-card-edit-personal-btn"
           >
-            Edit
+            {t("actionEdit")}
           </Button>
         ) : (
           <div className="flex gap-1">
@@ -420,7 +438,7 @@ function PersonalCard({ card, etag, onSaved }: PersonalCardProps) {
               onClick={() => setEditing(false)}
               disabled={busy}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               size="sm"
@@ -428,17 +446,17 @@ function PersonalCard({ card, etag, onSaved }: PersonalCardProps) {
               disabled={busy}
               data-testid="candidate-card-save-personal-btn"
             >
-              {busy ? "Saving..." : "Save"}
+              {busy ? t("actionSaving") : t("save")}
             </Button>
           </div>
         )}
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         {editing ? (
-          PERSONAL_FIELDS.map(({ key, label, type }) => (
+          PERSONAL_FIELDS.map(({ key, labelKey, type }) => (
             <div key={key} className="space-y-1">
               <Label className="text-xs" htmlFor={`personal-${key}`}>
-                {label}
+                {t(labelKey)}
               </Label>
               {type === "textarea" ? (
                 <Textarea
@@ -463,21 +481,30 @@ function PersonalCard({ card, etag, onSaved }: PersonalCardProps) {
           ))
         ) : (
           <dl className="grid grid-cols-1 gap-2">
-            <ReadField label="Email" value={card.email} />
-            <ReadField label="Phone" value={card.phone} />
-            <ReadField label="LinkedIn" value={card.linkedin_url} />
-            <ReadField label="Location" value={card.location} />
-            <ReadField label="Current position" value={card.current_position} />
+            <ReadField label={t("columnEmail")} value={card.email} />
+            <ReadField label={t("candidateFieldPhone")} value={card.phone} />
             <ReadField
-              label="Years of experience"
+              label={t("candidateFieldLinkedin")}
+              value={card.linkedin_url}
+            />
+            <ReadField
+              label={t("candidateFieldLocation")}
+              value={card.location}
+            />
+            <ReadField
+              label={t("candidateFieldCurrentPosition")}
+              value={card.current_position}
+            />
+            <ReadField
+              label={t("candidateFieldYearsExperience")}
               value={
                 card.years_of_experience !== null
                   ? `${card.years_of_experience}`
                   : null
               }
             />
-            <ReadField label="Source" value={card.source} />
-            <ReadField label="Notes" value={card.notes} />
+            <ReadField label={t("columnSource")} value={card.source} />
+            <ReadField label={t("candidateFieldNotes")} value={card.notes} />
           </dl>
         )}
       </CardContent>
@@ -509,15 +536,16 @@ function FilesCard({
 }: {
   files: CandidateCanonicalCard["candidate_files"];
 }) {
+  const t = useTranslations("recruitment");
   if (files.length === 0) {
     return (
       <Card data-testid="candidate-card-section-files">
         <CardHeader>
-          <CardTitle className="text-sm">Files</CardTitle>
+          <CardTitle className="text-sm">{t("candidateFilesTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-xs text-muted-foreground">
-            No files attached yet.
+            {t("candidateNoFiles")}
           </p>
         </CardContent>
       </Card>
@@ -526,7 +554,7 @@ function FilesCard({
   return (
     <Card data-testid="candidate-card-section-files">
       <CardHeader>
-        <CardTitle className="text-sm">Files</CardTitle>
+        <CardTitle className="text-sm">{t("candidateFilesTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
         {files.map((f) => (
@@ -548,8 +576,8 @@ function FilesCard({
               <Button
                 variant="ghost"
                 size="icon-sm"
-                onClick={() => downloadResume(f.id)}
-                aria-label="Download resume"
+                onClick={() => downloadResume(f.id, t("candidateDownloadFailed"))}
+                aria-label={t("candidateDownloadResume")}
                 data-testid={`candidate-card-file-${f.id}-download`}
               >
                 <Download className="size-4" />
@@ -562,7 +590,9 @@ function FilesCard({
   );
 }
 
-async function downloadResume(fileId: string) {
+// HRP-476: the fallback message is passed in — the helper sits outside the
+// component tree and cannot call `useTranslations` itself.
+async function downloadResume(fileId: string, failedMessage: string) {
   try {
     // HRP-347: the endpoint returns a presigned URL envelope, not the file
     // bytes; ``disposition=attachment`` makes the URL force a download with
@@ -575,7 +605,7 @@ async function downloadResume(fileId: string) {
     a.rel = "noopener";
     a.click();
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "Failed to download");
+    toast.error(err instanceof Error ? err.message : failedMessage);
   }
 }
 
@@ -584,19 +614,20 @@ function VacancyApplicationsCard({
 }: {
   card: CandidateCanonicalCard;
 }) {
+  const t = useTranslations("recruitment");
   const apps = card.vacancy_applications;
   return (
     <Card data-testid="candidate-card-section-applications">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-sm">
-          <Briefcase className="size-4 text-muted-foreground" /> Vacancy
-          applications
+          <Briefcase className="size-4 text-muted-foreground" />{" "}
+          {t("candidateApplicationsTitle")}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
         {apps.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            Not attached to any vacancy.
+            {t("candidateNoApplications")}
           </p>
         ) : (
           <ul className="space-y-2">
@@ -616,12 +647,17 @@ function VacancyApplicationsCard({
                     </Link>
                   ) : (
                     <span className="block truncate font-medium">
-                      Vacancy {a.vacancy_id.slice(0, 8)}
+                      {t("candidateVacancyFallback", {
+                        id: a.vacancy_id.slice(0, 8),
+                      })}
                     </span>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    {a.stage_name || "—"} · {a.status} · added{" "}
-                    {formatDate(a.added_at)}
+                    {t("candidateApplicationMeta", {
+                      stage: a.stage_name || "—",
+                      status: a.status,
+                      date: formatDate(a.added_at),
+                    })}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -631,7 +667,9 @@ function VacancyApplicationsCard({
                         "rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums",
                       )}
                     >
-                      Mgr {a.manager_score.toFixed(1)}
+                      {t("candidateManagerScore", {
+                        score: a.manager_score.toFixed(1),
+                      })}
                     </span>
                   )}
                   <AiVerdictBadge

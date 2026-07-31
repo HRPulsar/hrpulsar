@@ -145,12 +145,13 @@ async def patch_vacancy(
     """
     if_match = request.headers.get("if-match")
     if if_match is None:
-        from fastapi import HTTPException
         from fastapi import status as http_status
 
-        raise HTTPException(
+        from app.core.errors import AppError
+
+        raise AppError(
+            "vacancy_if_match_required",
             http_status.HTTP_428_PRECONDITION_REQUIRED,
-            "If-Match header is required for PATCH /vacancies/{id}.",
         )
     vacancy = await service.update_vacancy(
         db, current_user.tenant_id, vacancy_id, data, if_match=if_match

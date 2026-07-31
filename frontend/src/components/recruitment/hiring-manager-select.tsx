@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 
 import { api } from "@/lib/api";
 import {
@@ -37,6 +38,7 @@ export function HiringManagerSelect({
   testId,
   fallbackLabel,
 }: HiringManagerSelectProps) {
+  const t = useTranslations("recruitment");
   const [options, setOptions] = useState<HiringManagerOption[]>([]);
 
   useEffect(() => {
@@ -57,11 +59,12 @@ export function HiringManagerSelect({
     };
   }, []);
 
+  const placeholder = t("hiringManagerPlaceholder");
   const selectedLabel = value
     ? (options.find((m) => m.id === value)?.full_name ??
       fallbackLabel ??
-      "Select hiring manager")
-    : "Select hiring manager";
+      placeholder)
+    : placeholder;
 
   return (
     <Select
@@ -70,14 +73,12 @@ export function HiringManagerSelect({
       disabled={disabled}
     >
       <SelectTrigger id={id} data-testid={testId}>
-        <SelectValue placeholder="Select hiring manager">
-          {selectedLabel}
-        </SelectValue>
+        <SelectValue placeholder={placeholder}>{selectedLabel}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         {options.length === 0 ? (
           <div className="px-2 py-1 text-xs text-muted-foreground">
-            No eligible users
+            {t("hiringManagerNoEligible")}
           </div>
         ) : (
           options.map((m) => (

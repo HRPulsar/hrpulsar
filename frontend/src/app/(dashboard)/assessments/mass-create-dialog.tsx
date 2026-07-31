@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type {
   AssessmentGroupDetail,
   DictionaryItem,
@@ -35,10 +37,10 @@ import { ArrowLeft, ArrowRight, Users } from "lucide-react";
 import { isPastDeadline, todayLocalISO } from "@/lib/deadline";
 import { formatDate } from "@/lib/date-format";
 
-const typeOptions = [
-  { value: "self", label: "Self assessment" },
-  { value: "180", label: "180°" },
-  { value: "360", label: "360°" },
+const TYPE_OPTION_KEYS = [
+  { value: "self", labelKey: "typeSelf" },
+  { value: "180", labelKey: "type180" },
+  { value: "360", labelKey: "type360" },
 ];
 
 interface MassCreateDialogProps {
@@ -52,6 +54,9 @@ export function MassCreateDialog({
   onOpenChange,
   onCreated,
 }: MassCreateDialogProps) {
+  const t = useTranslations("assessments");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
 
@@ -70,8 +75,19 @@ export function MassCreateDialog({
   const [filterDivision, setFilterDivision] = useState("");
   const [filterPosition, setFilterPosition] = useState("");
   const [filterSpecialization, setFilterSpecialization] = useState("");
+  const selectedFilterSpec = filterSpecialization
+    ? specializations.find((s) => s.id === filterSpecialization)
+    : undefined;
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const typeOptions = useMemo(
+    () => TYPE_OPTION_KEYS.map(({ value, labelKey }) => ({
+      value,
+      label: t(labelKey),
+    })),
+    [t],
+  );
 
   // Load filter options on open
   useEffect(() => {
@@ -168,7 +184,7 @@ export function MassCreateDialog({
 
   async function handleCreate() {
     if (isPastDeadline(endedAt)) {
-      toast.error("Deadline cannot be in the past");
+      toast.error(t("errorDeadlineInPast"));
       return;
     }
     setSaving(true);
@@ -188,17 +204,15 @@ export function MassCreateDialog({
       const capped = result.skipped_capped_count ?? 0;
       if (capped > 0) {
         toast.success(
-          `Created ${created} of ${requested} assessments — ${capped} employee${
-            capped === 1 ? "" : "s"
-          } already at the active cap`,
+          t("massCreatedCapped", { created, requested, capped }),
         );
       } else {
-        toast.success(`Created ${created} assessments`);
+        toast.success(t("massCreated", { count: created }));
       }
       handleClose(false);
       onCreated();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create");
+      toast.error(err instanceof Error ? err.message : t("errorCreateFailed"));
     } finally {
       setSaving(false);
     }
@@ -227,26 +241,26 @@ export function MassCreateDialog({
       <DialogContent className="max-w-lg" data-testid="assessments-modal-mass-create">
         <DialogHeader>
           <DialogTitle>
-            {step === 1 && "Mass assessment — Settings"}
-            {step === 2 && "Mass assessment — Select employees"}
-            {step === 3 && "Mass assessment — Confirm"}
+            {step === 1 && t("massStep1Title")}
+            {step === 2 && t("massStep2Title")}
+            {step === 3 && t("massStep3Title")}
           </DialogTitle>
         </DialogHeader>
 
         {step === 1 && (
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Title</Label>
+              <Label>{t("fieldTitle")}</Label>
               <Input
                 data-testid="assessments-mass-input-title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="e.g. Q2 2026 360° Review"
+                placeholder={t("massTitlePlaceholder")}
                 maxLength={100}
               />
             </div>
             <div className="space-y-2">
-              <Label>Type</Label>
+              <Label>{t("fieldType")}</Label>
               <Select value={typeCode} onValueChange={setTypeCode}>
                 <SelectTrigger className="w-full" data-testid="assessments-mass-select-type">
                   <SelectValue>
@@ -263,7 +277,7 @@ export function MassCreateDialog({
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>End date</Label>
+              <Label>{t("fieldEndDate")}</Label>
               {/* HRP-335: shared DatePicker (HRP-152) instead of the
                   native date input. */}
               <DatePicker
@@ -273,7 +287,7 @@ export function MassCreateDialog({
                 onChange={setEndedAt}
               />
               {isPastDeadline(endedAt) && (
-                <p className="text-xs text-destructive">Deadline cannot be in the past</p>
+                <p className="text-xs text-destructive">{t("errorDeadlineInPast")}</p>
               )}
             </div>
           </div>
@@ -285,14 +299,14 @@ export function MassCreateDialog({
             <div className="grid grid-cols-3 gap-2">
               <Select value={filterDivision} onValueChange={setFilterDivision}>
                 <SelectTrigger className="w-full" data-testid="assessments-mass-select-division">
-                  <SelectValue placeholder="Division">
+                  <SelectValue placeholder={t("filterDivision")}>
                     {filterDivision
                       ? flatDivisions.find((d) => d.id === filterDivision)?.name
                       : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All divisions</SelectItem>
+                  <SelectItem value="">{t("allDivisions")}</SelectItem>
                   {flatDivisions.map((d) => (
                     <SelectItem key={d.id} value={d.id}>
                       {"  ".repeat(d.depth)}{d.name}
@@ -302,14 +316,14 @@ export function MassCreateDialog({
               </Select>
               <Select value={filterPosition} onValueChange={setFilterPosition}>
                 <SelectTrigger className="w-full" data-testid="assessments-mass-select-position">
-                  <SelectValue placeholder="Position">
+                  <SelectValue placeholder={t("filterPosition")}>
                     {filterPosition
                       ? positions.find((p) => p.id === filterPosition)?.title
                       : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All positions</SelectItem>
+                  <SelectItem value="">{t("allPositions")}</SelectItem>
                   {positions.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
                       {p.title}
@@ -322,17 +336,17 @@ export function MassCreateDialog({
                 onValueChange={setFilterSpecialization}
               >
                 <SelectTrigger className="w-full" data-testid="assessments-mass-select-specialization">
-                  <SelectValue placeholder="Specialization">
-                    {filterSpecialization
-                      ? specializations.find((s) => s.id === filterSpecialization)?.title
+                  <SelectValue placeholder={t("filterSpecialization")}>
+                    {selectedFilterSpec
+                      ? dictionaryItemLabel(tRef, selectedFilterSpec)
                       : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All</SelectItem>
+                  <SelectItem value="">{t("allSpecializations")}</SelectItem>
                   {specializations.map((s) => (
                     <SelectItem key={s.id} value={s.id}>
-                      {s.title}
+                      {dictionaryItemLabel(tRef, s)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -349,17 +363,17 @@ export function MassCreateDialog({
                   onCheckedChange={toggleAll}
                 />
                 <span className="text-sm text-muted-foreground">
-                  Select all ({employees.length})
+                  {t("selectAll", { count: employees.length })}
                 </span>
               </div>
               <div className="max-h-56 overflow-y-auto">
                 {loadingEmployees ? (
                   <div className="py-6 text-center text-sm text-muted-foreground">
-                    Loading...
+                    {tc("loading")}
                   </div>
                 ) : employees.length === 0 ? (
                   <div className="py-6 text-center text-sm text-muted-foreground">
-                    No employees match filters
+                    {t("noEmployeesMatch")}
                   </div>
                 ) : (
                   employees.map((e) => (
@@ -389,8 +403,7 @@ export function MassCreateDialog({
 
             {selectedIds.size > 0 && (
               <p className="text-sm font-medium">
-                {selectedIds.size} employee{selectedIds.size !== 1 ? "s" : ""}{" "}
-                selected
+                {t("employeesSelected", { count: selectedIds.size })}
               </p>
             )}
           </div>
@@ -400,17 +413,17 @@ export function MassCreateDialog({
           <div className="space-y-3">
             <div className="rounded-md border p-4 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Title</span>
-                <span className="text-sm font-medium">{title || "Untitled"}</span>
+                <span className="text-sm text-muted-foreground">{t("fieldTitle")}</span>
+                <span className="text-sm font-medium">{title || tc("untitled")}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Type</span>
+                <span className="text-sm text-muted-foreground">{t("fieldType")}</span>
                 <Badge variant="secondary">
                   {typeOptions.find((t) => t.value === typeCode)?.label}
                 </Badge>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Employees</span>
+                <span className="text-sm text-muted-foreground">{t("fieldEmployees")}</span>
                 <span className="text-sm font-medium flex items-center gap-1">
                   <Users className="h-3.5 w-3.5" />
                   {selectedIds.size}
@@ -418,7 +431,7 @@ export function MassCreateDialog({
               </div>
               {endedAt && (
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">End date</span>
+                  <span className="text-sm text-muted-foreground">{t("fieldEndDate")}</span>
                   <span className="text-sm">
                     {formatDate(endedAt)}
                   </span>
@@ -426,8 +439,7 @@ export function MassCreateDialog({
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              This will create {selectedIds.size} individual assessments grouped
-              together.
+              {t("massConfirmHint", { count: selectedIds.size })}
             </p>
           </div>
         )}
@@ -440,13 +452,13 @@ export function MassCreateDialog({
               disabled={saving}
             >
               <ArrowLeft className="mr-1 h-4 w-4" />
-              Back
+              {t("back")}
             </Button>
           )}
           <div className="flex-1" />
           {step === 1 && (
             <Button data-testid="assessments-mass-btn-next-1" onClick={() => setStep(2)} disabled={!title.trim()}>
-              Next
+              {t("next")}
               <ArrowRight className="ml-1 h-4 w-4" />
             </Button>
           )}
@@ -456,15 +468,15 @@ export function MassCreateDialog({
               onClick={() => setStep(3)}
               disabled={selectedIds.size === 0}
             >
-              Next ({selectedIds.size})
+              {t("nextCount", { count: selectedIds.size })}
               <ArrowRight className="ml-1 h-4 w-4" />
             </Button>
           )}
           {step === 3 && (
             <Button data-testid="assessments-mass-btn-submit" onClick={handleCreate} disabled={saving}>
               {saving
-                ? "Creating..."
-                : `Create ${selectedIds.size} assessments`}
+                ? t("creating")
+                : t("massCreateSubmit", { count: selectedIds.size })}
             </Button>
           )}
         </DialogFooter>

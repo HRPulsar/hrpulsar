@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -20,6 +21,7 @@ export function StatusChangePopover({
   onSelect,
   children,
 }: StatusChangePopoverProps) {
+  const t = useTranslations("recruitment");
   const [open, setOpen] = useState(false);
   const [pendingStage, setPendingStage] = useState<FunnelStage | null>(null);
   const [comment, setComment] = useState("");
@@ -131,7 +133,7 @@ export function StatusChangePopover({
                       {isCurrent && <Check className="size-4" />}
                       {stage.is_terminal && (
                         <span className="text-xs text-muted-foreground">
-                          Final
+                          {t("statusChangeFinal")}
                         </span>
                       )}
                     </button>
@@ -143,13 +145,13 @@ export function StatusChangePopover({
             /* Terminal stage: reason form */
             <div className="space-y-2 p-2">
               <p className="text-sm font-medium">
-                Move to &quot;{pendingStage.name}&quot;
+                {t("statusChangeMoveTo", { stage: pendingStage.name })}
               </p>
               <p className="text-xs text-muted-foreground">
-                This is a terminal stage. You may add a reason below.
+                {t("statusChangeTerminalHint")}
               </p>
               <Textarea
-                placeholder="Reason (optional)"
+                placeholder={t("statusChangeReasonPlaceholder")}
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 className="min-h-16 text-sm"
@@ -161,10 +163,10 @@ export function StatusChangePopover({
                   size="sm"
                   onClick={handleCancelTerminal}
                 >
-                  Back
+                  {t("actionBack")}
                 </Button>
                 <Button size="sm" onClick={handleConfirmTerminal}>
-                  Confirm
+                  {t("statusChangeConfirm")}
                 </Button>
               </div>
             </div>

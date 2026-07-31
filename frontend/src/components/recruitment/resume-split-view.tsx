@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Resume } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +39,8 @@ function ParsedFieldEditor({
   saving: boolean;
   onSave: (next: unknown) => void;
 }) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const displayValue =
     typeof value === "string" ? value : JSON.stringify(value, null, 2);
   const [draftOverride, setDraftOverride] = useState<string | null>(null);
@@ -52,7 +55,9 @@ function ParsedFieldEditor({
         const parsed = JSON.parse(draft);
         onSave(parsed);
       } catch {
-        toast.error(`Field "${formatLabel(field)}" — invalid JSON`);
+        toast.error(
+          t("resumeSplitInvalidJson", { field: formatLabel(field) }),
+        );
         return;
       }
     }
@@ -75,7 +80,9 @@ function ParsedFieldEditor({
             onClick={() => setDraftOverride(displayValue)}
             disabled={saving}
             data-testid={`resume-field-edit-${field}`}
-            aria-label={`Edit ${formatLabel(field)}`}
+            aria-label={t("resumeSplitEditField", {
+              field: formatLabel(field),
+            })}
           >
             <Pencil className="size-3.5" />
           </Button>
@@ -83,7 +90,9 @@ function ParsedFieldEditor({
         <CardContent>
           {typeof value === "string" ? (
             <p className="whitespace-pre-wrap text-sm text-muted-foreground">
-              {value || <span className="italic">empty</span>}
+              {value || (
+                <span className="italic">{t("resumeSplitEmptyValue")}</span>
+              )}
             </p>
           ) : Array.isArray(value) ? (
             <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
@@ -116,7 +125,7 @@ function ParsedFieldEditor({
             size="sm"
             onClick={cancel}
             disabled={saving}
-            aria-label="Cancel"
+            aria-label={tc("cancel")}
           >
             <X className="size-3.5" />
           </Button>
@@ -155,6 +164,7 @@ function ParsedFieldEditor({
 }
 
 export function ResumeSplitView({ resume, onUpdated }: ResumeSplitViewProps) {
+  const t = useTranslations("recruitment");
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -196,19 +206,19 @@ export function ResumeSplitView({ resume, onUpdated }: ResumeSplitViewProps) {
           `/recruitment/resumes/${resume.id}/parsed-data`,
           nextParsed,
         );
-        toast.success("Saved");
+        toast.success(t("resumeSplitToastSaved"));
         onUpdated?.(updated);
       } catch (err) {
         const message =
           err && typeof err === "object" && "message" in err
             ? String((err as { message: unknown }).message)
-            : "Failed to save";
+            : t("candidateSaveFailed");
         toast.error(message);
       } finally {
         setSaving(false);
       }
     },
-    [parsed, resume.id, onUpdated],
+    [parsed, resume.id, onUpdated, t],
   );
 
   const fieldEntries = useMemo(() => Object.entries(parsed), [parsed]);
@@ -231,7 +241,7 @@ export function ResumeSplitView({ resume, onUpdated }: ResumeSplitViewProps) {
               variant="ghost"
               size="sm"
               data-testid="resume-download-btn"
-              aria-label="Download resume"
+              aria-label={t("candidateDownloadResume")}
               render={
                 <a href={downloadUrl} target="_blank" rel="noreferrer">
                   <Download className="size-4" />
@@ -244,7 +254,9 @@ export function ResumeSplitView({ resume, onUpdated }: ResumeSplitViewProps) {
       <CardContent className="h-[calc(100%-3.5rem)] p-0">
         {downloadError && (
           <div className="flex h-full min-h-[400px] items-center justify-center p-6 text-center text-sm text-muted-foreground">
-            Preview is unavailable. {resume.raw_text ? "Raw text below." : "Try downloading the file."}
+            {resume.raw_text
+              ? t("resumeSplitPreviewUnavailableRawText")
+              : t("resumeSplitPreviewUnavailableDownload")}
           </div>
         )}
         {!downloadError && !downloadUrl && (
@@ -261,13 +273,17 @@ export function ResumeSplitView({ resume, onUpdated }: ResumeSplitViewProps) {
         )}
         {!downloadError && downloadUrl && !isPdf && (
           <div className="flex h-full min-h-[400px] flex-col items-center justify-center gap-3 p-6 text-sm text-muted-foreground">
-            <p>Inline preview not supported for {resume.mime_type}.</p>
+            <p>
+              {t("resumeSplitNoInlinePreview", {
+                mimeType: resume.mime_type,
+              })}
+            </p>
             <Button
               variant="outline"
               size="sm"
               render={
                 <a href={downloadUrl} target="_blank" rel="noreferrer">
-                  Open file
+                  {t("resumeSplitOpenFile")}
                 </a>
               }
             />
@@ -286,20 +302,20 @@ export function ResumeSplitView({ resume, onUpdated }: ResumeSplitViewProps) {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Extracted fields
+          {t("resumeSplitExtractedFields")}
         </h3>
         {saving && (
           <span className="flex items-center gap-1 text-xs text-muted-foreground">
             <Loader2 className="size-3 animate-spin" />
-            Saving
+            {t("resumeSplitSaving")}
           </span>
         )}
       </div>
       {fieldEntries.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           {resume.parse_status === "pending"
-            ? "Resume is being parsed…"
-            : "No extracted data yet."}
+            ? t("resumeSplitParsing")
+            : t("resumeSplitNoData")}
         </div>
       ) : (
         fieldEntries.map(([key, value]) => (
@@ -328,8 +344,10 @@ export function ResumeSplitView({ resume, onUpdated }: ResumeSplitViewProps) {
       {/* Mobile: tabs */}
       <Tabs defaultValue="file" className="md:hidden">
         <TabsList>
-          <TabsTrigger value="file">File</TabsTrigger>
-          <TabsTrigger value="extracted">Extracted</TabsTrigger>
+          <TabsTrigger value="file">{t("resumeSplitTabFile")}</TabsTrigger>
+          <TabsTrigger value="extracted">
+            {t("resumeSplitTabExtracted")}
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="file" className="space-y-3">
           {fileBlock}

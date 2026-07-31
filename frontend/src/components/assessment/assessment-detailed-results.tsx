@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { api, ApiError } from "@/lib/api";
@@ -11,6 +12,11 @@ import type {
   DetailedQuestion,
   DetailedResultsResponse,
 } from "@/lib/types";
+import {
+  dictionaryItemLabel,
+  scaleOptionLabel,
+  skillLevelLabel,
+} from "@/lib/reference-labels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,16 +30,18 @@ import {
 } from "@/components/ui/select";
 import { formatDateTime as formatIsoDateTime } from "@/lib/date-format";
 
-const ROLE_LABELS: Record<string, string> = {
-  self: "Self",
-  manager: "Manager",
-  peer: "Peer",
-  subordinate: "Subordinate",
-  external: "External",
+/** Participant role codes → keys in the `assessments` i18n namespace. */
+const ROLE_KEYS: Record<string, string> = {
+  self: "roleSelf",
+  manager: "roleManager",
+  peer: "rolePeer",
+  subordinate: "roleSubordinate",
+  external: "roleExternal",
 };
 
-function roleLabel(role: string): string {
-  return ROLE_LABELS[role] ?? role.charAt(0).toUpperCase() + role.slice(1);
+function roleLabel(t: (key: string) => string, role: string): string {
+  const key = ROLE_KEYS[role];
+  return key ? t(key) : role.charAt(0).toUpperCase() + role.slice(1);
 }
 
 function formatPercent(value: number | null): string {
@@ -69,6 +77,9 @@ export function AssessmentDetailedResults({
   canManage,
   onCalibrationChange,
 }: AssessmentDetailedResultsProps) {
+  const t = useTranslations("assessments");
+  const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [state, setState] = useState<{
     loading: boolean;
     error: string | null;
@@ -106,7 +117,8 @@ export function AssessmentDetailedResults({
         } else {
           setState({
             loading: false,
-            error: err instanceof Error ? err.message : "Failed to load detailed results",
+            error:
+              err instanceof Error ? err.message : t("errorLoadDetailedResults"),
             data: null,
           });
         }
@@ -114,7 +126,7 @@ export function AssessmentDetailedResults({
     return () => {
       cancelled = true;
     };
-  }, [assessmentId, visible, calibrationInProgress, refreshKey]);
+  }, [assessmentId, visible, calibrationInProgress, refreshKey, t]);
 
   // Enter edit mode whenever the backend reports calibration_in_progress.
   // Expand every competence so the reviewer can see every indicator at
@@ -186,7 +198,7 @@ export function AssessmentDetailedResults({
       await api.post(`/assessments/${assessmentId}/calibration/start`, {});
       await onCalibrationChange();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to start calibration");
+      toast.error(err instanceof Error ? err.message : t("errorCalibrationStart"));
     } finally {
       setBusy(false);
       setConfirmStart(false);
@@ -230,7 +242,7 @@ export function AssessmentDetailedResults({
       setRefreshKey((k) => k + 1);
       await onCalibrationChange();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save calibration");
+      toast.error(err instanceof Error ? err.message : t("errorCalibrationSave"));
     } finally {
       setBusy(false);
     }
@@ -244,7 +256,7 @@ export function AssessmentDetailedResults({
       setRefreshKey((k) => k + 1);
       await onCalibrationChange();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to cancel calibration");
+      toast.error(err instanceof Error ? err.message : t("errorCalibrationCancel"));
     } finally {
       setBusy(false);
       setConfirmCancel(false);
@@ -256,9 +268,11 @@ export function AssessmentDetailedResults({
     return (
       <Card data-testid="assessment-detailed-results">
         <CardHeader>
-          <CardTitle className="text-base">Detailed results</CardTitle>
+          <CardTitle className="text-base">{t("detailedResults")}</CardTitle>
         </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">Loading…</CardContent>
+        <CardContent className="text-sm text-muted-foreground">
+          {t("loadingEllipsis")}
+        </CardContent>
       </Card>
     );
   }
@@ -266,7 +280,7 @@ export function AssessmentDetailedResults({
     return (
       <Card data-testid="assessment-detailed-results">
         <CardHeader>
-          <CardTitle className="text-base">Detailed results</CardTitle>
+          <CardTitle className="text-base">{t("detailedResults")}</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-red-600">{error}</CardContent>
       </Card>
@@ -281,6 +295,14 @@ export function AssessmentDetailedResults({
       else next.add(compId);
       return next;
     });
+  }
+
+  // HRP-479: denormalized answers carry the stable option code next to
+  // the snapshot title — seeded-scale answers localize, tenant options
+  // (opt_N/neutral codes, absent from the catalog) fall back verbatim.
+  function answerLabel(code: string | null, title: string | null) {
+    if (title === null) return null;
+    return code ? scaleOptionLabel(tRef, { code, title }) : title;
   }
 
   function renderQuestionTotal(q: DetailedQuestion) {
@@ -298,8 +320,11 @@ export function AssessmentDetailedResults({
       // matching SelectItem children, so we pass the option title
       // explicitly — otherwise the trigger would display the raw UUID
       // value after a pick.
-      const selectedTitle =
-        scaleOptions.find((opt) => opt.id === overrideId)?.title ?? null;
+      const selectedOption =
+        scaleOptions.find((opt) => opt.id === overrideId) ?? null;
+      const selectedTitle = selectedOption
+        ? scaleOptionLabel(tRef, selectedOption)
+        : null;
       return (
         <div className="flex items-center gap-2">
           <Select
@@ -312,12 +337,12 @@ export function AssessmentDetailedResults({
               className="h-7 w-40 text-xs"
               data-testid={`calibrate-total-${q.indicator_id}`}
             >
-              <SelectValue placeholder="Total">{selectedTitle}</SelectValue>
+              <SelectValue placeholder={t("total")}>{selectedTitle}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               {scaleOptions.map((opt) => (
                 <SelectItem key={opt.id} value={opt.id}>
-                  {opt.title}
+                  {scaleOptionLabel(tRef, opt)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -328,7 +353,7 @@ export function AssessmentDetailedResults({
               className="border-amber-300 text-amber-700"
               data-testid={`calibrate-chip-${q.indicator_id}`}
             >
-              calibrated
+              {t("calibratedChip")}
             </Badge>
           )}
         </div>
@@ -339,7 +364,7 @@ export function AssessmentDetailedResults({
         <span className="font-semibold">
           {q.all_dont_know
             ? "—"
-            : q.overall_answer_title ??
+            : answerLabel(q.overall_answer_code, q.overall_answer_title) ??
               (q.overall_percent !== null ? formatPercent(q.overall_percent) : "—")}
         </span>
         {showCalibratedChip && (
@@ -348,7 +373,7 @@ export function AssessmentDetailedResults({
             className="border-amber-300 text-amber-700"
             data-testid={`calibrate-chip-${q.indicator_id}`}
           >
-            calibrated
+            {t("calibratedChip")}
           </Badge>
         )}
       </div>
@@ -358,7 +383,7 @@ export function AssessmentDetailedResults({
   return (
     <Card data-testid="assessment-detailed-results">
       <CardHeader className="flex-row items-center justify-between">
-        <CardTitle className="text-base">Detailed results</CardTitle>
+        <CardTitle className="text-base">{t("detailedResults")}</CardTitle>
         {canManage && !editMode && (
           <div className="flex gap-2">
             <Button
@@ -368,7 +393,7 @@ export function AssessmentDetailedResults({
               disabled={busy}
               onClick={() => setConfirmStart(true)}
             >
-              Calibrate
+              {t("calibrate")}
             </Button>
             {hasCalibratedTotals && (
               <Button
@@ -378,7 +403,7 @@ export function AssessmentDetailedResults({
                 disabled={busy}
                 onClick={() => setConfirmCancel(true)}
               >
-                Cancel calibration
+                {t("cancelCalibration")}
               </Button>
             )}
           </div>
@@ -392,7 +417,7 @@ export function AssessmentDetailedResults({
               disabled={busy}
               onClick={() => setConfirmCancel(true)}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               size="sm"
@@ -400,7 +425,7 @@ export function AssessmentDetailedResults({
               disabled={busy || !totalChanged()}
               onClick={saveCalibration}
             >
-              Save calibration
+              {t("saveCalibration")}
             </Button>
           </div>
         )}
@@ -425,13 +450,22 @@ export function AssessmentDetailedResults({
                 <div className="flex flex-1 flex-wrap items-center gap-2">
                   {comp.competence_type_title && (
                     <Badge variant="outline" className="font-normal">
-                      {comp.competence_type_title}
+                      {dictionaryItemLabel(tRef, {
+                        type: "competence_type",
+                        title: comp.competence_type_title,
+                        i18n_key: comp.competence_type_i18n_key,
+                      })}
                     </Badge>
                   )}
                   <span className="font-medium">{comp.competence_title}</span>
                   {comp.required_skill_level_title && (
                     <Badge variant="secondary" className="font-normal">
-                      Required: {comp.required_skill_level_title}
+                      {t("requiredLevel", {
+                        level: skillLevelLabel(tRef, {
+                          title: comp.required_skill_level_title,
+                          i18n_key: comp.required_skill_level_i18n_key,
+                        }),
+                      })}
                     </Badge>
                   )}
                 </div>
@@ -459,10 +493,15 @@ export function AssessmentDetailedResults({
                     >
                       <div className="flex items-center justify-between text-sm">
                         <div className="font-medium">
-                          {sl.skill_level_title ?? "Without level"}
+                          {sl.skill_level_title
+                            ? skillLevelLabel(tRef, {
+                                title: sl.skill_level_title,
+                                i18n_key: sl.skill_level_i18n_key,
+                              })
+                            : t("withoutLevel")}
                         </div>
                         <div className="text-muted-foreground">
-                          Percent for Skill level:{" "}
+                          {t("percentForSkillLevel")}{" "}
                           <span className="font-medium text-foreground">
                             {sl.all_dont_know
                               ? "—"
@@ -486,7 +525,7 @@ export function AssessmentDetailedResults({
                                   data-testid={`detailed-results-question-${q.indicator_id}-role-${r.role}`}
                                 >
                                   <span className="text-muted-foreground">
-                                    {roleLabel(r.role)}
+                                    {roleLabel(t, r.role)}
                                   </span>
                                   <span
                                     className={
@@ -495,12 +534,13 @@ export function AssessmentDetailedResults({
                                         : "font-medium"
                                     }
                                   >
-                                    {r.answer_title ?? "—"}
+                                    {answerLabel(r.answer_code, r.answer_title) ??
+                                      "—"}
                                   </span>
                                 </div>
                               ))}
                               <div className="flex items-center justify-between gap-2 border-t pt-1 text-sm">
-                                <span className="font-medium">Total</span>
+                                <span className="font-medium">{t("total")}</span>
                                 {renderQuestionTotal(q)}
                               </div>
                             </div>
@@ -518,7 +558,7 @@ export function AssessmentDetailedResults({
                                           variant="outline"
                                           className="ml-1 font-normal"
                                         >
-                                          {roleLabel(c.role)}
+                                          {roleLabel(t, c.role)}
                                         </Badge>
                                       </span>
                                       <span>{formatDateTime(c.created_at)}</span>
@@ -542,20 +582,20 @@ export function AssessmentDetailedResults({
       <ConfirmDialog
         open={confirmStart}
         onOpenChange={setConfirmStart}
-        title="Calibrate Totals?"
-        description="Participant submissions will be locked while you calibrate. You can cancel calibration at any time."
-        confirmLabel="Calibrate"
-        cancelLabel="Cancel"
+        title={t("calibrateConfirmTitle")}
+        description={t("calibrateConfirmDescription")}
+        confirmLabel={t("calibrate")}
+        cancelLabel={tc("cancel")}
         onConfirm={startCalibration}
         testId="calibrate-confirm-start"
       />
       <ConfirmDialog
         open={confirmCancel}
         onOpenChange={setConfirmCancel}
-        title="Cancel calibration?"
-        description="All manual Totals will be cleared and results will be recomputed from the original survey answers."
-        confirmLabel="Cancel calibration"
-        cancelLabel="Keep"
+        title={t("cancelCalibrationTitle")}
+        description={t("cancelCalibrationDescription")}
+        confirmLabel={t("cancelCalibration")}
+        cancelLabel={t("keep")}
         destructive
         onConfirm={cancelCalibration}
         testId="calibrate-confirm-cancel"

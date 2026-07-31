@@ -85,16 +85,19 @@ def generate_questions_task(
                 return {"status": "error", "error": "No vacancy profile found"}
 
             # Generate questions via LLM
+            from app.modules.ai.providers import resolve_generation_target_sync
             from app.modules.recruitment.ai_service import (
                 generate_individual_questions,
             )
 
+            creds = resolve_generation_target_sync(db, vacancy.tenant_id, None)
             questions = asyncio.run(
                 generate_individual_questions(
                     resume_data=resume.parsed_data,
                     profile_data=profile.profile_data,
                     vacancy_title=vacancy.title,
                     language=vacancy.language or "en",
+                    credentials=creds,
                 )
             )
 
@@ -214,9 +217,13 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
                 "language": vacancy.language or "en",
             }
 
+            from app.modules.ai.providers import resolve_generation_target_sync
             from app.modules.recruitment.ai_service import generate_vacancy_profile
 
-            profile_data = asyncio.run(generate_vacancy_profile(vacancy_data))
+            creds = resolve_generation_target_sync(db, vacancy.tenant_id, None)
+            profile_data = asyncio.run(
+                generate_vacancy_profile(vacancy_data, credentials=creds)
+            )
 
             # Normalize each competence id to a stable UUID so canvas/score
             # writes can reference it via uuid columns without an FK on the

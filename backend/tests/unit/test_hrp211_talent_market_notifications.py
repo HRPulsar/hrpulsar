@@ -12,10 +12,13 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 
+import pytest
+from app.config import settings
 from app.modules.auth.models import User
 from app.modules.employee.models import Employee
 from app.modules.talent_market import common, service
 from app.modules.talent_market.models import (
+    TalentCandidate,
     TalentCard,
     TalentCardCompetence,
 )
@@ -375,3 +378,108 @@ async def test_self_managed_cancel_skips_manager_email(
     assert not any(
         s.startswith("Your employee") for s in subjects
     )
+
+
+# ---------------------------------------------------------------------------
+# i18n F4 (HRP-478) — recipient locale on the lifecycle batch
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def locales_de_en(monkeypatch):
+    """Deployment that ships both catalogs, defaulting to English."""
+    monkeypatch.setattr(settings, "available_locales", "de,en")
+    monkeypatch.setattr(settings, "default_locale", "en")
+
+
+def _patch_enqueue_bodies(monkeypatch) -> list[tuple[str, str, str]]:
+    """Like ``_patch_enqueue`` but keeps the rendered body too."""
+    sent: list[tuple[str, str, str]] = []
+
+    def fake_enqueue(
+        recipient,
+        subject,
+        body,
+        *,
+        tenant_id=None,
+        template_code=None,
+    ):
+        sent.append((recipient, subject, body))
+
+    from app.core import email as email_mod
+
+    monkeypatch.setattr(email_mod, "enqueue_email", fake_enqueue)
+    return sent
+
+
+async def _set_language(db: AsyncSession, emp: Employee, language: str) -> None:
+    usr = await db.get(User, emp.user_id)
+    assert usr is not None
+    usr.language = language
+    await db.commit()
+
+
+async def test_dispatch_renders_in_recipient_locale(
+    db: AsyncSession, tenant, user, monkeypatch, locales_de_en
+) -> None:
+    """A candidate with ``language='de'`` gets the German render."""
+    card = await service.create_card(
+        db, tenant.id, user.id, TalentCardCreate(title="Loc", card_type="vacancy")
+    )
+    emp = await _make_employee(db, tenant, suffix="de")
+    await _set_language(db, emp, "de")
+    await service.add_candidate(
+        db, tenant.id, card["id"], CandidateAdd(employee_id=emp.id)
+    )
+    await _force_published(db, card["id"])
+
+    sent = _patch_enqueue_bodies(monkeypatch)
+    card_obj = await db.get(TalentCard, card["id"])
+    assert card_obj is not None
+    await common._dispatch_lifecycle_emails(db, card_obj, "published")
+
+    assert len(sent) == 1
+    assert 'lang="de"' in sent[0][2]
+
+
+async def test_dispatch_locale_is_per_recipient(
+    db: AsyncSession, tenant, user, monkeypatch, locales_de_en
+) -> None:
+    """Employee and manager are resolved independently: the appointed-self
+    mail follows the employee's locale, the manager copy the manager's."""
+    from app.modules.company.models import Division
+
+    mgr_emp = await _make_employee(db, tenant, suffix="mgr")
+    await _set_language(db, mgr_emp, "de")
+    division = Division(tenant_id=tenant.id, name="Loc", manager_id=mgr_emp.id)
+    db.add(division)
+    await db.flush()
+
+    # The reporting employee keeps ``language = None``, so their own mail
+    # falls through to the deployment default ("en").
+    emp = await _make_employee(db, tenant, suffix="rep")
+    emp.division_id = division.id
+    await db.commit()
+
+    card = await service.create_card(
+        db, tenant.id, user.id, TalentCardCreate(title="Loc2", card_type="vacancy")
+    )
+    cand = await service.add_candidate(
+        db, tenant.id, card["id"], CandidateAdd(employee_id=emp.id)
+    )
+    row = await db.get(TalentCandidate, cand["id"])
+    assert row is not None
+    row.status = "appointed"
+    await db.commit()
+
+    sent = _patch_enqueue_bodies(monkeypatch)
+    card_obj = await db.get(TalentCard, card["id"])
+    assert card_obj is not None
+    await common._dispatch_lifecycle_emails(db, card_obj, "appointed")
+
+    by_recipient = {recipient: body for recipient, _subject, body in sent}
+    emp_user = await db.get(User, emp.user_id)
+    mgr_user = await db.get(User, mgr_emp.user_id)
+    assert emp_user is not None and mgr_user is not None
+    assert 'lang="en"' in by_recipient[emp_user.email]
+    assert 'lang="de"' in by_recipient[mgr_user.email]

@@ -19,6 +19,8 @@ class TenantRead(BaseModel):
     description: str | None = None
     logo_file_id: uuid.UUID | None = None
     onboarding_completed: bool = False
+    # i18n (F0): tenant-default interface locale; None → deployment default.
+    default_locale: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -42,6 +44,9 @@ class CompanyProfileUpdate(BaseModel):
     )
     website: str | None = Field(default=None, max_length=500)
     description: str | None = None
+    # Interface locale from AVAILABLE_LOCALES (validated in the service);
+    # written by the onboarding "Language" step and company settings.
+    default_locale: str | None = Field(default=None, max_length=10)
 
 
 class CompanyProfileRead(TenantRead):

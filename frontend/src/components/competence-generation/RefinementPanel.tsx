@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -19,14 +20,6 @@ export interface RefinementPanelProps {
     exclude?: string | null;
   } | null;
 }
-
-const TOOLTIPS = {
-  add: "What to add — specific competences, indicators or groups missing from the current version.",
-  change:
-    "What to change — rewording, descriptions, indicator formatting.",
-  exclude:
-    "What to exclude — remove unsuitable groups, competences or indicators.",
-};
 
 const MAX_GENERAL = 4000;
 const MAX_FIELD = 2000;
@@ -55,6 +48,8 @@ export function RefinementPanel({
   onCancel,
   initialValues,
 }: RefinementPanelProps) {
+  const t = useTranslations("competences");
+  const tc = useTranslations("common");
   const [general, setGeneral] = useState(() => initialValues?.general ?? "");
   // Auto-expand the detailed form when any of the granular fields had
   // saved data, so the user lands on the same view they left.
@@ -89,10 +84,10 @@ export function RefinementPanel({
   return (
     <div className="space-y-3">
       <div className="space-y-1.5">
-        <Label>General request</Label>
+        <Label>{t("refineGeneralLabel")}</Label>
         <Textarea
           data-testid="compgen-refine-textarea-main"
-          placeholder="Describe what needs to change in the generated result…"
+          placeholder={t("refineGeneralPlaceholder")}
           value={general}
           onChange={(e) => setGeneral(e.target.value.slice(0, MAX_GENERAL))}
           rows={4}
@@ -115,28 +110,28 @@ export function RefinementPanel({
         ) : (
           <ChevronRight className="h-4 w-4" />
         )}
-        {expanded ? "Collapse to single field" : "Expand to detailed form"}
+        {expanded ? t("refineCollapse") : t("refineExpand")}
       </button>
 
       {expanded && (
         <div className="space-y-3 rounded-md border p-3">
           <RefineField
-            label="Add"
-            tooltip={TOOLTIPS.add}
+            label={t("refineFieldAdd")}
+            tooltip={t("refineTooltipAdd")}
             value={add}
             onChange={setAdd}
             testId="compgen-refine-textarea-add"
           />
           <RefineField
-            label="Change"
-            tooltip={TOOLTIPS.change}
+            label={t("refineFieldChange")}
+            tooltip={t("refineTooltipChange")}
             value={change}
             onChange={setChange}
             testId="compgen-refine-textarea-change"
           />
           <RefineField
-            label="Exclude"
-            tooltip={TOOLTIPS.exclude}
+            label={t("refineFieldExclude")}
+            tooltip={t("refineTooltipExclude")}
             value={exclude}
             onChange={setExclude}
             testId="compgen-refine-textarea-exclude"
@@ -146,14 +141,14 @@ export function RefinementPanel({
 
       <div className="flex justify-end gap-2 pt-1">
         <Button variant="outline" onClick={onCancel} disabled={submitting}>
-          Cancel
+          {tc("cancel")}
         </Button>
         <Button
           data-testid="compgen-refine-btn-submit"
           onClick={handleSubmit}
           disabled={!hasInput || submitting}
         >
-          {submitting ? "Sending…" : "Refine"}
+          {submitting ? t("refineSending") : t("refineSubmit")}
         </Button>
       </div>
     </div>

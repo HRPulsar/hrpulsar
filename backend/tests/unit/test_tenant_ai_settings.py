@@ -66,10 +66,10 @@ class TestServiceUpdate:
         self, db: AsyncSession, tenant
     ) -> None:
         row = await service.update(
-            db, tenant.id, AISettingsUpdate(llm_model="claude-opus-4-7")
+            db, tenant.id, AISettingsUpdate(llm_model="claude-opus-4-8")
         )
         assert row.effort_level == "custom"
-        assert row.llm_model == "claude-opus-4-7"
+        assert row.llm_model == "claude-opus-4-8"
 
     async def test_company_context_persists(self, db: AsyncSession, tenant) -> None:
         row = await service.update(
@@ -99,7 +99,7 @@ class TestServiceModelWhitelist:
 
     async def test_null_model_resets_override(self, db: AsyncSession, tenant) -> None:
         await service.update(
-            db, tenant.id, AISettingsUpdate(llm_model="claude-opus-4-7")
+            db, tenant.id, AISettingsUpdate(llm_model="claude-opus-4-8")
         )
         row = await service.update(db, tenant.id, AISettingsUpdate(llm_model=None))
         assert row.llm_model is None
@@ -130,7 +130,7 @@ class TestServiceReset:
             AISettingsUpdate(
                 effort_level="thorough",
                 company_context="Acme",
-                llm_model="claude-opus-4-7",
+                llm_model="claude-opus-4-8",
             ),
         )
         row = await service.reset(db, tenant.id)
@@ -159,7 +159,7 @@ class TestEffectiveResolvers:
         row = await service.update(
             db, tenant.id, AISettingsUpdate(effort_level="thorough")
         )
-        assert service.get_effective_model(row) == "claude-opus-4-7"
+        assert service.get_effective_model(row) == "claude-opus-4-8"
 
     async def test_effective_model_uses_override(
         self, db: AsyncSession, tenant
@@ -186,6 +186,30 @@ class TestSystemPromptExtras:
         extras = service.build_system_prompt_extras(row)
         assert any("Acme Corp" in part for part in extras)
         assert any("English" in part for part in extras)
+
+    async def test_language_directive_german(self, db: AsyncSession, tenant) -> None:
+        row = await service.update(
+            db, tenant.id, AISettingsUpdate(content_language="de")
+        )
+        assert "German" in service.build_language_directive(row)
+
+    async def test_language_directive_unknown_code_falls_back_to_english(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # The DB CHECK is gone (HRP-480); a row carrying a code the service
+        # does not know must still yield a safe English directive.
+        row = await service.get_or_default(db, tenant.id)
+        row.content_language = "xx"
+        assert "English" in service.build_language_directive(row)
+
+    async def test_to_read_dict_normalizes_unknown_language(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # Same scenario at the read boundary: an out-of-contract value must
+        # not break GET/PATCH via response_model validation.
+        row = await service.get_or_default(db, tenant.id)
+        row.content_language = "xx"
+        assert service.to_read_dict(row)["content_language"] == "en"
 
 
 class TestUniqueConstraint:
@@ -237,7 +261,7 @@ class TestRouterPatch:
         body = resp.json()
         assert body["effort_level"] == "thorough"
         assert body["effective_temperature"] == 0.2
-        assert body["effective_model"] == "claude-opus-4-7"
+        assert body["effective_model"] == "claude-opus-4-8"
 
     async def test_patch_temperature_flips_to_custom(
         self, auth_client: AsyncClient
@@ -277,6 +301,19 @@ class TestRouterPatch:
             json={"content_language": "fr"},
         )
         assert resp.status_code == 422
+
+    async def test_patch_content_language_de_accepted(
+        self, auth_client: AsyncClient
+    ) -> None:
+        resp = await auth_client.patch(
+            "/api/admin/ai-settings",
+            json={"content_language": "de"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["content_language"] == "de"
+
+        resp = await auth_client.get("/api/admin/ai-settings")
+        assert resp.json()["content_language"] == "de"
 
     async def test_patch_company_context_too_long_rejected(
         self, auth_client: AsyncClient

@@ -10,7 +10,9 @@ syntax.
 
 Adapted from the legacy generator semantics, but the legacy flat-string
 format and Russian text are replaced with English JSON to match the
-HRPulsar contract (Phase CR10b: `content_language` is currently `en` only).
+HRPulsar contract. The examples stay English regardless of the tenant's
+`content_language` — the output language is set by the directive tasks.py
+appends to the system prompt (HRP-480).
 """
 
 from __future__ import annotations

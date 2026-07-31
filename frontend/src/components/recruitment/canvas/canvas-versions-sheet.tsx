@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Loader2, RotateCcw, X } from "lucide-react";
 
 import { api } from "@/lib/api";
@@ -61,10 +62,13 @@ function emptyFilters(
   };
 }
 
-function operationLabel(op: AssessmentHistoryEvent["operation"]): string {
-  if (op === "upsert") return "created";
-  if (op === "revert") return "reverted";
-  return "updated";
+function operationLabel(
+  t: (key: string) => string,
+  op: AssessmentHistoryEvent["operation"],
+): string {
+  if (op === "upsert") return t("canvasVersionsOpCreated");
+  if (op === "revert") return t("canvasVersionsOpReverted");
+  return t("canvasVersionsOpUpdated");
 }
 
 function formatChange(event: AssessmentHistoryEvent): string {
@@ -80,6 +84,7 @@ export function CanvasVersionsSheet({
   evaluatorId,
   onReverted,
 }: CanvasVersionsSheetProps) {
+  const t = useTranslations("recruitment");
   const [filters, setFilters] = useState<FilterState>(() =>
     emptyFilters(candidateVacancyId, evaluatorId),
   );
@@ -114,12 +119,12 @@ export function CanvasVersionsSheet({
       setTotal(res.total);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to load history",
+        err instanceof Error ? err.message : t("canvasVersionsLoadFailed"),
       );
     } finally {
       setLoading(false);
     }
-  }, [vacancyId, queryString]);
+  }, [vacancyId, queryString, t]);
 
   useEffect(() => {
     if (!open) return;
@@ -129,7 +134,7 @@ export function CanvasVersionsSheet({
   const handleRevertConfirm = useCallback(async () => {
     if (!revertEvent) return;
     if (!revertEvent.evaluator_id) {
-      toast.error("Only Manager scores can be reverted from this panel.");
+      toast.error(t("canvasVersionsRevertOnlyManager"));
       return;
     }
     try {
@@ -137,14 +142,16 @@ export function CanvasVersionsSheet({
         `/recruitment/candidate-vacancies/${revertEvent.candidate_vacancy_id}/assessments/${revertEvent.competence_id}/evaluators/${revertEvent.evaluator_id}/revert`,
         { audit_event_id: revertEvent.id },
       );
-      toast.success("Score reverted");
+      toast.success(t("canvasVersionsToastReverted"));
       setRevertEvent(null);
       await fetchHistory();
       onReverted?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Revert failed");
+      toast.error(
+        err instanceof Error ? err.message : t("canvasVersionsRevertFailed"),
+      );
     }
-  }, [revertEvent, fetchHistory, onReverted]);
+  }, [revertEvent, fetchHistory, onReverted, t]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -154,18 +161,15 @@ export function CanvasVersionsSheet({
         data-testid="canvas-versions-sheet"
       >
         <SheetHeader>
-          <SheetTitle>Assessment versions</SheetTitle>
-          <SheetDescription>
-            Every Manager-score edit on this vacancy lives here. Pick a row
-            and Revert restores the prior value.
-          </SheetDescription>
+          <SheetTitle>{t("canvasVersionsTitle")}</SheetTitle>
+          <SheetDescription>{t("canvasVersionsDescription")}</SheetDescription>
         </SheetHeader>
 
         <div className="space-y-2 border-b px-4 pb-3 text-xs">
           <div className="grid grid-cols-2 gap-2">
             <label className="space-y-1">
               <span className="block text-[10px] uppercase text-muted-foreground">
-                Candidate-vacancy id
+                {t("canvasVersionsFilterCandidateLabel")}
               </span>
               <Input
                 value={filters.candidateVacancyId}
@@ -175,14 +179,14 @@ export function CanvasVersionsSheet({
                     candidateVacancyId: e.target.value.trim(),
                   }))
                 }
-                placeholder="UUID (optional)"
+                placeholder={t("canvasVersionsFilterUuidPlaceholder")}
                 data-testid="canvas-versions-filter-candidate"
                 disabled={Boolean(candidateVacancyId)}
               />
             </label>
             <label className="space-y-1">
               <span className="block text-[10px] uppercase text-muted-foreground">
-                Evaluator id
+                {t("canvasVersionsFilterEvaluatorLabel")}
               </span>
               <Input
                 value={filters.evaluatorId}
@@ -192,14 +196,14 @@ export function CanvasVersionsSheet({
                     evaluatorId: e.target.value.trim(),
                   }))
                 }
-                placeholder="UUID (optional)"
+                placeholder={t("canvasVersionsFilterUuidPlaceholder")}
                 data-testid="canvas-versions-filter-evaluator"
                 disabled={Boolean(evaluatorId)}
               />
             </label>
             <label className="space-y-1">
               <span className="block text-[10px] uppercase text-muted-foreground">
-                Since
+                {t("canvasVersionsFilterSince")}
               </span>
               <Input
                 type="datetime-local"
@@ -215,7 +219,7 @@ export function CanvasVersionsSheet({
             </label>
             <label className="space-y-1">
               <span className="block text-[10px] uppercase text-muted-foreground">
-                Until
+                {t("canvasVersionsFilterUntil")}
               </span>
               <Input
                 type="datetime-local"
@@ -244,12 +248,10 @@ export function CanvasVersionsSheet({
               }
               data-testid="canvas-versions-filter-only-divergence"
             />
-            <span>Only divergence-triggering edits</span>
+            <span>{t("canvasVersionsOnlyDivergence")}</span>
           </label>
           <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>
-              {total} event{total === 1 ? "" : "s"} match
-            </span>
+            <span>{t("canvasVersionsMatchCount", { count: total })}</span>
             <Button
               variant="ghost"
               size="sm"
@@ -259,7 +261,7 @@ export function CanvasVersionsSheet({
               data-testid="canvas-versions-filter-clear"
             >
               <X className="mr-1 size-3" />
-              Clear filters
+              {t("canvasVersionsClearFilters")}
             </Button>
           </div>
         </div>
@@ -271,7 +273,7 @@ export function CanvasVersionsSheet({
           {loading && (
             <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
               <Loader2 className="mr-2 size-4 animate-spin" />
-              Loading…
+              {t("loading")}
             </div>
           )}
           {error && !loading && (
@@ -281,7 +283,7 @@ export function CanvasVersionsSheet({
           )}
           {!loading && !error && items.length === 0 && (
             <p className="py-10 text-center text-sm text-muted-foreground">
-              No history matches the current filters.
+              {t("canvasVersionsEmpty")}
             </p>
           )}
           {!loading && !error && items.length > 0 && (
@@ -295,7 +297,7 @@ export function CanvasVersionsSheet({
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-mono text-[10px] text-muted-foreground">
                       v{event.version ?? "?"} ·{" "}
-                      {operationLabel(event.operation)}
+                      {operationLabel(t, event.operation)}
                     </span>
                     <span className="text-[10px] text-muted-foreground">
                       {formatDateTime(event.created_at)}
@@ -323,7 +325,7 @@ export function CanvasVersionsSheet({
                         data-testid={`canvas-versions-revert-btn-${event.id}`}
                       >
                         <RotateCcw className="mr-1 size-3" />
-                        Revert
+                        {t("canvasVersionsRevert")}
                       </Button>
                     )}
                   </div>
@@ -335,7 +337,7 @@ export function CanvasVersionsSheet({
 
         <div className="border-t p-3 text-right">
           <SheetClose render={<Button variant="outline" size="sm" />}>
-            Close
+            {t("canvasVersionsClose")}
           </SheetClose>
         </div>
 
@@ -344,21 +346,22 @@ export function CanvasVersionsSheet({
           onOpenChange={(next) => {
             if (!next) setRevertEvent(null);
           }}
-          title="Revert this assessment?"
+          title={t("canvasVersionsRevertTitle")}
           description={
             revertEvent
-              ? `Restore the cell to ${
-                  revertEvent.old_score === null
-                    ? "no score"
-                    : revertEvent.old_score.toFixed(1)
-                } (current: ${
-                  revertEvent.new_score === null
-                    ? "—"
-                    : revertEvent.new_score.toFixed(1)
-                }). The revert itself is audited and counted against the vacancy's score-update budget.`
+              ? t("canvasVersionsRevertDescription", {
+                  previous:
+                    revertEvent.old_score === null
+                      ? t("canvasVersionsRevertNoScore")
+                      : revertEvent.old_score.toFixed(1),
+                  current:
+                    revertEvent.new_score === null
+                      ? "—"
+                      : revertEvent.new_score.toFixed(1),
+                })
               : undefined
           }
-          confirmLabel="Revert"
+          confirmLabel={t("canvasVersionsRevert")}
           destructive
           onConfirm={handleRevertConfirm}
           testId="canvas-versions-revert-confirm"

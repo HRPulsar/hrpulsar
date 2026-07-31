@@ -12,7 +12,9 @@ import {
   Sliders,
   Target,
 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import type { DictionaryItem } from "@/lib/types";
 
 interface UsedData {
   specializations: string[];
@@ -46,6 +48,7 @@ export function UsedDataTooltip({
   testId = "compgen-tooltip-used-data",
   data: providedData,
 }: UsedDataTooltipProps) {
+  const t = useTranslations("competences");
   const [open, setOpen] = useState(defaultOpen);
   const [fetched, setFetched] = useState<UsedData | null>(null);
   const data = providedData ?? fetched;
@@ -57,8 +60,8 @@ export function UsedDataTooltip({
       try {
         const [specs, divs, company, settings] = await Promise.all([
           api
-            .get<{ id: string; title: string }[]>("/dictionaries/specialization")
-            .catch(() => []),
+            .get<DictionaryItem[]>("/dictionaries/specialization")
+            .catch(() => [] as DictionaryItem[]),
           api
             .get<{ id: string; title: string }[]>("/divisions")
             .catch(() => []),
@@ -69,6 +72,9 @@ export function UsedDataTooltip({
         ]);
         if (cancelled) return;
         setFetched({
+          // HRP-479 review: deliberately RAW titles — the panel claims to
+          // show "data sent to the model", and the backend prompt is
+          // built from the stored DB titles, not the localized labels.
           specializations: specs
             .map((s) => s.title?.trim())
             .filter((t): t is string => Boolean(t)),
@@ -101,20 +107,20 @@ export function UsedDataTooltip({
           <ChevronRight className="h-4 w-4" />
         )}
         <Info className="h-4 w-4 text-muted-foreground" />
-        Generation context
+        {t("usedDataTitle")}
         <span className="ml-auto text-xs font-normal text-muted-foreground">
-          Sent to the model
+          {t("usedDataSentToModel")}
         </span>
       </button>
       {open && (
         <div className="space-y-3 px-3 py-3 text-sm">
           <Section
             icon={<Target className="h-4 w-4 text-muted-foreground" />}
-            title="Specializations"
+            title={t("sectionSpecializations")}
             href="/dictionaries"
-            hrefLabel="Edit specializations"
+            hrefLabel={t("usedDataEditSpecializations")}
             empty={data ? data.specializations.length === 0 : false}
-            emptyHint="No specializations defined yet — the model will guess from grade chains."
+            emptyHint={t("usedDataSpecializationsEmpty")}
           >
             {data?.specializations.length ? (
               <ChipList items={data.specializations} />
@@ -123,11 +129,11 @@ export function UsedDataTooltip({
 
           <Section
             icon={<Building2 className="h-4 w-4 text-muted-foreground" />}
-            title="Divisions"
+            title={t("sectionDivisions")}
             href="/company"
-            hrefLabel="Edit divisions"
+            hrefLabel={t("usedDataEditDivisions")}
             empty={data ? data.divisions.length === 0 : false}
-            emptyHint="No divisions configured — generation runs without org context."
+            emptyHint={t("usedDataDivisionsEmpty")}
           >
             {data?.divisions.length ? (
               <ChipList items={data.divisions} />
@@ -136,11 +142,11 @@ export function UsedDataTooltip({
 
           <Section
             icon={<Layers className="h-4 w-4 text-muted-foreground" />}
-            title="Company description"
+            title={t("sectionCompanyDescription")}
             href="/company/profile"
-            hrefLabel="Edit company profile"
+            hrefLabel={t("usedDataEditCompanyProfile")}
             empty={!data?.companyDescription}
-            emptyHint="Describe what your company does so the model picks competences relevant to your business."
+            emptyHint={t("usedDataCompanyEmpty")}
           >
             {data?.companyDescription ? (
               <p className="whitespace-pre-wrap rounded-sm bg-background/60 p-2 text-xs text-foreground/90">
@@ -151,15 +157,15 @@ export function UsedDataTooltip({
 
           <Section
             icon={<Sliders className="h-4 w-4 text-muted-foreground" />}
-            title="AI settings"
+            title={t("usedDataAiSettings")}
             href="/settings/ai"
-            hrefLabel="Open AI settings"
+            hrefLabel={t("usedDataOpenAiSettings")}
             empty={false}
           >
             <p className="text-xs text-muted-foreground">
               {data?.hasAiSettings
-                ? "Tenant settings active — model, language, temperature, retry budget."
-                : "Using platform defaults."}
+                ? t("usedDataAiSettingsTenant")
+                : t("usedDataAiSettingsDefaults")}
             </p>
           </Section>
         </div>
@@ -185,6 +191,7 @@ function Section({
   emptyHint?: string;
   children?: React.ReactNode;
 }) {
+  const t = useTranslations("competences");
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-2">
@@ -204,7 +211,7 @@ function Section({
       </div>
       {empty ? (
         <p className="rounded-sm border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
-          {emptyHint ?? "No data."}
+          {emptyHint ?? t("usedDataNoData")}
         </p>
       ) : (
         children

@@ -2,10 +2,11 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.core.security import hash_password, verify_password
 from app.modules.public_api.models import APIKey
 
@@ -69,7 +70,7 @@ async def revoke_api_key(
 ) -> None:
     key = await db.get(APIKey, key_id)
     if not key or key.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
+        raise AppError("api_key_not_found", status.HTTP_404_NOT_FOUND)
     key.is_active = False
     await db.commit()
 
@@ -552,7 +553,7 @@ async def batch_assign_exams(db: AsyncSession, tenant_id: uuid.UUID, data) -> di
     # Validate mass exam
     me = await db.get(MassExam, data.mass_exam_id)
     if not me or me.tenant_id != tenant_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mass exam not found")
+        raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
 
     # Resolve employee IDs from filters
     employee_ids: set[uuid.UUID] = set()

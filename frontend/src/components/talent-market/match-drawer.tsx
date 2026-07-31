@@ -8,9 +8,11 @@
 // it clears the min_experience_years floor. Colour rules mirror HRP-173.
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 
 import { api } from "@/lib/api";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { dictionaryItemLabel, skillLevelLabel } from "@/lib/reference-labels";
 import {
   Sheet,
   SheetContent,
@@ -25,6 +27,8 @@ interface BreakdownCompetenceRow {
   competence_title: string;
   required_skill_level_id: string | null;
   required_skill_level_title: string | null;
+  // HRP-479: origin reference rows localize via reference.* keys.
+  required_skill_level_i18n_key?: string | null;
   card_match_percent: number;
   actual_percent: number | null;
   qualifies: boolean;
@@ -33,8 +37,10 @@ interface BreakdownCompetenceRow {
 interface BreakdownSpecRow {
   specialization_id: string;
   specialization_title: string;
+  specialization_i18n_key?: string | null;
   grade_id: string | null;
   grade_title: string | null;
+  grade_i18n_key?: string | null;
   required_years: number | null;
   actual_months: number | null;
   qualifies: boolean;
@@ -60,15 +66,20 @@ export interface MatchDrawerProps {
   onOpenChange: (open: boolean) => void;
 }
 
-function formatMonths(total: number | null): string {
-  if (total === null) return "No experience";
-  if (total <= 0) return "Less than a month";
+// HRP-476: the wording lives in the `talentMarket` i18n namespace, so the
+// helper takes the translator as a parameter instead of owning literals.
+function formatMonths(
+  t: (key: string, values?: Record<string, number>) => string,
+  total: number | null,
+): string {
+  if (total === null) return t("experienceNone");
+  if (total <= 0) return t("experienceLessThanMonth");
   const years = Math.floor(total / 12);
   const months = total % 12;
-  const yearPart = years ? `${years} year${years === 1 ? "" : "s"}` : "";
-  const monthPart = months ? `${months} month${months === 1 ? "" : "s"}` : "";
+  const yearPart = years ? t("experienceYears", { count: years }) : "";
+  const monthPart = months ? t("experienceMonths", { count: months }) : "";
   if (yearPart && monthPart) return `${yearPart} ${monthPart}`;
-  return yearPart || monthPart || "Less than a month";
+  return yearPart || monthPart || t("experienceLessThanMonth");
 }
 
 // HRP-172 redo (2026-06-09): the per-competence chip now mirrors the
@@ -90,6 +101,8 @@ export function MatchDrawer({
   open,
   onOpenChange,
 }: MatchDrawerProps) {
+  const t = useTranslations("talentMarket");
+  const tRef = useTranslations("reference");
   const [data, setData] = useState<Breakdown | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +129,7 @@ export function MatchDrawer({
         })
         .catch((err: unknown) => {
           if (cancelled) return;
-          setError(err instanceof Error ? err.message : "Failed to load");
+          setError(err instanceof Error ? err.message : t("toastLoadFailed"));
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
@@ -125,9 +138,9 @@ export function MatchDrawer({
     return () => {
       cancelled = true;
     };
-  }, [cardId, employeeId, open]);
+  }, [cardId, employeeId, open, t]);
 
-  const title = data?.employee_name ?? employeeName ?? "Candidate match";
+  const title = data?.employee_name ?? employeeName ?? t("drawerFallbackTitle");
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -136,9 +149,7 @@ export function MatchDrawer({
           <SheetTitle data-testid="talent-market-match-drawer-title">
             {title}
           </SheetTitle>
-          <SheetDescription>
-            Match breakdown against the card requirements.
-          </SheetDescription>
+          <SheetDescription>{t("drawerDescription")}</SheetDescription>
         </SheetHeader>
 
         {/* HRP-172 redo item 5: large requirement / experience lists
@@ -146,7 +157,9 @@ export function MatchDrawer({
             column so the inner list can scroll within the Sheet panel. */}
         <div className="flex-1 space-y-6 overflow-y-auto p-5">
           {loading && (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <p className="text-sm text-muted-foreground">
+              {t("loadingEllipsis")}
+            </p>
           )}
           {error && (
             <p className="text-sm text-destructive">{error}</p>
@@ -154,15 +167,17 @@ export function MatchDrawer({
 
           {data && data.competences.length > 0 && (
             <section data-testid="talent-market-match-drawer-competences">
-              <h3 className="mb-2 text-sm font-medium">Required competencies</h3>
+              <h3 className="mb-2 text-sm font-medium">
+                {t("requiredCompetencies")}
+              </h3>
               <p className="mb-3 text-xs text-muted-foreground">
-                Threshold: {data.card_match_percent}%
+                {t("drawerThreshold", { percent: data.card_match_percent })}
               </p>
               <ul className="space-y-2">
                 {data.competences.map((row) => {
                   const pctLabel =
                     row.actual_percent === null
-                      ? "No assessment"
+                      ? t("drawerNoAssessment")
                       : `${row.actual_percent}%`;
                   // HRP-172 redo (2026-06-09): chip colour is driven by
                   // the card threshold — green ≥ threshold, red below,
@@ -185,7 +200,12 @@ export function MatchDrawer({
                         </p>
                         {row.required_skill_level_title && (
                           <p className="text-xs text-muted-foreground">
-                            Required level: {row.required_skill_level_title}
+                            {t("drawerRequiredLevel", {
+                              level: skillLevelLabel(tRef, {
+                                title: row.required_skill_level_title,
+                                i18n_key: row.required_skill_level_i18n_key,
+                              }),
+                            })}
                           </p>
                         )}
                       </div>
@@ -205,15 +225,17 @@ export function MatchDrawer({
 
           {data && data.specializations.length > 0 && (
             <section data-testid="talent-market-match-drawer-experience">
-              <h3 className="mb-2 text-sm font-medium">Experience</h3>
+              <h3 className="mb-2 text-sm font-medium">
+                {t("drawerExperience")}
+              </h3>
               <ul className="space-y-2">
                 {data.specializations.map((row) => {
                   // HRP-210: when there's no WorkExperience tenure but
                   // the employee's current Position lines up with this
                   // spec, the chip becomes "Current position" (muted).
-                  let expLabel = formatMonths(row.actual_months);
+                  let expLabel = formatMonths(t, row.actual_months);
                   if (row.actual_months === null && row.current_position_match) {
-                    expLabel = "Current position";
+                    expLabel = t("drawerCurrentPosition");
                   }
                   // HRP-173 redo case 2.1: "no tenure on the matching
                   // specs" is muted, not red — the operator should see
@@ -230,17 +252,27 @@ export function MatchDrawer({
                     >
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-medium">
-                          {row.specialization_title}
+                          {dictionaryItemLabel(tRef, {
+                            type: "specialization",
+                            title: row.specialization_title,
+                            i18n_key: row.specialization_i18n_key,
+                          })}
                           {row.grade_title && (
                             <span className="ml-2 text-muted-foreground">
-                              · {row.grade_title}
+                              ·{" "}
+                              {dictionaryItemLabel(tRef, {
+                                type: "grade",
+                                title: row.grade_title,
+                                i18n_key: row.grade_i18n_key,
+                              })}
                             </span>
                           )}
                         </p>
                         {row.required_years != null && row.required_years > 0 && (
                           <p className="text-xs text-muted-foreground">
-                            Required: {row.required_years} year
-                            {row.required_years === 1 ? "" : "s"}
+                            {t("drawerRequiredYears", {
+                              count: row.required_years,
+                            })}
                           </p>
                         )}
                       </div>
@@ -263,8 +295,7 @@ export function MatchDrawer({
             data.specializations.length === 0 &&
             !loading && (
               <p className="text-sm text-muted-foreground">
-                This card has no requirements yet — set Required competencies or
-                Required specializations to compute a match.
+                {t("drawerEmptyRequirements")}
               </p>
             )}
         </div>

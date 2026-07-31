@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,17 +28,19 @@ export function VacancyArchiveDialog({
   onOpenChange,
   onArchived,
 }: Props) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [saving, setSaving] = useState(false);
 
   async function handleArchive() {
     setSaving(true);
     try {
       await api.post(`/recruitment/vacancies/${vacancy.id}/archive`);
-      toast.success("Vacancy archived");
+      toast.success(t("vacancyToastArchived"));
       onOpenChange(false);
       onArchived?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to archive");
+      toast.error(err instanceof Error ? err.message : t("vacancyArchiveFailed"));
     } finally {
       setSaving(false);
     }
@@ -50,23 +53,20 @@ export function VacancyArchiveDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="vacancy-archive-modal">
         <DialogHeader>
-          <DialogTitle>Archive vacancy?</DialogTitle>
+          <DialogTitle>{t("vacancyArchiveTitle")}</DialogTitle>
           <DialogDescription>
-            &ldquo;{vacancy.title}&rdquo; will be hidden from the active list.
-            You can restore it from the Archived filter within 90 days.
+            {t("vacancyArchiveDescription", { title: vacancy.title })}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2 text-sm">
           {invites > 0 && (
             <p className="text-yellow-700">
-              ⚠️ {invites} active reviewer invitation{invites === 1 ? "" : "s"}{" "}
-              will be deactivated.
+              {t("vacancyArchiveInvitesWarning", { count: invites })}
             </p>
           )}
           {candidates > 0 && (
             <p className="text-muted-foreground">
-              ℹ️ {candidates} candidate{candidates === 1 ? "" : "s"} will remain
-              accessible from the archived vacancy view.
+              {t("vacancyArchiveCandidatesNote", { count: candidates })}
             </p>
           )}
         </div>
@@ -77,7 +77,7 @@ export function VacancyArchiveDialog({
             disabled={saving}
             data-testid="vacancy-archive-modal-cancel"
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             variant="destructive"
@@ -85,7 +85,7 @@ export function VacancyArchiveDialog({
             disabled={saving}
             data-testid="vacancy-archive-modal-confirm"
           >
-            {saving ? "Archiving..." : "Archive"}
+            {saving ? t("vacancyArchiving") : t("actionArchive")}
           </Button>
         </DialogFooter>
       </DialogContent>

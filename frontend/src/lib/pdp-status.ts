@@ -46,15 +46,35 @@ export const PDP_GRADE_LOCKED_STATUSES: readonly PDPStatus[] = [
 // HRP-188: Assessment-style status labels — `Under review` renamed to
 // `On review` and `Completed` renamed to `Done` so the PDP chip wording
 // matches Assessments.
-export const PDP_STATUS_LABELS: Record<PDPStatus, string> = {
-  draft: "Draft",
-  sent: "Sent",
-  in_progress: "In progress",
-  review: "On review",
-  done: "Done",
-  returned: "Returned",
-  cancelled: "Cancelled",
+//
+// HRP-476: the wording itself now lives in the `development` i18n
+// namespace; every caller goes through PDP_STATUS_KEYS / translatePdpStatus.
+//
+// HRP-476: code → key in the `development` i18n namespace (same shape as
+// `components/employees/employee-status.ts` / `lib/assessment-status.ts`).
+export const PDP_STATUS_KEYS: Record<PDPStatus, string> = {
+  draft: "statusDraft",
+  sent: "statusSent",
+  in_progress: "statusInProgress",
+  review: "statusReview",
+  done: "statusDone",
+  returned: "statusReturned",
+  cancelled: "statusCancelled",
 };
+
+/** i18n key for a known status code, or `null` for anything unexpected. */
+export function pdpStatusKey(status: string): string | null {
+  return PDP_STATUS_KEYS[status as PDPStatus] ?? null;
+}
+
+/** Translated status label with a raw-code fallback for unknown statuses. */
+export function translatePdpStatus(
+  t: (key: string) => string,
+  status: string,
+): string {
+  const key = pdpStatusKey(status);
+  return key ? t(key) : status;
+}
 
 export const PDP_STATUS_COLORS: Record<PDPStatus, string> = {
   draft: BADGE_COLOR.neutral,
@@ -101,10 +121,6 @@ export function isPDPGradeLocked(status: string): boolean {
   return (PDP_GRADE_LOCKED_STATUSES as readonly string[]).includes(status);
 }
 
-export function pdpStatusLabel(status: string): string {
-  return PDP_STATUS_LABELS[status as PDPStatus] ?? status;
-}
-
 export function pdpStatusColor(status: string): string {
   return PDP_STATUS_COLORS[status as PDPStatus] ?? "";
 }
@@ -113,19 +129,31 @@ export function pdpNextStatuses(status: string): PDPStatus[] {
   return PDP_STATUS_TRANSITIONS[status as PDPStatus] ?? [];
 }
 
-// Action-button labels — short English verbs that read naturally on a button
-// ("send", "cancel"), distinct from PDP_STATUS_LABELS (full status names
-// shown on badges).
-export const PDP_STATUS_ACTION_LABELS: Record<PDPStatus, string> = {
-  draft: "draft",
-  sent: "send",
-  in_progress: "start",
-  review: "submit for review",
-  done: "complete",
-  returned: "return",
-  cancelled: "cancel",
+// Action-button labels — short verbs that read naturally on a button
+// ("send", "cancel"), distinct from the status names shown on badges.
+//
+// HRP-476: only the code → key relation lives here; the wording is in the
+// `development` i18n namespace.
+export const PDP_STATUS_ACTION_KEYS: Record<PDPStatus, string> = {
+  draft: "actionDraft",
+  sent: "actionSend",
+  in_progress: "actionStart",
+  review: "actionSubmitForReview",
+  done: "actionComplete",
+  returned: "actionReturn",
+  cancelled: "actionCancel",
 };
 
-export function pdpStatusActionLabel(status: string): string {
-  return PDP_STATUS_ACTION_LABELS[status as PDPStatus] ?? status;
+/** i18n key for a status action verb, or `null` for unknown statuses. */
+export function pdpStatusActionKey(status: string): string | null {
+  return PDP_STATUS_ACTION_KEYS[status as PDPStatus] ?? null;
+}
+
+/** Translated action verb with a raw-code fallback for unknown statuses. */
+export function translatePdpStatusAction(
+  t: (key: string) => string,
+  status: string,
+): string {
+  const key = pdpStatusActionKey(status);
+  return key ? t(key) : status;
 }

@@ -45,6 +45,20 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).exception("ws listener failed to start")
 
+    # HRP-466: fold moderation-approved catalog multipliers into the
+    # in-memory model whitelist so billing keeps its fast path after a
+    # restart (approvals land in the registry immediately; this replays
+    # them from the DB on boot). Best-effort — a cold DB must not block
+    # startup, /models lazily falls back to the row values.
+    try:
+        from app.database import async_session
+        from app.modules.ai import model_catalog_service
+
+        async with async_session() as db:
+            await model_catalog_service.sync_registry_from_catalog(db)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("model catalog registry sync failed")
+
     try:
         yield
     finally:
@@ -68,6 +82,68 @@ from app.modules.public_api.router import limiter  # noqa: E402
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
+# i18n (F3): code-based user-facing errors. AppError carries a stable
+# code; the handler resolves the request locale (NEXT_LOCALE cookie →
+# Accept-Language → deployment default) and renders the message from
+# backend/app/i18n/{locale}.json. ``detail`` stays a plain string for
+# backward compatibility with the API client and tests; ``code`` is
+# additive.
+from app.core.errors import AppError  # noqa: E402
+from app.core.i18n import (  # noqa: E402
+    resolve_locale_from_request,
+    translate,
+    validation_key_for_message,
+)
+
+
+async def _app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    locale = resolve_locale_from_request(request)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.localized_detail(locale), "code": exc.code},
+        headers=exc.headers,
+    )
+
+
+app.add_exception_handler(AppError, _app_error_handler)  # type: ignore[arg-type]
+
+# i18n (F3): localize framework validation messages where a translation
+# exists (errors.validation.<type> in the catalog); everything else keeps
+# the stock pydantic wording, so the default-locale output is unchanged.
+from fastapi.exception_handlers import (  # noqa: E402
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+
+
+async def _validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    locale = resolve_locale_from_request(request)
+    if locale != "en":
+        translated = []
+        for err in exc.errors():
+            key = f"errors.validation.{err.get('type', '')}"
+            message = translate(key, locale, **(err.get("ctx") or {}))
+            if message == key and err.get("type") == "value_error":
+                # Custom ``raise ValueError("...")`` in a pydantic validator:
+                # map the exact English message back to its catalog key (the
+                # schemas keep plain English strings on purpose).
+                custom_key = validation_key_for_message(
+                    str(err.get("msg", "")).removeprefix("Value error, ")
+                )
+                if custom_key is not None:
+                    key = custom_key
+                    message = translate(custom_key, locale)
+            if message != key:
+                err = {**err, "msg": message}
+            translated.append(err)
+        exc = RequestValidationError(translated, body=exc.body)
+    return await request_validation_exception_handler(request, exc)  # type: ignore[return-value]
+
+
+app.add_exception_handler(RequestValidationError, _validation_error_handler)  # type: ignore[arg-type]
 
 # Middleware (order matters — outermost first)
 from app.core.metrics import PrometheusMiddleware  # noqa: E402

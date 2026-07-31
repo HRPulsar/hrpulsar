@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Dialog,
   DialogContent,
@@ -72,11 +73,14 @@ const POLL_INTERVAL_MS = 3000;
 // filters cancelled rows out, so a sustained null is indistinguishable
 // from a dismissed session. Stops the spinner from spinning forever.
 const NULL_POLL_TOLERATED = 3;
-const GENERATION_STEPS = [
-  "Competence groups",
-  "Competences in each group",
-  "Indicators per competence (≥ 3 per level)",
-  "Interview questions (≥ 3 per competence)",
+// i18n keys in the `recruitment` namespace — the module constant cannot
+// call `useTranslations`, so the step list stores keys and the component
+// resolves them with its own `t`.
+const GENERATION_STEP_KEYS = [
+  "profileGenStepGroups",
+  "profileGenStepCompetences",
+  "profileGenStepIndicators",
+  "profileGenStepQuestions",
 ];
 
 function nonEmpty(value: string | null | undefined): string | null {
@@ -137,6 +141,7 @@ export function ProfileGenerationDialog({
   const prevOpenRef = useRef(false);
   const nullCountRef = useRef(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const t = useTranslations("recruitment");
 
   const lockedIds = useMemo(() => {
     return profileCompetences(preSnapshot).map(competenceKey).filter(Boolean);
@@ -198,7 +203,7 @@ export function ProfileGenerationDialog({
           if (nullCountRef.current >= NULL_POLL_TOLERATED) {
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;
-            toast.info("Generation dismissed");
+            toast.info(t("profileGenDismissed"));
             await onProfileChange?.();
             onOpenChange(false);
           }
@@ -215,13 +220,13 @@ export function ProfileGenerationDialog({
           if (generated) {
             setEditedData(generated);
           } else {
-            setError("Generated profile not found.");
+            setError(t("profileGenNotFound"));
           }
           setStage("review");
         } else if (data.status === "failed") {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
-          setError(data.error_message || "Generation failed");
+          setError(data.error_message || t("profileGenFailed"));
           setStage("review");
         }
         // "running" — keep polling. (Cancelled rows never come back from
@@ -236,7 +241,7 @@ export function ProfileGenerationDialog({
       if (pollRef.current) clearInterval(pollRef.current);
       pollRef.current = null;
     };
-  }, [stage, vacancy.id, onOpenChange, onProfileChange]);
+  }, [stage, vacancy.id, onOpenChange, onProfileChange, t]);
 
   const handleStart = useCallback(async () => {
     nullCountRef.current = 0;
@@ -257,7 +262,7 @@ export function ProfileGenerationDialog({
       // it like a confirmed dismiss — the polling loop will not see a
       // ``ready`` row, so we short-circuit here to close the dialog.
       if (result?.cancelled === true) {
-        toast.info("Generation cancelled");
+        toast.info(t("profileGenCancelled"));
         await onProfileChange?.();
         onOpenChange(false);
         return;
@@ -280,11 +285,11 @@ export function ProfileGenerationDialog({
       }
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to generate profile",
+        err instanceof Error ? err.message : t("profileGenStartFailed"),
       );
       setStage("review");
     }
-  }, [vacancy.id, clarification, onOpenChange, onProfileChange]);
+  }, [vacancy.id, clarification, onOpenChange, onProfileChange, t]);
 
   const handleCancel = useCallback(async () => {
     setBusy(true);
@@ -299,17 +304,17 @@ export function ProfileGenerationDialog({
         `/recruitment/vacancies/${vacancy.id}/profile/sessions/cancel`,
         session?.id ? { session_id: session.id } : {},
       );
-      toast.info("Generation cancelled");
+      toast.info(t("profileGenCancelled"));
       await onProfileChange?.();
       onOpenChange(false);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to cancel generation",
+        err instanceof Error ? err.message : t("profileGenCancelFailed"),
       );
     } finally {
       setBusy(false);
     }
-  }, [vacancy.id, session?.id, onOpenChange, onProfileChange]);
+  }, [vacancy.id, session?.id, onOpenChange, onProfileChange, t]);
 
   const handleApply = useCallback(async () => {
     const baseData = editedData;
@@ -353,7 +358,7 @@ export function ProfileGenerationDialog({
       // nameless-competence guard as the vacancy-page Save, since
       // assessment sheets key their labels off the name.
       if (findUnnamedCompetence(payload)) {
-        toast.error("Give every competence a name before saving.");
+        toast.error(t("vacancyCompetencesUnnamed"));
         return;
       }
       if (session?.id) {
@@ -371,12 +376,12 @@ export function ProfileGenerationDialog({
           profile_data: payload,
         });
       }
-      toast.success("Profile saved");
+      toast.success(t("vacancyProfileToastSaved"));
       await onProfileChange?.();
       onOpenChange(false);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save profile",
+        err instanceof Error ? err.message : t("profileGenSaveFailed"),
       );
     } finally {
       setBusy(false);
@@ -390,6 +395,7 @@ export function ProfileGenerationDialog({
     vacancy.id,
     onOpenChange,
     onProfileChange,
+    t,
   ]);
 
   const handleDiscard = useCallback(async () => {
@@ -409,17 +415,24 @@ export function ProfileGenerationDialog({
           { session_id: session.id },
         );
       }
-      toast.info("Discarded — the saved profile is unchanged");
+      toast.info(t("profileGenDiscarded"));
       await onProfileChange?.();
       onOpenChange(false);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to discard the result",
+        err instanceof Error ? err.message : t("profileGenDiscardFailed"),
       );
     } finally {
       setBusy(false);
     }
-  }, [vacancy.id, session?.id, session?.status, onOpenChange, onProfileChange]);
+  }, [
+    vacancy.id,
+    session?.id,
+    session?.status,
+    onOpenChange,
+    onProfileChange,
+    t,
+  ]);
 
   const startedAt = session ? new Date(session.started_at).getTime() : null;
   const elapsed =
@@ -446,11 +459,9 @@ export function ProfileGenerationDialog({
         {stage === "processing" && (
           <>
             <DialogHeader>
-              <DialogTitle>Generating competence matrix</DialogTitle>
+              <DialogTitle>{t("profileGenProcessingTitle")}</DialogTitle>
               <DialogDescription>
-                You can close this window — the session keeps running and the
-                banner reappears when you come back. Nothing is saved until
-                you review the result.
+                {t("profileGenProcessingDescription")}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 py-4">
@@ -459,16 +470,20 @@ export function ProfileGenerationDialog({
                 <div className="space-y-1">
                   <p className="flex items-center gap-2 text-sm font-medium">
                     <Sparkles className="size-4 text-accent" />
-                    Working on your profile
+                    {t("profileGenWorking")}
                     <span className="text-xs font-normal text-muted-foreground">
-                      (~{remaining > 0 ? `${remaining}s remaining` : "wrapping up"})
+                      (~
+                      {remaining > 0
+                        ? t("profileGenRemaining", { seconds: remaining })
+                        : t("profileGenWrappingUp")}
+                      )
                     </span>
                   </p>
                   <ul className="space-y-0.5 text-xs text-muted-foreground">
-                    {GENERATION_STEPS.map((step) => (
-                      <li key={step} className="flex items-center gap-1.5">
+                    {GENERATION_STEP_KEYS.map((stepKey) => (
+                      <li key={stepKey} className="flex items-center gap-1.5">
                         <span className="size-1.5 rounded-full bg-accent/70" />
-                        {step}
+                        {t(stepKey)}
                       </li>
                     ))}
                   </ul>
@@ -482,7 +497,7 @@ export function ProfileGenerationDialog({
                 disabled={busy}
                 data-testid="recruitment-profile-dialog-close-btn"
               >
-                Close window
+                {t("profileGenCloseWindow")}
               </Button>
               <Button
                 variant="destructive"
@@ -491,7 +506,7 @@ export function ProfileGenerationDialog({
                 data-testid="recruitment-profile-dialog-cancel-btn"
               >
                 <X className="mr-1 size-4" />
-                Cancel generation
+                {t("profileGenCancelGeneration")}
               </Button>
             </DialogFooter>
           </>
@@ -530,6 +545,8 @@ function ConfirmStage({
   onCancel: () => void;
   onStart: () => void;
 }) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const hasProfile = Boolean(
     initialProfile?.profile_data &&
       Array.isArray(
@@ -542,45 +559,54 @@ function ConfirmStage({
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Generate competence matrix</DialogTitle>
+        <DialogTitle>{t("profileGenConfirmTitle")}</DialogTitle>
         <DialogDescription>
-          The model receives the vacancy context below plus your clarification.
           {hasProfile
-            ? " Existing competences stay locked; only newly generated rows can be edited or deselected."
-            : ""}
+            ? t("profileGenConfirmDescriptionLocked")
+            : t("profileGenConfirmDescription")}
         </DialogDescription>
       </DialogHeader>
       <div
         className="max-h-[55vh] space-y-3 overflow-y-auto pr-1"
         data-testid="recruitment-profile-dialog-context"
       >
-        <ContextRow label="Vacancy" value={vacancy.title} />
+        <ContextRow label={tc("vacancy")} value={vacancy.title} />
         {nonEmpty(vacancy.description) && (
-          <ContextRow label="Description" value={vacancy.description!} multiline />
+          <ContextRow
+            label={t("vacancyFieldDescription")}
+            value={vacancy.description!}
+            multiline
+          />
         )}
         {nonEmpty(vacancy.employment_type) && (
-          <ContextRow label="Employment type" value={vacancy.employment_type!} />
+          <ContextRow
+            label={t("vacancyFieldEmploymentType")}
+            value={vacancy.employment_type!}
+          />
         )}
         {nonEmpty(vacancy.location) && (
-          <ContextRow label="Location" value={vacancy.location!} />
+          <ContextRow
+            label={t("candidateFieldLocation")}
+            value={vacancy.location!}
+          />
         )}
         {nonEmpty(vacancy.requirements) && (
           <ContextRow
-            label="Requirements"
+            label={t("vacancyFieldRequirements")}
             value={vacancy.requirements!}
             multiline
           />
         )}
         {nonEmpty(vacancy.responsibilities) && (
           <ContextRow
-            label="Responsibilities"
+            label={t("vacancyFieldResponsibilities")}
             value={vacancy.responsibilities!}
             multiline
           />
         )}
         {nonEmpty(vacancy.conditions) && (
           <ContextRow
-            label="Conditions"
+            label={t("vacancyFieldConditions")}
             value={vacancy.conditions!}
             multiline
           />
@@ -590,13 +616,13 @@ function ConfirmStage({
             htmlFor="profile-clarification"
             className="text-xs font-medium text-muted-foreground"
           >
-            Clarification for the AI (optional)
+            {t("profileGenClarificationLabel")}
           </label>
           <Textarea
             id="profile-clarification"
             value={clarification}
             onChange={(e) => onClarificationChange(e.target.value)}
-            placeholder="E.g. focus on backend leads, skip generic soft skills, emphasise distributed systems experience."
+            placeholder={t("profileGenClarificationPlaceholder")}
             className="min-h-20 text-sm"
             data-testid="recruitment-profile-dialog-clarification"
           />
@@ -604,11 +630,11 @@ function ConfirmStage({
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onCancel}>
-          Cancel
+          {tc("cancel")}
         </Button>
         <Button onClick={onStart} data-testid="recruitment-profile-dialog-start-btn">
           <Sparkles className="mr-1 size-4" />
-          Start generation
+          {t("profileGenStartButton")}
         </Button>
       </DialogFooter>
     </>
@@ -659,11 +685,12 @@ function ReviewStage({
   onApply: () => void;
   busy: boolean;
 }) {
+  const t = useTranslations("recruitment");
   if (error) {
     return (
       <>
         <DialogHeader>
-          <DialogTitle>Generation failed</DialogTitle>
+          <DialogTitle>{t("profileGenFailed")}</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col items-center gap-3 py-6">
           <AlertCircle className="size-8 text-destructive" />
@@ -671,7 +698,7 @@ function ReviewStage({
         </div>
         <DialogFooter>
           <Button onClick={onDiscard} disabled={busy}>
-            Close
+            {t("profileGenClose")}
           </Button>
         </DialogFooter>
       </>
@@ -681,14 +708,11 @@ function ReviewStage({
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Review competence matrix</DialogTitle>
+        <DialogTitle>{t("profileGenReviewTitle")}</DialogTitle>
         <DialogDescription>
-          Nothing is saved to the vacancy profile until you apply. Uncheck
-          items to drop them from the saved profile, edit text inline, or
-          delete groups / questions outright.
           {lockedIds.length > 0
-            ? " Previously-saved rows are locked and stay in the profile no matter what."
-            : ""}
+            ? t("profileGenReviewDescriptionLocked")
+            : t("profileGenReviewDescription")}
         </DialogDescription>
       </DialogHeader>
       <div
@@ -713,14 +737,14 @@ function ReviewStage({
           disabled={busy}
           data-testid="recruitment-profile-dialog-discard-btn"
         >
-          Discard changes
+          {t("profileGenDiscardButton")}
         </Button>
         <Button
           onClick={onApply}
           disabled={busy}
           data-testid="recruitment-profile-dialog-apply-btn"
         >
-          Save selection
+          {t("profileGenApplyButton")}
         </Button>
       </DialogFooter>
     </>

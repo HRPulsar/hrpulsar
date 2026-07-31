@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
@@ -74,13 +75,20 @@ const statusColors: Record<string, string> = {
 };
 
 // HRP-148: capitalised labels per spec (lowercase codes come from the API).
-const statusLabels: Record<string, string> = {
-  draft: "Draft",
-  published: "Published",
-  completed: "Completed",
-  closed: "Completed",
-  cancelled: "Cancelled",
+// HRP-476: the map holds i18n keys in the `talentMarket` namespace.
+const STATUS_KEYS: Record<string, string> = {
+  draft: "statusDraft",
+  published: "statusPublished",
+  completed: "statusCompleted",
+  closed: "statusCompleted",
+  cancelled: "statusCancelled",
 };
+
+/** Translated status label with a raw-code fallback for unknown values. */
+function statusLabel(t: (key: string) => string, status: string): string {
+  const key = STATUS_KEYS[status];
+  return key ? t(key) : status;
+}
 
 const TERMINAL_STATUSES = new Set(["completed", "closed", "cancelled"]);
 
@@ -106,19 +114,29 @@ function isOverdue(card: TalentCardDetail): boolean {
 // "Cancelled: yyyy-mm-dd" instead of the legacy "Closed:" label,
 // matching the Assessments section. Active cards (Draft / Published)
 // still render the date range.
-function formatCardTermLabel(card: TalentCardDetail): string {
+function formatCardTermLabel(
+  t: (key: string, values?: Record<string, string>) => string,
+  card: TalentCardDetail,
+): string {
   if (card.status === "completed" || card.status === "closed") {
     const when = card.completed_at ?? card.closed_at;
-    if (when) return `Completed: ${formatDate(when.slice(0, 10))}`;
+    if (when) {
+      return t("termCompleted", { date: formatDate(when.slice(0, 10)) });
+    }
   }
   if (card.status === "cancelled") {
     const when = card.cancelled_at ?? card.closed_at;
-    if (when) return `Cancelled: ${formatDate(when.slice(0, 10))}`;
+    if (when) {
+      return t("termCancelled", { date: formatDate(when.slice(0, 10)) });
+    }
   }
   if (card.end_date) {
-    return `${formatDate(card.start_date)} – ${formatDate(card.end_date)}`;
+    return t("termRange", {
+      start: formatDate(card.start_date),
+      end: formatDate(card.end_date),
+    });
   }
-  return `since ${formatDate(card.start_date)}`;
+  return t("termSince", { date: formatDate(card.start_date) });
 }
 
 // HRP-214: Candidates table now renders matched / not_matched / appointed
@@ -135,14 +153,20 @@ const candidateStatusColors: Record<string, string> = {
   responded: BADGE_COLOR.blue,
 };
 
-const candidateStatusLabels: Record<string, string> = {
-  matched: "Matched",
-  not_matched: "Not matched",
-  appointed: "Appointed",
+// HRP-476: code → key in the `talentMarket` namespace. Legacy statuses
+// have no key and fall through to the raw code, as before.
+const CANDIDATE_STATUS_KEYS: Record<string, string> = {
+  matched: "candidateStatusMatched",
+  not_matched: "candidateStatusNotMatched",
+  appointed: "candidateStatusAppointed",
 };
 
-function candidateStatusLabel(value: string): string {
-  return candidateStatusLabels[value] ?? value;
+function candidateStatusLabel(
+  t: (key: string) => string,
+  value: string,
+): string {
+  const key = CANDIDATE_STATUS_KEYS[value];
+  return key ? t(key) : value;
 }
 
 // HRP-95 / HRP-173: picker row returned by GET /talent-market/{id}/candidate-pool.
@@ -170,35 +194,46 @@ type CandidatePoolItem = {
   employee_status?: string | null;
 };
 
-function formatExperienceMonths(total: number | null): string {
-  if (total === null) return "no experience";
-  if (total <= 0) return "<1 month";
+// HRP-476: the wording lives in the `talentMarket` i18n namespace, so the
+// helpers below take the translator as a parameter.
+function formatExperienceMonths(
+  t: (key: string, values?: Record<string, number>) => string,
+  total: number | null,
+): string {
+  if (total === null) return t("matchNoExperience");
+  if (total <= 0) return t("expLessThanMonth");
   const years = Math.floor(total / 12);
   const months = total % 12;
-  const yearPart = years ? `${years}y` : "";
-  const monthPart = months ? `${months}m` : "";
-  return `${yearPart}${yearPart && monthPart ? " " : ""}${monthPart}` || "<1 month";
+  const yearPart = years ? t("expYearsShort", { count: years }) : "";
+  const monthPart = months ? t("expMonthsShort", { count: months }) : "";
+  return (
+    `${yearPart}${yearPart && monthPart ? " " : ""}${monthPart}` ||
+    t("expLessThanMonth")
+  );
 }
 
 // HRP-242: short label for the "last match" stamp in the Candidates
 // block header. Returns null for empty timestamps so the caller can
 // hide the row instead of rendering a sentinel.
-const MONTHS_SHORT = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
+const MONTH_SHORT_KEYS = [
+  "monthShortJan",
+  "monthShortFeb",
+  "monthShortMar",
+  "monthShortApr",
+  "monthShortMay",
+  "monthShortJun",
+  "monthShortJul",
+  "monthShortAug",
+  "monthShortSep",
+  "monthShortOct",
+  "monthShortNov",
+  "monthShortDec",
 ];
 
-function formatLastMatched(iso: string | null | undefined): {
+function formatLastMatched(
+  t: (key: string, values?: Record<string, string>) => string,
+  iso: string | null | undefined,
+): {
   short: string;
   tooltip: string;
 } | null {
@@ -219,13 +254,21 @@ function formatLastMatched(iso: string | null | undefined): {
   const dayDiff = Math.round(
     (startOfToday.getTime() - startOfTs.getTime()) / 86_400_000,
   );
-  if (dayDiff <= 0) return { short: "today", tooltip };
-  if (dayDiff === 1) return { short: "yesterday", tooltip };
-  const monthDay = `${MONTHS_SHORT[ts.getMonth()]} ${ts.getDate()}`;
+  if (dayDiff <= 0) return { short: t("lastMatchedToday"), tooltip };
+  if (dayDiff === 1) return { short: t("lastMatchedYesterday"), tooltip };
+  const month = t(MONTH_SHORT_KEYS[ts.getMonth()]);
+  const day = String(ts.getDate());
   if (ts.getFullYear() === today.getFullYear()) {
-    return { short: monthDay, tooltip };
+    return { short: t("lastMatchedMonthDay", { month, day }), tooltip };
   }
-  return { short: `${monthDay}, ${ts.getFullYear()}`, tooltip };
+  return {
+    short: t("lastMatchedMonthDayYear", {
+      month,
+      day,
+      year: String(ts.getFullYear()),
+    }),
+    tooltip,
+  };
 }
 
 // HRP-173: stacked Match cell. Renders a Competencies row (colour by
@@ -259,6 +302,7 @@ function MatchCell({
   // candidate row, so other rows render the chips without the chevron.
   hideTrigger?: boolean;
 }) {
+  const t = useTranslations("talentMarket");
   const hasComp = item.has_comp_requirement;
   const hasSpec = item.has_spec_requirement;
   // HRP-173 redo: each chip is coloured by its own rule — no cross-rule
@@ -278,14 +322,16 @@ function MatchCell({
       compChip = BADGE_COLOR.neutral;
       // HRP-173 redo case 2.2: when the card has no Required spec the
       // unscored fallback is "no assessments" (not "no experience").
-      compText = hasSpec ? "no assessment" : "no assessments";
+      compText = hasSpec
+        ? t("matchNoAssessment")
+        : t("matchNoAssessments");
     } else {
       compChip = item.comp_qualifies ? BADGE_COLOR.green : BADGE_COLOR.red;
       compText = `${item.comp_match}%`;
     }
   }
   let expChip: string = BADGE_COLOR.neutral;
-  let expText = "no experience";
+  let expText = t("matchNoExperience");
   if (hasSpec) {
     if (item.exp_months === null) {
       // HRP-210: no WorkExperience tenure to show — fall back to the
@@ -293,10 +339,10 @@ function MatchCell({
       // spec ("has experience" greyed). Otherwise stays "no experience".
       expChip = BADGE_COLOR.neutral;
       expText = item.exp_via_current_position
-        ? "has experience"
-        : "no experience";
+        ? t("matchHasExperience")
+        : t("matchNoExperience");
     } else {
-      expText = formatExperienceMonths(item.exp_months);
+      expText = formatExperienceMonths(t, item.exp_months);
       expChip = item.exp_qualifies ? BADGE_COLOR.green : BADGE_COLOR.red;
     }
   }
@@ -325,7 +371,7 @@ function MatchCell({
         <button
           type="button"
           onClick={onOpen}
-          aria-label="Open match breakdown"
+          aria-label={t("openMatchBreakdown")}
           aria-pressed={isOpen ? true : undefined}
           // HRP-172 redo item 2: when the drawer is open for this row the
           // chevron stays in its hover/active styling so the operator can
@@ -343,6 +389,8 @@ function MatchCell({
 }
 
 export default function TalentCardDetailPage() {
+  const t = useTranslations("talentMarket");
+  const tc = useTranslations("common");
   const { id } = useParams<{ id: string }>();
   const [card, setCard] = useState<TalentCardDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -431,11 +479,11 @@ export default function TalentCardDetailPage() {
         setDivisionName(null);
       }
     } catch {
-      toast.error("Failed to load card");
+      toast.error(t("toastLoadCardFailed"));
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     load();
@@ -484,10 +532,10 @@ export default function TalentCardDetailPage() {
     setSaving(true);
     try {
       await api.post(`/talent-market/${id}/publish`, {});
-      toast.success("Card published");
+      toast.success(t("toastCardPublished"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to publish");
+      toast.error(err instanceof Error ? err.message : t("toastPublishFailed"));
     } finally {
       setSaving(false);
     }
@@ -498,10 +546,10 @@ export default function TalentCardDetailPage() {
     setSaving(true);
     try {
       await api.post(`/talent-market/${id}/complete`, {});
-      toast.success("Card completed");
+      toast.success(t("toastCardCompleted"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to complete");
+      toast.error(err instanceof Error ? err.message : t("toastCompleteFailed"));
     } finally {
       setSaving(false);
     }
@@ -511,10 +559,10 @@ export default function TalentCardDetailPage() {
     setSaving(true);
     try {
       await api.post(`/talent-market/${id}/cancel`, {});
-      toast.success("Card cancelled");
+      toast.success(t("toastCardCancelled"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to cancel");
+      toast.error(err instanceof Error ? err.message : t("toastCancelFailed"));
     } finally {
       setSaving(false);
     }
@@ -530,11 +578,11 @@ export default function TalentCardDetailPage() {
     setSaving(true);
     try {
       await api.put(`/talent-market/${id}`, patch);
-      toast.success("Saved");
+      toast.success(t("toastSaved"));
       onSuccess();
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
+      toast.error(err instanceof Error ? err.message : t("toastSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -543,7 +591,7 @@ export default function TalentCardDetailPage() {
   async function saveTitle() {
     const next = titleEdit.draft.trim();
     if (!next) {
-      toast.error("Title is required");
+      toast.error(t("toastTitleRequired"));
       return;
     }
     await saveField({ title: next }, () => titleEdit.close());
@@ -563,7 +611,7 @@ export default function TalentCardDetailPage() {
     const raw = matchEdit.draft.trim();
     const next = Number(raw);
     if (!raw || !Number.isInteger(next) || next < 50 || next > 100) {
-      toast.error("Match must be an integer between 50 and 100");
+      toast.error(t("toastMatchRangeInline"));
       return;
     }
     await saveField({ match_percent: next }, () => matchEdit.close());
@@ -572,11 +620,11 @@ export default function TalentCardDetailPage() {
   async function saveDates() {
     const { start, end } = datesEdit.draft;
     if (!start) {
-      toast.error("Start date is required");
+      toast.error(t("toastStartDateRequired"));
       return;
     }
     if (end && end < start) {
-      toast.error("End date must be on or after start date");
+      toast.error(t("toastEndDateBeforeStart"));
       return;
     }
     await saveField(
@@ -599,12 +647,12 @@ export default function TalentCardDetailPage() {
         );
         setPool(res.items);
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to load");
+        toast.error(err instanceof Error ? err.message : t("toastLoadFailed"));
       } finally {
         setPoolLoading(false);
       }
     },
-    [id],
+    [id, t],
   );
 
   function openCandidatePicker() {
@@ -658,20 +706,16 @@ export default function TalentCardDetailPage() {
         await api.delete(`/talent-market/${id}/candidates/${emp}`);
       }
       if (pickerMode === "add") {
-        toast.success(
-          added.length === 1
-            ? "Candidate added"
-            : `${added.length} candidates added`,
-        );
+        toast.success(t("toastCandidatesAdded", { count: added.length }));
       } else {
-        toast.success("Candidates updated");
+        toast.success(t("toastCandidatesUpdated"));
       }
       setCandOpen(false);
       setSelectedIds(new Set());
       setInitialIds(new Set());
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("toastFailed"));
     } finally {
       setSaving(false);
     }
@@ -681,11 +725,11 @@ export default function TalentCardDetailPage() {
     setSaving(true);
     try {
       await api.post(`/talent-market/${id}/candidates/${candidateId}/appoint`, {});
-      toast.success("Candidate appointed");
+      toast.success(t("toastCandidateAppointed"));
       setAppointTarget(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      toast.error(err instanceof Error ? err.message : t("toastFailed"));
     } finally {
       setSaving(false);
     }
@@ -698,10 +742,10 @@ export default function TalentCardDetailPage() {
     setSaving(true);
     try {
       await api.post(`/talent-market/${id}/recompute`, {});
-      toast.success("Candidates refreshed");
+      toast.success(t("toastCandidatesRefreshed"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to refresh");
+      toast.error(err instanceof Error ? err.message : t("toastRefreshFailed"));
     } finally {
       setSaving(false);
     }
@@ -713,18 +757,18 @@ export default function TalentCardDetailPage() {
     setSaving(true);
     try {
       await api.post(`/talent-market/${id}/react`, {});
-      toast.success("Reaction sent");
+      toast.success(t("toastReactionSent"));
       setReactConfirmOpen(false);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to react");
+      toast.error(err instanceof Error ? err.message : t("toastReactFailed"));
     } finally {
       setSaving(false);
     }
   }
 
   if (loading) {
-    return <div className="flex items-center justify-center py-12 text-muted-foreground">Loading...</div>;
+    return <div className="flex items-center justify-center py-12 text-muted-foreground">{tc("loading")}</div>;
   }
 
   if (!card) {
@@ -732,9 +776,9 @@ export default function TalentCardDetailPage() {
       <div className="space-y-4">
         <Button variant="ghost" size="sm" render={<Link href="/talent-market" />}>
           <ArrowLeft className="mr-1 h-4 w-4" />
-          Back to talent market
+          {t("backToTalentMarket")}
         </Button>
-        <div className="py-12 text-center text-muted-foreground">Card not found</div>
+        <div className="py-12 text-center text-muted-foreground">{t("cardNotFound")}</div>
       </div>
     );
   }
@@ -848,7 +892,7 @@ export default function TalentCardDetailPage() {
                   className={isTerminal ? undefined : "italic"}
                   data-testid="talent-market-description-empty"
                 >
-                  {isTerminal ? "No description" : "No description yet"}
+                  {isTerminal ? t("noDescription") : t("noDescriptionYet")}
                 </span>
               )}
               {!isTerminal && canManage && (
@@ -868,35 +912,35 @@ export default function TalentCardDetailPage() {
         </div>
         <Badge variant="secondary" className={typeColors[card.card_type] || ""}>{card.card_type}</Badge>
         <Badge variant="secondary" className={statusColors[card.status] || ""}>
-          {statusLabels[card.status] || card.status}
+          {statusLabel(t, card.status)}
         </Badge>
       </div>
 
       {/* Info */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Details</CardTitle>
+          <CardTitle className="text-base">{t("detailsTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
             <div>
-              <p className="text-muted-foreground">Type</p>
+              <p className="text-muted-foreground">{t("fieldType")}</p>
               <Badge variant="secondary" className={typeColors[card.card_type] || ""}>{card.card_type}</Badge>
             </div>
             <div>
-              <p className="text-muted-foreground">Status</p>
+              <p className="text-muted-foreground">{t("fieldStatus")}</p>
               <Badge variant="secondary" className={statusColors[card.status] || ""}>
-                {statusLabels[card.status] || card.status}
+                {statusLabel(t, card.status)}
               </Badge>
             </div>
             {divisionName && (
               <div>
-                <p className="text-muted-foreground">Division</p>
+                <p className="text-muted-foreground">{t("fieldDivision")}</p>
                 <p className="font-medium" data-testid="talent-market-detail-division">{divisionName}</p>
               </div>
             )}
             <div>
-              <p className="text-muted-foreground">Created</p>
+              <p className="text-muted-foreground">{t("fieldCreated")}</p>
               <p className="font-medium">{formatDate(card.created_at)}</p>
             </div>
             {/* HRP-178: terminal cards (Completed / Cancelled) drop the
@@ -905,7 +949,7 @@ export default function TalentCardDetailPage() {
               Published) keep the row + inline pencil edit. */}
             {!isTerminal && (
             <div>
-              <p className="text-muted-foreground">Dates</p>
+              <p className="text-muted-foreground">{t("fieldDates")}</p>
               {datesEdit.editing ? (
                 <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center">
                   {/* HRP-335: shared DatePicker (HRP-152). */}
@@ -963,7 +1007,7 @@ export default function TalentCardDetailPage() {
                   }`}
                   data-testid="talent-market-detail-dates"
                 >
-                  <span>{formatCardTermLabel(card)}</span>
+                  <span>{formatCardTermLabel(t, card)}</span>
                   {!isTerminal && canManage && (
                     <Button
                       size="icon-sm"
@@ -987,7 +1031,7 @@ export default function TalentCardDetailPage() {
               {/* HRP-128 + HRP-179: card-level Match% — inline-editable
                 on Draft only (the backend rejects edits past Publish via
                 a 409). Non-draft cards just render the value. */}
-              <p className="text-muted-foreground">Match</p>
+              <p className="text-muted-foreground">{t("fieldMatch")}</p>
               {matchEdit.editing ? (
                 <div className="mt-1 flex items-center gap-2">
                   <Input
@@ -1050,7 +1094,7 @@ export default function TalentCardDetailPage() {
             </div>
             {card.published_at && (
               <div>
-                <p className="text-muted-foreground">Published at</p>
+                <p className="text-muted-foreground">{t("fieldPublishedAt")}</p>
                 <p className="font-medium">{formatDate(card.published_at)}</p>
               </div>
             )}
@@ -1071,7 +1115,7 @@ export default function TalentCardDetailPage() {
                 return (
                   <div>
                     <p className="text-muted-foreground">
-                      {isCompleted ? "Completed" : "Cancelled"}
+                      {isCompleted ? t("statusCompleted") : t("statusCancelled")}
                     </p>
                     <p
                       className="font-medium"
@@ -1098,7 +1142,7 @@ export default function TalentCardDetailPage() {
                 data-testid="talent-market-detail-publish"
               >
                 <Globe className="mr-1 h-4 w-4" />
-                Publish
+                {t("actionPublish")}
               </Button>
               <Button
                 size="sm"
@@ -1108,7 +1152,7 @@ export default function TalentCardDetailPage() {
                 data-testid="talent-market-detail-cancel"
               >
                 <XCircle className="mr-1 h-4 w-4" />
-                Cancel
+                {t("actionCancel")}
               </Button>
             </div>
           )}
@@ -1122,7 +1166,7 @@ export default function TalentCardDetailPage() {
                 data-testid="talent-market-detail-complete"
               >
                 <CheckCircle2 className="mr-1 h-4 w-4" />
-                Complete
+                {t("actionComplete")}
               </Button>
               <Button
                 size="sm"
@@ -1132,7 +1176,7 @@ export default function TalentCardDetailPage() {
                 data-testid="talent-market-detail-cancel"
               >
                 <XCircle className="mr-1 h-4 w-4" />
-                Cancel
+                {t("actionCancel")}
               </Button>
             </div>
           )}
@@ -1165,13 +1209,13 @@ export default function TalentCardDetailPage() {
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <div className="flex items-center gap-3">
-            <CardTitle className="text-base">Candidates</CardTitle>
+            <CardTitle className="text-base">{t("candidatesTitle")}</CardTitle>
             {/* HRP-242: "last match" label + refresh icon. Visible to
                 every viewer whenever the card carries a stamp; the
                 refresh button is hidden on terminal cards and for
                 Employee viewers (read-only there). */}
             {(() => {
-              const stamp = formatLastMatched(card.last_matched_at);
+              const stamp = formatLastMatched(t, card.last_matched_at);
               if (!stamp) return null;
               const refreshable = canManage && !isTerminal;
               return (
@@ -1179,14 +1223,16 @@ export default function TalentCardDetailPage() {
                   className="flex items-center gap-1 text-xs text-muted-foreground"
                   data-testid="talent-market-last-matched"
                 >
-                  <span title={stamp.tooltip}>last match: {stamp.short}</span>
+                  <span title={stamp.tooltip}>
+                    {t("lastMatched", { when: stamp.short })}
+                  </span>
                   {refreshable && (
                     <button
                       type="button"
                       onClick={refreshMatch}
                       disabled={saving}
-                      title="Recompute Candidates"
-                      aria-label="Refresh candidates"
+                      title={t("recomputeCandidatesTitle")}
+                      aria-label={t("refreshCandidatesAria")}
                       className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                       data-testid="talent-market-refresh-candidates"
                     >
@@ -1215,27 +1261,27 @@ export default function TalentCardDetailPage() {
               }
             >
               <UserPlus className="mr-1 h-4 w-4" />
-              {card.candidates.length === 0 ? "Add" : "Change"}
+              {card.candidates.length === 0 ? t("add") : t("change")}
             </Button>
           )}
         </CardHeader>
         <CardContent>
           {card.candidates.length === 0 ? (
-            <p className="py-4 text-center text-sm text-muted-foreground">No candidates</p>
+            <p className="py-4 text-center text-sm text-muted-foreground">{t("noCandidates")}</p>
           ) : (
             <div className="rounded-lg border">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Employee</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>{tc("employee")}</TableHead>
+                    <TableHead>{t("fieldStatus")}</TableHead>
                     {/* HRP-173 redo: keep the Match column narrow so the
                         right-aligned chips don't drift far away from the
                         Status column. The cell content shrinks to fit. */}
                     <TableHead className="w-[1%] whitespace-nowrap text-right">
-                      Match
+                      {t("fieldMatch")}
                     </TableHead>
-                    <TableHead>Actions</TableHead>
+                    <TableHead>{t("columnActions")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1275,7 +1321,7 @@ export default function TalentCardDetailPage() {
                                 className="text-xs text-muted-foreground"
                                 data-testid="talent-market-candidate-self-tag"
                               >
-                                it&apos;s me
+                                {t("itsMe")}
                               </span>
                             )}
                           </span>
@@ -1297,7 +1343,7 @@ export default function TalentCardDetailPage() {
                             className={candidateStatusColors[c.status] || ""}
                             data-testid="talent-market-candidate-status"
                           >
-                            {candidateStatusLabel(c.status)}
+                            {candidateStatusLabel(t, c.status)}
                           </Badge>
                           {/* HRP-213: surface the reacted chip next to the
                               status badge so managers see who already
@@ -1309,7 +1355,7 @@ export default function TalentCardDetailPage() {
                               className={BADGE_COLOR.blue}
                               data-testid="talent-market-candidate-reacted"
                             >
-                              reacted
+                              {t("candidateReacted")}
                             </Badge>
                           )}
                         </div>
@@ -1363,7 +1409,7 @@ export default function TalentCardDetailPage() {
                             disabled={saving}
                             data-testid="talent-market-candidate-appoint"
                           >
-                            Appoint
+                            {t("appoint")}
                           </Button>
                         )}
                         {/* HRP-213: an employee viewing their own
@@ -1384,7 +1430,7 @@ export default function TalentCardDetailPage() {
                               disabled={saving}
                               data-testid="talent-market-candidate-react"
                             >
-                              React
+                              {t("react")}
                             </Button>
                           )}
                       </TableCell>
@@ -1407,12 +1453,14 @@ export default function TalentCardDetailPage() {
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle data-testid="talent-market-change-modal-title">
-              {pickerMode === "change" ? "Change candidates" : "Add candidate"}
+              {pickerMode === "change"
+                ? t("pickerChangeTitle")
+                : t("pickerAddTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <Input
-              placeholder="Search by name..."
+              placeholder={t("pickerSearchPlaceholder")}
               value={candidateFilter}
               onChange={(e) => setCandidateFilter(e.target.value)}
               data-testid="talent-market-candidate-search"
@@ -1420,7 +1468,7 @@ export default function TalentCardDetailPage() {
             <div className="max-h-[420px] overflow-y-auto rounded-lg border">
               {poolLoading ? (
                 <p className="py-8 text-center text-sm text-muted-foreground">
-                  Loading...
+                  {tc("loading")}
                 </p>
               ) : (
                 (() => {
@@ -1434,8 +1482,8 @@ export default function TalentCardDetailPage() {
                     return (
                       <p className="py-8 text-center text-sm text-muted-foreground">
                         {pool.length === 0
-                          ? "No employees available"
-                          : "No employees match the filter"}
+                          ? t("pickerNoEmployees")
+                          : t("pickerNoMatches")}
                       </p>
                     );
                   }
@@ -1444,9 +1492,9 @@ export default function TalentCardDetailPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead className="w-10" />
-                          <TableHead>Employee</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead className="text-right">Match</TableHead>
+                          <TableHead>{tc("employee")}</TableHead>
+                          <TableHead>{t("fieldStatus")}</TableHead>
+                          <TableHead className="text-right">{t("fieldMatch")}</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -1470,7 +1518,9 @@ export default function TalentCardDetailPage() {
                                     if (locked) return;
                                     toggleCandidate(p.employee_id);
                                   }}
-                                  aria-label={`Select ${p.name}`}
+                                  aria-label={t("selectEmployeeAria", {
+                                    name: p.name,
+                                  })}
                                   // HRP-214 redo (2026-06-09): paint
                                   // appointed (locked) rows in muted
                                   // colours so the user can tell at a
@@ -1515,7 +1565,7 @@ export default function TalentCardDetailPage() {
                                   }
                                   data-testid="talent-market-candidate-pool-status"
                                 >
-                                  {candidateStatusLabel(p.status)}
+                                  {candidateStatusLabel(t, p.status)}
                                 </Badge>
                               </TableCell>
                               <TableCell className="text-right tabular-nums">
@@ -1546,14 +1596,14 @@ export default function TalentCardDetailPage() {
               className="mr-auto text-sm text-muted-foreground"
               data-testid="talent-market-candidate-selected-count"
             >
-              {selectedIds.size} selected
+              {t("selectedCount", { count: selectedIds.size })}
             </span>
             <Button
               variant="outline"
               onClick={() => setCandOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             {pickerMode === "change" ? (
               <Button
@@ -1561,7 +1611,7 @@ export default function TalentCardDetailPage() {
                 disabled={saving}
                 data-testid="talent-market-change-submit"
               >
-                {saving ? "Saving..." : "Save"}
+                {saving ? t("saving") : t("save")}
               </Button>
             ) : (
               <Button
@@ -1570,10 +1620,10 @@ export default function TalentCardDetailPage() {
                 data-testid="talent-market-candidate-add-submit"
               >
                 {saving
-                  ? "Adding..."
+                  ? t("adding")
                   : selectedIds.size > 1
-                    ? `Add ${selectedIds.size}`
-                    : "Add"}
+                    ? t("addN", { count: selectedIds.size })
+                    : t("add")}
               </Button>
             )}
           </DialogFooter>
@@ -1599,16 +1649,17 @@ export default function TalentCardDetailPage() {
       <ConfirmDialog
         open={appointTarget !== null}
         onOpenChange={(o) => !o && setAppointTarget(null)}
-        title="Appoint candidate"
+        title={t("appointCandidateTitle")}
         description={
           appointTarget
-            ? `Appoint ${
-                appointTarget.employeeName ?? "this candidate"
-              } to ${card.title}?`
+            ? t("appointConfirm", {
+                name: appointTarget.employeeName ?? t("thisCandidate"),
+                card: card.title,
+              })
             : ""
         }
-        confirmLabel="Appoint"
-        loadingLabel="Appointing..."
+        confirmLabel={t("appoint")}
+        loadingLabel={t("appointing")}
         confirmVariant="default"
         onConfirm={() => {
           if (appointTarget) void appointCandidate(appointTarget.candidateId);
@@ -1621,10 +1672,10 @@ export default function TalentCardDetailPage() {
       <ConfirmDialog
         open={reactConfirmOpen}
         onOpenChange={(o) => setReactConfirmOpen(o)}
-        title="Send reaction"
-        description={`Send your reaction to "${card.title}"? Your manager will be notified.`}
-        confirmLabel="Send"
-        loadingLabel="Sending..."
+        title={t("sendReactionTitle")}
+        description={t("sendReactionConfirm", { title: card.title })}
+        confirmLabel={t("send")}
+        loadingLabel={t("sending")}
         confirmVariant="default"
         onConfirm={() => void sendReaction()}
         loading={saving}

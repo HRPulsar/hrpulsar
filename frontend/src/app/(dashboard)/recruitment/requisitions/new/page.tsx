@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Vacancy } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,8 @@ import {
 
 export default function CreateVacancyPage() {
   const router = useRouter();
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const { user } = useAuth();
   // HRP-360: the Hiring manager field defaults to the current user. The
   // dashboard renders behind the AuthProvider gate, so `user` is already
@@ -28,7 +31,7 @@ export default function CreateVacancyPage() {
 
   async function handleSubmit(generateProfile: boolean) {
     if (!form.title.trim()) {
-      toast.error("Title is required");
+      toast.error(t("vacancyTitleRequired"));
       return;
     }
 
@@ -53,14 +56,16 @@ export default function CreateVacancyPage() {
             { keepalive: true },
           )
           .catch(() => {});
-        toast.success("Vacancy created — generating profile");
+        toast.success(t("vacancyToastCreatedGenerating"));
         router.push(`/recruitment/requisitions/${vacancy.id}?gen=1`);
       } else {
-        toast.success("Vacancy saved as draft");
+        toast.success(t("vacancyToastSavedDraft"));
         router.push(`/recruitment/requisitions/${vacancy.id}`);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create vacancy");
+      toast.error(
+        err instanceof Error ? err.message : t("vacancyCreateFailed"),
+      );
       setSaving(false);
     }
   }
@@ -69,14 +74,16 @@ export default function CreateVacancyPage() {
     <div className="space-y-6">
       <RecruitmentBreadcrumbs
         segments={[
-          { label: "Vacancies", href: "/recruitment/requisitions" },
-          { label: "New vacancy" },
+          { label: t("vacanciesTitle"), href: "/recruitment/requisitions" },
+          { label: t("vacancyNewBreadcrumb") },
         ]}
       />
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Create Vacancy</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {t("vacancyCreateButton")}
+        </h1>
         <p className="text-sm text-muted-foreground">
-          Fill in vacancy details and optionally generate a competency profile.
+          {t("vacancyCreateDescription")}
         </p>
       </div>
 
@@ -92,7 +99,7 @@ export default function CreateVacancyPage() {
               onClick={() => router.push("/recruitment/requisitions")}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               variant="outline"
@@ -100,14 +107,14 @@ export default function CreateVacancyPage() {
               onClick={() => handleSubmit(false)}
               disabled={saving}
             >
-              {saving ? "Saving..." : "Save Draft"}
+              {saving ? t("actionSaving") : t("vacancySaveDraft")}
             </Button>
             <Button
               data-testid="recruitment-vacancy-btn-save-generate"
               onClick={() => handleSubmit(true)}
               disabled={saving}
             >
-              {saving ? "Saving..." : "Save & Generate Profile"}
+              {saving ? t("actionSaving") : t("vacancySaveAndGenerate")}
             </Button>
           </>
         }

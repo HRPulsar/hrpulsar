@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,14 +12,16 @@ import { AuthLogo } from "@/components/auth-logo";
 import { API_BASE } from "@/lib/api-base";
 
 export default function ResetPasswordPage() {
+  const tc = useTranslations("common");
   return (
-    <Suspense fallback={<div className="text-white/50">Loading...</div>}>
+    <Suspense fallback={<div className="text-white/50">{tc("loading")}</div>}>
       <ResetPasswordForm />
     </Suspense>
   );
 }
 
 function ResetPasswordForm() {
+  const t = useTranslations("auth");
   const searchParams = useSearchParams();
   const token = searchParams.get("token") || "";
   const [password, setPassword] = useState("");
@@ -32,11 +35,11 @@ function ResetPasswordForm() {
     setError("");
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match");
+      setError(t("passwordsDoNotMatch"));
       return;
     }
     if (password.length < 8) {
-      setError("Password must be at least 8 characters");
+      setError(t("passwordTooShort"));
       return;
     }
 
@@ -48,12 +51,14 @@ function ResetPasswordForm() {
         body: JSON.stringify({ token, new_password: password }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ detail: "Request failed" }));
-        throw new Error(body.detail || "Request failed");
+        const body = await res
+          .json()
+          .catch(() => ({ detail: t("requestFailed") }));
+        throw new Error(body.detail || t("requestFailed"));
       }
       setSuccess(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Request failed");
+      setError(err instanceof Error ? err.message : t("requestFailed"));
     } finally {
       setLoading(false);
     }
@@ -65,9 +70,9 @@ function ResetPasswordForm() {
         <AuthLogo />
         <Card className="w-full max-w-sm border-white/10 bg-black/40 backdrop-blur-xl">
           <CardContent className="py-8 text-center">
-            <p className="text-sm text-white/70">Invalid or missing reset token.</p>
+            <p className="text-sm text-white/70">{t("invalidResetToken")}</p>
             <a href="/forgot-password" className="mt-2 inline-block text-sm text-brand hover:underline">
-              Request a new reset link
+              {t("requestNewResetLink")}
             </a>
           </CardContent>
         </Card>
@@ -80,14 +85,16 @@ function ResetPasswordForm() {
       <AuthLogo />
       <Card className="w-full max-w-sm border-white/10 bg-black/40 backdrop-blur-xl">
         <CardHeader className="text-center">
-          <CardTitle className="text-xl text-white">Set new password</CardTitle>
+          <CardTitle className="text-xl text-white">
+            {t("setNewPassword")}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {success ? (
             <div className="space-y-4 text-center">
-              <p className="text-sm text-white/70">Your password has been reset successfully.</p>
+              <p className="text-sm text-white/70">{t("passwordResetSuccess")}</p>
               <a href="/login" className="text-sm text-brand hover:underline">
-                Sign in with your new password
+                {t("signInWithNewPassword")}
               </a>
             </div>
           ) : (
@@ -98,7 +105,7 @@ function ResetPasswordForm() {
                 </div>
               )}
               <div className="space-y-2">
-                <Label htmlFor="password" className="text-white/70">New password</Label>
+                <Label htmlFor="password" className="text-white/70">{t("newPassword")}</Label>
                 <Input
                   id="password"
                   type="password"
@@ -109,7 +116,7 @@ function ResetPasswordForm() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="confirm" className="text-white/70">Confirm password</Label>
+                <Label htmlFor="confirm" className="text-white/70">{t("confirmPassword")}</Label>
                 <Input
                   id="confirm"
                   type="password"
@@ -119,9 +126,9 @@ function ResetPasswordForm() {
                   required
                 />
               </div>
-              <p className="text-xs text-white/40">Minimum 8 characters</p>
+              <p className="text-xs text-white/40">{t("passwordMinLength")}</p>
               <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? "Resetting..." : "Reset password"}
+                {loading ? t("resetting") : t("resetPassword")}
               </Button>
             </form>
           )}

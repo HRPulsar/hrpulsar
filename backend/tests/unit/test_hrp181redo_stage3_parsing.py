@@ -288,7 +288,7 @@ class TestParseResumeTask:
             lambda *args, **kwargs: "some resume text",
         )
 
-        async def fake_parse(text: str) -> dict:
+        async def fake_parse(text: str, **kwargs) -> dict:
             return {
                 "first_name": "Maya",
                 "last_name": "K",
@@ -377,7 +377,7 @@ class TestParseResumeTask:
         )
         captured = {"first_name": "X", "last_name": "Y"}
 
-        async def fake_parse(_):
+        async def fake_parse(_, **kwargs):
             return dict(captured)
 
         monkeypatch.setattr(
@@ -423,7 +423,7 @@ class TestParseResumeTask:
             lambda *args, **kwargs: "text",
         )
 
-        async def boom(_):
+        async def boom(_, **kwargs):
             raise RuntimeError("LLM blew up")
 
         monkeypatch.setattr(

@@ -5,12 +5,13 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings as app_settings
-from app.modules.ai import model_registry
+from app.core.errors import AppError
+from app.modules.ai import model_registry, providers
 from app.modules.ai_settings.models import TenantAISettings
 from app.modules.ai_settings.schemas import AISettingsUpdate
 
@@ -106,6 +107,25 @@ def register_models(models: list[dict[str, Any]]) -> None:
     ]
 
 
+def upsert_allowed_model(entry: dict[str, Any]) -> None:
+    """Insert or replace one whitelist entry.
+
+    HRP-466 moderation path: platform admin approves a discovered model
+    with an explicit multiplier, which must reach the in-memory registry
+    immediately so billing stays on the fast lookup (no DB hit per charge).
+    """
+    global _allowed_models
+    normalized = {
+        "provider": entry["provider"],
+        "model": entry["model"],
+        "label": entry.get("label", entry["model"]),
+        "credit_multiplier": float(entry.get("credit_multiplier", 1.0)),
+    }
+    _allowed_models = [
+        e for e in _allowed_models if e["model"] != normalized["model"]
+    ] + [normalized]
+
+
 def list_allowed_models() -> list[dict[str, Any]]:
     return list(_allowed_models)
 
@@ -157,15 +177,24 @@ async def update(
     row = await get_or_default(db, tenant_id)
     data = patch.model_dump(exclude_unset=True)
 
-    if (
-        "llm_model" in data
-        and data["llm_model"]
-        and data["llm_model"] not in _allowed_model_set()
-    ):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            f"Model '{data['llm_model']}' is not in the allowed list",
-        )
+    if "llm_model" in data and data["llm_model"]:
+        # HRP-466: when the catalog has a row for the model, the catalog is
+        # authoritative — disabling a row there is the kill-switch, even for
+        # curated models the in-memory whitelist would otherwise pass. The
+        # whitelist only covers models the catalog has never seen.
+        from app.modules.ai import model_catalog_service
+
+        entry = await model_catalog_service.get_entry(db, data["llm_model"])
+        if entry is not None:
+            allowed = entry.status == "approved" and entry.enabled
+        else:
+            allowed = data["llm_model"] in _allowed_model_set()
+        if not allowed:
+            raise AppError(
+                "llm_model_not_allowed",
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                model=data["llm_model"],
+            )
 
     custom_overrides = {"temperature", "max_retries", "llm_model"}
     explicit_override = any(
@@ -224,20 +253,18 @@ def apply_preset(row: TenantAISettings, preset_name: str) -> None:
 
 
 def _platform_provider() -> str:
-    raw = (app_settings.llm_provider or "claude").lower()
-    if raw == "claude":
-        return "anthropic"
-    return raw
+    return providers.resolve_provider_name(app_settings.llm_provider) or "anthropic"
 
 
 def get_effective_provider(row: TenantAISettings) -> str:
-    """Provider derived from override model, otherwise from platform default."""
+    """Provider derived from override model, otherwise from platform default.
+
+    Model-name classification lives in the provider registry (HRP-465);
+    unclassifiable names (local/OpenAI-compatible models) fall back to
+    "openai" — they are served through the OpenAI-compatible path.
+    """
     if row.llm_model:
-        if row.llm_model.startswith("claude"):
-            return "anthropic"
-        if row.llm_model.startswith("gemini"):
-            return "gemini"
-        return "openai"
+        return providers.classify_model(row.llm_model) or "openai"
     return _platform_provider()
 
 
@@ -273,11 +300,12 @@ def get_effective_few_shot_count(row: TenantAISettings) -> int:
 
 
 def get_effective_credit_multiplier(row: TenantAISettings) -> float:
-    """Per-model multiplier applied by `ee.credits._resolve_cost`.
+    """Per-model multiplier from the in-memory whitelist (read projection).
 
     Lookup order: effective model → entry in the registered whitelist. Falls
     back to 1.0 when the model isn't on the list (community edition or a
-    legacy row pinned to a no-longer-allowed model).
+    legacy row pinned to a no-longer-allowed model). Billing must NOT use
+    this — see :func:`get_effective_credit_multiplier_async`.
     """
     model = get_effective_model(row)
     entry = _model_lookup(model)
@@ -286,17 +314,54 @@ def get_effective_credit_multiplier(row: TenantAISettings) -> float:
     return float(entry["credit_multiplier"])
 
 
+async def get_effective_credit_multiplier_async(
+    db: AsyncSession, row: TenantAISettings
+) -> float:
+    """Billing-grade multiplier: registry, then the catalog row, then 1.0.
+
+    A moderation approval upserts the in-memory registry only in the uvicorn
+    worker that served it — sibling workers would bill at 1.0 until their
+    next restart. This resolver falls through to the catalog row's stored
+    multiplier (`model_catalog_service.stored_multiplier`) so every worker
+    bills at the moderated price. Used by `ee.credits._resolve_cost`.
+    """
+    model = get_effective_model(row)
+    entry = _model_lookup(model)
+    if entry is not None:
+        return float(entry["credit_multiplier"])
+
+    from app.modules.ai import model_catalog_service
+
+    stored = await model_catalog_service.stored_multiplier(db, model)
+    if stored is not None:
+        return float(stored)
+    return 1.0
+
+
 # ---------------------------------------------------------------------------
 # Prompt augmentation helpers (used by prompts.py)
 # ---------------------------------------------------------------------------
 
 
-_LANGUAGE_NAMES = {"en": "English"}
+_LANGUAGE_NAMES = {"en": "English", "de": "German"}
 
 
 def build_language_directive(row: TenantAISettings) -> str:
+    """Output-language directive appended to AI system prompts.
+
+    The verbatim carve-out is load-bearing (HRP-480 review): downstream
+    code matches LLM output back to DB rows by English titles and enum
+    values (`type` / `material_type` / `skill_level`, grade titles), so
+    a translated echo-back would be silently dropped or fail schema
+    validation.
+    """
     name = _LANGUAGE_NAMES.get(row.content_language, "English")
-    return f"Generate ALL content in {name}."
+    return (
+        f"Generate ALL content in {name}. "
+        "Echo machine-readable values verbatim in their original wording, "
+        "never translated: enum values (such as `type`, `material_type`), "
+        "and any skill-level or grade titles that come from the input."
+    )
 
 
 def build_system_prompt_extras(row: TenantAISettings | None) -> list[str]:
@@ -318,7 +383,14 @@ def to_read_dict(row: TenantAISettings) -> dict[str, Any]:
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
-        "content_language": row.content_language,
+        # The DB no longer CHECKs the column (HRP-480); normalize a code
+        # the API contract does not know so reads keep working instead of
+        # failing response_model validation with a 500.
+        "content_language": (
+            row.content_language
+            if row.content_language in _LANGUAGE_NAMES
+            else DEFAULT_LANGUAGE
+        ),
         "effort_level": row.effort_level,
         "llm_model": row.llm_model,
         "temperature": row.temperature,

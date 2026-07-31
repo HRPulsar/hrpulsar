@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api, ApiError } from "@/lib/api";
 import { invitationsApi } from "@/lib/api/invitations";
 import { useAuth } from "@/context/auth-context";
@@ -85,6 +86,8 @@ function DeepLinkInviteOpener({ onOpen }: { onOpen: () => void }) {
 }
 
 export default function InvitationsPage() {
+  const t = useTranslations("settings");
+  const tc = useTranslations("common");
   const { user } = useAuth();
   const isAdmin = !!(
     user?.is_platform_admin || user?.roles?.includes("admin")
@@ -158,7 +161,7 @@ export default function InvitationsPage() {
         division_id: inviteForm.division_id || null,
         position_id: inviteForm.position_id || null,
       });
-      toast.success("Invitation sent");
+      toast.success(t("inviteSent"));
       setInviteOpen(false);
       setInviteForm({
         name: "",
@@ -169,7 +172,9 @@ export default function InvitationsPage() {
       });
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to send invitation");
+      toast.error(
+        err instanceof Error ? err.message : t("inviteSendFailed"),
+      );
     } finally {
       setSaving(false);
     }
@@ -178,20 +183,20 @@ export default function InvitationsPage() {
   async function handleCancel(id: string) {
     try {
       await invitationsApi.cancel(id);
-      toast.success("Invitation cancelled");
+      toast.success(t("inviteCancelled"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to cancel");
+      toast.error(err instanceof Error ? err.message : t("inviteCancelFailed"));
     }
   }
 
   async function handleResend(id: string) {
     try {
       await invitationsApi.resend(id);
-      toast.success("Invitation resent");
+      toast.success(t("inviteResent"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to resend");
+      toast.error(err instanceof Error ? err.message : t("inviteResendFailed"));
     }
   }
 
@@ -228,7 +233,7 @@ export default function InvitationsPage() {
       const msg =
         err instanceof ApiError || err instanceof Error
           ? err.message
-          : "Failed to update invitation";
+          : t("inviteUpdateFailed");
       toast.error(msg);
       await load();
     } finally {
@@ -252,13 +257,13 @@ export default function InvitationsPage() {
       setInvitations((rows) =>
         rows.map((r) => (r.id === emailEdit.id ? updated : r)),
       );
-      toast.success("Invitation re-sent");
+      toast.success(t("inviteReSent"));
       setEmailEdit(null);
     } catch (err) {
       const msg =
         err instanceof ApiError || err instanceof Error
           ? err.message
-          : "Failed to update email";
+          : t("inviteEmailUpdateFailed");
       toast.error(msg);
     } finally {
       setEmailSaving(false);
@@ -272,68 +277,76 @@ export default function InvitationsPage() {
       </Suspense>
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Invitations</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("inviteTitle")}
+          </h1>
           <p className="text-sm text-muted-foreground">
-            Invite people to join your organization
+            {t("inviteSubtitle")}
           </p>
         </div>
         <Button data-testid="invitations-btn-invite" onClick={() => setInviteOpen(true)}>
           <Plus className="mr-1 h-4 w-4" />
-          Invite
+          {t("inviteButton")}
         </Button>
       </div>
 
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle className="text-base">
-            {total} invitation{total !== 1 ? "s" : ""}
+            {t("inviteCount", { count: total })}
           </CardTitle>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="w-[140px]">
-              <SelectValue placeholder="All statuses">
+              <SelectValue placeholder={t("inviteAllStatuses")}>
                 {statusFilter === "pending"
-                  ? "Pending"
+                  ? t("inviteStatusPending")
                   : statusFilter === "accepted"
-                    ? "Accepted"
+                    ? t("inviteStatusAccepted")
                     : statusFilter === "cancelled"
-                      ? "Cancelled"
+                      ? t("inviteStatusCancelled")
                       : statusFilter === "expired"
-                        ? "Expired"
+                        ? t("inviteStatusExpired")
                         : undefined}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All</SelectItem>
-              <SelectItem value="pending">Pending</SelectItem>
-              <SelectItem value="accepted">Accepted</SelectItem>
-              <SelectItem value="cancelled">Cancelled</SelectItem>
-              <SelectItem value="expired">Expired</SelectItem>
+              <SelectItem value="">{t("inviteStatusAll")}</SelectItem>
+              <SelectItem value="pending">{t("inviteStatusPending")}</SelectItem>
+              <SelectItem value="accepted">
+                {t("inviteStatusAccepted")}
+              </SelectItem>
+              <SelectItem value="cancelled">
+                {t("inviteStatusCancelled")}
+              </SelectItem>
+              <SelectItem value="expired">{t("inviteStatusExpired")}</SelectItem>
             </SelectContent>
           </Select>
         </CardHeader>
         <CardContent>
           {loading ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              Loading...
+              {tc("loading")}
             </p>
           ) : invitations.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              No invitations yet
+              {t("inviteEmpty")}
             </p>
           ) : (
             <div className="rounded-lg border">
               <Table data-testid="invitations-table">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead>Division</TableHead>
-                    <TableHead>Position</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Invited by</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    <TableHead>{t("inviteName")}</TableHead>
+                    <TableHead>{t("inviteEmail")}</TableHead>
+                    <TableHead>{t("inviteRole")}</TableHead>
+                    <TableHead>{t("inviteDivision")}</TableHead>
+                    <TableHead>{t("invitePosition")}</TableHead>
+                    <TableHead>{t("inviteStatus")}</TableHead>
+                    <TableHead>{t("inviteInvitedBy")}</TableHead>
+                    <TableHead>{t("inviteDate")}</TableHead>
+                    <TableHead className="text-right">
+                      {t("inviteActions")}
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -358,7 +371,7 @@ export default function InvitationsPage() {
                                 onClick={() =>
                                   setEmailEdit({ id: inv.id, email: inv.email })
                                 }
-                                title="Change email and re-send"
+                                title={t("inviteEditEmailTitle")}
                               >
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
@@ -417,7 +430,7 @@ export default function InvitationsPage() {
                                 className="h-8 w-[180px]"
                                 data-testid={`invitations-row-${inv.id}-edit-division`}
                               >
-                                <SelectValue placeholder="No division">
+                                <SelectValue placeholder={t("inviteNoDivision")}>
                                   {(() => {
                                     if (!inv.division_id) return undefined;
                                     const d = flatDivisions.find(
@@ -430,7 +443,9 @@ export default function InvitationsPage() {
                                 </SelectValue>
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="">No division</SelectItem>
+                                <SelectItem value="">
+                                  {t("inviteNoDivision")}
+                                </SelectItem>
                                 {flatDivisions.map((d) => (
                                   <SelectItem key={d.id} value={d.id}>
                                     {"—".repeat(d.depth)} {d.name}
@@ -482,7 +497,7 @@ export default function InvitationsPage() {
                                 variant="ghost"
                                 size="icon-sm"
                                 onClick={() => handleResend(inv.id)}
-                                title="Resend"
+                                title={t("inviteResendTitle")}
                               >
                                 <RotateCw className="h-3.5 w-3.5" />
                               </Button>
@@ -491,7 +506,7 @@ export default function InvitationsPage() {
                                 size="icon-sm"
                                 data-testid={`invitations-row-${inv.id}-btn-revoke`}
                                 onClick={() => handleCancel(inv.id)}
-                                title="Cancel"
+                                title={tc("cancel")}
                               >
                                 <X className="h-3.5 w-3.5" />
                               </Button>
@@ -514,12 +529,12 @@ export default function InvitationsPage() {
           <DialogHeader>
             <DialogTitle>
               <Mail className="mr-2 inline h-5 w-5" />
-              Send invitation
+              {t("inviteSendTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Name</Label>
+              <Label>{t("inviteName")}</Label>
               <Input
                 type="text"
                 maxLength={200}
@@ -528,11 +543,11 @@ export default function InvitationsPage() {
                 onChange={(e) =>
                   setInviteForm({ ...inviteForm, name: e.target.value })
                 }
-                placeholder="Colleague's full name"
+                placeholder={t("inviteNamePlaceholder")}
               />
             </div>
             <div className="space-y-2">
-              <Label>Email</Label>
+              <Label>{t("inviteEmail")}</Label>
               <Input
                 type="email"
                 data-testid="invitations-modal-invite-input-email"
@@ -540,11 +555,11 @@ export default function InvitationsPage() {
                 onChange={(e) =>
                   setInviteForm({ ...inviteForm, email: e.target.value })
                 }
-                placeholder="colleague@company.com"
+                placeholder={t("inviteEmailPlaceholder")}
               />
             </div>
             <div className="space-y-2">
-              <Label>Role</Label>
+              <Label>{t("inviteRole")}</Label>
               <Select
                 value={inviteForm.role_code}
                 onValueChange={(val) =>
@@ -568,7 +583,7 @@ export default function InvitationsPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Division</Label>
+              <Label>{t("inviteDivision")}</Label>
               <Select
                 value={inviteForm.division_id}
                 onValueChange={(val) =>
@@ -579,7 +594,7 @@ export default function InvitationsPage() {
                   className="w-full"
                   data-testid="invitations-modal-invite-select-division"
                 >
-                  <SelectValue placeholder="Select a division">
+                  <SelectValue placeholder={t("inviteSelectDivision")}>
                     {(() => { if (!inviteForm.division_id) return undefined; const d = flatDivisions.find((d) => d.id === inviteForm.division_id); return d ? `${"—".repeat(d.depth)} ${d.name}` : undefined; })()}
                   </SelectValue>
                 </SelectTrigger>
@@ -593,7 +608,7 @@ export default function InvitationsPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Position</Label>
+              <Label>{t("invitePosition")}</Label>
               <PositionCombobox
                 data-testid="invitations-modal-invite-select-position"
                 value={inviteForm.position_id || null}
@@ -609,7 +624,7 @@ export default function InvitationsPage() {
               onClick={() => setInviteOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               data-testid="invitations-modal-invite-btn-submit"
@@ -626,7 +641,7 @@ export default function InvitationsPage() {
                 !inviteForm.position_id
               }
             >
-              {saving ? "Sending..." : "Send invitation"}
+              {saving ? t("inviteSending") : t("inviteSendTitle")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -643,12 +658,12 @@ export default function InvitationsPage() {
           <DialogHeader>
             <DialogTitle>
               <Mail className="mr-2 inline h-5 w-5" />
-              Change email and re-send
+              {t("inviteEditEmailTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Email</Label>
+              <Label>{t("inviteEmail")}</Label>
               <Input
                 type="email"
                 data-testid="invitations-modal-edit-email-input"
@@ -658,11 +673,10 @@ export default function InvitationsPage() {
                     prev ? { ...prev, email: e.target.value } : prev,
                   )
                 }
-                placeholder="colleague@company.com"
+                placeholder={t("inviteEmailPlaceholder")}
               />
               <p className="text-xs text-muted-foreground">
-                A new invitation link will be generated and sent to this address.
-                The previous link will stop working.
+                {t("inviteEmailHint")}
               </p>
             </div>
           </div>
@@ -672,14 +686,14 @@ export default function InvitationsPage() {
               onClick={() => setEmailEdit(null)}
               disabled={emailSaving}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               data-testid="invitations-modal-edit-email-btn-submit"
               onClick={handleEmailSubmit}
               disabled={emailSaving || !emailEdit?.email.trim()}
             >
-              {emailSaving ? "Sending..." : "Resend invitation"}
+              {emailSaving ? t("inviteSending") : t("inviteResendSubmit")}
             </Button>
           </DialogFooter>
         </DialogContent>

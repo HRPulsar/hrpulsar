@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,6 +29,8 @@ export function VacancyDeleteDialog({
   onOpenChange,
   onDeleted,
 }: Props) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const router = useRouter();
   const [saving, setSaving] = useState(false);
 
@@ -35,7 +38,7 @@ export function VacancyDeleteDialog({
     setSaving(true);
     try {
       await api.delete(`/recruitment/vacancies/${vacancy.id}`);
-      toast.success("Vacancy deleted");
+      toast.success(t("vacancyToastDeleted"));
       onOpenChange(false);
       if (onDeleted) {
         onDeleted();
@@ -43,7 +46,7 @@ export function VacancyDeleteDialog({
         router.push("/recruitment/requisitions");
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(err instanceof Error ? err.message : t("vacancyDeleteFailed"));
     } finally {
       setSaving(false);
     }
@@ -53,10 +56,9 @@ export function VacancyDeleteDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="vacancy-delete-modal">
         <DialogHeader>
-          <DialogTitle>Delete vacancy permanently?</DialogTitle>
+          <DialogTitle>{t("vacancyDeleteTitle")}</DialogTitle>
           <DialogDescription>
-            This action cannot be undone. The vacancy &ldquo;{vacancy.title}
-            &rdquo; and its draft profile will be permanently removed.
+            {t("vacancyDeleteDescription", { title: vacancy.title })}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -66,7 +68,7 @@ export function VacancyDeleteDialog({
             disabled={saving}
             data-testid="vacancy-delete-modal-cancel"
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button
             variant="destructive"
@@ -74,7 +76,7 @@ export function VacancyDeleteDialog({
             onClick={handleDelete}
             data-testid="vacancy-delete-modal-confirm"
           >
-            {saving ? "Deleting..." : "Delete"}
+            {saving ? t("vacancyDeleting") : tc("delete")}
           </Button>
         </DialogFooter>
       </DialogContent>

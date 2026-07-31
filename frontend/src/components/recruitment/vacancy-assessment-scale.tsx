@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +40,7 @@ export function VacancyAssessmentScaleBlock({
   initial,
   onScaleChanged,
 }: Props) {
+  const t = useTranslations("recruitment");
   const [scales, setScales] = useState<Scale[]>([]);
   const [loading, setLoading] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -66,7 +68,7 @@ export function VacancyAssessmentScaleBlock({
   const activeScale = (() => {
     if (snapshot) {
       return {
-        name: snapshot.name ?? "Snapshot",
+        name: snapshot.name ?? t("vacancyScaleSnapshotFallback"),
         levels: snapshot.levels ?? [],
       };
     }
@@ -92,9 +94,9 @@ export function VacancyAssessmentScaleBlock({
       } satisfies VacancyShape;
       setVacancy(next);
       onScaleChanged?.(next);
-      toast.success("Scale updated");
+      toast.success(t("vacancyScaleToastUpdated"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Update failed");
+      toast.error(err instanceof Error ? err.message : t("scaleUpdateFailed"));
     } finally {
       setPicking(false);
     }
@@ -108,23 +110,25 @@ export function VacancyAssessmentScaleBlock({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="space-y-0.5">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            Assessment scale
+            {t("vacancyScaleHeading")}
           </p>
           {activeScale ? (
             <p className="text-sm font-medium">
               {activeScale.name}
               <span className="ml-1 text-xs text-muted-foreground">
-                · {activeScale.levels.length} levels
+                {t("vacancyScaleLevels", {
+                  count: activeScale.levels.length,
+                })}
               </span>
               {lockedBySnapshot && (
                 <Badge variant="outline" className="ml-2 text-[10px]">
-                  Snapshot — locked
+                  {t("vacancyScaleSnapshotLocked")}
                 </Badge>
               )}
             </p>
           ) : (
             <p className="text-sm text-muted-foreground">
-              No scale chosen — default will apply on first assessment.
+              {t("vacancyScaleNone")}
             </p>
           )}
         </div>
@@ -142,13 +146,15 @@ export function VacancyAssessmentScaleBlock({
               data-testid="vacancy-overview-scale-select"
             >
               <option value="">
-                {activeScale ? `(current) ${activeScale.name}` : "Pick scale…"}
+                {activeScale
+                  ? t("vacancyScaleCurrentOption", { name: activeScale.name })
+                  : t("vacancyScalePick")}
               </option>
               {scales.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
-                  {s.is_default ? " (default)" : ""}
-                  {s.archived_at ? " (archived)" : ""}
+                  {s.is_default ? t("vacancyScaleDefaultSuffix") : ""}
+                  {s.archived_at ? t("vacancyScaleArchivedSuffix") : ""}
                 </option>
               ))}
             </select>
@@ -160,14 +166,13 @@ export function VacancyAssessmentScaleBlock({
             disabled={loading}
             data-testid="vacancy-overview-scale-change-btn"
           >
-            Refresh
+            {t("actionRefresh")}
           </Button>
         </div>
       </div>
       {lockedBySnapshot && (
         <p className="mt-1 text-[11px] text-muted-foreground">
-          Scale is frozen because evaluations exist. Archive this vacancy and
-          create a new one to use a different scale.
+          {t("vacancyScaleFrozen")}
         </p>
       )}
     </div>
