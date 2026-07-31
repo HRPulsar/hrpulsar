@@ -222,6 +222,18 @@ class InvitationList(BaseModel):
     total: int
 
 
+class InvitationPreview(BaseModel):
+    """Token-scoped public view of a pending invitation (HRP-435).
+
+    Deliberately narrow — only what the accept form needs to introduce itself
+    and pre-fill its fields. Holding the token is the authorisation, so no
+    tenant, role or inviter detail is exposed.
+    """
+
+    email: str
+    name: str
+
+
 class AcceptInvitationRequest(BaseModel):
     token: str
     password: str = Field(min_length=8, max_length=128)

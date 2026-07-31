@@ -23,6 +23,7 @@ from app.core.s3 import get_presigned_url
 # remain forbidden; cross-domain writes go through events.
 from app.modules.assessment.models import PDP, Assessment
 from app.modules.auth.models import Invitation, Role, User, user_roles
+from app.modules.auth.roles import ensure_baseline_employee_role
 from app.modules.company.models import Division
 from app.modules.employee.alerts import (
     ALERT_LABELS,
@@ -662,6 +663,9 @@ async def downgrade_employee_role(
             user_roles.c.role_id == manager_role.id,
         )
     )
+    # HRP-196: same baseline guarantee as the automatic downgrade — a
+    # manager-only user must not be left with an empty role list.
+    await ensure_baseline_employee_role(db, emp.user_id)
     await db.commit()
     logger.info(
         "employee.role_downgraded",

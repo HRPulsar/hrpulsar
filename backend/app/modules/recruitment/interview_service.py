@@ -120,6 +120,11 @@ def _validate_upload_payload(
             "kind_video_requires_video_mime",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
+    if kind == "text_transcript" and detected_kind != "text_transcript":
+        raise AppError(
+            "kind_transcript_requires_transcript_mime",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
     # HRP-253 (D5): demo sandbox is text-only. The killswitch from D4 also
     # replaces the AI output, but blocking media at the upload door means
     # we never even spend S3 bytes on a sandbox transcript request.
@@ -652,32 +657,25 @@ async def update_transcript(
     return _interview_to_read(interview, role="recruiter")
 
 
-async def paste_text_transcript(
+async def _apply_text_transcript(
     db: AsyncSession,
     tenant_id: uuid.UUID,
-    interview_id: uuid.UUID,
-    data: TextTranscriptRequest,
-) -> dict:
-    """HRP-202: inline-paste a text transcript.
+    interview: Interview,
+    text: str,
+) -> None:
+    """Store a ready-made transcript on ``interview`` and rebuild segments.
 
-    Skips S3 entirely, stores the redacted text on the interview row,
-    parses ``Interviewer:`` / ``Candidate:`` prefixes into
-    ``InterviewSegment`` rows so the AI analysis stage gets structured
-    input, and flips the interview into ``uploaded`` so the rest of the
-    UI treats it the same way as a freshly-uploaded media file.
+    Shared by the inline-paste path and by the upload path once a pdf/txt
+    file has been extracted (HRP-385) — both end up with an interview the
+    analysis stage can consume, so the semantics must not drift.
+    ``text`` is expected to be PII-redacted by the caller.
     """
 
-    from app.core.pii_filter import redact_pii
-
-    interview = await _get_interview_with_relations(db, tenant_id, interview_id)
-    if interview.archived_at is not None:
-        raise AppError("interview_archived", status.HTTP_409_CONFLICT)
-
-    text = redact_pii(data.text)
     interview.transcript = text
     interview.type = "text_transcript"
     interview.status = "uploaded"
     interview.transcription_status = "completed"
+    # Nothing to scan for a transcript, and nothing to transcribe.
     interview.av_status = "skipped"
 
     await db.execute(
@@ -704,6 +702,30 @@ async def paste_text_transcript(
             )
         )
         cursor += approx_seconds
+
+
+async def paste_text_transcript(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview_id: uuid.UUID,
+    data: TextTranscriptRequest,
+) -> dict:
+    """HRP-202: inline-paste a text transcript.
+
+    Skips S3 entirely, stores the redacted text on the interview row,
+    parses ``Interviewer:`` / ``Candidate:`` prefixes into
+    ``InterviewSegment`` rows so the AI analysis stage gets structured
+    input, and flips the interview into ``uploaded`` so the rest of the
+    UI treats it the same way as a freshly-uploaded media file.
+    """
+
+    from app.core.pii_filter import redact_pii
+
+    interview = await _get_interview_with_relations(db, tenant_id, interview_id)
+    if interview.archived_at is not None:
+        raise AppError("interview_archived", status.HTTP_409_CONFLICT)
+
+    await _apply_text_transcript(db, tenant_id, interview, redact_pii(data.text))
 
     interview.version = (interview.version or 1) + 1
     await db.commit()
@@ -1010,6 +1032,28 @@ async def complete_interview_upload(
     head = head_object(key) or {}
     size = int(head.get("ContentLength") or 0)
 
+    # HRP-385: ``kind`` is supplied independently on init and on complete.
+    # Widening the contract to transcripts made that mismatch matter: an
+    # upload opened as audio (500 MB ceiling) could be finalised as a
+    # transcript, which is capped at 10 MB. Pin the finalise to the kind
+    # the session was opened with, and re-check the real object size —
+    # S3 does not enforce the ceiling we promised at init.
+    session = await _get_active_session(db, tenant_id, interview_id, data.upload_id)
+    if session is not None and session.kind != kind:
+        raise AppError(
+            "upload_kind_mismatch",
+            status.HTTP_409_CONFLICT,
+        )
+    kind_limit = (
+        _TRANSCRIPT_MAX_BYTES if kind == "text_transcript" else _MEDIA_MAX_BYTES
+    )
+    if size > kind_limit:
+        raise AppError(
+            "file_exceeds_size_limit",
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            max_mb=kind_limit // (1024 * 1024),
+        )
+
     # HRP-276 / M8: re-validate size on complete for demo tenants.
     # init_interview_upload already enforces a per-part / total cap,
     # but S3 doesn't refuse parts that exceed it — the abuser can
@@ -1066,9 +1110,44 @@ async def complete_interview_upload(
     interview.analysis_status = "pending"
     interview.auto_process = bool(data.auto_process) and kind in {"audio", "video"}
 
+    # HRP-385: an uploaded pdf/txt transcript has to reach the same state
+    # as a pasted one, otherwise the file attaches but every follow-up
+    # action refuses it ("Transcribe" wants audio/video, "Analyze" wants a
+    # finished transcription) and the upload is a dead end. Extraction is
+    # best-effort: a scanned/image-only PDF still uploads and stays
+    # visible in the viewer, it just has no text to analyse.
+    if kind == "text_transcript":
+        import asyncio
+
+        from app.core.pii_filter import redact_pii
+        from app.core.s3 import download_bytes
+        from app.modules.ai.file_parsing import parse_file
+
+        try:
+            raw = await asyncio.to_thread(download_bytes, key)
+            extracted = (
+                await asyncio.to_thread(parse_file, filename, raw) if raw else ""
+            )
+        except Exception:  # noqa: BLE001 — never fail a finished upload
+            logger.exception(
+                "transcript text extraction failed for interview %s", interview_id
+            )
+            extracted = ""
+        if extracted.strip():
+            await _apply_text_transcript(
+                db, tenant_id, interview, redact_pii(extracted)
+            )
+            interview.transcript_file_id = file_record.id
+            interview.file_s3_key = key
+            interview.file_size_bytes = size
+            interview.file_mime = mime_type
+            # Unlike the paste path there IS a file here, and the AV task
+            # below really does scan it (a malicious PDF must still be
+            # caught) — leave the verdict pending for it to fill in.
+            interview.av_status = "pending"
+
     # Mark the persistent upload-session as completed so the orphan-
     # cleanup task knows not to touch the now-finalized object.
-    session = await _get_active_session(db, tenant_id, interview_id, data.upload_id)
     if session:
         session.status = "completed"
 

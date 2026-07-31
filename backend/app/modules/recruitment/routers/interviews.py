@@ -286,7 +286,10 @@ async def get_interview_upload_part_url(
 async def complete_interview_upload(
     interview_id: uuid.UUID,
     data: CompleteUploadRequest,
-    kind: Literal["audio", "video"] = Query("audio"),
+    # HRP-385: the service has always accepted "text_transcript" here; the
+    # route literal did not, so a pdf/txt upload 422'd at the finalize step
+    # even once it got past init.
+    kind: Literal["audio", "video", "text_transcript"] = Query("audio"),
     filename: str = Query("interview.bin"),
     mime_type: str = Query("application/octet-stream"),
     db: AsyncSession = Depends(get_db),

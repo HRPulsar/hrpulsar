@@ -11,6 +11,8 @@ import { useLocale, useTranslations } from "next-intl";
 import { Loader2, Pencil } from "lucide-react";
 import { api } from "@/lib/api";
 import {
+  clearIndicatorsFor,
+  upsertCompetenceComment,
   CompetenceScoreList,
   findCompetenceComment,
   replaceCompetenceRow,
@@ -248,12 +250,24 @@ export default function PublicAssessmentPage() {
     );
   }
 
-  function setCompetenceScore(
-    competenceId: string,
-    value: number | null,
-    comment?: string,
-  ) {
+  /** Cancel this competence's still-pending indicator saves (HRP-378). */
+  function dropPendingIndicatorSaves(competenceId: string) {
+    for (const key of [...debounceTimers.current.keys()]) {
+      if (!key.startsWith(`ind:${competenceId}:`)) continue;
+      clearTimeout(debounceTimers.current.get(key)!);
+      debounceTimers.current.delete(key);
+      pendingFns.current.delete(key);
+      pendingSaves.current = Math.max(0, pendingSaves.current - 1);
+    }
+  }
+
+  function setCompetenceScore(competenceId: string, value: number | null) {
     if (readOnly) return;
+    // HRP-378: a hand-picked overall wins, so the competence's indicator
+    // answers are cleared here and on the server. Indicator saves still in
+    // flight would re-derive the overall and resurrect those answers on
+    // screen, so cancel them first.
+    dropPendingIndicatorSaves(competenceId);
     setSheet((prev) =>
       prev
         ? {
@@ -261,20 +275,45 @@ export default function PublicAssessmentPage() {
             competence_scores: upsertCompetence(prev.competence_scores, {
               competence_id: competenceId,
               score_value: value,
-              comment: comment ?? findCompetenceComment(prev, competenceId),
+              comment: findCompetenceComment(prev, competenceId),
             }),
+            indicator_scores: clearIndicatorsFor(
+              prev.indicator_scores,
+              competenceId,
+            ),
           }
         : prev,
     );
     if (value !== null) markInProgress();
+    // Score and comment hold separate debounce slots and each PATCH carries
+    // only its own field, so neither can overwrite the other with a value it
+    // captured before the other edit landed.
     scheduleAutosave(`comp:${competenceId}`, async () => {
       await api.patch<CompetenceScore>(
         `/v1/public/assessments/${token}/competence-scores/${competenceId}`,
-        {
-          score_value: value,
-          score_source: "manual",
-          comment: comment ?? findCompetenceComment(sheet, competenceId),
-        },
+        { score_value: value, score_source: "manual" },
+      );
+    });
+  }
+
+  function setCompetenceComment(competenceId: string, comment: string) {
+    if (readOnly) return;
+    setSheet((prev) =>
+      prev
+        ? {
+            ...prev,
+            competence_scores: upsertCompetenceComment(
+              prev.competence_scores,
+              competenceId,
+              comment,
+            ),
+          }
+        : prev,
+    );
+    scheduleAutosave(`note:${competenceId}`, async () => {
+      await api.patch<CompetenceScore>(
+        `/v1/public/assessments/${token}/competence-scores/${competenceId}`,
+        { comment },
       );
     });
   }
@@ -298,7 +337,9 @@ export default function PublicAssessmentPage() {
         : prev,
     );
     if (value !== null) markInProgress();
-    scheduleAutosave(`ind:${indicatorId}`, async () => {
+    // Key carries the competence so a manual overall can cancel exactly this
+    // competence's pending indicator saves (HRP-378).
+    scheduleAutosave(`ind:${competenceId}:${indicatorId}`, async () => {
       await api.patch<IndicatorScore>(
         `/v1/public/assessments/${token}/indicator-scores/${indicatorId}`,
         {
@@ -324,14 +365,23 @@ export default function PublicAssessmentPage() {
         const overallPending = debounceTimers.current.has(
           `comp:${competenceId}`,
         );
+        // This save owns the score, never the note: a comment being typed
+        // right now is not in the row we just fetched, and echoing that row
+        // back verbatim would blank the textarea under the evaluator.
+        const merged =
+          freshOverall &&
+          ({
+            ...freshOverall,
+            comment: findCompetenceComment(prev, competenceId) || null,
+          } as CompetenceScore);
         return {
           ...prev,
           indicator_scores: freshInd
             ? replaceIndicatorRow(prev.indicator_scores, freshInd)
             : prev.indicator_scores,
           competence_scores:
-            freshOverall && !overallPending
-              ? replaceCompetenceRow(prev.competence_scores, freshOverall)
+            merged && !overallPending
+              ? replaceCompetenceRow(prev.competence_scores, merged)
               : prev.competence_scores,
         };
       });
@@ -677,6 +727,7 @@ export default function PublicAssessmentPage() {
               disabled={readOnly}
               emptyHint={t("sheetNotReady")}
               onCompetenceScore={setCompetenceScore}
+              onCompetenceComment={setCompetenceComment}
               onIndicatorScore={setIndicatorScore}
             />
             <textarea

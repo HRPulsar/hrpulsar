@@ -52,6 +52,7 @@ import {
   applyDivisionFilters,
   deriveGradeOptions,
   derivePositionOptions,
+  deriveSpecializationOptions,
   hasActiveDivisionFilters,
   type DivisionEmployeeFilters,
 } from "@/lib/division-employee-filters";
@@ -166,6 +167,16 @@ export default function DivisionDetailPage() {
   const gradeOptions = useMemo(
     () => deriveGradeOptions(employees),
     [employees],
+  );
+  // HRP-58 REDO: union of the division's mapped specializations (what the
+  // tiles render, zero-employee ones included) and the specializations the
+  // loaded employees actually carry. An employee's specialization follows
+  // their position, so it need not be mapped to the division — taking only
+  // the catalogue would make those rows unreachable by this filter, and
+  // taking only the employees would leave a tile with no matching option.
+  const specializationOptions = useMemo(
+    () => deriveSpecializationOptions(specializations, employees),
+    [specializations, employees],
   );
   const flatDivisions = useMemo(() => flattenTree(allDivisions), [allDivisions]);
 
@@ -458,6 +469,44 @@ export default function DivisionDetailPage() {
                 <SelectContent>
                   <SelectItem value="">{t("allPositions")}</SelectItem>
                   {positionOptions.map((opt) => (
+                    <SelectItem key={opt.id} value={opt.id}>
+                      {opt.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* HRP-58 REDO: Specialization filter — the third dropdown.
+                  It stays in sync with the specialization tiles above:
+                  both write the same `filters.specializationId`, so
+                  clicking a tile selects it here and vice versa. Same
+                  <SelectValue> explicit-children guard as Position. */}
+              <Select
+                value={filters.specializationId ?? ""}
+                onValueChange={(val) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    specializationId: val || null,
+                  }))
+                }
+              >
+                <SelectTrigger
+                  className="h-8 w-[200px]"
+                  data-testid="division-employees-specialization-filter"
+                  aria-label={t("filterBySpecialization")}
+                >
+                  <SelectValue placeholder={t("filterAllSpecializations")}>
+                    {filters.specializationId
+                      ? specializationOptions.find(
+                          (o) => o.id === filters.specializationId,
+                        )?.title ?? t("filterAllSpecializations")
+                      : t("filterAllSpecializations")}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">
+                    {t("filterAllSpecializations")}
+                  </SelectItem>
+                  {specializationOptions.map((opt) => (
                     <SelectItem key={opt.id} value={opt.id}>
                       {opt.title}
                     </SelectItem>

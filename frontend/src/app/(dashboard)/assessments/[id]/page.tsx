@@ -57,6 +57,11 @@ import {
 } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -775,11 +780,21 @@ export default function AssessmentDetailPage() {
   // HRP-329: a saved calibration keeps the lock — surveys never reopen.
   const calibrationLock =
     !!assessment.calibration_in_progress || !!assessment.has_calibrated_totals;
-  const canEvaluateAnyone =
-    !isTerminal &&
-    !isDraft &&
-    !calibrationLock &&
-    assessment.competence_ids.length > 0;
+  // HRP-329 REDO: a calibration lock no longer HIDES the actions. Hiding
+  // them left the user with no explanation for the missing button, so the
+  // actions stay visible but disabled and a tooltip names the reason. The
+  // structural reasons (draft / terminal / no criteria) still hide, since
+  // there is nothing to explain — the assessment simply isn't running.
+  const showEvaluateActions =
+    !isTerminal && !isDraft && assessment.competence_ids.length > 0;
+  // Two distinct states, and they are mutually exclusive: saving a
+  // calibration clears `calibration_in_progress` and leaves the totals
+  // behind, so "is calibrating" wins while the reviewer is still editing.
+  const calibrationLockHint = assessment.calibration_in_progress
+    ? t("calibrationLockCalibrating")
+    : assessment.has_calibrated_totals
+      ? t("calibrationLockCalibrated")
+      : null;
   // HRP-104: Preview questions lives in Details (was in Rating scale). Visible
   // to admin/manager AND to participants — anyone who can already see the page
   // and has both criteria + scale picked.
@@ -1015,17 +1030,35 @@ export default function AssessmentDetailPage() {
               ))}
             </div>
           )}
-          {canEvaluateAnyone && myFirstPending && (
+          {showEvaluateActions && myFirstPending && (
             <div className="mt-4 flex gap-2">
-              <Button
-                size="sm"
-                data-testid="assessment-take-cta"
-                onClick={() => openEvaluation(myFirstPending.id)}
-              >
-                <Pencil className="mr-1 h-4 w-4" />
-                {t("takeAssessment")}
-                {myPendingParticipants.length > 1 && ` (${myPendingParticipants.length})`}
-              </Button>
+              {calibrationLockHint ? (
+                // A disabled button emits no pointer events, so the
+                // tooltip trigger has to be the wrapping span.
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<span tabIndex={-1} className="inline-flex" />}
+                  >
+                    <Button size="sm" data-testid="assessment-take-cta" disabled>
+                      <Pencil className="mr-1 h-4 w-4" />
+                      {t("takeAssessment")}
+                      {myPendingParticipants.length > 1 &&
+                        ` (${myPendingParticipants.length})`}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{calibrationLockHint}</TooltipContent>
+                </Tooltip>
+              ) : (
+                <Button
+                  size="sm"
+                  data-testid="assessment-take-cta"
+                  onClick={() => openEvaluation(myFirstPending.id)}
+                >
+                  <Pencil className="mr-1 h-4 w-4" />
+                  {t("takeAssessment")}
+                  {myPendingParticipants.length > 1 && ` (${myPendingParticipants.length})`}
+                </Button>
+              )}
             </div>
           )}
           {canPreviewQuestions && (
@@ -1178,7 +1211,7 @@ export default function AssessmentDetailPage() {
                     const isEvaluatee = !!evaluateeUserId && p.user_id === evaluateeUserId;
                     const isMine = !!currentUser?.id && p.user_id === currentUser.id;
                     const showEvaluate =
-                      canEvaluateAnyone && !p.is_completed && isMine;
+                      showEvaluateActions && !p.is_completed && isMine;
                     return (
                     <TableRow key={p.id} data-testid={`assessment-participant-${p.id}`}>
                       <TableCell className="text-sm">
@@ -1227,12 +1260,34 @@ export default function AssessmentDetailPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        {showEvaluate && (
-                          <Button size="xs" variant="ghost" data-testid={`assessment-participant-${p.id}-evaluate`} onClick={() => openEvaluation(p.id)}>
-                            <Pencil className="mr-1 h-3 w-3" />
-                            {t("evaluate")}
-                          </Button>
-                        )}
+                        {showEvaluate &&
+                          (calibrationLockHint ? (
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <span tabIndex={-1} className="inline-flex" />
+                                }
+                              >
+                                <Button
+                                  size="xs"
+                                  variant="ghost"
+                                  data-testid={`assessment-participant-${p.id}-evaluate`}
+                                  disabled
+                                >
+                                  <Pencil className="mr-1 h-3 w-3" />
+                                  {t("evaluate")}
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {calibrationLockHint}
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <Button size="xs" variant="ghost" data-testid={`assessment-participant-${p.id}-evaluate`} onClick={() => openEvaluation(p.id)}>
+                              <Pencil className="mr-1 h-3 w-3" />
+                              {t("evaluate")}
+                            </Button>
+                          ))}
                       </TableCell>
                     </TableRow>
                   );})}

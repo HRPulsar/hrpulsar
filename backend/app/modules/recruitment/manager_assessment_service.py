@@ -22,6 +22,7 @@ import hashlib
 import logging
 import secrets
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -58,6 +59,18 @@ from app.modules.recruitment.models import (
 )
 
 log = logging.getLogger(__name__)
+
+
+#: HRP-374: which evaluation sheets feed an aggregate.
+#:
+#: An internal evaluator's own sheet counts while still a draft — it is the
+#: recruiter's live work and the round header has to move as they score.
+#: An invited (external) evaluator's sheet only counts once they submitted:
+#: a half-filled external draft must not drag the candidate's average.
+_COUNTABLE_SHEET = or_(
+    RecruitmentAssessment.evaluator_type == "user",
+    RecruitmentAssessment.status == "submitted",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -783,6 +796,28 @@ async def set_competence_score(
         )
     )
     row = result.scalar_one_or_none()
+    # The score and the comment are independent fields: a PATCH touches only
+    # what it actually sends. Without this the comment textarea — which saves
+    # through this same endpoint — would have to replay the current score,
+    # and any client whose mirror of it lagged (the common case while an
+    # indicator save is still in flight) would silently rewrite the score.
+    scores_touched = bool(
+        payload.model_fields_set & {"score_value", "score_source"}
+    )
+    comment_touched = "comment" in payload.model_fields_set
+    # HRP-378: a *manual* overall edit resets the competence's indicator
+    # answers, so the two can never disagree. Only a real score edit counts —
+    # a note left on a competence scored through its indicators must not
+    # discard those indicators.
+    resets_indicators = (
+        scores_touched
+        and payload.score_source == "manual"
+        and (
+            row is None
+            or row.score_value != payload.score_value
+            or row.score_source != payload.score_source
+        )
+    )
     if row is None:
         row = AssessmentCompetenceScore(
             tenant_id=tenant_id,
@@ -794,9 +829,21 @@ async def set_competence_score(
         )
         db.add(row)
     else:
-        row.score_value = payload.score_value
-        row.score_source = payload.score_source
-        row.comment = payload.comment
+        if scores_touched:
+            row.score_value = payload.score_value
+            row.score_source = payload.score_source
+        if comment_touched:
+            row.comment = payload.comment
+    if resets_indicators:
+        # Delete rather than NULL the rows: an explicitly-stored NULL is
+        # the "Not assessed" answer and would render as a selected chip,
+        # while the spec asks for nothing selected at all.
+        await db.execute(
+            delete(AssessmentIndicatorScore).where(
+                AssessmentIndicatorScore.assessment_id == a.id,
+                AssessmentIndicatorScore.competence_id == competence_id,
+            )
+        )
     a.version += 1
     round_id = a.round_id
     assessment_id = a.id
@@ -858,8 +905,12 @@ async def set_indicator_score(
         row.comment = payload.comment
         row.competence_id = payload.competence_id
 
-    # If indicators are scored on this competence, mark the overall as
-    # computed and recompute its value as the rounded mean.
+    # HRP-378: indicators are the finer-grained answer, so whenever any of
+    # them carries a score the overall is derived from them — a previously
+    # hand-picked overall is overwritten rather than left to contradict
+    # them. The reverse direction (manual overall wipes the indicators)
+    # lives in ``set_competence_score``; together they keep exactly one of
+    # the two sides authoritative at any moment.
     indicator_result = await db.execute(
         select(AssessmentIndicatorScore).where(
             AssessmentIndicatorScore.assessment_id == a.id,
@@ -890,7 +941,7 @@ async def set_indicator_score(
                 score_source="computed_from_indicators",
             )
             db.add(overall)
-        elif overall.score_source != "manual":
+        else:
             overall.score_value = avg
             overall.score_source = "computed_from_indicators"
     elif overall is not None and overall.score_source != "manual":
@@ -1020,15 +1071,27 @@ async def recompute_manager_score(
 async def round_aggregate(
     db: AsyncSession, tenant_id: uuid.UUID, round_id: uuid.UUID
 ) -> dict[str, Any]:
+    """Round-level and per-competence averages for the round header.
+
+    HRP-374: the round ``average`` is the same number the vacancy's
+    Candidates block shows (:func:`_round_average` — the mean level across
+    every counted evaluator and competence), plus ``average_weight``, that
+    level rebased onto the scale's weights the same way
+    ``candidate_vacancies.manager_score_weight`` is. Both are ``None`` when
+    nothing has been scored yet, which the UI renders as an em dash.
+    """
     rd = await _load_round(db, tenant_id, round_id)
     a_result = await db.execute(
         select(RecruitmentAssessment).where(
             RecruitmentAssessment.round_id == rd.id,
             RecruitmentAssessment.tenant_id == tenant_id,
+            _COUNTABLE_SHEET,
         )
     )
     assessments = a_result.scalars().all()
-    by_competence: dict[str, list[tuple[int, str]]] = {}
+    evaluator_names = await _resolve_evaluator_names(db, tenant_id, assessments)
+
+    by_competence: dict[str, list[dict[str, Any]]] = {}
     for a in assessments:
         scores_result = await db.execute(
             select(AssessmentCompetenceScore).where(
@@ -1036,44 +1099,104 @@ async def round_aggregate(
                 AssessmentCompetenceScore.score_value.is_not(None),
             )
         )
+        is_internal = a.evaluator_user_id is not None
         for sc in scores_result.scalars().all():
-            evaluator_label = a.evaluator_display_name or (
-                f"user:{a.evaluator_user_id}"
-                if a.evaluator_user_id
-                else f"invited:{a.evaluator_invite_id}"
-            )
             assert sc.score_value is not None
             by_competence.setdefault(str(sc.competence_id), []).append(
-                (sc.score_value, evaluator_label)
+                {
+                    "evaluator": evaluator_names[a.id],
+                    "evaluator_type": "internal" if is_internal else "external",
+                    "score": sc.score_value,
+                }
             )
+
     # threshold from scale snapshot or vacancy default
     cv = await db.get(CandidateVacancy, rd.candidate_vacancy_id)
     vacancy = await db.get(Vacancy, cv.vacancy_id) if cv else None
+    snapshot = vacancy.assessment_scale_snapshot if vacancy else None
     threshold = 2
-    if vacancy and vacancy.assessment_scale_snapshot:
-        threshold = vacancy.assessment_scale_snapshot.get("divergence_threshold", 2)
+    if snapshot:
+        threshold = snapshot.get("divergence_threshold", 2)
     competences = []
     for cid, entries in by_competence.items():
-        scores = [e[0] for e in entries]
+        scores = [e["score"] for e in entries]
         avg = round(sum(scores) / len(scores), 2)
         spread = max(scores) - min(scores)
         competences.append(
             {
                 "competence_id": cid,
                 "average": avg,
+                "average_weight": _level_to_weight(snapshot, avg),
                 "min": min(scores),
                 "max": max(scores),
-                "diverges": spread >= threshold,
-                "scorers": [{"evaluator": e[1], "score": e[0]} for e in entries],
+                # A single evaluator can never disagree with anyone.
+                "diverges": len(scores) > 1 and spread >= threshold,
+                "scorers": entries,
             }
         )
     overall = await _round_average(db, rd.id)
     return {
         "round_id": rd.id,
         "average": overall,
+        "average_weight": (
+            _level_to_weight(snapshot, overall) if overall is not None else None
+        ),
         "competences": competences,
         "divergence_threshold": threshold,
     }
+
+
+async def _resolve_evaluator_names(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    assessments: Sequence[RecruitmentAssessment],
+) -> dict[uuid.UUID, str]:
+    """Map assessment id → human evaluator name for divergence tooltips.
+
+    Internal evaluators are named from their user row; invited ones carry
+    the name they gave on the public sheet (or the one the recruiter typed
+    on the invite). Falls back to the opaque id so a deleted user never
+    blanks out the tooltip.
+    """
+    from app.modules.auth.models import User
+
+    user_ids = {a.evaluator_user_id for a in assessments if a.evaluator_user_id}
+    invite_ids = {a.evaluator_invite_id for a in assessments if a.evaluator_invite_id}
+
+    by_user: dict[uuid.UUID, str] = {}
+    if user_ids:
+        rows = await db.execute(
+            select(User).where(
+                User.id.in_(user_ids), User.tenant_id == tenant_id
+            )
+        )
+        for u in rows.scalars().all():
+            by_user[u.id] = f"{u.first_name} {u.last_name}".strip()
+    by_invite: dict[uuid.UUID, str] = {}
+    if invite_ids:
+        rows_i = await db.execute(
+            select(AssessmentInvite).where(
+                AssessmentInvite.id.in_(invite_ids),
+                AssessmentInvite.tenant_id == tenant_id,
+            )
+        )
+        for inv in rows_i.scalars().all():
+            if inv.evaluator_name:
+                by_invite[inv.id] = inv.evaluator_name
+
+    out: dict[uuid.UUID, str] = {}
+    for a in assessments:
+        name = a.evaluator_display_name
+        if not name and a.evaluator_user_id:
+            name = by_user.get(a.evaluator_user_id)
+        if not name and a.evaluator_invite_id:
+            name = by_invite.get(a.evaluator_invite_id)
+        out[a.id] = name or (
+            f"user:{a.evaluator_user_id}"
+            if a.evaluator_user_id
+            else f"invited:{a.evaluator_invite_id}"
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1592,6 +1715,13 @@ def _invite_to_dict(inv: AssessmentInvite) -> dict[str, Any]:
 
 
 async def _round_average(db: AsyncSession, round_id: uuid.UUID) -> float | None:
+    """Mean competence level across every counted sheet in the round.
+
+    Single source of truth for "Average score": the round header, the
+    per-round aggregate and ``candidate_vacancies.manager_score`` (which
+    the vacancy Candidates block renders) all read this one number, so a
+    recruiter never sees two different averages for the same round.
+    """
     result = await db.execute(
         select(AssessmentCompetenceScore.score_value)
         .join(
@@ -1601,6 +1731,7 @@ async def _round_average(db: AsyncSession, round_id: uuid.UUID) -> float | None:
         .where(
             RecruitmentAssessment.round_id == round_id,
             AssessmentCompetenceScore.score_value.is_not(None),
+            _COUNTABLE_SHEET,
         )
     )
     scores = [s for s in result.scalars().all() if s is not None]

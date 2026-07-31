@@ -15,6 +15,7 @@ from starlette.datastructures import Headers
 
 from app.core.errors import AppError
 from app.modules.auth.models import Invitation, Role, User, user_roles
+from app.modules.auth.roles import ensure_baseline_employee_role
 from app.modules.company.models import (
     CompanyActivityField,
     Division,
@@ -277,6 +278,11 @@ async def _auto_downgrade_to_employee(
                 user_roles.c.role_id == manager_role.id,
             )
         )
+        # HRP-196: a user invited straight as `manager` held that single
+        # role, so the delete above left them with no role at all and the
+        # sidebar rendered a blank line. Restore the `employee` baseline —
+        # this is what "set role=Employee" means.
+        await ensure_baseline_employee_role(db, entry["user_id"])
         entry["downgraded"] = True
         logger.info(
             "division.role_auto_downgraded",

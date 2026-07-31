@@ -1,16 +1,9 @@
 import { test, expect } from "@playwright/test";
-import {
-  createInvitation,
-  provisionTenantMember,
-  registerUser,
-  setAuthTokens,
-} from "./helpers";
+import { createInvitation, registerUser, setAuthTokens } from "./helpers";
 
 test.describe("Invitations — INV2 (inline edit + email change)", () => {
   let adminAccess: string;
   let adminRefresh: string;
-  let managerAccess: string;
-  let managerRefresh: string;
   let invitationId: string;
   let invitationEmail: string;
 
@@ -20,13 +13,6 @@ test.describe("Invitations — INV2 (inline edit + email change)", () => {
     const adminCreds = await registerUser(page);
     adminAccess = adminCreds.accessToken;
     adminRefresh = adminCreds.refreshToken;
-
-    const manager = await provisionTenantMember(
-      { page, accessToken: adminAccess },
-      { roleCode: "manager", firstName: "Manager", lastName: "User" },
-    );
-    managerAccess = manager.accessToken;
-    managerRefresh = manager.refreshToken;
 
     invitationEmail = `inv2-target-${Date.now()}@example.com`;
     const inv = await createInvitation(
@@ -40,36 +26,8 @@ test.describe("Invitations — INV2 (inline edit + email change)", () => {
     await page.close();
   });
 
-  test("manager: Role read-only, Division/Position editable, no edit-email button", async ({
-    page,
-  }) => {
-    await setAuthTokens(page, managerAccess, managerRefresh);
-    await page.goto("/settings/invitations");
-    await expect(page.getByTestId("invitations-table")).toBeVisible({
-      timeout: 10000,
-    });
-
-    // Role cell — non-admin sees plain text, not the edit Select
-    await expect(
-      page.getByTestId(`invitations-row-${invitationId}-role`),
-    ).toBeVisible();
-    await expect(
-      page.getByTestId(`invitations-row-${invitationId}-edit-role`),
-    ).toHaveCount(0);
-
-    // Division + Position selectors are editable for managers
-    await expect(
-      page.getByTestId(`invitations-row-${invitationId}-edit-division`),
-    ).toBeVisible();
-    await expect(
-      page.getByTestId(`invitations-row-${invitationId}-edit-position`),
-    ).toBeVisible();
-
-    // Edit-email button is admin-only
-    await expect(
-      page.getByTestId(`invitations-row-${invitationId}-btn-edit-email`),
-    ).toHaveCount(0);
-  });
+  // HRP-436 moved the manager case (Invitations is admin-only now) to
+  // admin-section-access.spec.ts, which owns the whole Admin-group matrix.
 
   test("admin: all three fields editable + edit-email button available", async ({
     page,

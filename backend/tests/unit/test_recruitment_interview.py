@@ -536,3 +536,129 @@ class TestSegmentService:
 # TestTranscribePerMinutePricing was moved to tests/unit/ee/
 # test_recruitment_transcribe_billing.py — it imports ee.billing and
 # breaks public-repo CI (community build has no ee/ package).
+
+
+class TestConsentEmailCandidateName:
+    """HRP-384: the consent email greeted resume-sourced candidates as
+    "(unnamed)".
+
+    Both the email and the public consent view used to read the linked
+    ``Person`` only. ``Candidate.person_id`` has been nullable since
+    HRP-181 REDO — a candidate created from an uploaded resume has no
+    ``Person`` row, and their name lives on the canonical
+    ``Candidate.full_name``, so the person-only lookup fell through to
+    the fallback.
+    """
+
+    async def _personless_candidate(self, db, tenant):
+        from app.modules.recruitment.models import Candidate
+
+        candidate = Candidate(
+            tenant_id=tenant.id,
+            person_id=None,
+            full_name="Grace Hopper",
+            email=f"{uuid.uuid4().hex[:8]}@example.com",
+            source="resume",
+        )
+        db.add(candidate)
+        await db.commit()
+        await db.refresh(candidate, ["person", "files"])
+        return candidate
+
+    async def _send(self, db, tenant, user, candidate, monkeypatch):
+        import app.core.email as email_mod
+
+        sent: list[tuple[str, str, str]] = []
+        monkeypatch.setattr(
+            email_mod,
+            "enqueue_email",
+            lambda to, subject, html, **kw: sent.append((to, subject, html)),
+        )
+        await service.create_consent_template(
+            db,
+            tenant.id,
+            ConsentTemplateCreate(
+                name="Default",
+                body="By signing, you agree to recording.",
+                language="en",
+                is_active=True,
+            ),
+        )
+        result = await service.send_consent_request(
+            db,
+            tenant.id,
+            user.id,
+            candidate.id,
+            ConsentSendRequest(email="candidate@example.com"),
+        )
+        return result, sent
+
+    async def test_email_greets_candidate_without_person_row(
+        self, db, tenant, user, monkeypatch
+    ):
+        candidate = await self._personless_candidate(db, tenant)
+        _, sent = await self._send(db, tenant, user, candidate, monkeypatch)
+
+        assert len(sent) == 1
+        html = sent[0][2]
+        assert "Hello, Grace Hopper" in html
+        assert "(unnamed)" not in html
+
+    async def test_public_consent_view_exposes_the_name(
+        self, db, tenant, user, monkeypatch
+    ):
+        from app.modules.recruitment.models import ConsentRequest
+        from sqlalchemy import select
+
+        candidate = await self._personless_candidate(db, tenant)
+        result, _ = await self._send(db, tenant, user, candidate, monkeypatch)
+
+        token = (
+            await db.execute(
+                select(ConsentRequest.token).where(ConsentRequest.id == result["id"])
+            )
+        ).scalar_one()
+        view = await service.get_consent_by_token(db, token)
+        assert view["candidate_name"] == "Grace Hopper"
+
+    async def test_person_backed_candidate_still_uses_person_name(
+        self, db, tenant, user, monkeypatch
+    ):
+        """The Person path must keep working for internal referrals."""
+        created = await service.create_candidate(
+            db,
+            tenant.id,
+            user.id,
+            CandidateCreate(
+                first_name="Ada",
+                last_name="Lovelace",
+                email=f"{uuid.uuid4().hex[:8]}@example.com",
+            ),
+        )
+        from app.modules.recruitment.models import Candidate
+
+        candidate = await db.get(Candidate, created["id"])
+        _, sent = await self._send(db, tenant, user, candidate, monkeypatch)
+        assert "Hello, Ada Lovelace" in sent[0][2]
+
+    async def test_fallback_is_localized_when_there_is_no_name_at_all(
+        self, db, tenant, user, monkeypatch
+    ):
+        """A genuinely nameless row still must not leak an untranslated
+        string — the fallback comes from the email catalog."""
+        from app.core.i18n import translate
+        from app.modules.recruitment.models import Candidate
+
+        candidate = Candidate(
+            tenant_id=tenant.id,
+            person_id=None,
+            full_name="   ",
+            email=f"{uuid.uuid4().hex[:8]}@example.com",
+            source="resume",
+        )
+        db.add(candidate)
+        await db.commit()
+        await db.refresh(candidate, ["person", "files"])
+
+        _, sent = await self._send(db, tenant, user, candidate, monkeypatch)
+        assert translate("email.fallback.unnamed", "en") in sent[0][2]

@@ -60,9 +60,13 @@ test.describe("AI Settings page", () => {
     await expect(page.getByTestId("settings-ai-select-model")).toBeVisible();
   });
 
-  test("non-admin sees the not-available placeholder", async ({ page }) => {
+  test("a visitor without a token never sees the editable form", async ({
+    page,
+  }) => {
     // Drop the registered admin token so /settings/ai falls back to the
     // permissions guard. This relies on the guard being client-side.
+    // HRP-436: non-admins are now redirected to /dashboard with a toast
+    // (see admin-section-access.spec.ts); here the token is gone entirely.
     await page.context().clearCookies();
     await page.evaluate(() => {
       localStorage.removeItem("access_token");

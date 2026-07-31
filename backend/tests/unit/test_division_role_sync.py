@@ -452,3 +452,70 @@ class TestHrp196AutoDowngrade:
         assert len(rows) == 1
         # Invitation role_code unchanged after auto-downgrade.
         assert rows[0][0] == "manager"
+
+
+class TestHrp196BaselineRoleAfterDowngrade:
+    """HRP-196 REDO: a downgrade must never leave a user with zero roles.
+
+    Every earlier test seeds the user with `employee` first, so the gap was
+    invisible: a user invited straight as `manager` holds that single role,
+    and stripping it left `roles == []`. Permissions still resolved (they
+    fall back to "own data only", which is what QA observed), but the
+    sidebar had no role to render and showed a blank line instead of
+    "Employee".
+    """
+
+    async def test_manager_only_user_keeps_employee_after_unassign(
+        self, db: AsyncSession, tenant, manager_role, employee_role
+    ):
+        # Invited directly as a manager — no `employee` row at all.
+        u = await _make_user(db, tenant, manager_role)
+        emp = await _make_employee(db, tenant, u)
+        assert await _user_codes(db, u.id) == {"manager"}
+
+        d = await company_service.create_division(
+            db, tenant.id, DivisionCreate(name="Eng", manager_id=emp.id)
+        )
+        result = await company_service.update_division(
+            db, tenant.id, d["id"], DivisionUpdate(manager_id=None)
+        )
+        assert result["pending_role_downgrade"][0]["downgraded"] is True
+
+        codes = await _user_codes(db, u.id)
+        assert codes == {"employee"}, "downgrade must leave the baseline role"
+
+    async def test_downgrade_does_not_duplicate_existing_employee_role(
+        self, db: AsyncSession, tenant, manager_role, employee_role
+    ):
+        u = await _make_user(db, tenant, employee_role)
+        emp = await _make_employee(db, tenant, u)
+        d = await company_service.create_division(
+            db, tenant.id, DivisionCreate(name="Eng", manager_id=emp.id)
+        )
+        await company_service.update_division(
+            db, tenant.id, d["id"], DivisionUpdate(manager_id=None)
+        )
+
+        rows = (
+            await db.execute(
+                select(user_roles.c.role_id).where(
+                    user_roles.c.user_id == u.id,
+                    user_roles.c.role_id == employee_role.id,
+                )
+            )
+        ).all()
+        assert len(rows) == 1
+
+    async def test_manual_downgrade_endpoint_keeps_employee_role(
+        self, db: AsyncSession, tenant, manager_role, employee_role
+    ):
+        from app.modules.employee import service as employee_service
+
+        u = await _make_user(db, tenant, manager_role)
+        emp = await _make_employee(db, tenant, u)
+
+        result = await employee_service.downgrade_employee_role(
+            db, tenant.id, emp.id
+        )
+        assert result["downgraded"] is True
+        assert await _user_codes(db, u.id) == {"employee"}

@@ -245,7 +245,9 @@ export function CandidateInterviewsSection({
               err instanceof UploadError
                 ? err.code === "s3PutFailed"
                   ? t("uploadS3PutFailed", { status: err.status ?? 0 })
-                  : t("uploadS3NoEtag")
+                  : err.code === "s3Unreachable"
+                    ? t("uploadS3Unreachable")
+                    : t("uploadS3NoEtag")
                 : err instanceof Error
                   ? err.message
                   : t("candidateInterviewsUploadFailed"),

@@ -1,6 +1,6 @@
 import { Page } from "@playwright/test";
 
-const API_BASE = "http://localhost:8100/api";
+export const API_BASE = "http://localhost:8100/api";
 
 // ---------------------------------------------------------------------------
 // Unique generators
@@ -454,6 +454,29 @@ export async function createInvitation(
 }
 
 /**
+ * Read an invitation's token via the dev reveal endpoint (E2E_MODE only).
+ *
+ * Stands in for scraping the invitation email — the InvitationRead schema
+ * deliberately hides the token from regular clients.
+ */
+export async function revealInvitationToken(
+  opts: ApiHelperOpts,
+  invitationId: string,
+): Promise<string> {
+  const resp = await opts.page.request.get(
+    `${API_BASE}/auth/dev/invitations/${invitationId}/token`,
+    { headers: { Authorization: `Bearer ${opts.accessToken}` } },
+  );
+  if (!resp.ok()) {
+    throw new Error(
+      `dev_get_invitation_token failed (${resp.status()}): ${await resp.text()}`,
+    );
+  }
+  const { token } = await resp.json();
+  return token;
+}
+
+/**
  * Provision a second user inside the *current* tenant by inviting them and
  * accepting the invitation programmatically. The token is read off the
  * invitation that was just created (tests run with E2E_MODE=true so emails
@@ -505,18 +528,7 @@ export async function provisionTenantMember(
     position_id: params.positionId,
   });
 
-  // The InvitationRead schema doesn't expose the token (a real client gets it
-  // by email). E2E_MODE=true unlocks a dev-only reveal endpoint.
-  const tokenResp = await opts.page.request.get(
-    `${API_BASE}/auth/dev/invitations/${inv.id}/token`,
-    { headers: { Authorization: `Bearer ${opts.accessToken}` } },
-  );
-  if (!tokenResp.ok()) {
-    throw new Error(
-      `dev_get_invitation_token failed (${tokenResp.status()}): ${await tokenResp.text()}`,
-    );
-  }
-  const { token } = await tokenResp.json();
+  const token = await revealInvitationToken(opts, inv.id);
 
   const accept = await opts.page.request.post(
     `${API_BASE}/auth/accept-invite`,

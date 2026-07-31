@@ -354,7 +354,9 @@ async def test_saved_calibration_keeps_submissions_locked(
         ],
     )
     assert detail["calibration_in_progress"] is False
-    # The detail payload tells the UI to keep Take/Evaluate hidden.
+    # HRP-329 REDO: the detail payload tells the UI to render Take /
+    # Evaluate disabled (with the "were calibrated" tooltip) rather than
+    # hiding them.
     assert detail["has_calibrated_totals"] is True
 
     with pytest.raises(Exception) as exc:
@@ -374,3 +376,57 @@ async def test_saved_calibration_keeps_submissions_locked(
     # Cancel wipes the overrides — the questionnaire opens back up.
     detail = await service.cancel_calibration(db, tenant.id, ctx["assessment_id"])
     assert detail["has_calibrated_totals"] is False
+
+
+@pytest.mark.asyncio
+async def test_calibration_flags_survive_the_response_model(
+    db, tenant, user, employee, assessment_statuses, assessment_types
+):
+    """HRP-329 REDO: `has_calibrated_totals` must reach the client.
+
+    The service always put the flag in the detail dict, but the field was
+    never declared on `AssessmentDetail`. FastAPI validates the handler
+    result against the response model and drops unknown keys, so the flag
+    was silently stripped and the UI never saw the lock. Validate the dict
+    exactly the way the framework does.
+    """
+    from app.modules.assessment.schemas import AssessmentDetail
+
+    ctx = await _setup_in_review(db, tenant, user, employee, scale_weight=2)
+
+    detail = await service.get_assessment_detail(
+        db, tenant.id, ctx["assessment_id"]
+    )
+    model = AssessmentDetail.model_validate(detail)
+    assert model.has_calibrated_totals is False
+    assert model.calibration_in_progress is False
+
+    # Calibration started, nothing saved yet -> "is calibrating" state.
+    await service.start_calibration(db, tenant.id, ctx["assessment_id"])
+    detail = await service.get_assessment_detail(
+        db, tenant.id, ctx["assessment_id"]
+    )
+    model = AssessmentDetail.model_validate(detail)
+    assert model.calibration_in_progress is True
+    assert model.has_calibrated_totals is False
+
+    # Calibration saved -> "were calibrated" state, lock stays on.
+    await service.save_calibration(
+        db,
+        tenant.id,
+        ctx["assessment_id"],
+        [
+            CalibratedTotalItem(
+                indicator_id=ctx["indicator_id"],
+                answer_option_id=_opt_by_weight(ctx["scale"], 5).id,
+            )
+        ],
+    )
+    detail = await service.get_assessment_detail(
+        db, tenant.id, ctx["assessment_id"]
+    )
+    model = AssessmentDetail.model_validate(detail)
+    assert model.calibration_in_progress is False
+    assert model.has_calibrated_totals is True
+    # Serialized payload really carries the key to the browser.
+    assert model.model_dump()["has_calibrated_totals"] is True

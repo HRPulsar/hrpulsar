@@ -302,14 +302,13 @@ async def get_consent_by_token(
         )
     ).scalar_one_or_none()
 
-    person = candidate.person if candidate else None
-    # i18n F7: no English "(unnamed)" on the wire — the public consent
-    # page localizes the empty-name fallback itself.
-    candidate_name = (
-        f"{(person.first_name or '').strip()} {(person.last_name or '').strip()}".strip()
-        if person
-        else ""
-    )
+    # HRP-384: resolve through the shared helper so the canonical
+    # ``Candidate.full_name`` wins. Reading ``person`` alone left
+    # resume-sourced candidates (``person_id`` NULL since HRP-181 REDO)
+    # nameless here even though the row carries their name.
+    # i18n F7: no English fallback on the wire — the public consent page
+    # localizes the empty-name case itself.
+    candidate_name = candidate_display_name(candidate, fallback="")
 
     return {
         "candidate_id": request.candidate_id,

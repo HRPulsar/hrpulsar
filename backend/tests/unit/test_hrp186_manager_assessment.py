@@ -129,6 +129,33 @@ async def _make_extra_user(db: AsyncSession, tenant):
     return u
 
 
+def _in_a_week():
+    from datetime import datetime, timedelta, timezone
+
+    return datetime.now(timezone.utc) + timedelta(days=7)
+
+
+async def _external_sheet(db: AsyncSession, tenant, cv, round_id, *, name: str):
+    """An invited (external) evaluator with their own sheet on a round."""
+    invite = AssessmentInvite(
+        tenant_id=tenant.id,
+        candidate_vacancy_id=cv.id,
+        token=uuid.uuid4().hex,
+        token_hash=uuid.uuid4().hex,
+        email=f"{uuid.uuid4().hex[:6]}@example.com",
+        evaluator_name=name,
+        status="pending",
+        expires_at=_in_a_week(),
+        round_id=round_id,
+    )
+    db.add(invite)
+    await db.commit()
+    await db.refresh(invite)
+    return await service.get_or_create_assessment(
+        db, tenant.id, round_id, evaluator_invite_id=invite.id
+    )
+
+
 def _scale_payload(name: str = "Standard") -> ScaleCreate:
     return ScaleCreate(
         name=name,
@@ -1388,3 +1415,451 @@ class TestScaleLocking:
                 ),
             )
         assert ei.value.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# HRP-378: overall <-> indicators stay mutually exclusive
+# ---------------------------------------------------------------------------
+
+
+async def _sheet_rows(db: AsyncSession, tenant, assessment_id, comp_id):
+    """Return ``(overall_row_or_None, indicator_rows)`` for one competence."""
+    sheet = await service.get_assessment(db, tenant.id, assessment_id)
+    overall = [
+        c
+        for c in sheet["competence_scores"]
+        if str(c["competence_id"]) == str(comp_id)
+    ]
+    indicators = [
+        i
+        for i in sheet["indicator_scores"]
+        if str(i["competence_id"]) == str(comp_id)
+    ]
+    return (overall[0] if overall else None), indicators
+
+
+class TestOverallIndicatorOverride:
+    async def _fixture(self, db, tenant, user):
+        vacancy = await _make_vacancy(db, tenant)
+        cv = await _make_candidate_vacancy(db, tenant, vacancy)
+        rd = await service.create_round(
+            db, tenant.id, user.id, cv.id, RoundCreate(type="interview")
+        )
+        a = await service.get_or_create_assessment(
+            db, tenant.id, uuid.UUID(str(rd["id"])), evaluator_user_id=user.id
+        )
+        return a
+
+    async def test_indicators_override_a_manual_overall(
+        self, db: AsyncSession, tenant, user
+    ):
+        """HRP-378 §7.2: scoring indicators re-derives the overall even when
+        the evaluator had already picked one by hand."""
+        a = await self._fixture(db, tenant, user)
+        comp_id = uuid.uuid4()
+        await service.set_competence_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            comp_id,
+            CompetenceScoreIn(score_value=1, score_source="manual"),
+        )
+        for value in (4, 4):
+            await service.set_indicator_score(
+                db,
+                tenant.id,
+                user.id,
+                a.id,
+                uuid.uuid4(),
+                IndicatorScoreIn(competence_id=comp_id, score_value=value),
+            )
+        overall, _ = await _sheet_rows(db, tenant, a.id, comp_id)
+        assert overall is not None
+        assert overall["score_value"] == 4
+        assert overall["score_source"] == "computed_from_indicators"
+
+    async def test_manual_overall_clears_indicator_answers(
+        self, db: AsyncSession, tenant, user
+    ):
+        """HRP-378 §7.4: editing the overall by hand drops the indicator
+        answers entirely — not to 'Not assessed', to nothing selected."""
+        a = await self._fixture(db, tenant, user)
+        comp_id = uuid.uuid4()
+        for value in (2, 4):
+            await service.set_indicator_score(
+                db,
+                tenant.id,
+                user.id,
+                a.id,
+                uuid.uuid4(),
+                IndicatorScoreIn(competence_id=comp_id, score_value=value),
+            )
+        overall, indicators = await _sheet_rows(db, tenant, a.id, comp_id)
+        assert overall["score_value"] == 3
+        assert len(indicators) == 2
+
+        await service.set_competence_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            comp_id,
+            CompetenceScoreIn(score_value=1, score_source="manual"),
+        )
+        overall, indicators = await _sheet_rows(db, tenant, a.id, comp_id)
+        assert overall["score_value"] == 1
+        assert overall["score_source"] == "manual"
+        assert indicators == []
+
+    async def test_other_competences_keep_their_indicators(
+        self, db: AsyncSession, tenant, user
+    ):
+        """The reset is scoped to the edited competence."""
+        a = await self._fixture(db, tenant, user)
+        comp_a, comp_b = uuid.uuid4(), uuid.uuid4()
+        for comp in (comp_a, comp_b):
+            await service.set_indicator_score(
+                db,
+                tenant.id,
+                user.id,
+                a.id,
+                uuid.uuid4(),
+                IndicatorScoreIn(competence_id=comp, score_value=3),
+            )
+        await service.set_competence_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            comp_a,
+            CompetenceScoreIn(score_value=1, score_source="manual"),
+        )
+        _, indicators_a = await _sheet_rows(db, tenant, a.id, comp_a)
+        _, indicators_b = await _sheet_rows(db, tenant, a.id, comp_b)
+        assert indicators_a == []
+        assert len(indicators_b) == 1
+
+    async def test_comment_only_save_keeps_indicator_answers(
+        self, db: AsyncSession, tenant, user
+    ):
+        """A comment-only PATCH sends no score fields, so it can never be
+        mistaken for a manual overall edit — whatever the client believes
+        the current score to be."""
+        a = await self._fixture(db, tenant, user)
+        comp_id = uuid.uuid4()
+        await service.set_indicator_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            uuid.uuid4(),
+            IndicatorScoreIn(competence_id=comp_id, score_value=3),
+        )
+        await service.set_competence_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            comp_id,
+            CompetenceScoreIn(comment="Solid answers"),
+        )
+        overall, indicators = await _sheet_rows(db, tenant, a.id, comp_id)
+        assert overall["comment"] == "Solid answers"
+        # The derived overall is untouched by a note.
+        assert overall["score_value"] == 3
+        assert overall["score_source"] == "computed_from_indicators"
+        assert len(indicators) == 1
+
+    async def test_comment_save_with_a_stale_client_score_is_harmless(
+        self, db: AsyncSession, tenant, user
+    ):
+        """Regression: a note typed while an indicator save is still in
+        flight used to arrive carrying the client's pre-indicator score and
+        `manual` source, which deleted every indicator answer. Score fields
+        the client did not send are now simply not written."""
+        a = await self._fixture(db, tenant, user)
+        comp_id = uuid.uuid4()
+        await service.set_indicator_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            uuid.uuid4(),
+            IndicatorScoreIn(competence_id=comp_id, score_value=4),
+        )
+        await service.set_competence_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            comp_id,
+            CompetenceScoreIn(comment="typed while saving"),
+        )
+        overall, indicators = await _sheet_rows(db, tenant, a.id, comp_id)
+        assert overall["score_value"] == 4
+        assert overall["score_source"] == "computed_from_indicators"
+        assert len(indicators) == 1
+
+    async def test_score_save_does_not_clear_an_existing_comment(
+        self, db: AsyncSession, tenant, user
+    ):
+        """The two fields are independent: a score PATCH omits the comment."""
+        a = await self._fixture(db, tenant, user)
+        comp_id = uuid.uuid4()
+        await service.set_competence_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            comp_id,
+            CompetenceScoreIn(comment="Keep me"),
+        )
+        await service.set_competence_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            comp_id,
+            CompetenceScoreIn(score_value=4, score_source="manual"),
+        )
+        overall, _ = await _sheet_rows(db, tenant, a.id, comp_id)
+        assert overall["score_value"] == 4
+        assert overall["comment"] == "Keep me"
+
+    async def test_repeating_the_same_manual_score_is_not_a_reset(
+        self, db: AsyncSession, tenant, user
+    ):
+        """Re-picking the level already stored manually changes nothing, so
+        there is no indicator answer to discard."""
+        a = await self._fixture(db, tenant, user)
+        comp_id = uuid.uuid4()
+        await service.set_competence_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            comp_id,
+            CompetenceScoreIn(score_value=2, score_source="manual"),
+        )
+        await service.set_indicator_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            uuid.uuid4(),
+            IndicatorScoreIn(competence_id=comp_id, score_value=2),
+        )
+        # The indicators have since re-derived the overall to the same 2.
+        overall, _ = await _sheet_rows(db, tenant, a.id, comp_id)
+        assert overall["score_source"] == "computed_from_indicators"
+        # Re-sending that identical derived state is a no-op.
+        await service.set_competence_score(
+            db,
+            tenant.id,
+            user.id,
+            a.id,
+            comp_id,
+            CompetenceScoreIn(
+                score_value=2, score_source="computed_from_indicators"
+            ),
+        )
+        _, indicators = await _sheet_rows(db, tenant, a.id, comp_id)
+        assert len(indicators) == 1
+
+
+# ---------------------------------------------------------------------------
+# HRP-374: round Average score + per-competence divergence
+# ---------------------------------------------------------------------------
+
+
+class TestRoundAverageScore:
+    async def _round(self, db, tenant, user):
+        vacancy = await _make_vacancy(db, tenant)
+        cv = await _make_candidate_vacancy(db, tenant, vacancy)
+        scale = await service.create_scale(db, tenant.id, user.id, _scale_payload())
+        await service.set_vacancy_scale(
+            db, tenant.id, user.id, vacancy.id, uuid.UUID(str(scale["id"]))
+        )
+        rd = await service.create_round(
+            db, tenant.id, user.id, cv.id, RoundCreate(type="interview")
+        )
+        return cv, uuid.UUID(str(rd["id"]))
+
+    async def test_average_is_none_until_something_is_scored(
+        self, db: AsyncSession, tenant, user
+    ):
+        """HRP-374 §1: the header shows an em dash, not 0."""
+        _, rd_id = await self._round(db, tenant, user)
+        await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=user.id
+        )
+        agg = await service.round_aggregate(db, tenant.id, rd_id)
+        assert agg["average"] is None
+        assert agg["average_weight"] is None
+        assert agg["competences"] == []
+
+    async def test_average_appears_with_one_competence_from_one_evaluator(
+        self, db: AsyncSession, tenant, user
+    ):
+        _, rd_id = await self._round(db, tenant, user)
+        a = await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=user.id
+        )
+        await service.set_competence_score(
+            db, tenant.id, user.id, a.id, uuid.uuid4(), CompetenceScoreIn(score_value=3)
+        )
+        agg = await service.round_aggregate(db, tenant.id, rd_id)
+        assert agg["average"] == 3.0
+        # Level 3 carries weight 66 on the seeded scale.
+        assert agg["average_weight"] == 66.0
+
+    async def test_average_spans_all_evaluators_and_competences(
+        self, db: AsyncSession, tenant, user
+    ):
+        _, rd_id = await self._round(db, tenant, user)
+        other = await _make_extra_user(db, tenant)
+        comp = uuid.uuid4()
+        a1 = await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=user.id
+        )
+        a2 = await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=other.id
+        )
+        await service.set_competence_score(
+            db, tenant.id, user.id, a1.id, comp, CompetenceScoreIn(score_value=2)
+        )
+        await service.set_competence_score(
+            db, tenant.id, other.id, a2.id, comp, CompetenceScoreIn(score_value=4)
+        )
+        agg = await service.round_aggregate(db, tenant.id, rd_id)
+        assert agg["average"] == 3.0
+        assert len(agg["competences"]) == 1
+        assert agg["competences"][0]["average"] == 3.0
+
+    async def test_unsubmitted_external_sheet_is_not_counted(
+        self, db: AsyncSession, tenant, user
+    ):
+        """HRP-374 §3: an external evaluator only counts once submitted;
+        an internal draft counts immediately."""
+        cv, rd_id = await self._round(db, tenant, user)
+        comp = uuid.uuid4()
+        internal = await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=user.id
+        )
+        await service.set_competence_score(
+            db, tenant.id, user.id, internal.id, comp, CompetenceScoreIn(score_value=4)
+        )
+        external = await _external_sheet(
+            db, tenant, cv, rd_id, name="Ivan Petrov"
+        )
+        await service.set_competence_score(
+            db, tenant.id, None, external.id, comp, CompetenceScoreIn(score_value=2)
+        )
+
+        draft_avg = await service.round_aggregate(db, tenant.id, rd_id)
+        assert draft_avg["average"] == 4.0, "external draft must not move the average"
+
+        await service.submit_assessment(db, tenant.id, None, external.id)
+        submitted_avg = await service.round_aggregate(db, tenant.id, rd_id)
+        assert submitted_avg["average"] == 3.0
+
+    async def test_divergence_flags_and_names_both_evaluator_kinds(
+        self, db: AsyncSession, tenant, user
+    ):
+        """HRP-374 §2/§3: a spread >= the scale threshold marks the
+        competence and the tooltip data names internal + external alike."""
+        cv, rd_id = await self._round(db, tenant, user)
+        comp = uuid.uuid4()
+        internal = await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=user.id
+        )
+        await service.set_competence_score(
+            db, tenant.id, user.id, internal.id, comp, CompetenceScoreIn(score_value=4)
+        )
+        external = await _external_sheet(
+            db, tenant, cv, rd_id, name="Ivan Petrov"
+        )
+        await service.set_competence_score(
+            db, tenant.id, None, external.id, comp, CompetenceScoreIn(score_value=2)
+        )
+        await service.submit_assessment(db, tenant.id, None, external.id)
+
+        agg = await service.round_aggregate(db, tenant.id, rd_id)
+        assert agg["divergence_threshold"] == 2
+        row = agg["competences"][0]
+        assert row["diverges"] is True
+        assert row["min"] == 2 and row["max"] == 4
+        kinds = {s["evaluator_type"] for s in row["scorers"]}
+        assert kinds == {"internal", "external"}
+        names = {s["evaluator"] for s in row["scorers"]}
+        assert "Ivan Petrov" in names
+
+    async def test_single_evaluator_never_diverges(
+        self, db: AsyncSession, tenant, user
+    ):
+        _, rd_id = await self._round(db, tenant, user)
+        a = await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=user.id
+        )
+        await service.set_competence_score(
+            db, tenant.id, user.id, a.id, uuid.uuid4(), CompetenceScoreIn(score_value=4)
+        )
+        agg = await service.round_aggregate(db, tenant.id, rd_id)
+        assert agg["competences"][0]["diverges"] is False
+
+    async def test_spread_below_threshold_is_not_divergent(
+        self, db: AsyncSession, tenant, user
+    ):
+        _, rd_id = await self._round(db, tenant, user)
+        other = await _make_extra_user(db, tenant)
+        comp = uuid.uuid4()
+        a1 = await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=user.id
+        )
+        a2 = await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=other.id
+        )
+        await service.set_competence_score(
+            db, tenant.id, user.id, a1.id, comp, CompetenceScoreIn(score_value=3)
+        )
+        await service.set_competence_score(
+            db, tenant.id, other.id, a2.id, comp, CompetenceScoreIn(score_value=4)
+        )
+        agg = await service.round_aggregate(db, tenant.id, rd_id)
+        assert agg["competences"][0]["diverges"] is False
+
+    async def test_threshold_follows_the_scale_setting(
+        self, db: AsyncSession, tenant, user
+    ):
+        """The N in 'differ by >= N levels' is the scale's own setting."""
+        vacancy = await _make_vacancy(db, tenant)
+        cv = await _make_candidate_vacancy(db, tenant, vacancy)
+        payload = _scale_payload("Strict")
+        payload.divergence_threshold = 3
+        scale = await service.create_scale(db, tenant.id, user.id, payload)
+        await service.set_vacancy_scale(
+            db, tenant.id, user.id, vacancy.id, uuid.UUID(str(scale["id"]))
+        )
+        rd = await service.create_round(
+            db, tenant.id, user.id, cv.id, RoundCreate(type="interview")
+        )
+        rd_id = uuid.UUID(str(rd["id"]))
+        other = await _make_extra_user(db, tenant)
+        comp = uuid.uuid4()
+        a1 = await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=user.id
+        )
+        a2 = await service.get_or_create_assessment(
+            db, tenant.id, rd_id, evaluator_user_id=other.id
+        )
+        await service.set_competence_score(
+            db, tenant.id, user.id, a1.id, comp, CompetenceScoreIn(score_value=2)
+        )
+        await service.set_competence_score(
+            db, tenant.id, other.id, a2.id, comp, CompetenceScoreIn(score_value=4)
+        )
+        agg = await service.round_aggregate(db, tenant.id, rd_id)
+        assert agg["divergence_threshold"] == 3
+        # Spread of 2 no longer clears the raised bar.
+        assert agg["competences"][0]["diverges"] is False

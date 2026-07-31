@@ -10,6 +10,7 @@ import {
   applyDivisionFilters,
   deriveGradeOptions,
   derivePositionOptions,
+  deriveSpecializationOptions,
   hasActiveDivisionFilters,
   matchesDivisionFilters,
   type DivisionEmployeeForFilter,
@@ -162,6 +163,93 @@ describe("derive option helpers", () => {
     expect(deriveGradeOptions(employees)).toEqual([
       { id: "g-sr", title: "Senior" },
     ]);
+  });
+
+  // HRP-58 REDO: the specialization dropdown is fed by the division's
+  // specialization catalogue, so that every clickable tile — including a
+  // tile with no employees — resolves to a label on the select trigger.
+  it("derives specialization options from the division catalogue", () => {
+    expect(
+      deriveSpecializationOptions([
+        { specialization_id: "spec-z", specialization_title: "Zeta" },
+        { specialization_id: "spec-a", specialization_title: "Alpha" },
+      ]),
+    ).toEqual([
+      { id: "spec-a", title: "Alpha" },
+      { id: "spec-z", title: "Zeta" },
+    ]);
+  });
+
+  it("keeps specializations that have no employees", () => {
+    const options = deriveSpecializationOptions([
+      { specialization_id: "spec-empty", specialization_title: "Empty" },
+    ]);
+    expect(options).toEqual([{ id: "spec-empty", title: "Empty" }]);
+    // The tile writes this id into the filters; the option list must be
+    // able to resolve it back to a title.
+    expect(options.find((o) => o.id === "spec-empty")?.title).toBe("Empty");
+  });
+
+  // An employee's specialization comes from their position, so it need not
+  // be mapped to the division. Such a row is visible in the table and must
+  // stay reachable by the filter.
+  it("includes a specialization held only by an employee", () => {
+    const options = deriveSpecializationOptions(
+      [{ specialization_id: "spec-mapped", specialization_title: "Mapped" }],
+      [
+        makeEmployee({
+          specialization_id: "spec-unmapped",
+          specialization_title: "Unmapped",
+        }),
+      ],
+    );
+    expect(options).toEqual([
+      { id: "spec-mapped", title: "Mapped" },
+      { id: "spec-unmapped", title: "Unmapped" },
+    ]);
+  });
+
+  it("prefers the catalogue title when both sources have the id", () => {
+    expect(
+      deriveSpecializationOptions(
+        [{ specialization_id: "spec-a", specialization_title: "Curated" }],
+        [
+          makeEmployee({
+            specialization_id: "spec-a",
+            specialization_title: "Stale",
+          }),
+        ],
+      ),
+    ).toEqual([{ id: "spec-a", title: "Curated" }]);
+  });
+
+  it("de-duplicates a specialization shared by many employees", () => {
+    expect(
+      deriveSpecializationOptions(
+        [],
+        [
+          makeEmployee({ id: "a", specialization_id: "s1", specialization_title: "S1" }),
+          makeEmployee({ id: "b", specialization_id: "s1", specialization_title: "S1" }),
+        ],
+      ),
+    ).toEqual([{ id: "s1", title: "S1" }]);
+  });
+
+  it("falls back to a dash for an untitled specialization", () => {
+    expect(
+      deriveSpecializationOptions([
+        { specialization_id: "spec-x", specialization_title: null },
+      ]),
+    ).toEqual([{ id: "spec-x", title: "—" }]);
+  });
+
+  it("de-duplicates repeated specialization rows", () => {
+    expect(
+      deriveSpecializationOptions([
+        { specialization_id: "spec-a", specialization_title: "Alpha" },
+        { specialization_id: "spec-a", specialization_title: "Alpha" },
+      ]),
+    ).toEqual([{ id: "spec-a", title: "Alpha" }]);
   });
 });
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { DeepLinkInviteOpener } from "@/components/settings/deep-link-invite-opener";
 import { useTranslations } from "next-intl";
 import { api, ApiError } from "@/lib/api";
 import { invitationsApi } from "@/lib/api/invitations";
@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PositionCombobox } from "@/components/position-combobox";
+import { RequireRole } from "@/components/require-role";
 import { Label } from "@/components/ui/label";
 import {
   Card,
@@ -75,17 +76,19 @@ function allowedInviteRoles(userRoles: string[]): Set<string> {
   return allowed;
 }
 
-function DeepLinkInviteOpener({ onOpen }: { onOpen: () => void }) {
-  const searchParams = useSearchParams();
-  useEffect(() => {
-    if (searchParams.get("open") === "invite") {
-      onOpen();
-    }
-  }, [searchParams, onOpen]);
-  return null;
+
+// HRP-436: Invitations is an Admin-section page — managers and employees get a
+// toast + redirect instead of the (empty, 403-backed) list. Guarding the whole
+// component, not just its JSX, keeps the forbidden fetches from firing at all.
+export default function InvitationsPage() {
+  return (
+    <RequireRole admin>
+      <InvitationsPageContent />
+    </RequireRole>
+  );
 }
 
-export default function InvitationsPage() {
+function InvitationsPageContent() {
   const t = useTranslations("settings");
   const tc = useTranslations("common");
   const { user } = useAuth();

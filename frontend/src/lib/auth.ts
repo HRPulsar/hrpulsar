@@ -107,6 +107,20 @@ export async function register(data: {
   return api.post<PendingVerificationResponse>("/auth/register", data);
 }
 
+export interface InvitationPreview {
+  email: string;
+  name: string;
+}
+
+/** Token-scoped invitation preview used to pre-fill the accept form (HRP-435). */
+export async function fetchInvitationPreview(
+  token: string,
+): Promise<InvitationPreview> {
+  return api.get<InvitationPreview>(
+    `/auth/invitations/${encodeURIComponent(token)}`,
+  );
+}
+
 export async function acceptInvitation(data: {
   token: string;
   password: string;

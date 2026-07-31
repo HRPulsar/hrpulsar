@@ -111,6 +111,12 @@ class TestUpdateInvitation:
     async def test_manager_updates_position_and_division(
         self, db: AsyncSession, user, tenant, admin_role, position, division
     ):
+        """Service-layer field RBAC only — kept as defence in depth.
+
+        Since HRP-436 the router refuses a manager before this runs (see
+        ``test_invitation_access.py``), so this asserts the inner tier, not a
+        reachable capability.
+        """
         inv = await _create_pending(db, tenant, user)
         result = await service.update_invitation(
             db,

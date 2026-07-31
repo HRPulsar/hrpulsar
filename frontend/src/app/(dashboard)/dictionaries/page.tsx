@@ -71,7 +71,17 @@ const DICT_TYPES = [
 
 const emptyForm = { title: "", description: "", sort_index: 0, is_active: true };
 
+// HRP-436: guard the whole component, not just its JSX, so the page's
+// effects never fire for someone who is about to be redirected.
 export default function DictionariesPage() {
+  return (
+    <RequireRole admin>
+      <DictionariesPageContent />
+    </RequireRole>
+  );
+}
+
+function DictionariesPageContent() {
   const t = useTranslations("dictionaries");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
@@ -209,7 +219,6 @@ export default function DictionariesPage() {
   const filteredCount = filteredItems.length;
 
   return (
-    <RequireRole manage>
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
@@ -494,6 +503,5 @@ export default function DictionariesPage() {
         loading={saving}
       />
     </div>
-    </RequireRole>
   );
 }

@@ -693,3 +693,366 @@ class TestAutoProcess:
         # Auto-processing was a per-upload decision; the replacement
         # upload makes its own.
         assert result["auto_process"] is False
+
+
+class TestTranscriptUploadKind:
+    """HRP-385 case 2: pdf/txt transcripts could never be uploaded.
+
+    ``InitUploadRequest.kind`` allowed audio/video only, so both frontend
+    surfaces sent ``kind="audio"`` for a transcript; the MIME/kind
+    cross-check then rejected it with 422 and the interview was left
+    sitting in ``scheduled``.
+    """
+
+    async def test_init_accepts_transcript_kind(self, db, tenant, user, monkeypatch):
+        from app.core import s3 as s3_module
+
+        monkeypatch.setattr(s3_module, "init_multipart_upload", lambda *_a, **_k: "u-t")
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+
+        result = await service.init_interview_upload(
+            db,
+            tenant.id,
+            interview.id,
+            InitUploadRequest(
+                filename="transcript.pdf",
+                mime_type="application/pdf",
+                size_bytes=4096,
+                kind="text_transcript",
+            ),
+            user_id=user.id,
+        )
+        assert result["upload_id"] == "u-t"
+
+        session_row = (
+            await db.execute(
+                select(UploadSession).where(UploadSession.id == result["session_id"])
+            )
+        ).scalar_one()
+        assert session_row.kind == "text_transcript"
+
+        await db.refresh(interview)
+        assert interview.status == "uploading"
+
+    async def test_init_rejects_transcript_kind_for_media_mime(
+        self, db, tenant, user, monkeypatch
+    ):
+        """The new kind is cross-checked like audio and video are."""
+        from app.core import s3 as s3_module
+
+        monkeypatch.setattr(s3_module, "init_multipart_upload", lambda *_a, **_k: "u-t")
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+
+        with pytest.raises(HTTPException) as exc:
+            await service.init_interview_upload(
+                db,
+                tenant.id,
+                interview.id,
+                InitUploadRequest(
+                    filename="rec.mp3",
+                    mime_type="audio/mpeg",
+                    size_bytes=4096,
+                    kind="text_transcript",
+                ),
+                user_id=user.id,
+            )
+        assert exc.value.status_code == 422
+
+    async def test_complete_attaches_transcript_and_sets_type(
+        self, db, tenant, user
+    ):
+        from unittest.mock import MagicMock, patch
+
+        from app.modules.recruitment.schemas import CompleteUploadRequest
+
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+
+        with (
+            patch("app.core.s3.complete_multipart_upload", return_value="s3://loc"),
+            patch("app.core.s3.head_object", return_value={"ContentLength": 512}),
+            patch(
+                "app.modules.recruitment.tasks.scan_interview_media_task"
+            ) as scan_task,
+        ):
+            scan_task.delay = MagicMock()
+            result = await interview_service.complete_interview_upload(
+                db,
+                tenant.id,
+                user.id,
+                interview.id,
+                CompleteUploadRequest(upload_id="up-t", parts=[]),
+                filename="transcript.pdf",
+                mime_type="application/pdf",
+                kind="text_transcript",
+            )
+
+        assert result["status"] == "uploaded"
+        assert result["type"] == "text_transcript"
+        assert result["transcript_file_id"] is not None
+        assert result["audio_file_id"] is None
+        assert result["video_file_id"] is None
+        # Nothing to transcribe — the ASR chain must stay off.
+        assert result["auto_process"] is False
+
+    async def test_uploaded_transcript_text_is_extracted_and_analysable(
+        self, db, tenant, user
+    ):
+        """HRP-385: attaching the file is not enough.
+
+        Without extraction the interview lands with
+        ``transcription_status="pending"`` and no transcript, so
+        "Transcribe" refuses it (audio/video only) and "Analyze" refuses
+        it (needs a finished transcription) — the upload would be a dead
+        end one click later.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from app.modules.recruitment.schemas import CompleteUploadRequest
+
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+
+        body = b"Interviewer: Tell me about yourself.\nCandidate: I ship backends.\n"
+
+        with (
+            patch("app.core.s3.complete_multipart_upload", return_value="s3://loc"),
+            patch("app.core.s3.head_object", return_value={"ContentLength": len(body)}),
+            patch("app.core.s3.download_bytes", return_value=body),
+            patch(
+                "app.modules.recruitment.tasks.scan_interview_media_task"
+            ) as scan_task,
+        ):
+            scan_task.delay = MagicMock()
+            result = await interview_service.complete_interview_upload(
+                db,
+                tenant.id,
+                user.id,
+                interview.id,
+                CompleteUploadRequest(upload_id="up-txt", parts=[]),
+                filename="transcript.txt",
+                mime_type="text/plain",
+                kind="text_transcript",
+            )
+
+        assert result["status"] == "uploaded"
+        assert result["type"] == "text_transcript"
+        assert result["transcript_file_id"] is not None
+        assert result["transcription_status"] == "completed"
+        # A real file was uploaded, so the AV scan still has to run —
+        # unlike the paste path, which has nothing to scan.
+        assert result["av_status"] == "pending"
+        assert "I ship backends" in (result["transcript"] or "")
+        # Speaker prefixes become segments, same as the paste path.
+        assert len(result["segments"]) == 2
+
+    async def test_unextractable_transcript_still_uploads(self, db, tenant, user):
+        """A scanned/image-only PDF must not fail the finished upload."""
+        from unittest.mock import MagicMock, patch
+
+        from app.modules.recruitment.schemas import CompleteUploadRequest
+
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+
+        with (
+            patch("app.core.s3.complete_multipart_upload", return_value="s3://loc"),
+            patch("app.core.s3.head_object", return_value={"ContentLength": 10}),
+            patch(
+                "app.core.s3.download_bytes",
+                side_effect=RuntimeError("unreadable"),
+            ),
+            patch(
+                "app.modules.recruitment.tasks.scan_interview_media_task"
+            ) as scan_task,
+        ):
+            scan_task.delay = MagicMock()
+            result = await interview_service.complete_interview_upload(
+                db,
+                tenant.id,
+                user.id,
+                interview.id,
+                CompleteUploadRequest(upload_id="up-bad", parts=[]),
+                filename="scan.pdf",
+                mime_type="application/pdf",
+                kind="text_transcript",
+            )
+
+        assert result["status"] == "uploaded"
+        assert result["transcript_file_id"] is not None
+
+
+class TestUploadSwitchesInterviewType:
+    """HRP-405: the uploaded file's kind becomes ``interview.type``.
+
+    The frontend asks for confirmation first (see
+    ``requiresTypeSwitchConfirm``); these pin the server side of that
+    contract for every case in the ticket.
+    """
+
+    async def _complete_with_kind(self, db, tenant, user, interview, kind, mime):
+        from unittest.mock import MagicMock, patch
+
+        from app.modules.recruitment.schemas import CompleteUploadRequest
+
+        with (
+            patch("app.core.s3.complete_multipart_upload", return_value="s3://loc"),
+            patch("app.core.s3.head_object", return_value={"ContentLength": 512}),
+            patch(
+                "app.modules.recruitment.media_duration.probe_s3_audio_duration",
+                return_value=12.0,
+            ),
+            patch(
+                "app.modules.recruitment.tasks.scan_interview_media_task"
+            ) as scan_task,
+        ):
+            scan_task.delay = MagicMock()
+            return await interview_service.complete_interview_upload(
+                db,
+                tenant.id,
+                user.id,
+                interview.id,
+                CompleteUploadRequest(upload_id="up-1", parts=[]),
+                filename=f"file.{kind}",
+                mime_type=mime,
+                kind=kind,
+            )
+
+    @pytest.mark.parametrize(
+        ("declared", "uploaded", "mime"),
+        [
+            # Case 1 — audio / transcript interview receiving video.
+            ("audio", "video", "video/mp4"),
+            ("text_transcript", "video", "video/webm"),
+            # Case 2 — video / transcript interview receiving audio.
+            ("video", "audio", "audio/mpeg"),
+            ("text_transcript", "audio", "audio/wav"),
+            # Case 3 — video / audio interview receiving a transcript.
+            ("video", "text_transcript", "application/pdf"),
+            ("audio", "text_transcript", "text/plain"),
+            # Case 4 — "I'll decide later" adopts the uploaded kind.
+            ("undecided", "video", "video/mp4"),
+            ("undecided", "audio", "audio/mpeg"),
+            ("undecided", "text_transcript", "application/pdf"),
+        ],
+    )
+    async def test_type_follows_uploaded_file(
+        self, db, tenant, user, declared, uploaded, mime
+    ):
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+        interview.type = declared
+        await db.commit()
+
+        result = await self._complete_with_kind(
+            db, tenant, user, interview, uploaded, mime
+        )
+        assert result["type"] == uploaded
+        assert result["status"] == "uploaded"
+
+    async def test_complete_rejects_kind_the_session_was_not_opened_for(
+        self, db, tenant, user, monkeypatch
+    ):
+        """HRP-385: init and complete each carry ``kind`` independently.
+
+        Finalising an audio upload (500 MB ceiling) as a transcript would
+        otherwise park an oversize blob in ``transcript_file_id``, past the
+        10 MB transcript cap promised at init.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from app.core import s3 as s3_module
+        from app.modules.recruitment.schemas import CompleteUploadRequest
+
+        monkeypatch.setattr(s3_module, "init_multipart_upload", lambda *_a, **_k: "u-x")
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+
+        await service.init_interview_upload(
+            db,
+            tenant.id,
+            interview.id,
+            InitUploadRequest(
+                filename="rec.mp3",
+                mime_type="audio/mpeg",
+                size_bytes=1024,
+                kind="audio",
+            ),
+            user_id=user.id,
+        )
+
+        with (
+            patch("app.core.s3.complete_multipart_upload", return_value="s3://loc"),
+            patch(
+                "app.core.s3.head_object",
+                return_value={"ContentLength": 400 * 1024 * 1024},
+            ),
+            patch(
+                "app.modules.recruitment.tasks.scan_interview_media_task"
+            ) as scan_task,
+        ):
+            scan_task.delay = MagicMock()
+            with pytest.raises(HTTPException) as exc:
+                await interview_service.complete_interview_upload(
+                    db,
+                    tenant.id,
+                    user.id,
+                    interview.id,
+                    CompleteUploadRequest(upload_id="u-x", parts=[]),
+                    filename="transcript.pdf",
+                    mime_type="application/pdf",
+                    kind="text_transcript",
+                )
+        assert exc.value.status_code == 409
+
+    async def test_complete_rejects_object_above_the_kind_ceiling(
+        self, db, tenant, user, monkeypatch
+    ):
+        """S3 does not enforce the ceiling promised at init — re-check it."""
+        from unittest.mock import MagicMock, patch
+
+        from app.core import s3 as s3_module
+        from app.modules.recruitment.schemas import CompleteUploadRequest
+
+        monkeypatch.setattr(s3_module, "init_multipart_upload", lambda *_a, **_k: "u-y")
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+
+        await service.init_interview_upload(
+            db,
+            tenant.id,
+            interview.id,
+            InitUploadRequest(
+                filename="transcript.pdf",
+                mime_type="application/pdf",
+                size_bytes=1024,
+                kind="text_transcript",
+            ),
+            user_id=user.id,
+        )
+
+        with (
+            patch("app.core.s3.complete_multipart_upload", return_value="s3://loc"),
+            patch(
+                "app.core.s3.head_object",
+                return_value={"ContentLength": 40 * 1024 * 1024},
+            ),
+            patch(
+                "app.modules.recruitment.tasks.scan_interview_media_task"
+            ) as scan_task,
+        ):
+            scan_task.delay = MagicMock()
+            with pytest.raises(HTTPException) as exc:
+                await interview_service.complete_interview_upload(
+                    db,
+                    tenant.id,
+                    user.id,
+                    interview.id,
+                    CompleteUploadRequest(upload_id="u-y", parts=[]),
+                    filename="transcript.pdf",
+                    mime_type="application/pdf",
+                    kind="text_transcript",
+                )
+        assert exc.value.status_code == 413

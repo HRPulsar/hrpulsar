@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import rbac_hooks
 from app.core.errors import AppError
 from app.core.security import decode_token
 from app.database import get_db
@@ -68,6 +69,29 @@ def require_role(*role_codes: str) -> Callable:
         return current_user
 
     return role_checker
+
+
+def require_admin() -> Callable:
+    """Guard for tenant-admin-only endpoints (HRP-436).
+
+    Resolves the allowed codes through ``rbac_hooks`` at request time, so the
+    enterprise edition can widen "admin" to its platform-level role without
+    core naming it.
+
+    Currently used by the invitation registry only. The other admin surfaces
+    (dictionaries, AI settings, data import, grade system) still spell
+    ``require_role("admin")`` literally, so in the enterprise edition a
+    platform-level role reaches invitations but not those — converting them is
+    a separate change, not something this dependency has already done.
+    """
+
+    async def admin_checker(current_user: User = Depends(get_current_user)) -> User:
+        user_roles = {r.code for r in current_user.roles}
+        if not user_roles.intersection(rbac_hooks.admin_equivalent_codes()):
+            raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
+        return current_user
+
+    return admin_checker
 
 
 def require_permission(*codenames: str) -> Callable:

@@ -189,7 +189,9 @@ Reference data shared across the platform: specializations, grades, skill levels
 
 - Workspace-defined assessment scales (2–10 weighted levels); each vacancy freezes its scale on the first score
 - Assessment rounds per candidate (pre-interview, numbered interviews, final) with a separate sheet per evaluator
-- Indicator-level and competence-level scoring with autosave and a completion marker; evaluator disagreement above the scale threshold is highlighted
+- Indicator-level and competence-level scoring with autosave and a completion marker. Scoring a competence's indicators derives its overall score; setting the overall by hand instead clears the indicator answers, so the two never contradict each other
+- The round header carries the round's average score — the mean across every evaluator and competence, alongside its position on the scale's weights — and shows an em dash until the first score lands
+- Each competence shows its own cross-evaluator average, highlighted with a warning and a breakdown tooltip when evaluators differ by the scale's divergence threshold or more. External evaluators count toward these averages once they submit
 - External evaluators join through secure token links with expiry, no account needed. The public evaluation page shows the resume and question list next to the scoring sheet and keeps the platform itself closed off
 - Recruiters track invite status (pending, opened, in progress, submitted, expired) with resend, extend, and revoke actions
 
@@ -198,6 +200,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Schedule interviews with type, timezone, duration, and interviewers directly from the candidate page
 - Upload audio (mp3, wav, m4a) and video (mp4, webm, mov, avi) up to 500 MB, or text transcripts up to 10 MB, several files at once
 - Uploads are chunked and resumable: pause, resume, retry, and continue after a browser reload
+- The interview's recording type follows the file that is uploaded; when it contradicts the type chosen at scheduling, the recruiter is asked to confirm the switch first
 - Consent capture with magic-link signing runs before any upload
 - Transcription through pluggable providers, including Whisper and Deepgram with speaker separation; an in-app player covers audio and video with speed control and keyboard shortcuts
 - The analysis pipeline reports data completeness, competence scores, blind spots, process findings, red flags, and a verdict
@@ -270,7 +273,7 @@ What to evaluate is chosen in a dedicated panel, on single and mass assessments 
 - Scores aggregate per role: indicator answers average within a role, roll up to skill levels using indicator weights, then to a per-competence percent, and the final score is the mean across roles. "Don't know" answers never count
 - Each competence shows a percent, a resolved level from the scale, and a per-level breakdown
 - The overall score is the mean of per-competence percents and appears next to the results once the assessment completes
-- Reviewers can calibrate: override per-question totals while the assessment is locked for participants. Calibrated values are marked, survive recomputes, and can be reverted in one step
+- Reviewers can calibrate: override per-question totals while the assessment is locked for participants. Calibrated values are marked, survive recomputes, and can be reverted in one step. While the lock is on, participants still see their Take / Evaluate actions, greyed out with a tooltip explaining that the questionnaire is closed
 - A detailed results view for reviewers shows per-role answers and comments for every indicator
 - Employees see their own results when the assessment is done; peers and subordinates never see results of assessments they only participated in
 
@@ -432,6 +435,8 @@ Per-workspace configuration that applies to every AI call.
 
 - Three built-in roles: **Admin** (full access), **Manager** (team assessments, plans, and data), **Employee** (own profile and assigned tasks)
 - The same scope rules apply across every list in the product: admins see the workspace, managers see their subtree, employees see their own records
+- The Admin area (dictionaries, invitations, data import, AI settings) is reserved for admins: the whole sidebar group is hidden for everyone else, and opening one of its links directly shows an error and returns the user to the dashboard
+- Every action in the Admin area is admin-only on the API too, so a hidden section is never merely hidden (reference data stays readable across the product, as the rest of the app depends on it)
 
 ### Multi-Tenancy
 
@@ -507,8 +512,9 @@ A first-login wizard for newly registered organizations.
 - Invite colleagues by email with a pre-assigned role, division, and position; accepting creates the user account and the employee card in one step
 - Invitation links expire after 7 days; an inviter can never grant a role above their own
 - Bulk invite up to 100 people at once
-- A management page tracks all invitations with status filters (pending, accepted, cancelled, expired), resend and cancel actions, and inline editing of pending invites
+- A management page tracks all invitations with status filters (pending, accepted, cancelled, expired), resend and cancel actions, and inline editing of pending invites; the page and the registry API behind it are admin-only
 - Changing the email on a pending invite issues a fresh link, resets the expiry, and disables the old link
+- The accept page introduces itself from the invitation: the invited address is shown read-only and the name entered by the inviter is split into first and last name, both still editable
 
 ---
 

@@ -5,6 +5,8 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/auth-context";
 import {
+  clearIndicatorsFor,
+  upsertCompetenceComment,
   CompetenceScoreList,
   findCompetenceComment,
   replaceCompetenceRow,
@@ -12,6 +14,7 @@ import {
   toProfileCompetences,
   upsertCompetence,
   upsertIndicator,
+  type CompetenceAggregate,
   type CompetenceScore,
   type IndicatorScore,
   type ProfileCompetence,
@@ -71,6 +74,25 @@ interface VacancyOption {
   id: string;
   vacancy_id: string;
   vacancy_title: string | null;
+}
+
+// HRP-374: cross-evaluator roll-up for the active round — the round header
+// average plus one entry per scored competence.
+interface RoundAggregate {
+  average: number | null;
+  average_weight: number | null;
+  divergence_threshold: number;
+  competences: {
+    competence_id: string;
+    average: number;
+    average_weight: number | null;
+    diverges: boolean;
+    scorers: {
+      evaluator: string;
+      evaluator_type: "internal" | "external";
+      score: number;
+    }[];
+  }[];
 }
 
 // HRP-358: raw invite statuses are machine-codes; the recruiter-facing
@@ -149,6 +171,7 @@ export function ManagerAssessmentSection({
     ProfileCompetence[]
   >([]);
   const [invites, setInvites] = useState<InviteDto[]>([]);
+  const [aggregate, setAggregate] = useState<RoundAggregate | null>(null);
   // HRP-186 REDO: spec §3 — `+ New round` must surface a confirm dialog
   // ("Add new interview round? This will create Interview {N+1}.") so a
   // recruiter cannot accidentally insert a 4th round during a hectic
@@ -289,12 +312,51 @@ export function ManagerAssessmentSection({
     [user],
   );
 
+  // Mirror of activeRoundId readable from inside async callbacks, so a late
+  // response for a round the user already tabbed away from can be dropped.
+  const activeRoundIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeRoundIdRef.current = activeRoundId;
+  }, [activeRoundId]);
+
+  // HRP-374: the round header average spans every evaluator, so it can only
+  // come from the server — a local sheet knows nothing about colleagues or
+  // submitted external evaluators.
+  const loadAggregate = useCallback(async (roundId: string) => {
+    let agg: RoundAggregate | null = null;
+    try {
+      agg = await api.get<RoundAggregate>(
+        `/v1/assessment-rounds/${roundId}/aggregate`,
+      );
+    } catch {
+      agg = null;
+    }
+    if (activeRoundIdRef.current === roundId) setAggregate(agg);
+  }, []);
+
   useEffect(() => {
     if (!activeRoundId) return;
     void ensureSheet(activeRoundId);
+    // Competence ids are stable across rounds, so a leftover aggregate would
+    // render the previous round's averages against this round's sheet for a
+    // full round-trip.
+    setAggregate(null);
+    void loadAggregate(activeRoundId);
     const round = rounds.find((r) => r.id === activeRoundId);
     setInvites(round?.invites ?? []);
-  }, [activeRoundId, rounds, ensureSheet]);
+  }, [activeRoundId, rounds, ensureSheet, loadAggregate]);
+
+  const aggregatesByCompetence = useMemo(() => {
+    const out: Record<string, CompetenceAggregate> = {};
+    for (const c of aggregate?.competences ?? []) {
+      out[c.competence_id] = {
+        average: c.average,
+        diverges: c.diverges,
+        scorers: c.scorers,
+      };
+    }
+    return out;
+  }, [aggregate]);
 
   async function createRound(type: RoundType) {
     if (!activeCvId) return;
@@ -357,12 +419,24 @@ export function ManagerAssessmentSection({
     );
   }
 
-  async function setCompetenceScore(
-    competenceId: string,
-    value: number | null,
-    comment?: string,
-  ) {
+  /** Cancel this competence's still-pending indicator saves (HRP-378). */
+  function dropPendingIndicatorSaves(competenceId: string) {
+    for (const key of [...debounceTimers.current.keys()]) {
+      if (!key.startsWith(`ind:${competenceId}:`)) continue;
+      clearTimeout(debounceTimers.current.get(key)!);
+      debounceTimers.current.delete(key);
+      pendingSaves.current = Math.max(0, pendingSaves.current - 1);
+    }
+  }
+
+  async function setCompetenceScore(competenceId: string, value: number | null) {
     if (!sheet) return;
+    const { id: sheetId, round_id: roundId } = sheet;
+    // HRP-378: picking an overall by hand makes it authoritative, so the
+    // competence's indicator answers are dropped here and on the server.
+    // Indicator saves still in flight would re-derive the overall and
+    // resurrect those answers on screen, so cancel them first.
+    dropPendingIndicatorSaves(competenceId);
     setSheet((prev) =>
       prev
         ? {
@@ -370,19 +444,46 @@ export function ManagerAssessmentSection({
             competence_scores: upsertCompetence(prev.competence_scores, {
               competence_id: competenceId,
               score_value: value,
-              comment: comment ?? findCompetenceComment(prev, competenceId),
+              comment: findCompetenceComment(prev, competenceId),
             }),
+            indicator_scores: clearIndicatorsFor(
+              prev.indicator_scores,
+              competenceId,
+            ),
           }
         : prev,
     );
+    // Score and comment hold separate debounce slots and each PATCH carries
+    // only its own field, so neither can overwrite the other with a value it
+    // captured before the other edit landed.
     scheduleAutosave(`comp:${competenceId}`, async () => {
       await api.patch<CompetenceScore>(
-        `/v1/assessments/${sheet.id}/competence-scores/${competenceId}`,
-        {
-          score_value: value,
-          score_source: "manual",
-          comment: comment ?? findCompetenceComment(sheet, competenceId),
-        },
+        `/v1/assessments/${sheetId}/competence-scores/${competenceId}`,
+        { score_value: value, score_source: "manual" },
+      );
+      await loadAggregate(roundId);
+    });
+  }
+
+  async function setCompetenceComment(competenceId: string, comment: string) {
+    if (!sheet) return;
+    const sheetId = sheet.id;
+    setSheet((prev) =>
+      prev
+        ? {
+            ...prev,
+            competence_scores: upsertCompetenceComment(
+              prev.competence_scores,
+              competenceId,
+              comment,
+            ),
+          }
+        : prev,
+    );
+    scheduleAutosave(`note:${competenceId}`, async () => {
+      await api.patch<CompetenceScore>(
+        `/v1/assessments/${sheetId}/competence-scores/${competenceId}`,
+        { comment },
       );
     });
   }
@@ -405,7 +506,9 @@ export function ManagerAssessmentSection({
           }
         : prev,
     );
-    scheduleAutosave(`ind:${indicatorId}`, async () => {
+    // Key carries the competence so a manual overall can cancel exactly this
+    // competence's pending indicator saves (HRP-378).
+    scheduleAutosave(`ind:${competenceId}:${indicatorId}`, async () => {
       await api.patch<IndicatorScore>(
         `/v1/assessments/${sheet.id}/indicator-scores/${indicatorId}`,
         {
@@ -436,17 +539,27 @@ export function ManagerAssessmentSection({
         const overallPending = debounceTimers.current.has(
           `comp:${competenceId}`,
         );
+        // This save owns the score, never the note: a comment being typed
+        // right now is not in the row we just fetched, and echoing that row
+        // back verbatim would blank the textarea under the evaluator.
+        const merged =
+          freshOverall &&
+          ({
+            ...freshOverall,
+            comment: findCompetenceComment(prev, competenceId) || null,
+          } as CompetenceScore);
         return {
           ...prev,
           indicator_scores: freshInd
             ? replaceIndicatorRow(prev.indicator_scores, freshInd)
             : prev.indicator_scores,
           competence_scores:
-            freshOverall && !overallPending
-              ? replaceCompetenceRow(prev.competence_scores, freshOverall)
+            merged && !overallPending
+              ? replaceCompetenceRow(prev.competence_scores, merged)
               : prev.competence_scores,
         };
       });
+      await loadAggregate(sheet.round_id);
     });
   }
 
@@ -602,6 +715,30 @@ export function ManagerAssessmentSection({
                       }}
                     />
                   </div>
+                  {/* HRP-374: the round's Average score — the same mean the
+                      vacancy Candidates block shows, em dash until at least
+                      one competence is scored by at least one evaluator. */}
+                  <span
+                    className="flex items-baseline gap-1"
+                    data-testid="assessment-round-average-score"
+                  >
+                    {t("managerAssessmentAverageScore", {
+                      score:
+                        aggregate?.average != null
+                          ? aggregate.average.toFixed(1)
+                          : "—",
+                    })}
+                    {aggregate?.average_weight != null && (
+                      <span
+                        className="text-[10px] text-muted-foreground"
+                        data-testid="assessment-round-average-weight"
+                      >
+                        {t("managerAssessmentAverageWeight", {
+                          percent: aggregate.average_weight.toFixed(0),
+                        })}
+                      </span>
+                    )}
+                  </span>
                   {/* Disabled buttons swallow hover (pointer-events:none),
                       so the explainer tooltip lives on the wrapper span. */}
                   <span title={completeHint}>
@@ -622,8 +759,12 @@ export function ManagerAssessmentSection({
                   competenceScores={sheet.competence_scores}
                   indicatorScores={sheet.indicator_scores}
                   emptyHint={t("managerAssessmentEmptyHint")}
-                  onCompetenceScore={(compId, value, comment) =>
-                    void setCompetenceScore(compId, value, comment)
+                  aggregates={aggregatesByCompetence}
+                  onCompetenceScore={(compId, value) =>
+                    void setCompetenceScore(compId, value)
+                  }
+                  onCompetenceComment={(compId, comment) =>
+                    void setCompetenceComment(compId, comment)
                   }
                   onIndicatorScore={(compId, indId, value) =>
                     void setIndicatorScore(compId, indId, value)

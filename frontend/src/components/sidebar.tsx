@@ -10,6 +10,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useAuth } from "@/context/auth-context";
 import { useEENavItems } from "@/lib/ee-hooks";
 import { getBrandName, getLogoUrl, getSidebarLogoHeight } from "@/lib/brand";
+import { resolveRoleLabel } from "@/lib/user-role-label";
 import { AppVersion } from "@/components/app-version";
 import { SidebarTenantSwitcher } from "@/components/tenant-switcher";
 
@@ -139,7 +140,7 @@ const navigation: NavItem[] = [
     id: "dictionaries",
     labelKey: "dictionaries",
     href: "/dictionaries",
-    requireManage: true,
+    requireAdmin: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
@@ -161,7 +162,7 @@ const navigation: NavItem[] = [
     id: "invitations",
     labelKey: "invitations",
     href: "/settings/invitations",
-    requireManage: true,
+    requireAdmin: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
@@ -182,13 +183,10 @@ const navigation: NavItem[] = [
   },
 ];
 
-const SYSTEM_ROLE_KEYS: Record<string, string> = {
-  admin: "roleAdmin",
-  hr: "roleHr",
-  manager: "roleManager",
-  employee: "roleEmployee",
-};
-
+// HRP-436: every item of the Admin section is admin-only, so the whole group
+// collapses for managers and employees (the render loop drops empty sections).
+// Keep new Admin entries `requireAdmin` and guard their pages with
+// `<RequireRole admin>` so a direct link is denied too.
 const sections: NavSection[] = [
   { labelKey: "sectionWorkspace", items: ["dashboard", "employees", "company"] },
   { labelKey: "sectionTalent", items: ["assessments", "development", "exams", "competences"] },
@@ -234,11 +232,11 @@ export function Sidebar() {
     ? `${user.first_name[0] ?? ""}${user.last_name[0] ?? ""}`.toUpperCase()
     : "?";
   const userName = user ? `${user.first_name} ${user.last_name}`.trim() : "";
-  // System RBAC codes localize via the catalog; tenant-created custom
-  // roles have no stable key and render their code prettified verbatim.
-  const roleCode = user && user.roles.length > 0 ? user.roles[0] : "";
-  const roleKey = SYSTEM_ROLE_KEYS[roleCode];
-  const userRole = roleKey ? t(roleKey) : roleCode.replace(/_/g, " ");
+  // HRP-196: `roles` is unordered, so the strongest role wins rather than
+  // whichever code the database happened to return first — a freshly
+  // promoted manager holds both `employee` and `manager`. An empty list
+  // degrades to the `employee` baseline so the line is never blank.
+  const userRole = user ? resolveRoleLabel(user.roles, t) : "";
 
   return (
     <aside className="flex h-full w-[232px] flex-col border-r border-sidebar-border bg-sidebar">

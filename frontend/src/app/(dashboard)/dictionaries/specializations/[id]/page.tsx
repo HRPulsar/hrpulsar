@@ -22,7 +22,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+// HRP-436: guard the whole component, not just its JSX, so the page's
+// effects never fire for someone who is about to be redirected.
 export default function SpecializationDetailPage() {
+  return (
+    <RequireRole admin>
+      <SpecializationDetailPageContent />
+    </RequireRole>
+  );
+}
+
+function SpecializationDetailPageContent() {
   const t = useTranslations("dictionaries");
   const { id } = useParams<{ id: string }>();
   const [specialization, setSpecialization] = useState<DictionaryItem | null>(null);
@@ -81,7 +91,6 @@ export default function SpecializationDetailPage() {
   }
 
   return (
-    <RequireRole manage>
       <div className="space-y-6">
         <div className="flex items-center gap-3">
           <Button
@@ -194,6 +203,5 @@ export default function SpecializationDetailPage() {
           </CardContent>
         </Card>
       </div>
-    </RequireRole>
   );
 }

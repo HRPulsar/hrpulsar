@@ -752,11 +752,16 @@ export default function ExamDetailPage() {
             {exam.description ? (
               <span data-testid="exam-description">{exam.description}</span>
             ) : (
-              canEditMeta && (
-                <span className="italic" data-testid="exam-description-empty">
-                  {t("noDescriptionYet")}
-                </span>
-              )
+              // HRP-231 REDO: terminal exams (Completed / Cancelled) render a
+              // plain "No description" line — same as a closed Talent Market
+              // card — instead of leaving the block empty. Editable exams keep
+              // the italic "No description yet" hint next to the pencil.
+              <span
+                className={canEditMeta ? "italic" : undefined}
+                data-testid="exam-description-empty"
+              >
+                {canEditMeta ? t("noDescriptionYet") : t("noDescription")}
+              </span>
             )}
             {canEditMeta && (
               <button

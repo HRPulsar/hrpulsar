@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.16.1] - 2026-07-31
+
+### Added
+- Manager assessments: the interview round header now shows the round's Average score (with its scale weight), and every competence shows its cross-evaluator average, highlighted with a warning when evaluators differ by the scale's divergence threshold or more (HRP-374)
+- Uploading a file whose kind contradicts the interview's scheduled recording type now asks for confirmation before switching the type; interviews left as "I'll decide later" adopt the uploaded kind silently (HRP-405)
+
+### Changed
+- Manager assessments: scoring a competence's indicators now always re-derives its overall, and editing the overall by hand clears the indicator answers, so the two can no longer contradict each other; the "from indicators" chip is gone (HRP-378)
+- Manager assessments: external evaluators' scores count toward round averages once they submit, instead of while their sheet is still a draft (HRP-374)
+
+### Fixed
+- German locale native-style proofread: 74 wording, grammar, and terminology fixes across UI catalogs, backend errors/emails, and notification templates (HRP-518)
+- Manager assessments: picking a score no longer scrolls the candidate page away to a blank area (HRP-370)
+- Interview transcripts (pdf, txt) can be uploaded again: the upload contract rejected the `text_transcript` kind, so every transcript failed validation and its interview stayed in `scheduled` (HRP-385)
+- An uploaded pdf/txt transcript now has its text extracted into the interview, so it can be analysed like a pasted one instead of attaching as an unusable file (HRP-385)
+- A failed interview upload that never reached storage now explains itself instead of surfacing the browser's raw "Failed to fetch" (HRP-385)
+- Finalising an interview upload is pinned to the file type it was started for, so the transcript size ceiling cannot be sidestepped (HRP-385)
+- Consent-link email addresses resume-sourced candidates by name instead of "(unnamed)"; the public consent page and the questions PDF resolve the candidate name the same way (HRP-384)
+- Accept-invitation page pre-fills First and Last name by splitting the name from the invitation, and shows the invited email read-only instead of letting the browser autofill it into Last name (HRP-435)
+- Admin sidebar section (Dictionaries, Invitations) is now admin-only: managers no longer see the group, and managers and employees opening a direct link get an error toast and a redirect to the dashboard instead of an empty page; the invitation registry API is admin-only to match (HRP-436)
+- Division detail: the Employees block regained its Specialization filter, so specialization, position and grade can be combined (HRP-58)
+- The Send invitation dialog opened from a division can now be closed; it no longer reopens itself on close or reload (HRP-174)
+- The sidebar now shows the strongest role a user holds, and a manager downgraded to Employee keeps the Employee role instead of ending up with none (HRP-196)
+- Assessments locked by a calibration now show Take this assessment and Evaluate greyed out with an explanatory tooltip instead of hiding them (HRP-329)
+- Completed and cancelled exams without a description now show "No description" instead of an empty line (HRP-231)
+
 ## [1.16.0] - 2026-07-31
 
 ### Added

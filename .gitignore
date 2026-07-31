@@ -72,6 +72,7 @@ frontend/test-results/
 frontend/playwright-report/
 test-results/
 playwright-report/
+.playwright-mcp/
 status/web/.next/
 status/web/out/
 *.tsbuildinfo

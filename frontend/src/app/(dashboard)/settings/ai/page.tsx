@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
+import { RequireRole } from "@/components/require-role";
 import { useIsSaas } from "@/hooks/use-is-saas";
-import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
 import {
   aiSettingsApi,
@@ -64,23 +64,22 @@ const PRESET_DESCRIPTION_KEY: Record<Exclude<EffortLevel, "custom">, string> = {
   thorough: "aiPresetThoroughDescription",
 };
 
-function NotAvailable({ message }: { message: string }) {
-  const t = useTranslations("settings");
-  return (
-    <div className="mx-auto max-w-3xl py-12 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight">{t("aiTitle")}</h1>
-      <p className="mt-3 text-sm text-muted-foreground">{message}</p>
-    </div>
-  );
-}
-
 function formatMultiplier(value: number): string {
   return `×${value % 1 === 0 ? value.toFixed(1) : value.toString()}`;
 }
 
+// HRP-436: every Admin-section page denies access the same way — an error
+// toast plus a redirect to the dashboard — instead of an inline panel.
 export default function AISettingsPage() {
+  return (
+    <RequireRole admin>
+      <AISettingsPageContent />
+    </RequireRole>
+  );
+}
+
+function AISettingsPageContent() {
   const t = useTranslations("settings");
-  const { isAdmin } = usePermissions();
   const isSaas = useIsSaas();
   const [settings, setSettings] = useState<AISettings | null>(null);
   const [presets, setPresets] = useState<EffortPreset[]>([]);
@@ -94,10 +93,7 @@ export default function AISettingsPage() {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
 
   useEffect(() => {
-    if (!isAdmin) {
-      setLoading(false);
-      return;
-    }
+    // RequireRole above guarantees an admin, so no in-effect role check.
     Promise.all([
       aiSettingsApi.get(),
       aiSettingsApi.presets(),
@@ -128,7 +124,7 @@ export default function AISettingsPage() {
         );
       })
       .finally(() => setLoading(false));
-  }, [isAdmin, isSaas, t]);
+  }, [isSaas, t]);
 
   const baseForm = useMemo(
     () => (settings ? settingsToForm(settings) : null),
@@ -182,9 +178,6 @@ export default function AISettingsPage() {
     return entry?.credit_multiplier ?? 1.0;
   }, [form, models, presets, providerFilter]);
 
-  if (!isAdmin) {
-    return <NotAvailable message={t("aiAdminOnly")} />;
-  }
   if (loading || !settings || !form) {
     return (
       <div className="mx-auto max-w-3xl py-12 text-center text-sm text-muted-foreground">

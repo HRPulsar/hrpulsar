@@ -150,6 +150,12 @@ class AssessmentList(BaseModel):
 
 
 class AssessmentDetail(AssessmentRead):
+    # HRP-329: derived from the presence of calibrated totals — the
+    # questionnaire stays closed once a calibration was saved. The service
+    # has always put this in the detail dict, but without the field
+    # declared here the response model silently dropped it, so the client
+    # never saw the lock. No column, no migration: it is computed per read.
+    has_calibrated_totals: bool = False
     participants: list[ParticipantRead] = []
     competence_ids: list[uuid.UUID] = []
     competences: list[AssessmentCompetenceRead] = []

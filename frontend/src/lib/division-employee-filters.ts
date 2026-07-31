@@ -1,7 +1,10 @@
 // HRP-58: derived filter options + AND-matcher for the Division detail
 // Employees block. Three filters (specialization / position / grade) all
-// combine via AND. Option lists are derived from the loaded employees
-// of the division so the dropdowns never show stale catalog items.
+// combine via AND. Position and Grade options are derived from the loaded
+// employees of the division so the dropdowns never show stale catalog
+// items; Specialization additionally unions in the division's mapped
+// specializations, because the tiles render that catalogue (see
+// `deriveSpecializationOptions`).
 
 export interface DivisionEmployeeForFilter {
   id: string;
@@ -11,6 +14,12 @@ export interface DivisionEmployeeForFilter {
   position_title?: string | null;
   grade_id?: string | null;
   grade_title?: string | null;
+}
+
+/** One row of the division's specialization catalogue (the tiles). */
+export interface DivisionSpecializationForFilter {
+  specialization_id: string;
+  specialization_title?: string | null;
 }
 
 export interface DivisionEmployeeFilters {
@@ -38,8 +47,8 @@ export type FilterDropdownOption = {
  */
 function deriveOptions(
   employees: DivisionEmployeeForFilter[],
-  idKey: "position_id" | "grade_id" | "specialization_id",
-  titleKey: "position_title" | "grade_title" | "specialization_title",
+  idKey: "position_id" | "grade_id",
+  titleKey: "position_title" | "grade_title",
 ): FilterDropdownOption[] {
   const map = new Map<string, string>();
   for (const e of employees) {
@@ -67,10 +76,41 @@ export function deriveGradeOptions(
   return deriveOptions(employees, "grade_id", "grade_title");
 }
 
+/**
+ * Specialization options are the UNION of two sources, because neither
+ * alone is complete:
+ *
+ *  - the division's specialization catalogue (what the clickable tiles
+ *    render). A tile must always resolve to an option, including one with
+ *    zero employees — otherwise clicking it would leave the select
+ *    trigger showing "All specializations" while the filter is active.
+ *  - the specializations actually present on the loaded employees. An
+ *    employee's specialization comes from their *position*, not from the
+ *    division mapping, so someone can hold a specialization the division
+ *    was never mapped to. Catalogue-only options would make those rows
+ *    unreachable by this filter while Position and Grade still list them.
+ *
+ * The catalogue title wins on collision — it is the curated one.
+ */
 export function deriveSpecializationOptions(
-  employees: DivisionEmployeeForFilter[],
+  specializations: DivisionSpecializationForFilter[],
+  employees: DivisionEmployeeForFilter[] = [],
 ): FilterDropdownOption[] {
-  return deriveOptions(employees, "specialization_id", "specialization_title");
+  const map = new Map<string, string>();
+  for (const e of employees) {
+    if (!e.specialization_id) continue;
+    if (!map.has(e.specialization_id)) {
+      map.set(e.specialization_id, e.specialization_title || "—");
+    }
+  }
+  // Catalogue second so its title overwrites the employee-derived one.
+  for (const s of specializations) {
+    if (!s.specialization_id) continue;
+    map.set(s.specialization_id, s.specialization_title || "—");
+  }
+  return Array.from(map, ([id, title]) => ({ id, title })).sort((a, b) =>
+    a.title.localeCompare(b.title),
+  );
 }
 
 /** Combined AND matcher — all active filters must match. */

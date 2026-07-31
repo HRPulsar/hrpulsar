@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useAuth } from "@/context/auth-context";
 import { toast } from "sonner";
 
 interface RequireRoleProps {
@@ -16,19 +17,26 @@ interface RequireRoleProps {
 
 export function RequireRole({ children, manage, admin }: RequireRoleProps) {
   const { canManage, isAdmin } = usePermissions();
+  const { user, loading } = useAuth();
   const router = useRouter();
   const t = useTranslations("common");
 
+  // Only judge a user we actually have. `loading` can go false with `user`
+  // still null — an aborted /auth/me leaves exactly that state — and reading
+  // "no roles" as "not permitted" would bounce an entitled admin off the page.
+  const undecided = loading || !user;
   const allowed = admin ? isAdmin : manage ? canManage : true;
 
   useEffect(() => {
-    if (!allowed) {
-      toast.error(t("noPermissionPage"));
+    if (!undecided && !allowed) {
+      // Stable id: a remount (or React's double-invoked effects in dev) would
+      // otherwise stack a second identical toast.
+      toast.error(t("noPermissionPage"), { id: "require-role-denied" });
       router.replace("/dashboard");
     }
-  }, [allowed, router, t]);
+  }, [undecided, allowed, router, t]);
 
-  if (!allowed) return null;
+  if (undecided || !allowed) return null;
 
   return <>{children}</>;
 }

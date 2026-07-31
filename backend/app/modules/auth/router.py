@@ -23,7 +23,11 @@ from app.core.errors import AppError
 from app.core.security import decode_token
 from app.database import get_db
 from app.modules.auth import service
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import (
+    get_current_user,
+    require_admin,
+    require_role,
+)
 from app.modules.auth.models import User
 from app.modules.auth.schemas import (
     AcceptInvitationRequest,
@@ -33,6 +37,7 @@ from app.modules.auth.schemas import (
     InvitationCreate,
     InvitationEmailUpdate,
     InvitationList,
+    InvitationPreview,
     InvitationRead,
     InvitationUpdate,
     LoginRequest,
@@ -437,6 +442,12 @@ async def delete_role(
 
 
 # --- Invitations (GF3) ---
+#
+# HRP-436: the invitation registry (list/update/cancel/resend) is an admin
+# surface — it backs the Admin sidebar section, which managers and employees no
+# longer see. Creating an invitation stays on the inviter hierarchy
+# (``_INVITE_ALLOWED``), so a manager may still invite an employee it owns
+# without being able to read or manage the tenant-wide registry.
 
 
 @router.post("/invitations", response_model=InvitationRead, status_code=201)
@@ -484,7 +495,7 @@ async def list_invitations(
     limit: int = Query(50, ge=1, le=100),
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_admin()),
 ):
     items, total = await service.list_invitations(
         db, current_user.tenant_id, skip, limit, status
@@ -497,9 +508,7 @@ async def update_invitation(
     invitation_id: uuid.UUID,
     data: InvitationUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "hr", "platform_admin", "manager")
-    ),
+    current_user: User = Depends(require_admin()),
 ):
     role_codes = [r.code for r in current_user.roles]
     return await service.update_invitation(
@@ -518,7 +527,7 @@ async def update_invitation_email(
     invitation_id: uuid.UUID,
     data: InvitationEmailUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "platform_admin")),
+    current_user: User = Depends(require_admin()),
 ):
     return await service.update_invitation_email(
         db, current_user.tenant_id, invitation_id, data, changed_by_id=current_user.id
@@ -529,7 +538,7 @@ async def update_invitation_email(
 async def cancel_invitation(
     invitation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_admin()),
 ):
     return await service.cancel_invitation(db, current_user.tenant_id, invitation_id)
 
@@ -540,9 +549,25 @@ async def resend_invitation(
     request: Request,
     invitation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_admin()),
 ):
     return await service.resend_invitation(db, current_user.tenant_id, invitation_id)
+
+
+@router.get("/auth/invitations/{token}", response_model=InvitationPreview)
+@auth_limiter.limit(settings.auth_rate_limit_login)
+async def get_invitation_preview(
+    request: Request,
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public, token-scoped invitation preview backing the accept form (HRP-435).
+
+    Rate-limited per source IP like the rest of the unauthenticated auth
+    surface — the token is the only secret standing between a caller and an
+    invitee's name and email.
+    """
+    return await service.get_invitation_preview(db, token)
 
 
 @router.post("/auth/accept-invite", response_model=VerifyEmailResponse)

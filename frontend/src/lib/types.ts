@@ -1217,6 +1217,24 @@ export interface CreditHistoryList {
   total: number;
 }
 
+// Public price list — GET /billing/costs + GET /billing/config
+
+export interface CreditCostAction {
+  action: string;
+  name: string;
+  cost: number;
+}
+
+export interface CreditCostCategory {
+  category: string;
+  actions: CreditCostAction[];
+}
+
+export interface BillingConfig {
+  category_labels: Record<string, string>;
+  free_credits_monthly: number;
+}
+
 // Billing Analytics
 
 export interface SpendingByCategory {

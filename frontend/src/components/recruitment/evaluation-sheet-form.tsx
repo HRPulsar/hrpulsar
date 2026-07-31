@@ -7,8 +7,8 @@
 // must stay visually identical, so the JSX lives here once.
 
 import { useTranslations } from "next-intl";
+import { AlertTriangle } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import {
   competenceScoreId,
   indicatorScoreId,
@@ -118,6 +118,38 @@ export function upsertCompetence(
   return next;
 }
 
+/** HRP-378: update only the note, leaving the score and its source alone. */
+export function upsertCompetenceComment(
+  scores: CompetenceScore[],
+  competenceId: string,
+  comment: string,
+): CompetenceScore[] {
+  const idx = scores.findIndex((c) => c.competence_id === competenceId);
+  if (idx === -1) {
+    return [
+      ...scores,
+      {
+        id: `tmp-${competenceId}`,
+        competence_id: competenceId,
+        score_value: null,
+        comment,
+        score_source: "manual",
+      },
+    ];
+  }
+  const next = [...scores];
+  next[idx] = { ...next[idx]!, comment };
+  return next;
+}
+
+/** HRP-378: a manual overall drops the competence's indicator answers. */
+export function clearIndicatorsFor(
+  rows: IndicatorScore[],
+  competenceId: string,
+): IndicatorScore[] {
+  return rows.filter((r) => r.competence_id !== competenceId);
+}
+
 export function replaceCompetenceRow(
   rows: CompetenceScore[],
   fresh: CompetenceScore,
@@ -171,6 +203,37 @@ export function findCompetenceComment(
   );
 }
 
+/** HRP-374: "Evaluators disagree: Internal A P: 4, External Ivan Petrov: 2".
+ *
+ * Each entry is rendered through its own ICU message so the evaluator name
+ * and the score stay translator-visible arguments rather than glued-together
+ * substrings. */
+function divergenceTooltip(
+  t: (key: string, values?: Record<string, string | number>) => string,
+  aggregate: CompetenceAggregate,
+): string {
+  const entries = aggregate.scorers.map((s) =>
+    t(
+      s.evaluator_type === "external"
+        ? "evalSheetDivergenceEntryExternal"
+        : "evalSheetDivergenceEntryInternal",
+      { name: s.evaluator, score: s.score },
+    ),
+  );
+  return t("evalSheetDivergenceTooltip", { entries: entries.join(", ") });
+}
+
+/** HRP-374: one competence's cross-evaluator roll-up for the round. */
+export interface CompetenceAggregate {
+  average: number;
+  diverges: boolean;
+  scorers: {
+    evaluator: string;
+    evaluator_type: "internal" | "external";
+    score: number;
+  }[];
+}
+
 interface CompetenceScoreListProps {
   competences: ProfileCompetence[];
   scaleLevels: ScaleLevel[];
@@ -178,11 +241,12 @@ interface CompetenceScoreListProps {
   indicatorScores: IndicatorScore[];
   disabled?: boolean;
   emptyHint: string;
-  onCompetenceScore: (
-    competenceId: string,
-    value: number | null,
-    comment?: string,
-  ) => void;
+  /** HRP-374: per-competence round averages, keyed by competence id. Only
+   * the internal sheet passes these — an invited external evaluator must
+   * not see what the rest of the panel scored. */
+  aggregates?: Record<string, CompetenceAggregate>;
+  onCompetenceScore: (competenceId: string, value: number | null) => void;
+  onCompetenceComment: (competenceId: string, comment: string) => void;
   onIndicatorScore: (
     competenceId: string,
     indicatorId: string,
@@ -197,7 +261,9 @@ export function CompetenceScoreList({
   indicatorScores,
   disabled = false,
   emptyHint,
+  aggregates,
   onCompetenceScore,
+  onCompetenceComment,
   onIndicatorScore,
 }: CompetenceScoreListProps) {
   const t = useTranslations("recruitment");
@@ -210,10 +276,15 @@ export function CompetenceScoreList({
         const score = competenceScores.find(
           (s) => s.competence_id === comp.id,
         );
+        const aggregate = aggregates?.[comp.id];
         return (
           <details
             key={comp.id}
-            className="rounded-md border bg-muted/20 p-3"
+            className={`rounded-md border p-3 ${
+              aggregate?.diverges
+                ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30"
+                : "bg-muted/20"
+            }`}
             data-testid={`assessment-competence-card-${comp.id}`}
           >
             <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-medium">
@@ -228,14 +299,29 @@ export function CompetenceScoreList({
                   </span>
                 )}
               </span>
-              {score?.score_source === "computed_from_indicators" && (
-                <Badge
-                  variant="outline"
-                  className="ml-2 text-[10px]"
-                  data-testid={`assessment-competence-overall-computed-badge-${comp.id}`}
-                >
-                  {t("evalSheetFromIndicators")}
-                </Badge>
+              {aggregate && (
+                <span className="flex items-center gap-1 text-[11px] font-normal text-muted-foreground">
+                  {aggregate.diverges && (
+                    <AlertTriangle
+                      role="img"
+                      aria-label={t("evalSheetDivergenceAria")}
+                      className="size-3.5 text-amber-600"
+                      data-testid={`assessment-competence-divergence-icon-${comp.id}`}
+                    />
+                  )}
+                  <span
+                    data-testid={`assessment-competence-round-average-${comp.id}`}
+                    title={
+                      aggregate.diverges
+                        ? divergenceTooltip(t, aggregate)
+                        : undefined
+                    }
+                  >
+                    {t("evalSheetRoundAverage", {
+                      score: aggregate.average.toFixed(1),
+                    })}
+                  </span>
+                </span>
               )}
             </summary>
             <div className="mt-2 space-y-2">
@@ -248,7 +334,9 @@ export function CompetenceScoreList({
                 {scaleLevels.map((lvl) => (
                   <label
                     key={lvl.value}
-                    className={`rounded-md border px-2 py-1 text-xs ${
+                    // HRP-370: `relative` is load-bearing — see the note on
+                    // the indicator radio below.
+                    className={`relative rounded-md border px-2 py-1 text-xs ${
                       score?.score_value === lvl.value
                         ? "border-emerald-500 bg-emerald-50"
                         : "bg-background"
@@ -261,13 +349,7 @@ export function CompetenceScoreList({
                       className="sr-only"
                       disabled={disabled}
                       checked={score?.score_value === lvl.value}
-                      onChange={() =>
-                        onCompetenceScore(
-                          comp.id,
-                          lvl.value,
-                          score?.comment ?? undefined,
-                        )
-                      }
+                      onChange={() => onCompetenceScore(comp.id, lvl.value)}
                       data-testid={`assessment-competence-overall-radio-${comp.id}-${lvl.value}`}
                     />
                     {lvl.value} — {lvl.label}
@@ -306,7 +388,19 @@ export function CompetenceScoreList({
                           {scaleLevels.map((lvl) => (
                             <label
                               key={lvl.value}
-                              className={`rounded-md border px-2 py-0.5 text-[11px] ${
+                              // HRP-370: `relative` is load-bearing. The radio
+                              // below is `sr-only`, i.e. `position:absolute`.
+                              // Without a positioned ancestor its containing
+                              // block is the document, so inside the dashboard's
+                              // `main.overflow-auto` the label scrolls
+                              // internally while the 1x1 input stays behind —
+                              // they drift apart by `main.scrollTop`. Clicking
+                              // focuses the input and the browser scrolls the
+                              // window to reach it, throwing the whole app
+                              // shell off-screen (the reported white screen).
+                              // The public sheet has no nested scroller, which
+                              // is why only the internal one was affected.
+                              className={`relative rounded-md border px-2 py-0.5 text-[11px] ${
                                 iScore?.score_value === lvl.value
                                   ? "border-emerald-500 bg-emerald-50"
                                   : "bg-background"
@@ -351,13 +445,7 @@ export function CompetenceScoreList({
               <textarea
                 value={score?.comment ?? ""}
                 readOnly={disabled}
-                onChange={(e) =>
-                  onCompetenceScore(
-                    comp.id,
-                    score?.score_value ?? null,
-                    e.target.value,
-                  )
-                }
+                onChange={(e) => onCompetenceComment(comp.id, e.target.value)}
                 placeholder={t("evalSheetCommentPlaceholder")}
                 className="w-full rounded-md border bg-background p-2 text-xs"
                 rows={2}

@@ -283,6 +283,7 @@ export default function InterviewDetailPage() {
                 <InterviewUploadZone
                   interviewId={interview.id}
                   consentSigned={!!interview.consent_signed_at}
+                  interviewType={interview.type}
                   onUploaded={(updated) => {
                     setInterview(updated);
                     void refresh();

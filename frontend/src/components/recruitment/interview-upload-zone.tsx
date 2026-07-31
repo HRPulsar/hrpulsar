@@ -15,16 +15,24 @@ import { api, ApiError, API_BASE } from "@/lib/api";
 import type {
   InitUploadResponse,
   Interview,
+  InterviewType,
   PartUrlResponse,
 } from "@/lib/types";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { toast } from "sonner";
 
 interface InterviewUploadZoneProps {
   interviewId: string;
   consentSigned: boolean;
+  // HRP-405: the interview's declared recording type. When the dropped
+  // file is of a different kind we ask before switching the type
+  // ("undecided" is adopted silently — nothing to overwrite).
+  interviewType?: InterviewType | null;
   onUploaded?: (interview: Interview) => void;
   onConsentMissing?: () => void;
 }
+
+type UploadKind = "audio" | "video" | "text_transcript";
 
 import {
   MEDIA_MAX_BYTES,
@@ -34,6 +42,7 @@ import {
   detectKind,
   effectiveMime,
   putChunk,
+  requiresTypeSwitchConfirm,
 } from "@/lib/interview-upload";
 
 interface ChunkResult {
@@ -60,10 +69,12 @@ function storageKey(interviewId: string): string {
 export function InterviewUploadZone({
   interviewId,
   consentSigned,
+  interviewType,
   onUploaded,
   onConsentMissing,
 }: InterviewUploadZoneProps) {
   const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -74,6 +85,25 @@ export function InterviewUploadZone({
   const [paused, setPaused] = useState(false);
   const [resumable, setResumable] = useState<PersistedSession | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // HRP-405: file whose kind contradicts the interview's declared type,
+  // parked until the recruiter confirms the type switch.
+  const [pendingKindSwitch, setPendingKindSwitch] = useState<{
+    file: File;
+    kind: UploadKind;
+  } | null>(null);
+  // Literal t() calls (not dynamic keys) keep next-intl's key typing and
+  // the catalog-parity guard honest.
+  const kindSwitchTitle: Record<UploadKind, string> = {
+    audio: t("interviewUploadTypeSwitchAudio"),
+    video: t("interviewUploadTypeSwitchVideo"),
+    text_transcript: t("interviewUploadTypeSwitchTranscript"),
+  };
+  const interviewTypeLabel: Record<InterviewType, string> = {
+    audio: t("candidateInterviewsTypeAudio"),
+    video: t("candidateInterviewsTypeVideo"),
+    text_transcript: t("candidateInterviewsTypeTextTranscript"),
+    undecided: t("candidateInterviewsTypeUndecided"),
+  };
   // HRP-202 REDO: chain transcribe -> analyze automatically once the
   // upload completes. Text transcripts skip the chain (no ASR needed).
   const [autoProcess, setAutoProcess] = useState(true);
@@ -251,7 +281,9 @@ export function InterviewUploadZone({
           err instanceof UploadError
             ? err.code === "s3PutFailed"
               ? t("uploadS3PutFailed", { status: err.status ?? 0 })
-              : t("uploadS3NoEtag")
+              : err.code === "s3Unreachable"
+                ? t("uploadS3Unreachable")
+                : t("uploadS3NoEtag")
             : err instanceof Error
               ? err.message
               : t("interviewUploadFailed"),
@@ -261,6 +293,49 @@ export function InterviewUploadZone({
       }
     },
     [interviewId, persist, clearPersisted, onUploaded, reset, autoProcess, t],
+  );
+
+  const startUpload = useCallback(
+    async (file: File, kind: UploadKind) => {
+      setUploading(true);
+      setActiveFile(file);
+      setProgress(0);
+      setBytesUploaded(0);
+
+      // effectiveMime maps extension-detected files (browsers leave
+      // File.type empty for AVI/m4a) to a real MIME so upload/init
+      // passes backend validation.
+      const mimeType = effectiveMime(file);
+      let init: InitUploadResponse | null = null;
+      try {
+        init = await api.post<InitUploadResponse>(
+          `/recruitment/interviews/${interviewId}/upload/init`,
+          {
+            filename: file.name,
+            mime_type: mimeType,
+            size_bytes: file.size,
+            // HRP-385: the real kind — see interview-upload.ts.
+            kind,
+          },
+        );
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          onConsentMissing?.();
+          toast.error(t("interviewUploadConsentNotSigned"));
+        } else {
+          toast.error(
+            err instanceof Error
+              ? err.message
+              : t("interviewUploadStartFailed"),
+          );
+        }
+        reset();
+        return;
+      }
+
+      await runUpload(file, init, kind, mimeType, []);
+    },
+    [interviewId, onConsentMissing, reset, runUpload, t],
   );
 
   const onFile = useCallback(
@@ -286,45 +361,16 @@ export function InterviewUploadZone({
         return;
       }
 
-      setUploading(true);
-      setActiveFile(file);
-      setProgress(0);
-      setBytesUploaded(0);
-
-      // effectiveMime maps extension-detected files (browsers leave
-      // File.type empty for AVI/m4a) to a real MIME so upload/init
-      // passes backend validation.
-      const mimeType = effectiveMime(file);
-      const initKind = kind === "text_transcript" ? "audio" : kind;
-      let init: InitUploadResponse | null = null;
-      try {
-        init = await api.post<InitUploadResponse>(
-          `/recruitment/interviews/${interviewId}/upload/init`,
-          {
-            filename: file.name,
-            mime_type: mimeType,
-            size_bytes: file.size,
-            kind: initKind,
-          },
-        );
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 409) {
-          onConsentMissing?.();
-          toast.error(t("interviewUploadConsentNotSigned"));
-        } else {
-          toast.error(
-            err instanceof Error
-              ? err.message
-              : t("interviewUploadStartFailed"),
-          );
-        }
-        reset();
+      // HRP-405: an interview that already declares a recording type must
+      // not silently flip to another one.
+      if (requiresTypeSwitchConfirm(interviewType, kind)) {
+        setPendingKindSwitch({ file, kind });
         return;
       }
 
-      await runUpload(file, init, kind, mimeType, []);
+      await startUpload(file, kind);
     },
-    [consentSigned, interviewId, onConsentMissing, reset, runUpload, t],
+    [consentSigned, interviewType, onConsentMissing, startUpload, t],
   );
 
   function onCancel() {
@@ -394,6 +440,10 @@ export function InterviewUploadZone({
         data-testid="recruitment-interview-input-file"
         onChange={(e) => {
           const f = e.target.files?.[0];
+          // HRP-405: clear the input so picking the same file again still
+          // fires onChange — declining the type-switch dialog (or any
+          // failed attempt) otherwise leaves the picker inert.
+          e.target.value = "";
           if (f) void onFile(f);
         }}
       />
@@ -507,6 +557,31 @@ export function InterviewUploadZone({
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingKindSwitch !== null}
+        onOpenChange={(o) => !o && setPendingKindSwitch(null)}
+        title={pendingKindSwitch ? kindSwitchTitle[pendingKindSwitch.kind] : ""}
+        description={
+          pendingKindSwitch
+            ? t("interviewUploadTypeSwitchDescription", {
+                current: interviewTypeLabel[interviewType ?? "undecided"],
+                next: interviewTypeLabel[pendingKindSwitch.kind],
+              })
+            : undefined
+        }
+        confirmLabel={t("interviewUploadTypeSwitchConfirm")}
+        cancelLabel={tc("cancel")}
+        onConfirm={() => {
+          // ConfirmDialog closes itself afterwards, which clears the
+          // pending file via onOpenChange — clearing it here instead
+          // would blank the dialog's own copy mid exit-animation.
+          if (pendingKindSwitch) {
+            void startUpload(pendingKindSwitch.file, pendingKindSwitch.kind);
+          }
+        }}
+        testId="recruitment-interview-type-switch-confirm"
+      />
     </div>
   );
 }

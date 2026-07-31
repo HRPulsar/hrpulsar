@@ -1322,6 +1322,25 @@ async def update_invitation_email(
     return _invitation_to_read(inv)
 
 
+async def get_invitation_preview(db: AsyncSession, token: str) -> dict[str, Any]:
+    """Read a pending invitation by its token for the public accept form (HRP-435).
+
+    Read-only on purpose: unlike :func:`accept_invitation` this does not flip a
+    lapsed invitation to ``expired``, since a GET must not mutate. The same
+    validity errors are raised so the accept page can explain itself before the
+    visitor fills anything in.
+    """
+    result = await db.execute(select(Invitation).where(Invitation.token == token))
+    inv = result.scalar_one_or_none()
+    if not inv:
+        raise AppError("invitation_not_found", status.HTTP_404_NOT_FOUND)
+    if inv.status != "pending":
+        raise AppError("invitation_no_longer_valid", status.HTTP_400_BAD_REQUEST)
+    if inv.expires_at < datetime.now(timezone.utc):
+        raise AppError("invitation_has_expired", status.HTTP_400_BAD_REQUEST)
+    return {"email": inv.email, "name": inv.name}
+
+
 async def accept_invitation(
     db: AsyncSession, data: AcceptInvitationRequest
 ) -> dict[str, Any]:

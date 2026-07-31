@@ -39,6 +39,8 @@ const SEGMENT_KEYS: Record<string, string> = {
   import: "dataImport",
   notifications: "notifications",
   billing: "billing",
+  transactions: "transactions",
+  prices: "prices",
   ai: "aiSettings",
   recruitment: "recruitment",
   requisitions: "requisitions",

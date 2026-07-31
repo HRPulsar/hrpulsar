@@ -808,7 +808,8 @@ async def get_assessment_detail(
 
     data = _assessment_to_read(a)
     # HRP-329: saved calibration closes the questionnaire for good — the
-    # UI hides Take/Evaluate off this flag, mirroring the server gate.
+    # UI renders Take/Evaluate disabled off this flag, with a tooltip
+    # naming the reason, mirroring the server gate.
     data["has_calibrated_totals"] = await _has_calibrated_totals(db, a.id)
     # HRP-85: map each participant to their employee row so the UI can
     # render them as a link to /employees/{id} when the viewer is allowed

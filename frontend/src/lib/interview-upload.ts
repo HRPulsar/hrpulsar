@@ -11,6 +11,7 @@ import { api } from "@/lib/api";
 import type {
   InitUploadResponse,
   Interview,
+  InterviewType,
   PartUrlResponse,
 } from "@/lib/types";
 
@@ -77,6 +78,23 @@ export function detectKind(
   return EXT_KIND[fileExtension(file.name)] ?? null;
 }
 
+/**
+ * HRP-405: does uploading a file of `kind` contradict the interview's
+ * declared `interviewType`?
+ *
+ * The backend adopts the uploaded file's kind as `interview.type` on
+ * upload/complete, so a mismatch silently rewrites the recruiter's
+ * choice — ask first. An interview left as "undecided" (the "I'll decide
+ * later" option) has nothing to overwrite and adopts the kind quietly.
+ */
+export function requiresTypeSwitchConfirm(
+  interviewType: InterviewType | null | undefined,
+  kind: "audio" | "video" | "text_transcript",
+): boolean {
+  if (!interviewType || interviewType === "undecided") return false;
+  return interviewType !== kind;
+}
+
 // Single source of truth for both upload surfaces' <input accept=…>.
 export const UPLOAD_ACCEPT_ATTR =
   ".mp3,.wav,.m4a,.mp4,.webm,.mov,.avi,.pdf,.txt," +
@@ -95,7 +113,7 @@ export function effectiveMime(file: File): string {
  * message keeps the technical English for logs and debugging. */
 export class UploadError extends Error {
   constructor(
-    public readonly code: "s3PutFailed" | "s3NoEtag",
+    public readonly code: "s3PutFailed" | "s3NoEtag" | "s3Unreachable",
     message: string,
     public readonly status?: number,
   ) {
@@ -127,6 +145,17 @@ export async function putChunk(
     if (attempt < 2) {
       await new Promise((r) => setTimeout(r, 500 * Math.pow(3, attempt)));
       return putChunk(url, chunk, attempt + 1);
+    }
+    // HRP-385: fetch rejects with a bare TypeError ("Failed to fetch")
+    // when the request never reached storage — a blocked CORS preflight
+    // on a cross-origin bucket is the usual cause. Surfacing the raw
+    // browser string told nobody anything; give it a stable code so the
+    // toast can explain it. See docs/ops/INTERVIEW_UPLOAD_STORAGE_CORS.md.
+    if (err instanceof TypeError) {
+      throw new UploadError(
+        "s3Unreachable",
+        `Storage unreachable from the browser: ${err.message}`,
+      );
     }
     throw err;
   }
@@ -164,7 +193,9 @@ export async function uploadInterviewMedia(
       filename: file.name,
       mime_type: mimeType,
       size_bytes: file.size,
-      kind: kind === "text_transcript" ? "audio" : kind,
+      // HRP-385: send the real kind. Claiming "audio" for a pdf/txt made
+      // the backend's MIME/kind cross-check reject the upload with 422.
+      kind,
     },
   );
 

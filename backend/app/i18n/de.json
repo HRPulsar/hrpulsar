@@ -62,7 +62,7 @@
       "body": "Bitte veranlassen Sie die Verlängerung vor dem Ablaufdatum.",
       "button": "Mitarbeiter ansehen",
       "heading": "Zertifikat läuft bald ab",
-      "intro": "Das Zertifikat für \"<strong>{course_title}</strong>\" ({employee_name}) läuft am <strong>{expiry_date}</strong> ab ({days_left} Tage verbleibend).",
+      "intro": "Das Zertifikat für \"<strong>{course_title}</strong>\" ({employee_name}) läuft am <strong>{expiry_date}</strong> ab (noch {days_left} Tage).",
       "subject": "Zertifikat läuft bald ab: {course_title}"
     },
     "date": {
@@ -109,7 +109,7 @@
     },
     "fallback": {
       "unnamed": "(unbenannt)",
-      "employee": "(unbekannter Mitarbeiter)"
+      "employee": "(Mitarbeiter unbekannt)"
     },
     "footer_automated": "Dies ist eine automatisch generierte Nachricht von {brand_link}.",
     "footer_no_reply": "Bitte antworten Sie nicht auf diese E-Mail.",
@@ -206,8 +206,8 @@
       "button": "Plan ansehen",
       "heading": "Plan zur Überprüfung eingereicht: {title}",
       "heading_untitled": "Plan zur Überprüfung eingereicht",
-      "intro": "<strong>{employee_name}</strong> hat den Entwicklungsplan \"<strong>{title}</strong>\" zu Ihrer Prüfung eingereicht.",
-      "intro_untitled": "<strong>{employee_name}</strong> hat den Entwicklungsplan zu Ihrer Prüfung eingereicht.",
+      "intro": "<strong>{employee_name}</strong> hat den Entwicklungsplan \"<strong>{title}</strong>\" zu Ihrer Überprüfung eingereicht.",
+      "intro_untitled": "<strong>{employee_name}</strong> hat den Entwicklungsplan zu Ihrer Überprüfung eingereicht.",
       "subject": "Entwicklungsplan Ihres Mitarbeiters zur Überprüfung eingereicht: {title}",
       "subject_untitled": "Entwicklungsplan Ihres Mitarbeiters zur Überprüfung eingereicht"
     },
@@ -225,7 +225,7 @@
     "recruitment_consent": {
       "body": "Für ein Interview mit Aufzeichnung und KI-gestützter Analyse benötigen wir Ihre Einwilligung. Bitte prüfen Sie die Bedingungen und bestätigen Sie sie über den Link unten — ein Konto ist nicht erforderlich.",
       "button": "Einwilligung prüfen und unterschreiben",
-      "heading": "Hallo, {candidate_name}",
+      "heading": "Hallo {candidate_name}",
       "note": "Dieser Link ist {expires_in_days} Tage gültig.",
       "subject": "Einwilligung für Interviewaufzeichnung und -analyse"
     },
@@ -327,7 +327,7 @@
       "who_unknown": "Ihr Mitarbeiter"
     },
     "talent_market_removed_candidate": {
-      "body": "Sie wurden von der Kandidatenliste für \"<strong>{title}</strong>\" entfernt.",
+      "body": "Sie wurden aus der Kandidatenliste für \"<strong>{title}</strong>\" entfernt.",
       "heading": "Sie werden nicht mehr berücksichtigt",
       "subject": "Sie werden nicht mehr berücksichtigt: {title}"
     },
@@ -373,7 +373,7 @@
     "assessment_deadline_in_past": "Die Frist liegt in der Vergangenheit",
     "assessment_done_requires_on_review": "Der Status \"Abgeschlossen\" ist nur aus \"Zur Überprüfung\" erreichbar",
     "assessment_employee_already_participant": "Der Mitarbeiter ist bereits Teilnehmer dieser Bewertung",
-    "assessment_employees_not_found": "Mitarbeiter nicht gefunden: {employee_ids}",
+    "assessment_employees_not_found": "Mitarbeitende nicht gefunden: {employee_ids}",
     "assessment_group_not_found": "Bewertungsgruppe nicht gefunden",
     "assessment_group_scale_locked": "Die Bewertungsskala ist gesperrt: Nicht alle Bewertungen der Gruppe sind im Entwurf",
     "assessment_indicator_not_in_competences": "Der Indikator gehört zu keiner Kompetenz dieser Bewertung",
@@ -426,7 +426,7 @@
     "cannot_edit_self_status": "Führungskräfte können ihren eigenen Mitarbeiterdatensatz nicht bearbeiten; Änderungen am eigenen Profil erfolgen über /auth/me",
     "cannot_modify_system_roles": "Systemrollen können nicht geändert werden",
     "company_not_found": "Unternehmen nicht gefunden",
-    "compensation_end_date_before_effective_date": "end_date muss gleich oder nach effective_date liegen",
+    "compensation_end_date_before_effective_date": "end_date darf nicht vor effective_date liegen",
     "competence_deactivate_in_use": "Deaktivieren nicht möglich: Die Kompetenz wird von anderen Diensten verwendet",
     "competence_delete_in_use": "Löschen nicht möglich: Die Kompetenz wird von anderen Diensten verwendet",
     "competence_group_cycle_detected": "Zyklus in der Hierarchie der Kompetenzgruppen erkannt",
@@ -469,7 +469,7 @@
     "compgen_target_id_position_mismatch": "target_id stimmt nicht mit position.specialization_id überein",
     "compgen_target_or_position_required": "Es muss entweder target_id oder position_id angegeben werden.",
     "compgen_unknown_scope": "Unbekannter Scope",
-    "compgen_whole_base_no_target_id": "whole_base akzeptiert kein target_id",
+    "compgen_whole_base_no_target_id": "whole_base akzeptiert keine target_id",
     "consent_link_expired": "Der Einwilligungslink ist abgelaufen",
     "consent_link_not_found": "Einwilligungslink nicht gefunden",
     "consent_required": "Für diese Aktion ist die Einwilligung des Kandidaten erforderlich",
@@ -612,11 +612,12 @@
     "invite_token_candidate_vacancy_mismatch": "Token passt nicht zur Kandidat-Stelle-Zuordnung",
     "invited_evaluator_playback_disabled": "Die Wiedergabe für eingeladene Bewerter ist für diesen Mandanten deaktiviert",
     "kind_audio_requires_audio_mime": "kind=audio erfordert einen Audio-MIME-Typ",
+    "kind_transcript_requires_transcript_mime": "kind=text_transcript erfordert einen PDF- oder Klartext-MIME-Typ",
     "kind_video_requires_video_mime": "kind=video erfordert einen Video-MIME-Typ",
     "llm_generation_failed": "LLM-Generierung fehlgeschlagen: {error}",
     "llm_model_not_allowed": "Modell \"{model}\" ist nicht zugelassen",
     "llm_provider_not_found": "LLM-Anbieter nicht gefunden",
-    "llm_base_url_not_public": "Die benutzerdefinierte Endpoint-URL muss auf Cloud-Installationen eine öffentliche Adresse sein",
+    "llm_base_url_not_public": "Die benutzerdefinierte Endpoint-URL muss bei Cloud-Installationen eine öffentliche Adresse sein",
     "logo_empty_file": "Leere Datei",
     "logo_invalid_file_type": "Ungültiger Dateityp. Erlaubt: {allowed}",
     "logo_not_set": "Kein Logo festgelegt",
@@ -792,7 +793,7 @@
     "tm_competence_link_not_found": "Kompetenzverknüpfung nicht gefunden",
     "tm_complete_requires_appointed": "Abschluss nicht möglich: Mindestens ein Kandidat muss ernannt sein.",
     "tm_employee_id_not_found": "Mitarbeiter {employee_id} nicht gefunden",
-    "tm_end_date_before_start_date": "end_date muss auf oder nach start_date liegen",
+    "tm_end_date_before_start_date": "end_date darf nicht vor start_date liegen",
     "tm_end_date_in_past": "Das Enddatum liegt in der Vergangenheit",
     "tm_grade_not_configured_for_specialization": "Das Grade ist für diese Spezialisierung nicht konfiguriert. Fügen Sie es zuerst auf der Seite der Spezialisierung hinzu.",
     "tm_grade_not_found": "Grade nicht gefunden",
@@ -818,6 +819,7 @@
     "upload_file_too_large": "Die Datei überschreitet das Limit von {max_mb} MB.",
     "upload_quota_exhausted": "Upload-Kontingent erschöpft",
     "upload_session_expired": "Die Upload-Sitzung ist abgelaufen",
+    "upload_kind_mismatch": "Dieser Upload wurde für einen anderen Dateityp gestartet",
     "upload_session_not_found": "Upload-Sitzung nicht gefunden",
     "user_already_employee": "Der Benutzer ist bereits Mitarbeiter",
     "user_email_already_exists": "Ein Benutzer mit dieser E-Mail-Adresse existiert bereits",
@@ -850,7 +852,7 @@
       "choice_needs_correct_option": "Auswahlfragen erfordern mindestens eine richtige Option",
       "date_from_datetime_parsing": "Eingabe muss ein gültiges Datum oder Datum/Uhrzeit sein, {error}",
       "deadline_in_past": "Die Frist darf nicht in der Vergangenheit liegen",
-      "end_date_before_start": "end_date muss auf oder nach start_date liegen",
+      "end_date_before_start": "end_date darf nicht vor start_date liegen",
       "end_date_out_of_range": "end_date außerhalb des erlaubten Bereichs (+5 Jahre ab heute)",
       "enum": "Eingabe muss {expected} sein",
       "extra_forbidden": "Zusätzliche Eingaben sind nicht zulässig",

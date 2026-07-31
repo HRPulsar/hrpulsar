@@ -189,7 +189,10 @@ async def add_evaluator_endpoint(
 async def round_aggregate_endpoint(
     round_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    # HRP-374: the payload now names each evaluator and their individual
+    # score, so it is gated like the round's other hiring-team surfaces
+    # rather than left open to any authenticated tenant member.
+    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
 ) -> dict[str, Any]:
     return await service.round_aggregate(db, current_user.tenant_id, round_id)
 

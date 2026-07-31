@@ -907,7 +907,12 @@ class InitUploadRequest(BaseModel):
     filename: str = Field(max_length=255)
     mime_type: str = Field(max_length=120)
     size_bytes: int = Field(ge=1)
-    kind: Literal["audio", "video"]
+    # HRP-385: transcripts (pdf/txt) are a first-class upload kind. The
+    # literal used to allow audio/video only, which forced both frontend
+    # surfaces to send kind="audio" for a PDF — and the MIME/kind
+    # cross-check then rejected it with 422, so no transcript could ever
+    # be uploaded and the interview stayed "scheduled".
+    kind: Literal["audio", "video", "text_transcript"]
 
 
 class InitUploadResponse(BaseModel):

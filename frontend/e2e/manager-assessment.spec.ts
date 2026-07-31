@@ -222,11 +222,121 @@ test.describe("Manager assessments (HRP-186)", () => {
     await expect(section).toContainText("2 / 2 competences assessed", {
       timeout: 10000,
     });
+    // HRP-378: the overall is still derived from the indicators — the card
+    // now reports it as the round average instead of a "from indicators"
+    // chip, and the completion gate opens.
     await expect(
       criticalCard.locator(
-        '[data-testid^="assessment-competence-overall-computed-badge-"]',
+        '[data-testid^="assessment-competence-round-average-"]',
       ),
-    ).toBeVisible();
+    ).toContainText("3.0", { timeout: 10000 });
     await expect(completeBtn).toBeEnabled();
+  });
+
+  // HRP-374: the round header carries an Average score next to the progress
+  // bar — an em dash until something is scored, then the round mean.
+  // HRP-378: indicators and a manual overall never contradict each other.
+  test("round header shows Average score and overall/indicators override each other", async ({
+    page,
+  }) => {
+    const { email, password, accessToken } = await registerUser(page);
+
+    const vacResp = await page.request.post(
+      `${API_BASE}/recruitment/vacancies`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: { title: "HRP-374 e2e vacancy", language: "en" },
+      },
+    );
+    expect(vacResp.ok()).toBeTruthy();
+    const vacancy = await vacResp.json();
+
+    const profResp = await page.request.put(
+      `${API_BASE}/recruitment/vacancies/${vacancy.id}/profile`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: {
+          profile_data: {
+            competences: [
+              {
+                name: "Python",
+                criticality: "critical",
+                indicators: ["Writes idiomatic code", "Knows asyncio"],
+              },
+            ],
+          },
+        },
+      },
+    );
+    expect(profResp.ok()).toBeTruthy();
+
+    const candResp = await page.request.post(
+      `${API_BASE}/recruitment/vacancies/${vacancy.id}/candidates`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: {
+          full_name: "Ada Average",
+          email: `ada-${Date.now()}@example.com`,
+        },
+      },
+    );
+    expect(candResp.ok()).toBeTruthy();
+    const candidate = await candResp.json();
+
+    await loginViaUI(page, email, password);
+    await page.goto(`/recruitment/candidates/${candidate.id}`);
+
+    const section = page.getByTestId("candidate-section-assessments");
+    await expect(section).toBeVisible({ timeout: 10000 });
+    await page.getByTestId("assessment-round-new-btn").click();
+    await page
+      .getByTestId("assessment-round-new-confirm-modal-confirm")
+      .click();
+    await expect(
+      page.locator('[data-testid^="assessment-round-tab-"]'),
+    ).toHaveCount(1, { timeout: 10000 });
+    await page.getByRole("button", { name: "Start scoring this round" }).click();
+
+    // Nothing scored yet — the header shows an em dash, not a zero.
+    const average = page.getByTestId("assessment-round-average-score");
+    await expect(average).toBeVisible({ timeout: 10000 });
+    await expect(average).toContainText("—");
+
+    const card = page
+      .locator('[data-testid^="assessment-competence-card-"]')
+      .first();
+    await card.locator("summary").click();
+
+    // A manual overall of 4 lands in the header average.
+    await card
+      .locator(
+        'label:has(input[data-testid^="assessment-competence-overall-radio-"][data-testid$="-4"])',
+      )
+      .click();
+    await expect(average).toContainText("4.0", { timeout: 10000 });
+
+    // HRP-378 §7.2: indicators now override that manual overall — two 2s
+    // pull the competence (and the header average) down to 2.0.
+    const twos = card.locator(
+      'label:has(input[data-testid^="assessment-indicator-radio-"][data-testid$="-2"])',
+    );
+    await expect(twos).toHaveCount(2);
+    await twos.nth(0).click();
+    await twos.nth(1).click();
+    await expect(average).toContainText("2.0", { timeout: 10000 });
+
+    // HRP-378 §7.4: going back to a manual overall clears the indicator
+    // answers — nothing stays selected.
+    await card
+      .locator(
+        'label:has(input[data-testid^="assessment-competence-overall-radio-"][data-testid$="-3"])',
+      )
+      .click();
+    await expect(average).toContainText("3.0", { timeout: 10000 });
+    await expect(
+      card.locator(
+        'input[data-testid^="assessment-indicator-radio-"]:checked',
+      ),
+    ).toHaveCount(0);
   });
 });

@@ -22,8 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
-from app.models import Person
 from app.modules.company.models import Tenant
+from app.modules.recruitment.common import candidate_display_name
 from app.modules.recruitment.models import (
     Candidate,
     CandidateQuestion,
@@ -109,10 +109,12 @@ async def export_questions_pdf(
     tenant = await db.get(Tenant, tenant_id)
     tenant_name = tenant.name if tenant else ""
 
-    person: Person | None = candidate.person
-    candidate_name = (
-        f"{person.first_name} {person.last_name}".strip() if person else "(unnamed)"
-    )
+    # HRP-384: prefer the canonical ``Candidate.full_name``. Reading the
+    # linked ``Person`` alone printed "(unnamed)" for resume-sourced
+    # candidates, which have no ``Person`` row (``person_id`` NULL since
+    # HRP-181 REDO). The rest of this PDF is English by design, so the
+    # fallback stays a literal.
+    candidate_name = candidate_display_name(candidate, fallback="(unnamed)")
 
     return _render_pdf(
         tenant_name=tenant_name,
