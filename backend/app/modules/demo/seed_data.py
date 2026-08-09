@@ -52,17 +52,30 @@ _TRANSCRIPT_FALLBACK = "Transcript artifact not bundled."
 def load_transcript() -> str:
     """Read the packaged Elena interview transcript.
 
-    Falls back to a one-line stub when the asset is missing so the
-    seed still produces a syntactically valid Interview row in a
-    stripped-down distribution.
+    Picks the seed-locale variant (``interview-transcript-elena.<locale>.txt``)
+    when one is bundled, falling back to the English asset, and finally
+    to a one-line stub when no asset is present so the seed still
+    produces a syntactically valid Interview row in a stripped-down
+    distribution.
     """
-    try:
-        return TRANSCRIPT_PATH.read_text(encoding="utf-8")
-    except OSError:
-        logger.warning(
-            "demo seed: transcript missing at %s, using stub", TRANSCRIPT_PATH
+    from app.modules.demo.seed_i18n import seed_locale
+
+    locale = seed_locale()
+    paths = [TRANSCRIPT_PATH]
+    if locale != "en":
+        paths.insert(
+            0,
+            TRANSCRIPT_PATH.with_name(f"interview-transcript-elena.{locale}.txt"),
         )
-        return _TRANSCRIPT_FALLBACK
+    for path in paths:
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    logger.warning(
+        "demo seed: transcript missing at %s, using stub", TRANSCRIPT_PATH
+    )
+    return _TRANSCRIPT_FALLBACK
 
 
 # ---------------------------------------------------------------------------

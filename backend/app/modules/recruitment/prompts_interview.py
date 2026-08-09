@@ -165,9 +165,7 @@ def build_interview_analysis_prompt(
     user-input block.
     """
 
-    safe_competences = json.dumps(
-        profile_competences, ensure_ascii=False, indent=2
-    )
+    safe_competences = json.dumps(profile_competences, ensure_ascii=False, indent=2)
     # Segment text is user-controlled (it's the transcript). Even though
     # we render the segments as a structured JSON block outside the
     # ``<user_input>`` wrapper so the model can cite them by id, we still
@@ -220,9 +218,18 @@ class ResumeAnchor(BaseModel):
 
 
 class GeneratedQuestion(BaseModel):
+    # HRP-486: same vocabulary as ``schemas.QuestionGoal`` /
+    # ``QuestionPriority`` — generation, manual add and display must not
+    # drift apart. ``test_question_enum_alignment`` pins them together.
     text: str
-    goal: Literal["clarification", "depth", "risk", "motivation", "fit"]
-    priority: Literal["must", "should", "nice_to_ask"]
+    goal: Literal[
+        "verify_skill",
+        "clarify_experience",
+        "probe_risk",
+        "explore_motivation",
+        "assess_fit",
+    ]
+    priority: Literal["must_ask", "should_ask", "nice_to_ask"]
     competence_name: str | None = None
     resume_anchor: ResumeAnchor | None = None
     expected_answer_indicators: list[str] = Field(default_factory=list)
@@ -267,14 +274,41 @@ QUESTION_SET_SYSTEM_PROMPT = (
     "5. follow_ups: 1-3 short probe questions the interviewer can use.\n"
     "6. rationale: 1-3 sentences explaining WHY this question matters "
     "for THIS candidate on THIS role.\n"
-    "7. goal categories: clarification | depth | risk | motivation | fit.\n"
-    "8. priority categories: must | should | nice_to_ask. Aim for ~30% "
-    "must, ~40% should, ~30% nice_to_ask.\n"
+    "7. goal categories: verify_skill | clarify_experience | probe_risk | "
+    "explore_motivation | assess_fit.\n"
+    "8. priority categories: must_ask | should_ask | nice_to_ask. Aim for "
+    "~30% must_ask, ~40% should_ask, ~30% nice_to_ask.\n"
     "9. Questions are open-ended, behavioural / situational. Never "
     "yes/no. Never generic — every question is tied to a resume fact.\n"
     "10. coverage_note: 1-2 sentences flagging anything the profile asks "
     "for that the resume does not show.\n"
     "11. Return ONLY the JSON object — no prose, no markdown fences.\n"
+)
+
+
+# HRP-444: a next-round set is not another pre-interview set. It starts
+# from what the previous round actually produced, so the rules that
+# matter are about *not* re-asking and about going deeper where the
+# evidence is thin.
+DYNAMIC_NEXT_RULES = (
+    "NEXT-ROUND RULES (this set follows one or more completed "
+    "interviews):\n"
+    "1. Do NOT re-ask a question already marked covered, and do NOT "
+    "re-ask anything the transcript already answers exhaustively. A "
+    "question is only worth asking again if the previous answer was "
+    "evasive, contradictory, or too shallow to judge.\n"
+    "2. Every blind spot listed above MUST become a question with "
+    "source='from_blind_spot'. Use its suggested_question as a seed, "
+    "rewritten to fit this candidate's own words from the transcript.\n"
+    "3. Cover competences the prior analyses left 'insufficient', "
+    "'not_covered', or low-confidence — these are the point of this "
+    "round.\n"
+    "4. Re-probe every competence flagged as disagreed above.\n"
+    "5. Where a competence was touched only superficially, go deeper: "
+    "ask for specifics — decisions owned, trade-offs, failures, "
+    "measurable outcomes — rather than repeating the opening question.\n"
+    "6. Anchor questions in what the candidate actually said when the "
+    "transcript supports it; resume_anchor still quotes the resume.\n"
 )
 
 
@@ -287,6 +321,8 @@ def build_question_set_prompt(
     previous_questions: list[dict] | None = None,
     transcripts: list[dict] | None = None,
     blind_spots: list[dict] | None = None,
+    prior_analyses: list[dict] | None = None,
+    manager_divergence: list[dict] | None = None,
     generation_mode: str = "initial",
 ) -> str:
     """Build the prompt for question-set generation.
@@ -295,20 +331,22 @@ def build_question_set_prompt(
     state) so the model can avoid repeats. ``transcripts`` carry past
     interview transcripts for dynamic-next sets. ``blind_spots`` lists
     competences the AI flagged as uncovered after the previous round.
+    ``prior_analyses`` and ``manager_divergence`` are dynamic-next only
+    (HRP-444) — the latter carries the *fact* of a manager/AI
+    disagreement per competence and never the scores behind it.
     """
 
     profile_json = json.dumps(profile_competences, ensure_ascii=False, indent=2)
     resume_json = json.dumps(resume_data, ensure_ascii=False, indent=2)
-    prev_json = json.dumps(
-        previous_questions or [], ensure_ascii=False, indent=2
-    )
+    prev_json = json.dumps(previous_questions or [], ensure_ascii=False, indent=2)
     blind_json = json.dumps(blind_spots or [], ensure_ascii=False, indent=2)
+    analyses_json = json.dumps(prior_analyses or [], ensure_ascii=False, indent=2)
+    divergence_json = json.dumps(manager_divergence or [], ensure_ascii=False, indent=2)
 
     transcript_blocks = []
     for t in transcripts or []:
         transcript_blocks.append(
-            "## Round transcript\n"
-            f"{sanitize_inline(t.get('text') or '')}\n"
+            f"## Round transcript\n{sanitize_inline(t.get('text') or '')}\n"
         )
     transcripts_block = "\n".join(transcript_blocks) or "(no prior transcripts)"
 
@@ -326,7 +364,25 @@ def build_question_set_prompt(
         "Blind spots flagged after prior rounds — each MUST become a "
         "question with source='from_blind_spot':\n"
         f"{blind_json}\n\n"
+        # HRP-444: lets the next round deepen weakly-covered competences
+        # instead of re-asking what the transcript already answered.
+        "AI analyses of prior rounds (no human scores — see ANTI-BIAS). "
+        "Competences with status 'insufficient' or low confidence need "
+        "deeper questions; 'assessed' ones with solid evidence do not:\n"
+        f"{analyses_json}\n\n"
+        # HRP-444: the *fact* of a manager/AI disagreement, never the
+        # scores or who gave them — a competence people read differently
+        # is worth re-probing, but the model must not learn the direction
+        # of the disagreement and anchor on it.
+        "Competences where a human evaluation and the AI analysis "
+        "disagreed. You are told only THAT they disagreed — never the "
+        "scores, never who gave them. Re-probe these with fresh, "
+        "evidence-seeking questions:\n"
+        f"{divergence_json}\n\n"
     )
+
+    if generation_mode == "dynamic_next":
+        head += DYNAMIC_NEXT_RULES
 
     user_block = wrap_user_input(
         "Prior interview transcripts (reference only — do NOT quote scores):\n"
@@ -345,9 +401,7 @@ class ResumeExcerpt(BaseModel):
     """Resume-only analog of ``Citation`` — references the resume body
     instead of an interview transcript segment."""
 
-    section: Literal[
-        "experience", "education", "skills", "projects", "summary"
-    ]
+    section: Literal["experience", "education", "skills", "projects", "summary"]
     excerpt_text: str
     source_company: str | None = None
     source_period: str | None = None
@@ -485,9 +539,7 @@ def build_resume_only_analysis_prompt(
     contained.
     """
 
-    safe_competences = json.dumps(
-        profile_competences, ensure_ascii=False, indent=2
-    )
+    safe_competences = json.dumps(profile_competences, ensure_ascii=False, indent=2)
     safe_resume = json.dumps(parsed_resume or {}, ensure_ascii=False, indent=2)
     safe_title = sanitize_inline(vacancy_title)
 
@@ -504,8 +556,7 @@ def build_resume_only_analysis_prompt(
 
     raw_block = resume_raw_text or "no data"
     user_block = wrap_user_input(
-        "Full resume text (for extended context):\n"
-        f"{raw_block}\n"
+        f"Full resume text (for extended context):\n{raw_block}\n"
     )
 
     return head + user_block

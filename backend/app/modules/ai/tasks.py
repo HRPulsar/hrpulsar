@@ -67,6 +67,7 @@ async def _generate_json_with_retries(
     tenant_settings: Any,
     max_retries: int,
     credentials: Any = None,
+    model: str | None = None,
 ) -> Any:
     """Call generate_json, retrying on JSON parse errors up to max_retries times.
 
@@ -86,6 +87,7 @@ async def _generate_json_with_retries(
                 system=system,
                 tenant_settings=tenant_settings,
                 credentials=credentials,
+                model=model,
             )
         except (json.JSONDecodeError, ValueError) as exc:
             last_exc = exc
@@ -112,23 +114,38 @@ async def _load_settings(
         return await ai_settings_service.get_or_default(db, tenant_id)
 
 
-async def _load_credentials(
+async def _load_dispatch(
     session_factory: async_sessionmaker[AsyncSession],
     tenant_id: uuid.UUID | None,
     tenant_settings: Any,
-) -> Any:
-    """Resolve the tenant's BYOK/local generation target (HRP-465), or None.
+) -> tuple[Any, str | None]:
+    """``(credentials, model)`` for one generation call, or ``(None, None)``.
 
-    Uses a short-lived session from the task's own factory — the worker
-    event loop owns it, so no cross-loop connection reuse."""
+    Resolves the tenant's BYOK/local generation target (HRP-465) *and* the
+    effective model in one short-lived session from the task's own factory
+    — the worker event loop owns it, so no cross-loop connection reuse.
+
+    HRP-500 (review #5): the model must be resolved through the catalog
+    here. Celery paths hand ``llm_client`` a ``credentials`` object and no
+    session, so the kill-switch inside ``generate()`` never ran and the
+    worker dispatched a model the platform admin had disabled — while
+    billing (``ee.credits``) priced the substitute it never used. Passing
+    the resolved id explicitly makes dispatch and billing agree, and the
+    LLM call itself still runs with no session open.
+    """
     if tenant_id is None:
-        return None
+        return None, None
     from app.modules.ai import providers
-    from app.modules.ai_settings.service import get_effective_model
+    from app.modules.ai_settings.service import get_effective_model_async
 
-    model = get_effective_model(tenant_settings) if tenant_settings else None
     async with session_factory() as db:
-        return await providers.resolve_generation_target(db, tenant_id, model)
+        model = (
+            await get_effective_model_async(db, tenant_settings)
+            if tenant_settings is not None
+            else None
+        )
+        credentials = await providers.resolve_generation_target(db, tenant_id, model)
+    return credentials, model
 
 
 def _retry_budget(tenant_settings: Any, fallback: int) -> int:
@@ -160,7 +177,7 @@ def generate_positions_task(
         from app.modules.position.service import _position_to_read
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
-        credentials = await _load_credentials(
+        credentials, model = await _load_dispatch(
             session_factory, tenant_id, tenant_settings
         )
 
@@ -173,6 +190,7 @@ def generate_positions_task(
             system=prompts.build_system_position(tenant_settings),
             tenant_settings=tenant_settings,
             credentials=credentials,
+            model=model,
             max_retries=_retry_budget(tenant_settings, fallback=2),
         )
         items = result if isinstance(result, list) else [result]
@@ -235,7 +253,7 @@ def suggest_pdp_task(
         from app.modules.ai import prompts, service
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
-        credentials = await _load_credentials(
+        credentials, model = await _load_dispatch(
             session_factory, tenant_id, tenant_settings
         )
 
@@ -247,6 +265,7 @@ def suggest_pdp_task(
             system=prompts.build_system_competence(tenant_settings),
             tenant_settings=tenant_settings,
             credentials=credentials,
+            model=model,
             max_retries=_retry_budget(tenant_settings, fallback=2),
         )
         items = result if isinstance(result, list) else [result]
@@ -298,7 +317,7 @@ def generate_competences_task(
         from app.modules.ai import prompts
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
-        credentials = await _load_credentials(
+        credentials, model = await _load_dispatch(
             session_factory, tenant_id, tenant_settings
         )
 
@@ -312,6 +331,7 @@ def generate_competences_task(
             system=prompts.build_system_competence(tenant_settings),
             tenant_settings=tenant_settings,
             credentials=credentials,
+            model=model,
             max_retries=_retry_budget(tenant_settings, fallback=2),
         )
         items = result if isinstance(result, list) else [result]
@@ -358,7 +378,7 @@ def generate_indicators_task(
         from app.modules.ai import prompts
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
-        credentials = await _load_credentials(
+        credentials, model = await _load_dispatch(
             session_factory, tenant_id, tenant_settings
         )
 
@@ -371,6 +391,7 @@ def generate_indicators_task(
             system=prompts.build_system_competence(tenant_settings),
             tenant_settings=tenant_settings,
             credentials=credentials,
+            model=model,
             max_retries=_retry_budget(tenant_settings, fallback=2),
         )
         items = result if isinstance(result, list) else [result]

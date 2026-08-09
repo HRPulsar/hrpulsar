@@ -6,11 +6,13 @@ import {
   CheckCircle2,
   CircleHelp,
   Info,
+  Loader2,
   XCircle,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { aiVerdictCellState } from "@/lib/recruitment-types";
 import type { AiReadiness, AiVerdict } from "@/lib/recruitment-types";
 
 interface VerdictConfig {
@@ -42,7 +44,8 @@ interface Props {
   // — interview required for full assessment"); ``full`` renders an
   // emerald sub-badge. ``null`` / ``undefined`` hides the sub-badge.
   analysisMode?: "resume_only" | "full" | null;
-  scoreDivergence?: boolean;
+  /** HRP-493: a run is queued or executing for this pair right now. */
+  inProgress?: boolean;
   summary?: string | null;
   keyStrength?: string | null;
   keyRisk?: string | null;
@@ -55,7 +58,7 @@ export function AiVerdictBadge({
   aiScore = null,
   aiReadiness,
   analysisMode,
-  scoreDivergence = false,
+  inProgress = false,
   summary,
   keyStrength,
   keyRisk,
@@ -68,6 +71,47 @@ export function AiVerdictBadge({
   const label = t(cfg.labelKey);
   const hasDetails = verdict !== "pending" &&
     (summary || keyStrength || keyRisk || riskMitigation);
+
+  // HRP-493: "an analysis is running" and "nothing has ever run" both
+  // arrive as ``verdict === "pending"``. Splitting them is the whole
+  // point of the AI VERDICT column: a spinner tells the recruiter to
+  // wait, a bare icon tells them to press Analyze.
+  const cellState = aiVerdictCellState({ verdict, readiness: aiReadiness, inProgress });
+
+  if (cellState === "analyzing") {
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium align-middle",
+          BADGE_COLOR.neutral,
+        )}
+        title={t("verdictAnalyzing")}
+        data-testid={
+          testIdPrefix ? `${testIdPrefix}-ai-verdict-analyzing` : undefined
+        }
+      >
+        <Loader2 className="size-3 animate-spin" aria-hidden />
+        <span>{t("verdictAnalyzing")}</span>
+      </span>
+    );
+  }
+
+  // No resume means no analysis is even possible yet — a "Pending"
+  // chip overstated that as work already under way.
+  if (cellState === "no-analysis") {
+    return (
+      <span
+        className="inline-flex items-center align-middle text-muted-foreground"
+        title={t("verdictNoAnalysisYet")}
+        aria-label={t("verdictNoAnalysisYet")}
+        data-testid={
+          testIdPrefix ? `${testIdPrefix}-ai-verdict-none` : undefined
+        }
+      >
+        <CircleHelp className="size-3.5" aria-hidden />
+      </span>
+    );
+  }
 
   const badge = (
     <span
@@ -114,24 +158,16 @@ export function AiVerdictBadge({
     <span className="inline-flex items-center gap-1 align-middle">
       {badge}
       {modeSubBadge}
+      {/* HRP-493: the candidates table no longer passes ``aiScore`` —
+          the AI column two cells to the left already shows it, and the
+          divergence marker that used to follow restated the amber
+          highlight on the MANAGER / AI cells. Surfaces without those
+          columns (the candidate card's application list) still pass it
+          and still get the number. */}
       {aiScore !== null && aiScore !== undefined && (
         <span className="text-xs tabular-nums text-muted-foreground">
           {/* Canonical raw 0..1 scale (HRP-274) — two decimals. */}
           {aiScore.toFixed(2)}
-        </span>
-      )}
-      {scoreDivergence && (
-        <span
-          className="inline-flex items-center text-amber-700 dark:text-amber-300"
-          title={t("verdictDivergenceTooltip")}
-          aria-label={t("verdictDivergenceAria")}
-          data-testid={
-            testIdPrefix
-              ? `${testIdPrefix}-score-divergence-marker`
-              : undefined
-          }
-        >
-          <AlertTriangle className="size-3.5" aria-hidden />
         </span>
       )}
       {hasDetails && (

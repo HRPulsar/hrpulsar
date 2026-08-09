@@ -888,6 +888,23 @@ def stub_tenant_ai_settings():
         yield fake_settings
 
 
+def _stub_ai_db():
+    """Session double for the sync AI handlers.
+
+    HRP-500 made the billing cost resolver consult the model catalog (the
+    catalog, not the in-memory registry, is the source of truth), so the
+    session these tests hand in must at least answer ``execute`` — an
+    empty catalog is exactly the "nothing moderated here" case.
+    """
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = None
+    result.scalars.return_value.all.return_value = []
+    result.scalar_one_or_none.return_value = None
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=result)
+    return db
+
+
 class TestAIServiceGenerateCompetences:
     async def test_generate_competences_success(self, stub_tenant_ai_settings):
         from app.modules.ai import service as ai_svc
@@ -900,7 +917,7 @@ class TestAIServiceGenerateCompetences:
             return_value=expected,
         ):
             result = await ai_svc.generate_competences(
-                MagicMock(), uuid.uuid4(), uuid.uuid4(), "Software Engineer"
+                _stub_ai_db(), uuid.uuid4(), uuid.uuid4(), "Software Engineer"
             )
 
         assert result == expected
@@ -918,7 +935,7 @@ class TestAIServiceGenerateCompetences:
             return_value=single,
         ):
             result = await ai_svc.generate_competences(
-                MagicMock(), uuid.uuid4(), uuid.uuid4(), "Designer"
+                _stub_ai_db(), uuid.uuid4(), uuid.uuid4(), "Designer"
             )
 
         assert result == [single]
@@ -933,7 +950,7 @@ class TestAIServiceGenerateCompetences:
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await ai_svc.generate_competences(
-                    MagicMock(), uuid.uuid4(), uuid.uuid4(), "Manager"
+                    _stub_ai_db(), uuid.uuid4(), uuid.uuid4(), "Manager"
                 )
             assert exc_info.value.status_code == 502
 
@@ -953,7 +970,7 @@ class TestAIServiceGenerateIndicators:
             return_value=indicators,
         ):
             result = await ai_svc.generate_indicators(
-                MagicMock(), uuid.uuid4(), uuid.uuid4(), "Leadership"
+                _stub_ai_db(), uuid.uuid4(), uuid.uuid4(), "Leadership"
             )
 
         assert len(result) == 2
@@ -968,7 +985,7 @@ class TestAIServiceGenerateIndicators:
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await ai_svc.generate_indicators(
-                    MagicMock(), uuid.uuid4(), uuid.uuid4(), "Communication"
+                    _stub_ai_db(), uuid.uuid4(), uuid.uuid4(), "Communication"
                 )
             assert exc_info.value.status_code == 502
 

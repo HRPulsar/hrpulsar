@@ -13,6 +13,10 @@ from app.core.celery_app import celery
 
 logger = logging.getLogger(__name__)
 
+# CandidateVacancy statuses that mean the candidate left the funnel; the
+# report's implicit "All active" scope (no whitelist) excludes them.
+TERMINAL_CV_STATUSES = frozenset({"hired", "rejected", "withdrew"})
+
 
 # ---------------------------------------------------------------------------
 # generate_report_task (R4a, FR-23/24)
@@ -44,7 +48,10 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
     from app.core.s3 import upload_file
     from app.models import Person
     from app.modules.company.models import Tenant
-    from app.modules.recruitment.common import normalize_competence_id
+    from app.modules.recruitment.common import (
+        candidate_display_name,
+        normalize_competence_id,
+    )
     from app.modules.recruitment.models import (
         AIAssessment,
         Candidate,
@@ -52,7 +59,6 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
         ConsolidatedReport,
         HumanAssessment,
         Interview,
-        ReportTemplate,
         Vacancy,
         VacancyProfile,
         VacancyStage,
@@ -97,13 +103,21 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 db.commit()
                 return {"status": "failed", "error": "Vacancy not found"}
 
-            # HRP-268: the 4-sheet renderer always emits Summary /
-            # Matrix / Detail × N / Incomplete regardless of the
-            # historical ``sections`` list — see CHANGELOG entry. The
-            # column is still touched by older callers so we keep the
-            # FK probe below, but the value is no longer consulted.
-            if export.template_id:
-                db.get(ReportTemplate, export.template_id)
+            # HRP-521: the sheet set comes from the Generate-report
+            # dialog (``sections``). Rows written before HRP-521 carry
+            # legacy section codes that no longer map to a sheet — an
+            # empty intersection means "render everything" so an old
+            # export can still be regenerated.
+            requested_sections = {str(code) for code in (export.sections or [])}
+            known_sections = {
+                "summary_ranking",
+                "competency_matrix",
+                "detailed_analysis",
+                "incomplete_data",
+            }
+            selected_sections = requested_sections & known_sections
+            if not selected_sections:
+                selected_sections = set(known_sections)
 
             profile = db.execute(
                 select(VacancyProfile).where(VacancyProfile.vacancy_id == vacancy.id)
@@ -423,12 +437,30 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                             export_id,
                         )
 
+            # HRP-523 — the Summary / Matrix headers carry the vacancy's
+            # position and division, so resolve the two FK titles here
+            # rather than shipping the placeholders the sheets used to
+            # render as empty.
+            specialization_title: str | None = None
+            if vacancy.specialization_id:
+                from app.modules.dictionary.models import DictionaryItem
+
+                spec_row = db.get(DictionaryItem, vacancy.specialization_id)
+                specialization_title = spec_row.title if spec_row else None
+
+            division_name: str | None = None
+            if vacancy.division_id:
+                from app.modules.company.models import Division
+
+                div_row = db.get(Division, vacancy.division_id)
+                division_name = div_row.name if div_row else None
+
             vacancy_payload = {
                 "title": vacancy.title,
                 "status": vacancy.status,
-                "specialization_title": None,
+                "specialization_title": specialization_title,
                 "grade_title": None,
-                "division_name": None,
+                "division_name": division_name,
                 "location": vacancy.location,
                 "employment_type": vacancy.employment_type,
                 "salary_min": (
@@ -462,8 +494,17 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     cv_filter.add(uuid.UUID(str(raw)))
                 except (TypeError, ValueError):
                     continue
+            # No whitelist means the wizard's "All active" scope: hired,
+            # rejected and withdrawn candidates stay out of the report.
+            # An explicit list (Finalists / Custom) is taken verbatim.
             selected_cvs = (
-                [cv for cv in cvs if cv.id in cv_filter] if cv_filter else cvs
+                [cv for cv in cvs if cv.id in cv_filter]
+                if cv_filter
+                else [
+                    cv
+                    for cv in cvs
+                    if (cv.status or "").lower() not in TERMINAL_CV_STATUSES
+                ]
             )
             selected_cv_ids = {cv.id for cv in selected_cvs}
 
@@ -547,13 +588,14 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     interviews_by_cv.setdefault(iv.candidate_vacancy_id, []).append(iv)
 
             def _cv_display_name(cv_obj: CandidateVacancy) -> str:
-                person = persons_by_candidate.get(cv_obj.candidate_id)
-                if not person:
-                    return "Unknown"
-                return (
-                    f"{(person.first_name or '').strip()} "
-                    f"{(person.last_name or '').strip()}"
-                ).strip() or "Unknown"
+                # HRP-525 — resume-sourced candidates have no Person row
+                # (person_id is optional since HRP-181 REDO), so keying
+                # the name off ``persons_by_candidate`` rendered every one
+                # of them as "Unknown" — including in the Detail sheet
+                # title. ``candidate_display_name`` prefers the
+                # denormalised ``Candidate.full_name`` and only then falls
+                # back to the linked person.
+                return candidate_display_name(cv_obj.candidate)
 
             # Per-candidate aggregates (Manager % + AI %, with not_covered
             # dropping out of the AI denominator per HRP-265 spec).
@@ -619,12 +661,26 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
 
                 manager_denominator = max_score * len(comp_keys)
                 ai_denominator = max_score * max(len(comp_keys) - ai_not_covered, 0)
+                # HRP-523 REDO — two different manager percentages, for two
+                # different questions. ``manager_percent`` keeps the full
+                # denominator: it is the coverage-aware figure the Summary and
+                # Matrix totals display. ``manager_scored_percent`` divides by
+                # what the manager actually rated, and only that one feeds the
+                # recommendation — otherwise a candidate scored 5/5 on 3 of 10
+                # competences reads as 30% and gets "Not recommended" for the
+                # manager's unfinished work rather than for their answers.
+                manager_scored_denominator = max_score * manager_scored
                 per_cv_aggregates[cv.id] = {
                     "manager_total": manager_sum,
                     "manager_scored": manager_scored,
                     "manager_percent": (
                         round(manager_sum / manager_denominator * 100, 1)
                         if manager_scored > 0 and manager_denominator > 0
+                        else None
+                    ),
+                    "manager_scored_percent": (
+                        round(manager_sum / manager_scored_denominator * 100, 1)
+                        if manager_scored > 0 and manager_scored_denominator > 0
                         else None
                     ),
                     "ai_total": ai_sum,
@@ -639,8 +695,11 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     "cells": cells_for_matrix,
                 }
 
-            # Sheet 1 — Summary rows.
+            # Sheet 1 — Summary rows (HRP-523).
             summary_rows = []
+            # Manager / AI percentages at or above this count as "high"
+            # for the recommendation rule below.
+            strong_percent = 70.0
             for cv in selected_cvs:
                 agg = per_cv_aggregates[cv.id]
                 manager_text = (
@@ -656,7 +715,18 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     if agg["manager_scored"] > 0
                     else "—"
                 )
-                ai_text = "—"
+
+                readiness = (cv.ai_readiness or "none").lower()
+                # ``ai_readiness`` is the candidate-level record of which
+                # inputs the model actually saw, so it — not the score
+                # count — decides the wording of the empty AI cell.
+                if readiness == "resume_and_transcript":
+                    readiness_text = "Full data"
+                elif readiness == "resume_only":
+                    readiness_text = "No transcript"
+                else:
+                    readiness_text = "No data"
+
                 if agg["ai_scored"] > 0:
                     ai_text = (
                         f"{round(agg['ai_total'], 1)}/"
@@ -669,44 +739,115 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     )
                     if agg["ai_not_covered"]:
                         ai_text += "*"
-                data_readiness = "Complete"
-                if agg["ai_scored"] == 0:
-                    data_readiness = "AI missing"
-                elif agg["ai_not_covered"]:
-                    data_readiness = f"AI partial ({agg['ai_not_covered']} skipped)"
-                # Recommendation derived from coverage + divergence.
+                elif readiness == "resume_only":
+                    ai_text = "— (no transcript)"
+                else:
+                    ai_text = "— (no data)"
+
+                verdict = (cv.ai_verdict or "pending").lower()
+                # HRP-523 REDO — strength is judged on the competences the
+                # manager actually rated; coverage is a separate question,
+                # answered by the ``manager_partial`` branch below.
+                manager_pct = agg["manager_scored_percent"]
+                ai_pct = agg["ai_percent"]
+                manager_strong = (
+                    manager_pct is not None and manager_pct >= strong_percent
+                )
+                ai_strong = ai_pct is not None and ai_pct >= strong_percent
+                has_divergence = agg["divergence_count"] > 0
+                manager_partial = 0 < agg["manager_scored"] < len(comp_keys)
+
                 if agg["manager_scored"] == 0:
                     recommendation = "Awaiting manager review"
-                elif agg["ai_scored"] == 0 or agg["divergence_count"] >= max(
-                    1, len(comp_keys) // 4
-                ):
+                elif not manager_strong or verdict == "not_recommended":
+                    recommendation = "Not recommended"
+                elif manager_partial:
+                    # Strong on what was rated, but the sheet is unfinished —
+                    # not enough evidence to recommend, not a reason to reject.
                     recommendation = "Additional check"
-                else:
+                elif (
+                    ai_strong
+                    and readiness == "resume_and_transcript"
+                    and verdict == "recommended"
+                    and not has_divergence
+                ):
                     recommendation = "Recommended"
+                else:
+                    recommendation = "Additional check"
+
+                # Profile snippet: the AI verdict summary is the sharper
+                # read when it exists, otherwise fall back to the parsed
+                # resume summary. Both capped so the column stays legible.
+                parsed_summary = (
+                    (cv.candidate.parsed_resume_jsonb or {}).get("summary")
+                    if cv.candidate and cv.candidate.parsed_resume_jsonb
+                    else None
+                )
+                profile_source = cv.ai_verdict_summary or parsed_summary or ""
+                profile_summary = profile_source.strip()
+                if len(profile_summary) > 100:
+                    profile_summary = profile_summary[:97].rstrip() + "…"
+
+                # Footnote — only attached when the AI figure carries the
+                # asterisk (partial coverage) or diverges from the manager.
+                note: str | None = None
+                if agg["ai_not_covered"] and has_divergence:
+                    note = (
+                        f"AI {round(agg['ai_total'], 1)}/"
+                        f"{round(max_score * (len(comp_keys) - agg['ai_not_covered']), 1)}"
+                        f" — diverges from the manager on "
+                        f"{agg['divergence_count']} competence(s); "
+                        f"{agg['ai_not_covered']} competence(s) were not "
+                        "verified at the interview and drop out of the "
+                        "AI denominator."
+                    )
+                elif agg["ai_not_covered"]:
+                    note = (
+                        f"{agg['ai_not_covered']} competence(s) were not "
+                        "covered by the interview and drop out of the AI "
+                        "denominator."
+                    )
+                elif has_divergence:
+                    note = (
+                        f"Manager and AI diverge on "
+                        f"{agg['divergence_count']} competence(s)."
+                    )
+
                 summary_rows.append(
                     {
                         "candidate_name": _cv_display_name(cv),
-                        "profile_summary": (
-                            (cv.candidate.parsed_resume_jsonb or {}).get("summary")
-                            if cv.candidate and cv.candidate.parsed_resume_jsonb
-                            else None
-                        ),
+                        "profile_summary": profile_summary,
                         "manager_score_text": manager_text,
                         "ai_score_text": ai_text,
-                        "data_readiness": data_readiness,
+                        "data_readiness": readiness_text,
                         "recommendation": recommendation,
-                        "note": (
-                            f"AI excluded {agg['ai_not_covered']} competences "
-                            "from the denominator (not covered)."
-                            if agg["ai_not_covered"]
-                            else None
-                        ),
+                        "note": note,
                     }
                 )
 
             # Sheet 2 — Matrix payload (competences × candidates).
+            # HRP-524 — each column header needs to know whether the
+            # candidate's AI run saw a transcript (the ✅ marker), and the
+            # Total row needs the per-candidate denominators + percentages
+            # so it can render "39/44 (89%)" and pick a threshold colour.
             matrix_candidates = [
-                {"id": cv.candidate_id, "name": _cv_display_name(cv)}
+                {
+                    "id": cv.candidate_id,
+                    "name": _cv_display_name(cv),
+                    "ai_full_data": (cv.ai_readiness or "").lower()
+                    == "resume_and_transcript",
+                    "manager_denominator": round(max_score * len(comp_keys), 1),
+                    "ai_denominator": round(
+                        max_score
+                        * max(
+                            len(comp_keys) - per_cv_aggregates[cv.id]["ai_not_covered"],
+                            0,
+                        ),
+                        1,
+                    ),
+                    "manager_percent": per_cv_aggregates[cv.id]["manager_percent"],
+                    "ai_percent": per_cv_aggregates[cv.id]["ai_percent"],
+                }
                 for cv in selected_cvs
             ]
             matrix_competences = []
@@ -736,10 +877,18 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 "candidates": matrix_candidates,
                 "competences": matrix_competences,
                 "max_score": max_score,
-                "title": f"{vacancy.title} — competence matrix",
-                "disclaimer": (
-                    f"Divergence threshold: {divergence_threshold}. "
-                    f"AI 'not covered' cells drop out of the AI denominator."
+                "vacancy_title": vacancy.title,
+                "data_disclaimer": (
+                    "Data sources: Manager column is the mean across all "
+                    "evaluators who scored the competence; AI column is the "
+                    "latest completed interview analysis. Cells marked ⚠ are "
+                    "where the two disagree; 'n/a' means the AI did not cover "
+                    "the competence and it drops out of the AI denominator."
+                ),
+                "scale_disclaimer": (
+                    f"Scale: {active_scale.name if active_scale else 'default'} "
+                    f"(max {round(max_score, 1)} per competence). "
+                    f"Divergence threshold: {divergence_threshold}."
                 ),
             }
 
@@ -750,8 +899,9 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 cv_interviews = interviews_by_cv.get(cv.id, [])
                 latest_interview = max(
                     cv_interviews,
-                    key=lambda iv: iv.created_at
-                    or datetime.min.replace(tzinfo=timezone.utc),
+                    key=lambda iv: (
+                        iv.created_at or datetime.min.replace(tzinfo=timezone.utc)
+                    ),
                     default=None,
                 )
                 analysis = (
@@ -772,6 +922,10 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                             citation_lines.append(c)
                     scores_table.append(
                         {
+                            # HRP-525 — the Scores table shows the group
+                            # as well as the competence, so a reader can
+                            # tell which block a low score sits in.
+                            "competence_group": meta.get("group") or "—",
                             "competence_name": meta["name"],
                             "manager_score": cell["manager_score"],
                             "ai_score": cell["ai_score"],
@@ -816,7 +970,13 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     {
                         "candidate_name": _cv_display_name(cv),
                         "position": position_value,
-                        "status": cv.status,
+                        # HRP-525 — the header shows the funnel stage the
+                        # candidate actually sits in; ``cv.status`` is only
+                        # the active/removed flag and read as noise.
+                        "status": (
+                            stage_names.get(cv.stage_id) if cv.stage_id else None
+                        )
+                        or cv.status,
                         "resume_summary": resume_summary,
                         "scores": scores_table,
                         "blind_spots": analysis.get("blind_spots") or [],
@@ -886,6 +1046,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 details=details_payload,
                 incomplete=incomplete_rows,
                 audience=audience,
+                sections=sorted(selected_sections),
             )
 
             file_id = uuid.uuid4()

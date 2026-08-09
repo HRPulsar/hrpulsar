@@ -14,14 +14,17 @@ Covers:
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.modules.recruitment import question_service, service
 from app.modules.recruitment.models import (
+    AIAssessment,
     CandidateFile,
     HumanAssessment,
+    Interview,
     Question,
     QuestionSet,
     VacancyProfile,
@@ -51,8 +54,10 @@ def _gen_questions(n: int = 10) -> GeneratedQuestionSet:
         questions=[
             GeneratedQuestion(
                 text=f"Tell me about decision {i} from your CV.",
-                goal="depth",
-                priority="must" if i < 3 else "should" if i < 7 else "nice_to_ask",
+                goal="verify_skill",
+                priority=(
+                    "must_ask" if i < 3 else "should_ask" if i < 7 else "nice_to_ask"
+                ),
                 competence_name="Senior Python skills",
                 resume_anchor=ResumeAnchor(
                     quote=f"Led migration in 202{i}",
@@ -140,6 +145,35 @@ async def _add_profile(db: AsyncSession, tenant, user, vacancy_id) -> None:
         )
     )
     await db.commit()
+
+
+async def _add_interview(
+    db: AsyncSession,
+    tenant,
+    cv_id,
+    *,
+    transcript: str = "Interviewer: tell me. Candidate: I led the migration.",
+    transcription_status: str = "completed",
+    archived_at=None,
+    analysis_data: dict | None = None,
+    title: str | None = "Interview 1",
+) -> Interview:
+    """A past round the next set can be built on (HRP-444)."""
+    iv = Interview(
+        tenant_id=tenant.id,
+        candidate_vacancy_id=uuid.UUID(str(cv_id)),
+        title=title,
+        status="uploaded",
+        transcript=transcript,
+        transcription_status=transcription_status,
+        analysis_status="completed" if analysis_data else "not_started",
+        analysis_data=analysis_data,
+        archived_at=archived_at,
+    )
+    db.add(iv)
+    await db.commit()
+    await db.refresh(iv)
+    return iv
 
 
 async def _bootstrap(db: AsyncSession, tenant, user) -> dict[str, Any]:
@@ -255,7 +289,7 @@ class TestRegenerate:
             db,
             tenant.id,
             uuid.UUID(str(first["id"])),
-            QuestionCreate2(text="Manual probe", priority="must", source="manual"),
+            QuestionCreate2(text="Manual probe", priority="must_ask", source="manual"),
             current_user_id=user.id,
         )
         indicator = await question_service.add_question_to_set(
@@ -264,7 +298,7 @@ class TestRegenerate:
             uuid.UUID(str(first["id"])),
             QuestionCreate2(
                 text="Indicator probe",
-                priority="should",
+                priority="should_ask",
                 source="from_competency_indicator",
             ),
             current_user_id=user.id,
@@ -303,6 +337,9 @@ class TestDynamicNext:
         self, db: AsyncSession, tenant, user
     ):
         ctx = await _bootstrap(db, tenant, user)
+        # HRP-444: a next-round set is only generated off a real
+        # transcript, so the round has to exist before we ask for one.
+        iv = await _add_interview(db, tenant, ctx["cv"]["id"])
 
         with patch(
             "app.modules.recruitment.question_service._call_llm",
@@ -342,7 +379,8 @@ class TestDynamicNext:
                 uuid.UUID(str(ctx["cv"]["id"])),
                 GenerateQuestionSetRequest(
                     mode="dynamic_next",
-                    source_round_ids=[],
+                    source_round_ids=[iv.id],
+                    create_round=True,
                 ),
                 current_user_id=user.id,
             )
@@ -409,6 +447,391 @@ class TestDynamicNext:
         assert "boss" not in lower
         assert "4.5" not in lower
         assert "strong leader" not in lower
+
+
+class TestNewSetFlow:
+    """HRP-444: New set is guarded, bound to a round, and context-rich."""
+
+    async def _first_set(self, db, tenant, user, cv_id) -> dict:
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = _gen_questions(10)
+            return await question_service.generate_question_set(
+                db,
+                tenant.id,
+                uuid.UUID(str(cv_id)),
+                GenerateQuestionSetRequest(mode="initial"),
+                current_user_id=user.id,
+            )
+
+    async def test_rejects_generation_without_a_transcribed_round(
+        self, db: AsyncSession, tenant, user
+    ):
+        ctx = await _bootstrap(db, tenant, user)
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = _gen_questions(10)
+            with pytest.raises(HTTPException) as exc:
+                await question_service.generate_question_set(
+                    db,
+                    tenant.id,
+                    uuid.UUID(str(ctx["cv"]["id"])),
+                    GenerateQuestionSetRequest(mode="dynamic_next", create_round=True),
+                    current_user_id=user.id,
+                )
+        assert exc.value.status_code == 409
+        # The LLM must not be called at all — the precondition fails first.
+        assert mock_llm.await_count == 0
+
+    async def test_ignores_unfinished_and_archived_transcripts(
+        self, db: AsyncSession, tenant, user
+    ):
+        ctx = await _bootstrap(db, tenant, user)
+        processing = await _add_interview(
+            db,
+            tenant,
+            ctx["cv"]["id"],
+            transcription_status="processing",
+            transcript="half a sentence",
+        )
+        archived = await _add_interview(
+            db,
+            tenant,
+            ctx["cv"]["id"],
+            archived_at=datetime.now(UTC),
+        )
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = _gen_questions(10)
+            with pytest.raises(HTTPException) as exc:
+                await question_service.generate_question_set(
+                    db,
+                    tenant.id,
+                    uuid.UUID(str(ctx["cv"]["id"])),
+                    GenerateQuestionSetRequest(
+                        mode="dynamic_next",
+                        source_round_ids=[processing.id, archived.id],
+                        create_round=True,
+                    ),
+                    current_user_id=user.id,
+                )
+        assert exc.value.status_code == 409
+
+    async def test_opens_the_next_round_and_binds_the_set_to_it(
+        self, db: AsyncSession, tenant, user
+    ):
+        from app.modules.recruitment import manager_assessment_service
+
+        ctx = await _bootstrap(db, tenant, user)
+        cv_id = uuid.UUID(str(ctx["cv"]["id"]))
+        await self._first_set(db, tenant, user, cv_id)
+        iv = await _add_interview(db, tenant, cv_id)
+
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = _gen_questions(9)
+            out = await question_service.generate_question_set(
+                db,
+                tenant.id,
+                cv_id,
+                GenerateQuestionSetRequest(
+                    mode="dynamic_next",
+                    source_round_ids=[iv.id],
+                    create_round=True,
+                    # Deliberately wrong on the wire — a transcript-based
+                    # set is always a round set.
+                    set_type="pre_interview",
+                ),
+                current_user_id=user.id,
+            )
+
+        assert out["set_type"] == "interview_round"
+        assert out["assessment_round_id"] is not None
+        rounds = await manager_assessment_service.list_rounds(db, tenant.id, cv_id)
+        interview_rounds = [r for r in rounds if r["type"] == "interview"]
+        assert len(interview_rounds) == 1
+        assert interview_rounds[0]["round_number"] == 1
+        assert str(interview_rounds[0]["id"]) == str(out["assessment_round_id"])
+
+    async def test_one_set_per_round(self, db: AsyncSession, tenant, user):
+        from app.modules.recruitment import manager_assessment_service
+        from app.modules.recruitment.manager_assessment_schemas import RoundCreate
+
+        ctx = await _bootstrap(db, tenant, user)
+        cv_id = uuid.UUID(str(ctx["cv"]["id"]))
+        iv = await _add_interview(db, tenant, cv_id)
+        rd = await manager_assessment_service.create_round(
+            db, tenant.id, user.id, cv_id, RoundCreate(type="interview")
+        )
+
+        req = GenerateQuestionSetRequest(
+            mode="dynamic_next",
+            source_round_ids=[iv.id],
+            assessment_round_id=uuid.UUID(str(rd["id"])),
+        )
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = _gen_questions(10)
+            first = await question_service.generate_question_set(
+                db, tenant.id, cv_id, req, current_user_id=user.id
+            )
+            assert str(first["assessment_round_id"]) == str(rd["id"])
+
+            with pytest.raises(HTTPException) as exc:
+                await question_service.generate_question_set(
+                    db, tenant.id, cv_id, req, current_user_id=user.id
+                )
+        assert exc.value.status_code == 409
+
+    async def test_rejects_a_round_from_another_candidate_vacancy(
+        self, db: AsyncSession, tenant, user
+    ):
+        from app.modules.recruitment import manager_assessment_service
+        from app.modules.recruitment.manager_assessment_schemas import RoundCreate
+
+        mine = await _bootstrap(db, tenant, user)
+        other = await _bootstrap(db, tenant, user)
+        iv = await _add_interview(db, tenant, mine["cv"]["id"])
+        foreign = await manager_assessment_service.create_round(
+            db,
+            tenant.id,
+            user.id,
+            uuid.UUID(str(other["cv"]["id"])),
+            RoundCreate(type="interview"),
+        )
+
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = _gen_questions(10)
+            with pytest.raises(HTTPException) as exc:
+                await question_service.generate_question_set(
+                    db,
+                    tenant.id,
+                    uuid.UUID(str(mine["cv"]["id"])),
+                    GenerateQuestionSetRequest(
+                        mode="dynamic_next",
+                        source_round_ids=[iv.id],
+                        assessment_round_id=uuid.UUID(str(foreign["id"])),
+                    ),
+                    current_user_id=user.id,
+                )
+        assert exc.value.status_code == 404
+
+    async def test_prompt_carries_prior_analysis_and_blind_spots(
+        self, db: AsyncSession, tenant, user
+    ):
+        ctx = await _bootstrap(db, tenant, user)
+        cv_id = uuid.UUID(str(ctx["cv"]["id"]))
+        comp_id = str(uuid.uuid4())
+        iv = await _add_interview(
+            db,
+            tenant,
+            cv_id,
+            analysis_data={
+                "data_completeness": "partial",
+                "competence_assessments": [
+                    {
+                        "competence_id": comp_id,
+                        "status": "insufficient",
+                        "confidence": "low",
+                    }
+                ],
+                "blind_spots": [
+                    {
+                        "competence_id": comp_id,
+                        "suggested_question": "How did you size the cache?",
+                    }
+                ],
+                "red_flags": [
+                    {
+                        "flag_type": "inconsistency",
+                        "severity": "medium",
+                        "description": "Dates do not line up.",
+                    }
+                ],
+            },
+        )
+
+        captured: dict[str, Any] = {}
+
+        async def fake_call_llm(**kw):
+            captured.update(kw)
+            return _gen_questions(10)
+
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new=fake_call_llm,
+        ):
+            await question_service.generate_question_set(
+                db,
+                tenant.id,
+                cv_id,
+                GenerateQuestionSetRequest(
+                    mode="dynamic_next",
+                    source_round_ids=[iv.id],
+                    create_round=True,
+                ),
+                current_user_id=user.id,
+            )
+
+        assert captured["transcripts"], "transcript must reach the model"
+        assert captured["blind_spots"][0]["suggested_question"]
+        analyses = captured["prior_analyses"]
+        assert analyses[0]["competence_assessments"][0]["status"] == "insufficient"
+        assert analyses[0]["red_flags"][0]["flag_type"] == "inconsistency"
+
+        prompt = build_question_set_prompt(
+            vacancy_title=captured["vacancy"].title,
+            language="en",
+            profile_competences=captured["profile_competences"],
+            resume_data=captured["resume_data"],
+            previous_questions=captured["previous_questions"],
+            transcripts=captured["transcripts"],
+            blind_spots=captured["blind_spots"],
+            prior_analyses=captured["prior_analyses"],
+            manager_divergence=captured["manager_divergence"],
+            generation_mode="dynamic_next",
+        )
+        # The next-round rules only appear in the mode that needs them.
+        assert "NEXT-ROUND RULES" in prompt
+        assert "How did you size the cache?" in prompt
+
+    async def test_divergence_reaches_the_prompt_without_any_scores(
+        self, db: AsyncSession, tenant, user
+    ):
+        ctx = await _bootstrap(db, tenant, user)
+        cv_id = uuid.UUID(str(ctx["cv"]["id"]))
+        comp_id = uuid.uuid4()
+        iv = await _add_interview(db, tenant, cv_id)
+        db.add(
+            HumanAssessment(
+                tenant_id=tenant.id,
+                candidate_vacancy_id=cv_id,
+                competence_id=comp_id,
+                evaluator_id=user.id,
+                evaluator_name="Boss",
+                score=5.0,
+                comment="outstanding leader",
+            )
+        )
+        db.add(
+            AIAssessment(
+                tenant_id=tenant.id,
+                interview_id=iv.id,
+                competence_id=comp_id,
+                score=1.0,
+                status="assessed",
+                reasoning="thin evidence",
+            )
+        )
+        await db.commit()
+
+        captured: dict[str, Any] = {}
+
+        async def fake_call_llm(**kw):
+            captured.update(kw)
+            return _gen_questions(10)
+
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new=fake_call_llm,
+        ):
+            await question_service.generate_question_set(
+                db,
+                tenant.id,
+                cv_id,
+                GenerateQuestionSetRequest(
+                    mode="dynamic_next",
+                    source_round_ids=[iv.id],
+                    create_round=True,
+                ),
+                current_user_id=user.id,
+            )
+
+        divergence = captured["manager_divergence"]
+        assert divergence == [{"competence_id": str(comp_id), "disagreed": True}]
+
+        prompt = build_question_set_prompt(
+            vacancy_title=captured["vacancy"].title,
+            language="en",
+            profile_competences=captured["profile_competences"],
+            resume_data=captured["resume_data"],
+            previous_questions=captured["previous_questions"],
+            transcripts=captured["transcripts"],
+            blind_spots=captured["blind_spots"],
+            prior_analyses=captured["prior_analyses"],
+            manager_divergence=captured["manager_divergence"],
+            generation_mode="dynamic_next",
+        )
+        lower = prompt.lower()
+        # Anti-bias: the model learns THAT they disagreed, never the
+        # scores, the direction, or who scored it.
+        assert "boss" not in lower
+        assert "outstanding leader" not in lower
+        assert "5.0" not in lower
+        assert "disagreed" in lower
+
+    async def test_agreeing_scores_are_not_reported_as_divergence(
+        self, db: AsyncSession, tenant, user
+    ):
+        ctx = await _bootstrap(db, tenant, user)
+        cv_id = uuid.UUID(str(ctx["cv"]["id"]))
+        comp_id = uuid.uuid4()
+        iv = await _add_interview(db, tenant, cv_id)
+        db.add(
+            HumanAssessment(
+                tenant_id=tenant.id,
+                candidate_vacancy_id=cv_id,
+                competence_id=comp_id,
+                evaluator_id=user.id,
+                score=4.0,
+            )
+        )
+        db.add(
+            AIAssessment(
+                tenant_id=tenant.id,
+                interview_id=iv.id,
+                competence_id=comp_id,
+                score=4.0,
+                status="assessed",
+            )
+        )
+        await db.commit()
+
+        captured: dict[str, Any] = {}
+
+        async def fake_call_llm(**kw):
+            captured.update(kw)
+            return _gen_questions(10)
+
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new=fake_call_llm,
+        ):
+            await question_service.generate_question_set(
+                db,
+                tenant.id,
+                cv_id,
+                GenerateQuestionSetRequest(
+                    mode="dynamic_next",
+                    source_round_ids=[iv.id],
+                    create_round=True,
+                ),
+                current_user_id=user.id,
+            )
+        assert captured["manager_divergence"] == []
 
 
 class TestSampleMode:

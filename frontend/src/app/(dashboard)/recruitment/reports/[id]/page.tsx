@@ -118,7 +118,7 @@ export default function ReportDetailPage({
           { label: t("breadcrumbReports"), href: "/recruitment/reports" },
           {
             label: report
-              ? report.template_name || t("reportBreadcrumbFallback")
+              ? t("reportBreadcrumbFallback")
               : t("loading"),
           },
         ]}
@@ -127,7 +127,7 @@ export default function ReportDetailPage({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
-            {report?.template_name || t("reportDetailTitleFallback")}
+            {t("reportDetailTitleFallback")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {report ? (

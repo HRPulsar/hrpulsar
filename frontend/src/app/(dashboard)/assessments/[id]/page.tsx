@@ -83,6 +83,7 @@ import { ArrowLeft, ArrowRightLeft, Check, Info, MoreHorizontal, Pencil, Plus, S
 import { AssessmentDetailedResults } from "@/components/assessment/assessment-detailed-results";
 import { AssessmentRecommendationCard } from "@/components/assessment/assessment-recommendation-card";
 import { CriteriaSheet } from "@/components/assessment/criteria-sheet";
+import { MatchPercentChip } from "@/components/assessment/match-percent-chip";
 import { isPastDeadline, todayLocalISO } from "@/lib/deadline";
 import { formatDate } from "@/lib/date-format";
 import { CriteriaSummary } from "@/components/assessment/criteria-summary";
@@ -1308,18 +1309,19 @@ export default function AssessmentDetailPage() {
 
       {/* Results */}
       {canViewResults && assessment.results.length > 0 && (
-        <Card>
+        // HRP-528: the group analytics matrix deep-links here.
+        <Card id="results" className="scroll-mt-20">
           <CardHeader className="flex-row items-center justify-between">
             <div className="flex items-baseline gap-3">
               <CardTitle className="text-base">{t("results")}</CardTitle>
-              {assessment.overall_percent !== null && (
-                <span
-                  className="text-lg font-semibold text-primary"
-                  data-testid="assessment-results-overall-percent"
-                >
-                  {assessment.overall_percent}%
-                </span>
-              )}
+              {/* HRP-527: no null gate — the chip renders the muted dash
+                  itself, which is the spec's "no result" state (an assessment
+                  answered entirely with "Don't know" still has result rows). */}
+              <MatchPercentChip
+                percent={assessment.overall_percent}
+                className="h-6 px-2.5 text-sm"
+                data-testid="assessment-results-overall-percent"
+              />
             </div>
             {/* HRP-185: Calibrate lives in the Detailed results card now —
                 the spec moves calibration onto per-indicator Totals. */}
@@ -1389,7 +1391,7 @@ export default function AssessmentDetailPage() {
                           {(r.calibrated_score ?? r.avg_score).toFixed(2)}
                         </TableCell>
                         <TableCell data-testid={`assessment-results-row-${r.competence_id}-percent`}>
-                          {r.percent === null ? "—" : `${r.percent}%`}
+                          <MatchPercentChip percent={r.percent} />
                         </TableCell>
                         <TableCell data-testid={`assessment-results-row-${r.competence_id}-level`}>
                           {r.level ? (
@@ -2037,7 +2039,9 @@ export default function AssessmentDetailPage() {
                           })
                         : "—"}
                     </TableCell>
-                    <TableCell>{row.percent === null ? "—" : `${row.percent}%`}</TableCell>
+                    <TableCell>
+                      <MatchPercentChip percent={row.percent} />
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

@@ -405,7 +405,7 @@ function CompactToolbar({
         size="sm"
         render={
           <Link
-            href={`/recruitment/requisitions/${vacancyId}/canvas`}
+            href={`/recruitment/requisitions/${vacancyId}/assessments/canvas`}
             data-testid="assessment-canvas-open-fullscreen-btn"
           >
             <ExternalLink className="mr-1 size-4" />

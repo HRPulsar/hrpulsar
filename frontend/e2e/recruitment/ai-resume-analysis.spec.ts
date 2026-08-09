@@ -7,8 +7,8 @@
  * gated, see backend/app/modules/recruitment/router.py) and asserts the
  * candidate card honours the contract the recruiter actually depends on:
  *
- *   1. Fresh candidate with no AI run → empty state + Analyze split button
- *      shows the resume-only price tag.
+ *   1. Fresh manually-added candidate → empty state + a disabled
+ *      Analyze split-button (HRP-488 case 1: nothing to analyse yet).
  *   2. After a seeded ``resume_only`` verdict the AI Insights section
  *      renders the verdict word AND the ``[resume only]`` sub-badge.
  *   3. A full-mode seeded verdict swaps the sub-badge to ``[full]``.
@@ -100,7 +100,7 @@ async function seedVerdict(
 }
 
 test.describe("HRP-273 — Resume-only AI analysis UI", () => {
-  test("empty state surfaces the resume-only split-button", async ({ page }) => {
+  test("empty state surfaces the Analyze split-button", async ({ page }) => {
     const setup = await setupVacancyWithCandidate(page);
     await page.goto(
       `/recruitment/candidates/${setup.candidateId}?vacancyId=${setup.vacancyId}`,
@@ -111,11 +111,37 @@ test.describe("HRP-273 — Resume-only AI analysis UI", () => {
     );
     await expect(aiInsights).toBeVisible({ timeout: 15000 });
 
-    const analyzeButton = page.getByTestId(
-      "candidate-section-ai-insights-analyze-resume-only",
+    // HRP-488: the empty state owns the action now — the section footer
+    // that used to carry it is gone, and both modes live in the menu
+    // behind a single "Analyze" trigger.
+    const analyzeTrigger = aiInsights.getByTestId(
+      "candidate-section-ai-insights-analyze-menu-trigger",
     );
-    await expect(analyzeButton).toBeVisible();
-    await expect(analyzeButton).toContainText(/Resume only/i);
+    await expect(analyzeTrigger).toBeVisible();
+    await expect(analyzeTrigger).toContainText(/Analyze/i);
+
+    // HRP-488 case 1: this candidate was added by hand, so there is no
+    // resume to analyse — the control is visible (the option stays
+    // discoverable) but disabled, and the hint says what to do.
+    await expect(analyzeTrigger).toBeDisabled();
+    await expect(aiInsights).toContainText(/resume/i);
+  });
+
+  test("the manual refresh control is gone from the section header", async ({
+    page,
+  }) => {
+    // HRP-489: it never did anything a user could observe — the section
+    // refetches after every trigger and polls while a run is in flight.
+    const setup = await setupVacancyWithCandidate(page);
+    await page.goto(
+      `/recruitment/candidates/${setup.candidateId}?vacancyId=${setup.vacancyId}`,
+    );
+
+    const section = page.getByTestId("candidate-section-ai-insights");
+    await expect(section).toBeVisible({ timeout: 15000 });
+    await expect(section.getByRole("button", { name: /refresh/i })).toHaveCount(
+      0,
+    );
   });
 
   test("seeded resume-only verdict renders verdict word + [resume only] sub-badge", async ({

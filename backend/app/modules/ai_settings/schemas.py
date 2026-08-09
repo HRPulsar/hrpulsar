@@ -74,3 +74,8 @@ class ProviderStatusRead(BaseModel):
     configured: bool
     source: Literal["global", "byok", "local"] | None
     supports_local: bool
+    # State of the tenant's stored key for this provider, when there is
+    # one (HRP-514): ``decrypt_failed`` means the row exists but its
+    # ciphertext is unreadable, so generation silently uses the platform
+    # key — the UI must not present it as BYOK.
+    key_status: Literal["ok", "decrypt_failed"] | None = None

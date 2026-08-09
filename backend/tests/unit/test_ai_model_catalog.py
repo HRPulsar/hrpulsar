@@ -343,6 +343,10 @@ class TestDiscoveryFilters:
 
         monkeypatch.setattr(llm_client, "_get_openai", lambda key: FakeClient())
         out = await provider_discovery.discover_openai("key")
+        # o-series stays in: it is chat-capable, and HRP-500 taught the
+        # dispatch its parameter shape (max_completion_tokens, no
+        # temperature) instead of hiding the family from the catalog — see
+        # ``test_o_series_dispatch_uses_max_completion_tokens``.
         assert {m["model_id"] for m in out} == {
             "gpt-4o",
             "gpt-4o-2024-08-06",
@@ -657,14 +661,16 @@ class TestEffectiveMultiplierAsync:
         row = await ai_settings_service.get_or_default(db, tenant.id)
         row.llm_model = model_id
         assert ai_settings_service._model_lookup(model_id) is None
-        value = await ai_settings_service.get_effective_credit_multiplier_async(
-            db, row
-        )
+        value = await ai_settings_service.get_effective_credit_multiplier_async(db, row)
         assert value == pytest.approx(2.5)
 
-    async def test_registry_wins_over_catalog_row(
+    async def test_catalog_row_wins_over_registry(
         self, db: AsyncSession, tenant, _registry_guard
     ) -> None:
+        """HRP-500 (review #10): the catalog is the source of truth and the
+        in-memory registry is only this process's cache of it. A multiplier
+        edit reaches the registry of one uvicorn worker; billing must not
+        depend on which worker answers."""
         model_id = f"claude-billing-{uuid.uuid4().hex[:6]}"
         await model_catalog_service.seed_from_registry(db)
         with patch.object(settings, "deployment_mode", "onprem"):
@@ -686,17 +692,354 @@ class TestEffectiveMultiplierAsync:
 
         row = await ai_settings_service.get_or_default(db, tenant.id)
         row.llm_model = model_id
-        value = await ai_settings_service.get_effective_credit_multiplier_async(
-            db, row
-        )
-        assert value == pytest.approx(3.0)
+        value = await ai_settings_service.get_effective_credit_multiplier_async(db, row)
+        assert value == pytest.approx(2.5)
 
     async def test_defaults_to_one_when_unknown_everywhere(
         self, db: AsyncSession, tenant
     ) -> None:
         row = await ai_settings_service.get_or_default(db, tenant.id)
         row.llm_model = f"ghost-model-{uuid.uuid4().hex[:6]}"
-        value = await ai_settings_service.get_effective_credit_multiplier_async(
+        value = await ai_settings_service.get_effective_credit_multiplier_async(db, row)
+        assert value == pytest.approx(1.0)
+
+
+class TestCatalogAsSourceOfTruth:
+    """HRP-500 — the catalog reaches the worker, the presets, the picker
+    ranking and the billing resolver."""
+
+    async def test_seed_row_outranks_a_newer_dated_snapshot(
+        self, db: AsyncSession
+    ) -> None:
+        # ANTHROPIC_FAST is a dated id that is not canonical under its own
+        # normalization and carries no row multiplier, so a discovered
+        # '...-20260210' used to take the family's picker slot — dropping
+        # the id EFFORT_PRESETS still returns (review #13).
+        await model_catalog_service.seed_from_registry(db)
+        seed_id = model_registry.ANTHROPIC_FAST
+        family = model_catalog_service.normalize_model_id(seed_id, "anthropic")
+        newer = f"{family}-20260210"
+        with patch.object(settings, "deployment_mode", "onprem"):
+            await model_catalog_service.upsert_discovered(
+                db, "anthropic", [{"model_id": newer, "label": "newer snapshot"}]
+            )
+        rows = await model_catalog_service.approved_models(db)
+        with patch.object(settings, "deployment_mode", "saas"):
+            picker = {m["model"] for m in model_catalog_service.to_read_dicts(rows)}
+        assert seed_id in picker
+        assert newer not in picker
+
+    async def test_disabled_preset_model_falls_back_to_the_catalog(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # Preset tenants never pin a model, so disabling the preset's model
+        # in the catalog used to change nothing at all (review #12).
+        await model_catalog_service.seed_from_registry(db)
+        row = await ai_settings_service.get_or_default(db, tenant.id)
+        row.llm_model = None
+        row.effort_level = "balanced"
+        await db.commit()
+
+        with patch.object(settings, "llm_provider", "anthropic"):
+            preset_model = ai_settings_service.get_effective_model(row)
+            assert preset_model == model_registry.ANTHROPIC_BALANCED
+
+            entry = await model_catalog_service.get_entry(db, preset_model)
+            assert entry is not None
+            entry.enabled = False
+            substitute_id = f"claude-substitute-{uuid.uuid4().hex[:6]}"
+            db.add(
+                ModelCatalogEntry(
+                    provider="anthropic",
+                    model_id=substitute_id,
+                    label=substitute_id,
+                    tier="balanced",
+                    status="approved",
+                    enabled=True,
+                    credit_multiplier=1.0,
+                    source="discovered",
+                )
+            )
+            await db.commit()
+
+            resolved = await ai_settings_service.get_effective_model_async(db, row)
+        assert resolved == substitute_id
+
+    async def test_disabled_family_snapshot_is_not_a_substitute(
+        self, db: AsyncSession
+    ) -> None:
+        # review #3: the kill-switch filtered row by row, so disabling
+        # claude-sonnet-5 left its discovered snapshot enabled and the
+        # substitution handed back the very model that was turned off.
+        # Synthetic family + tier so the assertion is independent of what
+        # the rest of the suite has already switched off in the catalog.
+        suffix = uuid.uuid4().hex[:6]
+        tier = f"tier-{suffix}"
+        family = f"claude-famkill-{suffix}"
+        rows = [
+            (family, False),
+            (f"{family}-20260601", True),  # re-dated snapshot of the same family
+            (f"claude-other-{suffix}", True),
+        ]
+        for model_id, enabled in rows:
+            db.add(
+                ModelCatalogEntry(
+                    provider="anthropic",
+                    model_id=model_id,
+                    label=model_id,
+                    tier=tier,
+                    status="approved",
+                    enabled=enabled,
+                    credit_multiplier=1.0,
+                    source="discovered",
+                )
+            )
+        await db.commit()
+
+        picked = await model_catalog_service.pick_tier_model(db, "anthropic", tier)
+        assert picked == f"claude-other-{suffix}"
+
+    async def test_substitute_stays_on_the_disabled_model_provider(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # review #2: the substitution read the provider off the platform
+        # default, so a tenant pinned to gpt-4o through its own OpenAI key
+        # was handed a Claude model — silently bypassing its BYOK creds and
+        # contradicting the effective_provider the same projection reports.
+        suffix = uuid.uuid4().hex[:6]
+        tier = f"tier-{suffix}"
+        pinned_id = f"gpt-pinned-{suffix}"
+        substitute_id = f"gpt-sub-{suffix}"
+        decoy_id = f"claude-decoy-{suffix}"
+        for provider, model_id, enabled in [
+            ("openai", pinned_id, False),
+            ("openai", substitute_id, True),
+            ("anthropic", decoy_id, True),
+        ]:
+            db.add(
+                ModelCatalogEntry(
+                    provider=provider,
+                    model_id=model_id,
+                    label=model_id,
+                    tier=tier,
+                    status="approved",
+                    enabled=enabled,
+                    credit_multiplier=1.0,
+                    source="discovered",
+                )
+            )
+        row = await ai_settings_service.get_or_default(db, tenant.id)
+        row.llm_model = pinned_id
+        row.effort_level = "custom"
+        await db.commit()
+
+        # Platform default is Anthropic — the buggy resolver picked the
+        # decoy from there instead of staying on the tenant's provider.
+        with patch.object(settings, "llm_provider", "anthropic"):
+            resolved = await ai_settings_service.get_effective_model_async(db, row)
+        assert resolved == substitute_id
+        assert ai_settings_service.get_effective_provider(row) == "openai"
+
+    async def test_no_same_provider_substitute_keeps_the_pinned_model(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # Better an honest (deprecated) model than a silent provider swap.
+        suffix = uuid.uuid4().hex[:6]
+        tier = f"tier-{suffix}"
+        pinned_id = f"gemini-pinned-{suffix}"
+        for provider, model_id, enabled in [
+            ("gemini", pinned_id, False),
+            ("anthropic", f"claude-decoy-{suffix}", True),
+        ]:
+            db.add(
+                ModelCatalogEntry(
+                    provider=provider,
+                    model_id=model_id,
+                    label=model_id,
+                    tier=tier,
+                    status="approved",
+                    enabled=enabled,
+                    credit_multiplier=1.0,
+                    source="discovered",
+                )
+            )
+        row = await ai_settings_service.get_or_default(db, tenant.id)
+        row.llm_model = pinned_id
+        row.effort_level = "custom"
+        await db.commit()
+
+        with patch.object(settings, "llm_provider", "anthropic"):
+            resolved = await ai_settings_service.get_effective_model_async(db, row)
+        assert resolved == pinned_id
+
+    async def test_get_entry_is_provider_scoped_and_deterministic(
+        self, db: AsyncSession
+    ) -> None:
+        # Uniqueness is (provider, model_id): a proxied id can exist under
+        # two providers, and the provider-blind lookup must still be stable.
+        model_id = f"gpt-shared-{uuid.uuid4().hex[:6]}"
+        for provider in ("openai", "gemini"):
+            db.add(
+                ModelCatalogEntry(
+                    provider=provider,
+                    model_id=model_id,
+                    label=model_id,
+                    tier=None,
+                    status="approved",
+                    enabled=True,
+                    credit_multiplier=1.0,
+                    source="discovered",
+                )
+            )
+        await db.commit()
+
+        scoped = await model_catalog_service.get_entry(db, model_id, provider="openai")
+        assert scoped is not None and scoped.provider == "openai"
+        blind = await model_catalog_service.get_entry(db, model_id)
+        assert blind is not None and blind.provider == "gemini"  # order_by(provider)
+
+    async def test_unknown_local_model_is_not_overridden(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # A model the catalog has never seen (local/BYOK name) stays as-is.
+        row = await ai_settings_service.get_or_default(db, tenant.id)
+        row.llm_model = f"qwen-local-{uuid.uuid4().hex[:6]}"
+        await db.commit()
+        resolved = await ai_settings_service.get_effective_model_async(db, row)
+        assert resolved == row.llm_model
+
+    async def test_read_projection_quotes_the_billed_multiplier(
+        self, db: AsyncSession, tenant, _registry_guard
+    ) -> None:
+        # review #14: the settings page resolved the multiplier from the
+        # registry while billing read the catalog, so it could quote x1.0
+        # for a model charged at x2.5.
+        model_id = f"claude-readproj-{uuid.uuid4().hex[:6]}"
+        db.add(
+            ModelCatalogEntry(
+                provider="anthropic",
+                model_id=model_id,
+                label=model_id,
+                tier=None,
+                status="approved",
+                enabled=True,
+                credit_multiplier=2.5,
+                source="discovered",
+            )
+        )
+        row = await ai_settings_service.get_or_default(db, tenant.id)
+        row.llm_model = model_id
+        await db.commit()
+        await db.refresh(row)
+
+        assert ai_settings_service._model_lookup(model_id) is None
+        projected = await ai_settings_service.to_read_dict_async(db, row)
+        billed = await ai_settings_service.get_effective_credit_multiplier_async(
             db, row
         )
+        assert projected["effective_credit_multiplier"] == pytest.approx(2.5)
+        assert projected["effective_credit_multiplier"] == pytest.approx(billed)
+
+    async def test_unpriced_pinned_model_warns_before_billing_one(
+        self, db: AsyncSession, tenant, caplog
+    ) -> None:
+        # review #11: a model dropped from credits.yaml and never moderated
+        # billed at 1.0 without a trace.
+        row = await ai_settings_service.get_or_default(db, tenant.id)
+        row.llm_model = f"claude-dropped-{uuid.uuid4().hex[:6]}"
+        await db.commit()
+        with caplog.at_level("WARNING"):
+            value = await ai_settings_service.get_effective_credit_multiplier_async(
+                db, row
+            )
         assert value == pytest.approx(1.0)
+        assert "no credit multiplier" in caplog.text
+
+    async def test_legacy_anthropic_ids_keep_their_output_cap(self) -> None:
+        # review #7: both ids are still served by Anthropic and reachable
+        # through BYOK rows; the 8192 fallback truncated long generations.
+        clamp = llm_client._clamp_anthropic_max_tokens
+        assert clamp("claude-sonnet-4-6", 64000) == 64000
+        assert clamp("claude-opus-4-7", 32768) == 32000
+
+    async def test_o_series_dispatch_uses_max_completion_tokens(self) -> None:
+        # review #9: o-series passes the discovery filter and is pickable on
+        # community installs, but the chat-completions parameter shape 400s.
+        from types import SimpleNamespace
+
+        captured: dict = {}
+
+        class _FakeCompletions:
+            async def create(self, **kwargs):
+                captured.clear()
+                captured.update(kwargs)
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason="stop",
+                            message=SimpleNamespace(content="ok"),
+                        )
+                    ]
+                )
+
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=_FakeCompletions())
+        )
+        with patch.object(llm_client, "_get_openai", return_value=fake_client):
+            await llm_client.generate("hi", model="o3-mini", max_tokens=4096)
+            assert captured["max_completion_tokens"] == 4096
+            assert "max_tokens" not in captured
+            assert "temperature" not in captured
+
+            await llm_client.generate("hi", model="gpt-4o", max_tokens=4096)
+            assert captured["max_tokens"] == 4096
+            assert "max_completion_tokens" not in captured
+            assert "temperature" in captured
+
+    # ``test_worker_bootstrap_registers_ai_models`` (review #5) lives in
+    # ``tests/unit/ee/test_ai_model_registry_sync.py`` — it imports from
+    # ``ee`` and core tests are synced to the public repo.
+
+    async def test_o1_mini_keeps_its_own_output_cap(self) -> None:
+        # The cap table used to be first-match, so "o1-mini" inherited the
+        # 100k "o1" ceiling and every request 400'd.
+        clamp = llm_client._clamp_openai_max_tokens
+        assert clamp("o1-mini", 100000) == 65536
+        assert clamp("o1-preview", 100000) == 32768
+        assert clamp("o1", 100000) == 100000
+        assert clamp("gpt-4o-mini", 100000) == 16384
+
+    async def test_o1_mini_folds_system_into_the_user_turn(self) -> None:
+        # o1-mini/o1-preview predate the `developer` role and reject a
+        # `system` message outright — the schema contract generate_json
+        # appends there must survive as part of the user turn.
+        from types import SimpleNamespace
+
+        captured: dict = {}
+
+        class _FakeCompletions:
+            async def create(self, **kwargs):
+                captured.clear()
+                captured.update(kwargs)
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason="stop",
+                            message=SimpleNamespace(content="ok"),
+                        )
+                    ]
+                )
+
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=_FakeCompletions())
+        )
+        with patch.object(llm_client, "_get_openai", return_value=fake_client):
+            await llm_client.generate("hi", system="RULES", model="o1-mini")
+            roles = [m["role"] for m in captured["messages"]]
+            assert roles == ["user"]
+            assert captured["messages"][0]["content"].startswith("RULES")
+            assert "hi" in captured["messages"][0]["content"]
+
+            # Newer reasoning models still take a real system message.
+            await llm_client.generate("hi", system="RULES", model="o3-mini")
+            assert [m["role"] for m in captured["messages"]] == ["system", "user"]

@@ -160,6 +160,20 @@ async def update_round_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
 ) -> dict[str, Any]:
+    # HRP-376: the kebab sends an explicit action ("restore" cannot be
+    # expressed as a target status — it lands on complete or in_progress
+    # depending on where the round was archived from). The older
+    # ``{"status": ...}`` shape stays supported.
+    action = payload.get("action")
+    if isinstance(action, str):
+        return await service.apply_round_action(
+            db,
+            current_user.tenant_id,
+            current_user.id,
+            round_id,
+            action,
+            archived_reason=payload.get("archived_reason"),
+        )
     new_status = payload.get("status")
     if not isinstance(new_status, str):
         raise AppError("round_status_required", status.HTTP_400_BAD_REQUEST)
@@ -194,7 +208,12 @@ async def round_aggregate_endpoint(
     # rather than left open to any authenticated tenant member.
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
 ) -> dict[str, Any]:
-    return await service.round_aggregate(db, current_user.tenant_id, round_id)
+    # HRP-373: it also names each scorer, so an evaluator of this round
+    # only sees their own numbers until their own sheet is in — the same
+    # anti-anchoring gate the per-sheet listing applies.
+    return await service.round_aggregate(
+        db, current_user.tenant_id, round_id, viewer_user_id=current_user.id
+    )
 
 
 @router.get("/v1/assessment-rounds/{round_id}/assessments")
@@ -203,9 +222,21 @@ async def list_round_assessments_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
+    # HRP-373: a colleague's sheet stays hidden until the caller's own one
+    # is in, so nobody anchors their scores on someone else's.
     return await service.list_assessments_for_round(
-        db, current_user.tenant_id, round_id
+        db, current_user.tenant_id, round_id, viewer_user_id=current_user.id
     )
+
+
+@router.get("/v1/assessment-rounds/{round_id}/eligible-evaluators")
+async def list_eligible_evaluators_endpoint(
+    round_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+) -> list[dict[str, Any]]:
+    """HRP-373: candidates for the `+ Add evaluator` picker."""
+    return await service.list_eligible_evaluators(db, current_user.tenant_id, round_id)
 
 
 # --- Assessments — per-evaluator sheets ----------------------------------
@@ -217,7 +248,12 @@ async def get_assessment_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    return await service.get_assessment(db, current_user.tenant_id, assessment_id)
+    # HRP-373: fetching a colleague's sheet by id is the same disclosure
+    # the round listing filters out — refused until the caller's own sheet
+    # is submitted (or the round closes).
+    return await service.get_assessment(
+        db, current_user.tenant_id, assessment_id, viewer_user_id=current_user.id
+    )
 
 
 @router.patch("/v1/assessments/{assessment_id}/competence-scores/{competence_id}")
@@ -314,6 +350,18 @@ async def revoke_invite_endpoint(
     )
 
 
+@router.post("/v1/manager-assessment-invites/{invite_id}/resend")
+async def resend_invite_endpoint(
+    invite_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+) -> dict[str, Any]:
+    """HRP-377: mail the same invitation link again (bounced / lost email)."""
+    return await service.resend_invite(
+        db, current_user.tenant_id, current_user.id, invite_id
+    )
+
+
 @router.post("/v1/manager-assessment-invites/{invite_id}/extend")
 async def extend_invite_endpoint(
     invite_id: uuid.UUID,
@@ -366,6 +414,18 @@ async def public_get_endpoint(
 ) -> dict[str, Any]:
     _security_headers(response)
     return await public_service.public_get_context(db, token, ip=_client_ip(request))
+
+
+@public_router.get("/v1/public/assessments/{token}/resume-preview")
+async def public_resume_preview_endpoint(
+    token: str,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """HRP-371: renderable resume preview (docx text, pdf URL, or neither)."""
+    _security_headers(response)
+    return await public_service.public_resume_preview(db, token, ip=_client_ip(request))
 
 
 @public_router.post("/v1/public/assessments/{token}/consent/accept")

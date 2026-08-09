@@ -102,6 +102,13 @@ celery.conf.update(
             "task": "app.modules.recruitment.tasks.cleanup_stuck_recruitment_tasks_task",
             "schedule": 600.0,  # every 10 minutes
         },
+        "purge-archived-interviews": {
+            # HRP-418: archived interviews are restorable for 90 days; after
+            # that the recording is dropped from object storage while the
+            # row stays for audit. Window enforced inside the task.
+            "task": "app.modules.recruitment.tasks.purge_archived_interviews_task",
+            "schedule": 86400.0,  # daily
+        },
         "cleanup-detached-resume-files": {
             # HRP-181 REDO Stage 3: bulk-upload resumes the user never
             # finalised. 7-day retention window enforced inside the task.

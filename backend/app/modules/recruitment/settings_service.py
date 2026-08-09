@@ -40,6 +40,7 @@ from app.modules.recruitment.settings_schemas import (
     ScaleConfigUpdate,
     TranscriptionProviderCreate,
     TranscriptionProviderUpdate,
+    ensure_provider_owns_model,
 )
 
 # ─── Scales (SCR-90) ────────────────────────────────────────────────
@@ -202,6 +203,23 @@ async def update_llm_provider(
     payload = data.model_dump(exclude_unset=True)
     if "settings" in payload:
         await _guard_llm_settings(payload["settings"])
+    if payload.get("model"):
+        # The patch carries no provider — cross-check the new model against
+        # the row's stored one (HRP-498). The row's base_url (patched in the
+        # same call, or the stored one) decides whether prefix ownership
+        # applies at all: proxies serve upstream model ids verbatim.
+        effective_settings = payload.get("settings", cfg.settings)
+        try:
+            ensure_provider_owns_model(
+                cfg.provider, payload["model"], effective_settings
+            )
+        except ValueError:
+            raise AppError(
+                "llm_provider_model_mismatch",
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                provider=cfg.provider,
+                model=payload["model"],
+            ) from None
     if "api_key" in payload:
         new_key = payload.pop("api_key")
         cfg.api_key_encrypted = encrypt_secret(new_key) if new_key else None

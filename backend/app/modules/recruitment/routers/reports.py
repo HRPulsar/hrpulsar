@@ -1,4 +1,4 @@
-"""Report endpoints: generation, templates, comparison, sharing, analytics (R4a/R4c)."""
+"""Report endpoints: generation, comparison, sharing, analytics (R4a/R4c)."""
 
 from __future__ import annotations
 
@@ -34,9 +34,6 @@ from app.modules.recruitment.schemas import (
     ReportShareCreate,
     ReportSharePublicView,
     ReportShareRead,
-    ReportTemplateCreate,
-    ReportTemplateRead,
-    ReportTemplateUpdate,
     VacancyAnalytics,
 )
 
@@ -67,9 +64,7 @@ async def generate_vacancy_report(
     # the audience + candidate-set scope so a downstream auditor can
     # answer "who shipped a hiring-manager-redacted report to whom".
     candidate_scope = (
-        len(data.candidate_vacancy_ids)
-        if data.candidate_vacancy_ids
-        else "all"
+        len(data.candidate_vacancy_ids) if data.candidate_vacancy_ids else "all"
     )
     await audit_service.record_event(
         db,
@@ -159,62 +154,6 @@ async def get_report_preview(
     return await service.get_report_preview(db, current_user.tenant_id, export_id)
 
 
-@router.get(
-    "/recruitment/report-templates",
-    response_model=list[ReportTemplateRead],
-)
-async def list_report_templates(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await service.list_report_templates(db, current_user.tenant_id)
-
-
-@router.post(
-    "/recruitment/report-templates",
-    response_model=ReportTemplateRead,
-    status_code=201,
-)
-async def create_report_template(
-    data: ReportTemplateCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
-):
-    return await service.create_report_template(
-        db, current_user.tenant_id, data
-    )
-
-
-@router.put(
-    "/recruitment/report-templates/{template_id}",
-    response_model=ReportTemplateRead,
-)
-async def update_report_template(
-    template_id: uuid.UUID,
-    data: ReportTemplateUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
-):
-    return await service.update_report_template(
-        db, current_user.tenant_id, template_id, data
-    )
-
-
-@router.delete(
-    "/recruitment/report-templates/{template_id}",
-    status_code=204,
-)
-async def delete_report_template(
-    template_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
-):
-    await service.delete_report_template(
-        db, current_user.tenant_id, template_id
-    )
-    return Response(status_code=204)
-
-
 # ── Candidate comparison (R4a, SCR-55/56) ────────────────────────────
 
 
@@ -272,9 +211,7 @@ async def list_report_shares(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter")),
 ):
-    return await share_service.list_shares(
-        db, current_user.tenant_id, report_id
-    )
+    return await share_service.list_shares(db, current_user.tenant_id, report_id)
 
 
 @router.delete(
@@ -332,9 +269,7 @@ async def get_recruitment_summary(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "hr", "hrd", "recruiter")),
 ):
-    return await analytics_service.recruitment_summary(
-        db, current_user.tenant_id
-    )
+    return await analytics_service.recruitment_summary(db, current_user.tenant_id)
 
 
 @router.get(

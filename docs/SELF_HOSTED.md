@@ -34,7 +34,11 @@ FRONTEND_URL=https://hr.yourcompany.com   # public URL of your instance
 
 `FRONTEND_URL` is what links in outgoing emails (verification, password
 reset, invitations) point at — without it they fall back to
-`http://localhost:3100` and only work from the server itself.
+`http://localhost:3100` and only work from the server itself. It is also
+the default origin that browser-facing file links (logos, avatars,
+attachments) are signed against, since the bundled MinIO is only
+reachable inside the Docker network; leave `S3_PUBLIC_ENDPOINT` unset
+unless storage is served from a different origin than the app.
 
 Configuring an email provider (`SMTP_*` or `RESEND_API_KEY` in `.env`) is
 recommended but not required to get started:
@@ -87,10 +91,10 @@ To enable automatic HTTPS:
 3. Restart Caddy: `docker compose -f docker-compose.self-hosted.yml restart caddy`
 
 Caddy will automatically obtain a Let's Encrypt certificate. Remember to
-update `FRONTEND_URL` in `.env` to the new domain, and set
-`S3_PUBLIC_ENDPOINT=https://your-domain` so uploaded files (logos, media)
-are served through the proxy — without it, file links point at the
-internal MinIO address and won't load in the browser.
+update `FRONTEND_URL` in `.env` to the new domain — uploaded files (logos,
+media) are served through the proxy at that origin. Set
+`S3_PUBLIC_ENDPOINT=https://your-domain` only if storage is proxied from
+somewhere other than `FRONTEND_URL`.
 
 ## Running Without Docker Compose
 
@@ -122,7 +126,7 @@ the hosted-product entry surface.
 | `S3_ACCESS_KEY` | No | — | S3 access key |
 | `S3_SECRET_KEY` | No | — | S3 secret key |
 | `S3_BUCKET` | No | `hrpulsar` | S3 bucket name |
-| `S3_PUBLIC_ENDPOINT` | No | — | Public base URL for file links when `S3_ENDPOINT` is internal-only (bundled MinIO). Set to your site origin, e.g. `https://hr.yourcompany.com` |
+| `S3_PUBLIC_ENDPOINT` | No | `FRONTEND_URL` | Public base URL for file links when `S3_ENDPOINT` is internal-only (bundled MinIO). Set it only when storage is served from another origin than the app |
 | `BRAND_NAME` | No | `HRPulsar` | Installation name in outgoing emails and the API title |
 | `BRAND_LOGO_URL` | No | Stock logo | Absolute URL of the email-header logo |
 | `BRAND_ACCENT_COLOR` | No | `#0066FF` | Accent color for email buttons and links |

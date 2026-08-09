@@ -11,7 +11,10 @@ HRP-250) and gets imported by ``seed.py`` to populate:
 * ``grade_system.GradeSpecialization`` ladder cells.
 
 All literals are deliberately static (no AI-generation at seed time)
-and English-only — see ``feedback_english_only`` memory. Sales is kept
+and authored in English — the single structural source. White-label
+deployments localize display strings at clone time via the
+``seed_i18n`` catalog overlay; join-key titles (``GRADES`` resolve
+origin rows by name) are excluded from that overlay. Sales is kept
 as a specialization but without a grade ladder, per the S0 plan call
 with Maxim (2026-06-16).
 """

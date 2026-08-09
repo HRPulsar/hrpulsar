@@ -96,6 +96,7 @@ from app.modules.demo.seed_data_recruitment_extras import (
     INTERVIEW_SHAPES,
 )
 from app.modules.demo.seed_data_talent_market import TALENT_CARDS
+from app.modules.demo.seed_i18n import localize, seed_locale, translate
 from app.modules.dictionary.models import DictionaryItem
 from app.modules.employee.models import Employee
 from app.modules.exam.models import (
@@ -251,7 +252,7 @@ async def _seed_company_structure(
     ctx = CompanyContext()
 
     # 1. Specializations
-    for idx, spec in enumerate(SPECIALIZATIONS):
+    for idx, spec in enumerate(localize(SPECIALIZATIONS)):
         ctx.specializations[spec["key"]] = await _upsert_dict_item(
             db,
             tenant_id,
@@ -267,7 +268,8 @@ async def _seed_company_structure(
     # fall back to a tenant-scoped row if the origin row is absent
     # (e.g. a test DB that never ran the data migration). ``.first()``
     # tolerates duplicate origin rows that other CI tests may have
-    # inserted without cleanup.
+    # inserted without cleanup. NOT localized: the titles resolve origin
+    # rows by name and must stay byte-identical to the migration seed.
     for spec in GRADES:
         origin = (
             (
@@ -295,7 +297,7 @@ async def _seed_company_structure(
         )
 
     # 3. Divisions — two passes so children resolve their parent.
-    for spec in DIVISIONS:
+    for spec in localize(DIVISIONS):
         existing = (
             await db.execute(
                 select(Division).where(
@@ -327,7 +329,7 @@ async def _seed_company_structure(
         ctx.anchor_division_id = anchor.id
 
     # 4. Positions
-    for spec in POSITIONS:
+    for spec in localize(POSITIONS):
         existing_pos = (
             await db.execute(
                 select(Position).where(
@@ -359,7 +361,7 @@ async def _seed_company_structure(
         ctx.positions[spec["key"]] = position
 
     # 5. Grade-specializations (ladder cells)
-    for spec in GRADE_SPECIALIZATIONS:
+    for spec in localize(GRADE_SPECIALIZATIONS):
         grade = ctx.grades[spec["grade_key"]]
         specialization = ctx.specializations[spec["specialization_key"]]
         existing_gs = (
@@ -443,7 +445,7 @@ async def _seed_competences(
         )
 
     # 2. Competence groups
-    for spec in COMPETENCE_GROUPS:
+    for spec in localize(COMPETENCE_GROUPS):
         existing_group = (
             await db.execute(
                 select(CompetenceGroup).where(
@@ -468,7 +470,7 @@ async def _seed_competences(
         ctx.competence_groups[spec["key"]] = group
 
     # 3. Competences
-    for spec in COMPETENCES:
+    for spec in localize(COMPETENCES):
         existing_comp = (
             await db.execute(
                 select(Competence).where(
@@ -504,7 +506,7 @@ async def _seed_competences(
     # both would render two indicators under the same Advanced cell.
     sort_by_competence: dict[uuid.UUID, int] = {}
     seen_indicator_cells: set[tuple[uuid.UUID, uuid.UUID]] = set()
-    for spec in INDICATORS:
+    for spec in localize(INDICATORS):
         competence = ctx.competences.get(spec["competence_key"])
         skill_level = ctx.skill_levels.get(spec["skill_level_key"])
         if competence is None or skill_level is None:
@@ -546,7 +548,7 @@ async def _seed_competences(
     # row that lands on each ladder cell, drop the rest.
     materials_sort_by_competence: dict[uuid.UUID, int] = {}
     seen_material_cells: set[tuple[uuid.UUID, uuid.UUID]] = set()
-    for spec in MATERIALS:
+    for spec in localize(MATERIALS):
         competence = ctx.competences.get(spec["competence_key"])
         skill_level = ctx.skill_levels.get(spec["skill_level_key"])
         if competence is None or skill_level is None:
@@ -808,7 +810,7 @@ async def _seed_assessments_and_pdps(
     done_assessment_by_employee: dict[int, Assessment] = {}
     supported_type_codes = {"180", "360", "self"}
     supported_status_codes = {"draft", "in_progress", "done", "cancelled"}
-    for spec in ASSESSMENTS:
+    for spec in localize(ASSESSMENTS):
         # Fail-loud on specs the seed does not know how to materialise —
         # silent fall-through used to leave half-shaped Assessment rows.
         if spec["type_code"] not in supported_type_codes:
@@ -1042,7 +1044,7 @@ async def _seed_assessments_and_pdps(
         await db.flush()
 
     pdp_count = 0
-    for spec in PDPS:
+    for spec in localize(PDPS):
         employee = ctx.employees[spec["employee_index"]]
         title = spec["title"]
         existing_pdp = (
@@ -1132,7 +1134,7 @@ async def _seed_exams(
     payload. Idempotent on ``(tenant_id, title)`` for MassExam.
     """
     seeded = 0
-    for spec in MASS_EXAMS:
+    for spec in localize(MASS_EXAMS):
         existing = (
             await db.execute(
                 select(MassExam).where(
@@ -1277,7 +1279,7 @@ async def _seed_talent_market(
     """
     today = now.date()
     seeded = 0
-    for spec in TALENT_CARDS:
+    for spec in localize(TALENT_CARDS):
         existing = (
             await db.execute(
                 select(TalentCard).where(
@@ -1409,7 +1411,7 @@ async def _seed_recruitment_extras(
     extra_vacancies: dict[str, Vacancy] = dict(legacy_vacancies)
     vacancy_count = candidate_count = interview_count = 0
 
-    for spec in EXTRA_VACANCIES:
+    for spec in localize(EXTRA_VACANCIES):
         existing_vac = (
             await db.execute(
                 select(Vacancy).where(
@@ -1461,7 +1463,7 @@ async def _seed_recruitment_extras(
     # name; the shapes are intentionally different so don't unify the
     # two locals without rewriting both call sites.
     cv_for_interview: dict[str, tuple[CandidateVacancy, dict]] = {}
-    for spec in EXTRA_CANDIDATES:
+    for spec in localize(EXTRA_CANDIDATES):
         extra_vac = extra_vacancies.get(spec["vacancy_key"])
         if extra_vac is None:
             # Legacy vacancy key the base seed didn't carry — skip
@@ -1487,7 +1489,9 @@ async def _seed_recruitment_extras(
             current_position=spec.get("current_position"),
             years_of_experience=spec.get("years"),
             source=INVESTOR_MARKER,
-            notes=f"Investor demo candidate ({spec['vacancy_key']}).",
+            notes=translate("Investor demo candidate ({key}).").format(
+                key=spec["vacancy_key"]
+            ),
         )
         db.add(candidate)
         await db.flush()
@@ -1529,8 +1533,9 @@ async def _seed_recruitment_extras(
     if not with_interviews:
         return (vacancy_count, candidate_count, 0)
 
+    localized_shapes = localize(INTERVIEW_SHAPES)
     for cv, spec in cv_for_interview.values():
-        shape = INTERVIEW_SHAPES[spec["interview_kind"]]
+        shape = localized_shapes[spec["interview_kind"]]
         interview_date = now - timedelta(days=shape["days_ago"])
         duration_minutes = shape["duration_minutes"]
         duration_seconds = duration_minutes * 60 if duration_minutes else None
@@ -1560,7 +1565,7 @@ async def _seed_recruitment_extras(
                 analysis_data=None,
                 archived_at=archived_at,
                 archived_by=archived_by,
-                notes="Investor demo interview (S7 extras).",
+                notes=translate("Investor demo interview (S7 extras)."),
             )
         )
         interview_count += 1
@@ -1587,7 +1592,7 @@ async def _seed_misc(
     re-runs as a no-op for any row already present.
     """
     dict_count = 0
-    for bucket in CUSTOM_DICTIONARIES:
+    for bucket in localize(CUSTOM_DICTIONARIES):
         for spec in bucket["items"]:
             existing = (
                 await db.execute(
@@ -1614,26 +1619,31 @@ async def _seed_misc(
     await db.flush()
 
     # Cache template lookups so the loop doesn't do 10 round-trips.
+    # Templates are pinned per locale (i18n F4); prefer the seed-locale
+    # row per code and fall back to the English one so a template
+    # missing its localized variant still produces a notification.
     template_codes = {n["template_code"] for n in NOTIFICATIONS}
+    locale = seed_locale()
     template_rows = (
         (
             await db.execute(
                 select(NotificationTemplate).where(
                     NotificationTemplate.code.in_(template_codes),
-                    # Demo content is English; without the locale filter the
-                    # per-locale rows (i18n F4) would shadow each other in
-                    # the code-keyed cache below.
-                    NotificationTemplate.locale == "en",
+                    NotificationTemplate.locale.in_({locale, "en"}),
                 )
             )
         )
         .scalars()
         .all()
     )
-    templates_by_code = {t.code: t for t in template_rows}
+    templates_by_code: dict[str, NotificationTemplate] = {}
+    for t in template_rows:
+        current = templates_by_code.get(t.code)
+        if current is None or (t.locale == locale and current.locale != locale):
+            templates_by_code[t.code] = t
 
     notification_count = 0
-    for spec in NOTIFICATIONS:
+    for spec in localize(NOTIFICATIONS):
         template = templates_by_code.get(spec["template_code"])
         if template is None:
             continue
@@ -1706,7 +1716,7 @@ async def _create_vacancies(
     anchor_division_id: uuid.UUID | None,
 ) -> dict[str, Vacancy]:
     vacancy_objs: dict[str, Vacancy] = {}
-    for spec in VACANCIES:
+    for spec in localize(VACANCIES):
         vacancy = Vacancy(
             tenant_id=tenant_id,
             title=spec["title"],
@@ -1754,7 +1764,7 @@ async def _create_candidates(
     vacancy_objs: dict[str, Vacancy],
 ) -> dict[str, CandidateVacancy]:
     cv_for_interview: dict[str, CandidateVacancy] = {}
-    for spec in candidates():
+    for spec in localize(candidates()):
         # HRP-276 / H2: do not mint Person rows for demo seed candidates.
         # Person is a tenant-less global registry — every demo session
         # otherwise leaks 8 orphan rows that survive Tenant deletion
@@ -1773,7 +1783,9 @@ async def _create_candidates(
             years_of_experience=spec.get("years"),
             linkedin_url=spec.get("linkedin"),
             source=INVESTOR_MARKER,
-            notes=f"Investor demo candidate ({spec['vacancy_key']}).",
+            notes=translate("Investor demo candidate ({key}).").format(
+                key=spec["vacancy_key"]
+            ),
         )
         db.add(candidate)
         await db.flush()
@@ -1824,15 +1836,15 @@ def _build_elena_interview(
         interview_date=now - timedelta(days=2),
         duration_minutes=47,
         duration_seconds=47 * 60,
-        title="Technical + system design — Elena Volkov",
+        title=translate("Technical + system design — Elena Volkov"),
         type="technical",
         status="completed",
         transcript=transcript,
         transcription_status="completed",
         transcription_provider="seeded",
         analysis_status="completed",
-        analysis_data=ELENA_INTERVIEW_ANALYSIS,
-        notes="Investor demo interview.",
+        analysis_data=localize(ELENA_INTERVIEW_ANALYSIS),
+        notes=translate("Investor demo interview."),
     )
 
 
@@ -1850,15 +1862,15 @@ def _build_tomas_interview(
         interview_date=now - timedelta(days=5),
         duration_minutes=42,
         duration_seconds=42 * 60,
-        title="Recruiter screen — Tomás Becker",
+        title=translate("Recruiter screen — Tomás Becker"),
         type="screen",
         status="completed",
-        transcript="[Transcript redacted for demo brevity.]",
+        transcript=translate("[Transcript redacted for demo brevity.]"),
         transcription_status="completed",
         transcription_provider="seeded",
         analysis_status="completed",
-        analysis_data=TOMAS_INTERVIEW_ANALYSIS,
-        notes="Investor demo interview.",
+        analysis_data=localize(TOMAS_INTERVIEW_ANALYSIS),
+        notes=translate("Investor demo interview."),
     )
 
 
@@ -1895,8 +1907,11 @@ async def _maybe_seed_analysis_cache(
     if cache_key is None:
         return
 
+    # Localized copy so the cache-hit payload matches the localized
+    # ``analysis_data`` stored on the seeded Interview row.
+    elena_analysis = localize(ELENA_INTERVIEW_ANALYSIS)
     assessments: list[dict] = []
-    for ca in ELENA_INTERVIEW_ANALYSIS.get("competence_assessments", []) or []:
+    for ca in elena_analysis.get("competence_assessments", []) or []:
         label = (ca.get("competence") or "").strip()
         slug = (ca.get("competence_id") or "").strip()
         verdict = (ca.get("verdict") or "unknown").lower()
@@ -1934,7 +1949,7 @@ async def _maybe_seed_analysis_cache(
             db,
             tenant_id,
             cache_key,
-            ELENA_INTERVIEW_ANALYSIS,
+            elena_analysis,
             assessments,
         )
     except Exception:  # noqa: BLE001

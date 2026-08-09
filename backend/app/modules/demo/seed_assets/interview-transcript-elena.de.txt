@@ -1,0 +1,96 @@
+Interview · Senior Backend Engineer — Payments
+Kandidatin: Elena Volkov
+Interviewer: Maxim Berg (Hiring Manager)
+Datum: 2026-06-08
+Dauer: 47 Minuten
+Typ: Technik + Systemdesign
+
+[00:00:14] Recruiter: Danke, dass Sie sich Zeit genommen haben, Elena. Ich möchte die ersten 20 Minuten auf ein Systemdesign-Problem verwenden, den Rest auf Ihren Hintergrund und Ihre Fragen an uns. Passt das?
+
+[00:00:28] Kandidatin: Passt. Legen Sie los.
+
+[00:00:34] Recruiter: Stellen Sie sich vor, wir müssen die Merchant-Settlement-Pipeline bauen. Am Ende jedes Tages aggregieren wir die Transaktionen pro Händler, berechnen die Auszahlungen nach Gebühren und stoßen SEPA-Überweisungen an. Führen Sie mich durch Ihr Design.
+
+[00:01:05] Kandidatin: Okay. Erste Frage — wie hoch ist das Volumen?
+
+[00:01:11] Recruiter: Sagen wir 50.000 aktive Händler, 2 Millionen Transaktionen pro Tag.
+
+[00:01:20] Kandidatin: Und was ist das SLA dafür, dass die Auszahlung am nächsten Morgen verfügbar ist?
+
+[00:01:28] Recruiter: Geld verfügbar bis 9 Uhr Ortszeit, an jedem Werktag.
+
+[00:01:35] Kandidatin: Gut. Ich würde das als drei Stufen denken — Aggregation, Settlement, Auslösen der Überweisung. Jede Stufe idempotent. Die Aggregation läuft als Stream-Job mit Zeitfenstern, nicht als Mitternachts-Batch — so können wir bei einem Teilausfall vom letzten committeten Offset weitermachen, statt von vorn zu beginnen.
+
+[00:02:10] Kandidatin: Als Datenspeicher würde ich PostgreSQL für die Settlement-Datensätze nehmen und Kafka als Source of Truth für die Transaktionen. Settlement-Datensätze haben einen eindeutigen Schlüssel — merchant_id plus settlement_date —, damit Retries sicher sind.
+
+[00:02:45] Recruiter: Wie gehen Sie mit einem Teilausfall beim Auslösen der Überweisungen um — sagen wir, wir haben 30.000 Überweisungen gesendet und dann läuft das SEPA-Gateway in einen Timeout?
+
+[00:03:02] Kandidatin: Genau hier zahlen sich Idempotency-Keys aus. Jede Überweisung bekommt einen deterministischen Schlüssel aus settlement_id plus merchant_id. Wenn das Gateway sich erholt, spielen wir jedes Settlement ohne bestätigte Transaktionsreferenz erneut ein. Das Gateway erkennt den Schlüssel und liefert das ursprüngliche Ergebnis zurück, statt doppelt auszuzahlen.
+
+[00:03:40] Recruiter: Und was, wenn das Gateway den Schlüssel verliert? Das kommt bei manchen Anbietern vor.
+
+[00:03:50] Kandidatin: Dann brauchen wir einen Reconciliation-Job, der alle paar Stunden läuft und unsere Outbox mit dem Kontoauszug des Gateways vergleicht. Alles, was in unserer Outbox steht, aber nicht im Auszug, wird nach einer Abkühlphase mit frischem Schlüssel erneut versucht. Jede erkannte Doppelabbuchung wird geloggt — das sind Incidents.
+
+[00:04:30] Recruiter: Gut. Sprechen wir über Ihr Team bei Klarna. Sie sagten, Sie haben den Rewrite der Payments-Reconciliation geleitet. Was war der schwierigste Teil?
+
+[00:04:48] Kandidatin: Ehrlich gesagt? Nicht die technische Arbeit. Das Schwierigste war, dass im alten System vier Jahre an Edge Cases im Code vergraben waren. Wir haben einen sechswöchigen Parallellauf gemacht, in dem das neue System die Produktion schattete, und dabei sieben Fälle gefunden, die das Team komplett vergessen hatte. Einer war eine norwegische Mehrwertsteuerregel, die nur für Händler galt, die sich vor 2019 registriert hatten.
+
+[00:05:30] Recruiter: Wie haben Sie die gefunden?
+
+[00:05:35] Kandidatin: Wir haben Abweichungen zwischen alten und neuen Ergebnissen geloggt und wöchentlich triagiert. Das Team nannte es den „Divergenz-Dienstag“. Wir haben erst ausgeliefert, als der Divergenz-Dienstag zwei Wochen am Stück leer war.
+
+[00:06:00] Recruiter: Dieses Muster habe ich in dieser Phase noch nicht gesehen. Haben Sie das aufgeschrieben?
+
+[00:06:08] Kandidatin: Ich habe intern einen Vortrag gehalten. Extern nie veröffentlicht. Sollte ich?
+
+[00:06:14] Recruiter: Ja. Okay, gehen wir tiefer in Postgres. Sie haben 50.000 Händler, jeder mit einer settlement_records-Zeile pro Tag. Das sind 18 Mio. Zeilen im Jahr. Wie halten Sie das schnell?
+
+[00:06:38] Kandidatin: Partitionierung nach Monat ist der naheliegende Schritt. Index auf merchant_id und settlement_date. Die interessante Frage ist, was mit den älteren Partitionen passiert — die meisten Abfragen betreffen die letzten 90 Tage, also würde ich alles, was älter als ein Jahr ist, in Cold Storage archivieren und die Partition abhängen.
+
+[00:07:15] Kandidatin: Eine Falle, die ich vermeiden würde, ist die Partitionierung nach merchant_id. Verlockend, weil man Isolation pro Tenant bekommt, aber die Kardinalität ist zu hoch — man landet bei 50.000 Partitionen und der Planner wird unglücklich.
+
+[00:07:45] Recruiter: Diesen Fehler haben wir gemacht. Erzählen Sie mir von Ihrer On-Call-Erfahrung.
+
+[00:07:58] Kandidatin: Bei Klarna bin ich Primary für die Reconciliation-Pipeline. Letztes Jahr wurde ich achtmal gepagt. Zwei waren echte Incidents, sechs waren Rauschen von einem flackernden Alert, den ich irgendwann neu geschrieben habe. Ich pflege ein persönliches Runbook in unseren geteilten Docs.
+
+[00:08:35] Recruiter: Was war der schlimmste Incident, den Sie geleitet haben?
+
+[00:08:42] Kandidatin: Ein Zeitzonen-Bug. Die Zeitumstellung ließ settlement_date für einen Teil der Händler eine Stunde zu früh umspringen. Etwa 1.200 Händler sahen für zehn Minuten zwei Settlements am selben Tag. Ich habe das Deployment zurückgerollt, dann haben wir manuell abgeglichen. Das Post-mortem habe ich am nächsten Tag geschrieben.
+
+[00:09:30] Recruiter: Haben Sie danach etwas am Prozess des Teams geändert?
+
+[00:09:38] Kandidatin: Ja — jede Datumslogik muss jetzt mit expliziten Zeitzonentests ausgeliefert werden. Und wir haben einen Deploy-Freeze in der Woche um die Zeitumstellungen.
+
+[00:10:10] Recruiter: Okay, Mentoring. Sie erwähnten, dass Sie bei Klarna zwei Engineers mentorieren. Wie sieht das Woche für Woche konkret aus?
+
+[00:10:24] Kandidatin: Eine ist Mid-Level und will in Richtung Senior wachsen. Wir machen ein wöchentliches 1:1, in dem ich meist nach einer technischen Entscheidung frage, die sie vor sich herschiebt, und nach einem Karrierethema, das sie umtreibt. Der andere ist ein Junior, den ich vor sechs Monaten onboardet habe. Mit ihr mache ich mehr Pair Programming — einmal die Woche, zwei Stunden, an einem echten Ticket.
+
+[00:11:00] Kandidatin: Die Mid-Level-Kollegin dränge ich, mehr zu schreiben — Design-Docs, ADRs. Sie ist darin gut geworden. Beim Junior geht es mehr um Selbstvertrauen — sie kennt die Antwort in der Hälfte der Fälle, nimmt aber an, dass sie sie nicht kennt.
+
+[00:11:30] Recruiter: Woran messen Sie, ob Ihr Mentoring funktioniert?
+
+[00:11:38] Kandidatin: Ehrlich gesagt habe ich keine saubere Metrik. Die Mid-Level-Kollegin wurde im letzten Zyklus befördert, das fühlte sich wie ein Erfolg an. Aber Beförderung ist ein Spätindikator. Das bessere Signal ist, glaube ich, ob sie mir mit der Zeit härtere Probleme bringen — irgendwann sollte ich Resonanzboden sein, kein Orakel.
+
+[00:12:20] Recruiter: Warum verlassen Sie Klarna?
+
+[00:12:25] Kandidatin: Ich bin seit dreieinhalb Jahren dort. Der Payments-Rewrite war das große Ding, das ich ausliefern wollte, und er ist fertig. Die nächsten zwölf Monate dort sehen für mich nach Wartungsphase plus Organisationspolitik aus. Ich wäre lieber die zweite oder dritte Engineerin in einem kleineren Team, das seine Kernsysteme noch definiert.
+
+[00:13:05] Recruiter: Eine faire Antwort. Was suchen Sie in einem Team?
+
+[00:13:12] Kandidatin: Drei Dinge. Erstens eine hohe Latte bei der Engineering-Qualität — ich will keine Energie darauf verwenden, jedes Quartal neu über Tests-oder-keine-Tests zu verhandeln. Zweitens die Bereitschaft, in Tooling zu investieren — wenn ich täglich eine Stunde gegen die CI kämpfe, stimmt etwas nicht. Drittens Peers, von denen ich lerne. Der letzte Punkt ist von außen am schwersten zu beurteilen.
+
+[00:13:55] Recruiter: Haben Sie Fragen an uns?
+
+[00:14:05] Kandidatin: Ein paar. Erstens — was ist gerade das härteste ungelöste Problem auf der Payments-Roadmap? Zweitens — wie ist das Verhältnis des Teams zu Security und Compliance? Bei Klarna war es konfrontativ; ich würde gern wissen, wie es hier ist. Und drittens — was tut das Team heute, das Sie in fünf Jahren noch genauso tun möchten?
+
+[00:14:50] Recruiter: Gute Fragen. Ich gehe sie der Reihe nach durch...
+
+[00:32:00] Recruiter: Gut, die letzten fünf Minuten. Gibt es etwas, das wir nicht behandelt haben und das ich wissen sollte?
+
+[00:32:14] Kandidatin: Eine Sache. Ich habe keine Payments-Erfahrung mit EUR-Settlements in dem Volumen, das Sie beschreiben — Klarna ist größer. Wenn Ihre Latte also „sie hat genau das schon im großen Maßstab gemacht“ ist, bin ich es nicht. Aber das Systemdenken überträgt sich. Ich würde sechs Wochen für die Einarbeitung in die Domäne wollen, nicht sechs Monate.
+
+[00:33:00] Recruiter: Das ist eine hilfreiche Einordnung, danke. Wir melden uns bis Ende der Woche.
+
+[00:33:08] Kandidatin: Danke, Maxim.
+
+[Ende des Interviews]

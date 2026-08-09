@@ -9,6 +9,7 @@ slot for it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,7 @@ from app.modules.recruitment.manager_assessment_models import (
 )
 from app.modules.recruitment.manager_assessment_service import (
     INVITE_ACTIVE_STATUSES,
+    assert_round_open,
     get_assessment,
     get_or_create_assessment,
     hash_token,
@@ -50,6 +52,17 @@ PUBLIC_RATE_LIMIT_BLOCK_HOURS = 1
 # frictionless submit; below it the UI shows a "Submit anyway?" warning.
 # The check is advisory (client-side modal), never a hard server block.
 CRITICAL_SUBMIT_THRESHOLD = 0.5
+
+# HRP-371: a browser cannot render a .docx, so pointing an <iframe> at the
+# presigned URL left the Resume pane blank *and* pushed the file into the
+# evaluator's Downloads folder on every page load. The server extracts the
+# document's text instead and the page renders it as an ordinary preview;
+# the raw file only leaves S3 when the evaluator asks for it.
+RESUME_PREVIEW_MAX_BLOCKS = 400
+RESUME_PREVIEW_MAX_BYTES = 15 * 1024 * 1024
+#: Mime fragments we can turn into a text preview server-side.
+_DOCX_MIME_HINTS = ("wordprocessingml", "docx")
+_PLAINTEXT_MIME_HINTS = ("text/", "rtf")
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +209,21 @@ async def _mark_opened(db: AsyncSession, invite: AssessmentInvite) -> None:
     )
 
 
+async def _assert_invite_round_open(db: AsyncSession, invite: AssessmentInvite) -> None:
+    """HRP-376: the external sheet dies with its round.
+
+    Completing or archiving a round makes every sheet on it read-only —
+    the score endpoints already refuse through ``set_*_score``, but submit
+    / notes / name went straight to the invite and would flip it (and the
+    sheet) to ``submitted`` with no scores behind it. An invite whose
+    round was archived rather than completed still holds a live token, so
+    this is the only thing standing between that page and a write.
+    """
+    if invite.round_id is None:
+        return
+    await assert_round_open(db, invite.tenant_id, invite.round_id)
+
+
 def _mark_in_progress(invite: AssessmentInvite) -> None:
     """HRP-358: the first saved score flips the invite to ``in_progress``.
 
@@ -265,9 +293,16 @@ async def public_get_context(
     vacancy = await db.get(Vacancy, cv.vacancy_id)
 
     # Latest resume file → short-lived presigned URL for the PDF pane.
+    # ``file_type`` matters: the same table also holds interview media, and
+    # the newest row on a candidate is often an audio recording — which
+    # would then be handed to the evaluator as "the resume".
     resume_result = await db.execute(
         select(CandidateFile)
-        .where(CandidateFile.candidate_id == cv.candidate_id)
+        .where(
+            CandidateFile.candidate_id == cv.candidate_id,
+            CandidateFile.tenant_id == invite.tenant_id,
+            CandidateFile.file_type == "resume",
+        )
         .order_by(CandidateFile.created_at.desc())
         .limit(1)
     )
@@ -356,6 +391,183 @@ async def public_get_context(
     }
 
 
+def _resume_kind(mime_type: str | None, filename: str | None) -> str:
+    """Classify a resume file into a preview strategy.
+
+    ``pdf`` renders inline in an iframe; ``text`` is extracted server-side;
+    anything else only offers a download. The filename is a fallback for
+    uploads that arrived without a usable mime type.
+    """
+    mime = (mime_type or "").lower()
+    name = (filename or "").lower()
+    if "pdf" in mime or name.endswith(".pdf"):
+        return "pdf"
+    if any(hint in mime for hint in _DOCX_MIME_HINTS) or name.endswith(".docx"):
+        return "text"
+    if any(hint in mime for hint in _PLAINTEXT_MIME_HINTS) or name.endswith(
+        (".txt", ".rtf")
+    ):
+        return "text"
+    return "unsupported"
+
+
+def _docx_preview_blocks(data: bytes) -> list[str]:
+    """Paragraph-level text of a DOCX, in reading order.
+
+    Mirrors the resume-parsing extractor: many CV templates keep the whole
+    document inside tables, so paragraphs alone would return an empty
+    preview. Table rows collapse to ``cell | cell`` lines — enough to read
+    a two-column resume without shipping a full HTML converter.
+    """
+    import io
+
+    from docx import Document
+    from docx.table import Table
+
+    doc = Document(io.BytesIO(data))
+    blocks: list[str] = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+
+    def _walk_table(table: Table) -> None:
+        # Merged cells surface once per spanned grid slot — dedupe on the
+        # underlying XML element so the text is not repeated.
+        seen: set[Any] = set()
+        for row in table.rows:
+            cells: list[str] = []
+            for cell in row.cells:
+                if cell._tc in seen:
+                    continue
+                seen.add(cell._tc)
+                if cell.text.strip():
+                    cells.append(cell.text.strip())
+                for nested in cell.tables:
+                    _walk_table(nested)
+            if cells:
+                blocks.append(" | ".join(cells))
+
+    for table in doc.tables:
+        _walk_table(table)
+
+    for section in doc.sections:
+        for para in (*section.header.paragraphs, *section.footer.paragraphs):
+            if para.text.strip():
+                blocks.append(para.text.strip())
+
+    return blocks
+
+
+def _plaintext_preview_blocks(data: bytes) -> list[str]:
+    text = data.decode("utf-8", errors="ignore")
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+async def public_resume_preview(
+    db: AsyncSession, token: str, *, ip: str | None = None
+) -> dict[str, Any]:
+    """Renderable preview of the candidate's resume for an invited evaluator.
+
+    Read-only companion to :func:`public_get_context`, behind the same
+    token *and* the same consent gate — the resume is candidate PII.
+    """
+    from app.core.s3 import download_bytes, get_presigned_url
+    from app.modules.recruitment.candidate_service import _attachment_disposition
+    from app.modules.storage.models import File
+
+    invite = await resolve_invite_by_token(db, token, ip=ip)
+    if invite.consent_accepted_at is None:
+        raise AppError("assessment_consent_required", status.HTTP_403_FORBIDDEN)
+    cv = await db.get(CandidateVacancy, invite.candidate_vacancy_id)
+    if cv is None:
+        raise AppError("candidate_no_longer_available", status.HTTP_410_GONE)
+    if cv.tenant_id != invite.tenant_id:
+        raise AppError("cross_tenant_invite_mismatch", status.HTTP_403_FORBIDDEN)
+
+    empty: dict[str, Any] = {
+        "kind": "none",
+        "filename": None,
+        "mime_type": None,
+        "preview_url": None,
+        "download_url": None,
+        "blocks": [],
+        "truncated": False,
+    }
+
+    resume_result = await db.execute(
+        select(CandidateFile)
+        .where(
+            CandidateFile.candidate_id == cv.candidate_id,
+            CandidateFile.tenant_id == invite.tenant_id,
+            CandidateFile.file_type == "resume",
+        )
+        .order_by(CandidateFile.created_at.desc())
+        .limit(1)
+    )
+    resume = resume_result.scalar_one_or_none()
+    if resume is None or not resume.file_id:
+        return empty
+    file_record = await db.get(File, resume.file_id)
+    if file_record is None:
+        return empty
+
+    kind = _resume_kind(resume.mime_type, resume.original_filename)
+    # Content-Disposition: attachment is what makes "download" an explicit
+    # user action rather than a side effect of opening the page. Same
+    # RFC 5987 encoder the recruiter-facing download uses (HRP-347).
+    download_url = get_presigned_url(
+        file_record.path,
+        content_disposition=_attachment_disposition(
+            resume.original_filename or "resume"
+        ),
+    )
+    out = {
+        **empty,
+        "kind": kind,
+        "filename": resume.original_filename,
+        "mime_type": resume.mime_type,
+        "download_url": download_url,
+    }
+    if kind == "pdf":
+        out["preview_url"] = get_presigned_url(file_record.path)
+        return out
+    if kind != "text":
+        return out
+
+    if (file_record.size or 0) > RESUME_PREVIEW_MAX_BYTES:
+        # Refuse to pull an oversized document into the worker just to
+        # render a preview; the evaluator can still download it.
+        out["kind"] = "unsupported"
+        return out
+    # Both steps are synchronous and slow — up to 15 MB off S3 through
+    # blocking boto3, then an XML walk over the whole document. Run on the
+    # thread pool: this is an unauthenticated token endpoint, so leaving
+    # them on the loop lets a handful of concurrent previews stall every
+    # other request the worker is serving.
+    data = await asyncio.to_thread(download_bytes, file_record.path)
+    if not data:
+        out["kind"] = "unsupported"
+        return out
+    try:
+        mime = (resume.mime_type or "").lower()
+        name = (resume.original_filename or "").lower()
+        if any(hint in mime for hint in _DOCX_MIME_HINTS) or name.endswith(".docx"):
+            blocks = await asyncio.to_thread(_docx_preview_blocks, data)
+        else:
+            blocks = await asyncio.to_thread(_plaintext_preview_blocks, data)
+    except Exception:
+        log.exception("resume preview extraction failed for invite=%s", invite.id)
+        out["kind"] = "unsupported"
+        return out
+
+    if not blocks:
+        # A readable file that yielded nothing (scanned pages inside a
+        # docx, for instance) — an empty pane would look like a bug, so
+        # fall back to the download-only affordance.
+        out["kind"] = "unsupported"
+        return out
+    out["truncated"] = len(blocks) > RESUME_PREVIEW_MAX_BLOCKS
+    out["blocks"] = blocks[:RESUME_PREVIEW_MAX_BLOCKS]
+    return out
+
+
 async def public_accept_consent(
     db: AsyncSession, token: str, *, ip: str | None = None
 ) -> dict[str, Any]:
@@ -410,6 +622,7 @@ async def public_update_name(
 ) -> dict[str, Any]:
     invite = await resolve_invite_by_token(db, token, ip=ip)
     _ensure_editable(invite)
+    await _assert_invite_round_open(db, invite)
     invite.evaluator_name = name
     await db.commit()
     if invite.round_id is not None:
@@ -445,6 +658,7 @@ async def public_submit(
     _ensure_editable(invite)
     if invite.round_id is None:
         raise AppError("invite_has_no_round", status.HTTP_400_BAD_REQUEST)
+    await _assert_invite_round_open(db, invite)
     a = await get_or_create_assessment(
         db,
         invite.tenant_id,
@@ -493,6 +707,7 @@ async def public_save_final_notes(
     _ensure_editable(invite)
     if invite.round_id is None:
         raise AppError("invite_has_no_round", status.HTTP_400_BAD_REQUEST)
+    await _assert_invite_round_open(db, invite)
     a = await get_or_create_assessment(
         db,
         invite.tenant_id,
@@ -600,6 +815,7 @@ async def public_set_indicator_score(
 __all__ = [
     "resolve_invite_by_token",
     "public_get_context",
+    "public_resume_preview",
     "public_accept_consent",
     "public_decline",
     "public_update_name",
@@ -613,4 +829,5 @@ __all__ = [
     "PUBLIC_RATE_LIMIT_WINDOW_MINUTES",
     "PUBLIC_RATE_LIMIT_BLOCK_HOURS",
     "CRITICAL_SUBMIT_THRESHOLD",
+    "RESUME_PREVIEW_MAX_BLOCKS",
 ]

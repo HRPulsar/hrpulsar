@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 # ─── Scale ─────────────────────────────────────────────────────────
 
@@ -50,12 +50,50 @@ LLMProviderName = Literal[
 ]
 
 
+def ensure_provider_owns_model(
+    provider: str | None,
+    model: str | None,
+    provider_settings: dict | None = None,
+) -> None:
+    """Reject a config row whose model belongs to another provider.
+
+    HRP-498: the BYOK form pre-filled a Claude model while the provider
+    dropdown moved independently, so ``{provider: "openai", model:
+    "claude-…"}`` rows were saved and sat inert — until the recruitment
+    pipeline started dispatching on the most recent active row and every
+    resume parse 404'd. Model names that no provider claims by prefix
+    (local/self-hosted servers) stay free-form, and so do OpenAI-compatible
+    proxies — ``providers.model_matches_provider`` owns that predicate, so
+    the guard, the dispatch resolver and the backfill migration agree.
+
+    The message is a constant English string — the i18n layer reverse-maps
+    it onto ``errors.validation.llm_model_provider_mismatch``.
+    """
+    if not provider or not model:
+        return
+    from app.modules.ai.providers import (
+        base_url_from_settings,
+        model_matches_provider,
+    )
+
+    if model_matches_provider(
+        provider, model, base_url_from_settings(provider_settings)
+    ):
+        return
+    raise ValueError("Model does not belong to the selected provider")
+
+
 class LLMProviderCreate(BaseModel):
     provider: LLMProviderName
     model: str = Field(max_length=100)
     api_key: str | None = Field(default=None, max_length=500)
     is_active: bool = True
     settings: dict | None = None
+
+    @model_validator(mode="after")
+    def _model_belongs_to_provider(self) -> LLMProviderCreate:
+        ensure_provider_owns_model(self.provider, self.model, self.settings)
+        return self
 
 
 class LLMProviderUpdate(BaseModel):

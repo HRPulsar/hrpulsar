@@ -94,6 +94,28 @@ def decrypt_secret(token: str | None) -> str | None:
         raise ValueError("decryption failed") from exc
 
 
+def decrypt_optional_secret(
+    token: str | None, *, context: str
+) -> tuple[str | None, str]:
+    """Decrypt a stored secret without ever raising. Returns ``(plaintext,
+    status)`` where status is ``missing`` (nothing stored), ``ok``, or
+    ``decrypt_failed`` (unreadable ciphertext — e.g. ENCRYPTION_KEY was
+    rotated without re-encrypting).
+
+    Shared by every consumer of a tenant BYOK column (LLM dispatch,
+    transcription, the settings read projection): a stale key must degrade
+    to the platform credential, and the raw ciphertext must never be used
+    as a credential (HRP-506).
+    """
+    if not token:
+        return None, "missing"
+    try:
+        return decrypt_secret(token), "ok"
+    except ValueError:
+        log.warning("secret decrypt failed", extra={"context": context})
+        return None, "decrypt_failed"
+
+
 def mask_secret(plaintext: str | None, last: int = 4) -> str | None:
     """Return a masked preview suitable for API responses (e.g. ``••••abcd``)."""
     if not plaintext:

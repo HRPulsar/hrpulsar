@@ -115,6 +115,46 @@ async def test_start_provisions_demo_tenant_with_seed(
 
 
 @pytest.mark.asyncio
+async def test_start_pins_ai_content_language_to_platform_default_locale(
+    client: AsyncClient, admin_role, enable_demo, monkeypatch, db: AsyncSession
+):
+    """White-label deployments run with a non-English DEFAULT_LOCALE;
+    the demo tenant must be born with an explicit TenantAISettings row
+    matching it — otherwise the first AI call would lazily create the
+    row with the global English default and demo visitors on a German
+    platform would get English AI content."""
+    from app.modules.ai_settings.models import TenantAISettings
+
+    monkeypatch.setattr(settings, "available_locales", "de,en")
+    monkeypatch.setattr(settings, "default_locale", "de")
+
+    resp = await client.post("/api/demo/start", json={})
+    assert resp.status_code == 201, resp.text
+    tenant_id = uuid.UUID(resp.json()["tenant_id"])
+
+    row = (
+        await db.execute(
+            select(TenantAISettings).where(
+                TenantAISettings.tenant_id == tenant_id
+            )
+        )
+    ).scalar_one()
+    assert row.content_language == "de"
+
+
+def test_demo_content_language_falls_back_for_unsupported_locale(monkeypatch):
+    """Interface locales and AI content languages are orthogonal axes:
+    a platform locale the AI layer doesn't support (no entry in the
+    ContentLanguage Literal) must fall back to English rather than
+    store a value the settings API would refuse to round-trip."""
+    monkeypatch.setattr(settings, "default_locale", "fr")
+    assert demo_service._demo_content_language() == "en"
+
+    monkeypatch.setattr(settings, "default_locale", "de")
+    assert demo_service._demo_content_language() == "de"
+
+
+@pytest.mark.asyncio
 async def test_start_returns_503_when_disabled(
     client: AsyncClient, admin_role, enable_demo, monkeypatch
 ):

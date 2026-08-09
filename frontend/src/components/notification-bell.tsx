@@ -105,7 +105,16 @@ export function NotificationBell() {
           </div>
         ) : (
           notifications.map((n) => (
-            <DropdownMenuItem key={n.id} className="flex-col items-start gap-0.5 px-3 py-2">
+            <DropdownMenuItem
+              key={n.id}
+              className="flex-col items-start gap-0.5 px-3 py-2"
+              // HRP-442: notifications that carry a deep link open it.
+              render={
+                typeof n.context?.link === "string" ? (
+                  <Link href={n.context.link as string} />
+                ) : undefined
+              }
+            >
               <p className={`text-sm ${n.is_read ? "text-muted-foreground" : "font-medium"}`}>
                 {(n.context?.title as string) || (n.context?.message as string) || t("notification")}
               </p>

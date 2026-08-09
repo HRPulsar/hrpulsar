@@ -261,6 +261,53 @@ def cleanup_orphan_upload_sessions_task(self) -> dict:
         engine.dispose()
 
 
+@celery.task(
+    bind=True,
+    max_retries=0,
+    name="app.modules.recruitment.tasks.purge_archived_interviews_task",
+)
+def purge_archived_interviews_task(self) -> dict:
+    """HRP-418: drop the media of interviews archived past the 90-day window.
+
+    Metadata survives for audit — only the object-storage blob and the
+    file pointers go, which is also what makes the interview permanently
+    unrestorable. Intended to run daily from celery beat.
+    """
+
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.config import settings
+    from app.database import make_async_engine
+    from app.modules.recruitment.interview_service import (
+        purge_expired_archived_interviews,
+    )
+
+    async def _inner() -> int:
+        engine = make_async_engine(
+            settings.database_url,
+            pool_size=2,
+            max_overflow=2,
+            pool_recycle=300,
+            pool_pre_ping=True,
+        )
+        session_factory = async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
+        try:
+            async with session_factory() as db:
+                return await purge_expired_archived_interviews(db)
+        finally:
+            await engine.dispose()
+
+    try:
+        return {"status": "ok", "purged": asyncio.run(_inner())}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("purge_archived_interviews_task failed")
+        return {"status": "error", "error": str(exc)[:200]}
+
+
 # ---------------------------------------------------------------------------
 # HRP-181 REDO Stage 3 — detached resume retention
 # ---------------------------------------------------------------------------

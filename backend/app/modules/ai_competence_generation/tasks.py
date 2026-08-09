@@ -379,6 +379,7 @@ async def _generate_with_retries(
     max_attempts: int,
     max_tokens: int | None = None,
     credentials: Any = None,
+    model: str | None = None,
 ) -> tuple[BaseModel, str | None]:
     """Returns (model_instance, error_code_or_None). Bounded exponential backoff.
 
@@ -400,6 +401,11 @@ async def _generate_with_retries(
         "tenant_settings": tenant_settings,
         "schema": schema,
         "credentials": credentials,
+        # HRP-500 (review #5): resolved through the catalog by the caller,
+        # which holds the session — passing ``credentials`` alone left the
+        # kill-switch unapplied on this Celery path while billing already
+        # priced the substitute.
+        "model": model,
     }
     if max_tokens is not None:
         generate_kwargs["max_tokens"] = max_tokens
@@ -1482,7 +1488,14 @@ async def _execute_session_body(
         # after the LLM round-trip completes.
         await _broadcast_progress(tenant_id, user_id, sess.id, "thinking")
         tenant_settings = await ai_settings_service.get_or_default(db, tenant_id)
-        sess.llm_model = ai_settings_service.get_effective_model(tenant_settings)
+        # HRP-500 (review #5): the catalog kill-switch has to be applied
+        # here, where the session still exists — the LLM phase below runs
+        # on ``credentials`` alone. The recorded ``llm_model`` is the id we
+        # actually dispatch and the one billing prices.
+        effective_model = await ai_settings_service.get_effective_model_async(
+            db, tenant_settings
+        )
+        sess.llm_model = effective_model
         await db.commit()
 
         # --- Build prompt per scope ---------------------------------
@@ -1521,11 +1534,7 @@ async def _execute_session_body(
         from app.modules.ai import providers as ai_providers
 
         credentials = await ai_providers.resolve_generation_target(
-            db,
-            sess.tenant_id,
-            ai_settings_service.get_effective_model(tenant_settings)
-            if tenant_settings
-            else None,
+            db, sess.tenant_id, effective_model
         )
 
         await db.commit()
@@ -1552,6 +1561,7 @@ async def _execute_session_body(
                 # HRP-122: scope-aware output budget — see _max_tokens_for_scope.
                 max_tokens=_max_tokens_for_scope(sess.scope),
                 credentials=credentials,
+                model=effective_model,
             )
         except RuntimeError as exc:
             code = str(exc) or "service_error"

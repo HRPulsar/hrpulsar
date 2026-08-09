@@ -40,6 +40,7 @@ from app.modules.recruitment.tasks.maintenance import (
     cleanup_detached_resume_files_task,
     cleanup_orphan_upload_sessions_task,
     cleanup_stuck_recruitment_tasks_task,
+    purge_archived_interviews_task,
 )
 from app.modules.recruitment.tasks.parsing import parse_resume_task
 from app.modules.recruitment.tasks.reporting import generate_report_task
@@ -54,6 +55,7 @@ __all__ = [
     "generate_questions_task",
     "generate_report_task",
     "parse_resume_task",
+    "purge_archived_interviews_task",
     "run_gdpr_export_task",
     "scan_interview_media_task",
     "transcribe_interview_task",

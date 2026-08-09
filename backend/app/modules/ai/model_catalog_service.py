@@ -23,11 +23,14 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.modules.ai import model_registry
@@ -60,14 +63,22 @@ def normalize_model_id(model_id: str, provider: str) -> str:
     return pattern.sub("", model_id)
 
 
-def _family_rank(row: ModelCatalogEntry) -> tuple[bool, bool, str]:
+def _family_rank(row: ModelCatalogEntry) -> tuple[bool, bool, bool, str]:
     """Deterministic preference among same-family catalog rows.
 
-    Canonical dateless id first (its registry/YAML price is keyed on it),
-    then any row that carries a moderated multiplier, then the newest
+    Curated seed rows first: they are the ids ``EFFORT_PRESETS`` resolves
+    to and ``credits.yaml`` prices, and one of them (``ANTHROPIC_FAST``)
+    is a dated id that is not canonical under its own normalization and
+    carries no row multiplier — it lost both remaining tiebreaks to any
+    newer dated snapshot, which dropped a still-selectable model from the
+    picker and quoted the wrong price (HRP-500, review #13).
+
+    Then the canonical dateless id (its registry/YAML price is keyed on
+    it), then any row that carries a moderated multiplier, then the newest
     snapshot (version suffixes sort lexicographically within a provider).
     """
     return (
+        row.source == "seed",
         row.model_id == normalize_model_id(row.model_id, row.provider),
         row.credit_multiplier is not None,
         row.model_id,
@@ -177,26 +188,33 @@ async def approved_models(db: AsyncSession) -> list[ModelCatalogEntry]:
     return list((await db.execute(query)).scalars().all())
 
 
-async def get_entry(db: AsyncSession, model_id: str) -> ModelCatalogEntry | None:
+async def get_entry(
+    db: AsyncSession, model_id: str, provider: str | None = None
+) -> ModelCatalogEntry | None:
     """The catalog row for a model id regardless of status, or None.
 
     When a row exists the catalog is authoritative for pickability — the
     in-memory whitelist is only a fallback for models the catalog has never
-    seen (``ai_settings.service.update``)."""
-    return (
-        (
-            await db.execute(
-                select(ModelCatalogEntry).where(ModelCatalogEntry.model_id == model_id)
-            )
-        )
-        .scalars()
-        .first()
-    )
+    seen (``ai_settings.service.update``).
+
+    Uniqueness is on ``(provider, model_id)``, so an id two providers both
+    serve (a proxied ``gpt-4o``, say) has more than one row: pass
+    ``provider`` when the caller knows it, and the ordering keeps the
+    provider-blind answer stable instead of whatever the plan returns."""
+    query = select(ModelCatalogEntry).where(ModelCatalogEntry.model_id == model_id)
+    if provider is not None:
+        query = query.where(ModelCatalogEntry.provider == provider)
+    query = query.order_by(ModelCatalogEntry.provider)
+    return (await db.execute(query)).scalars().first()
 
 
 async def is_model_allowed(db: AsyncSession, model_id: str) -> bool:
     """Approved+enabled catalog membership (union partner of the in-memory
-    registry check in ``ai_settings.service.update``)."""
+    registry check in ``ai_settings.service.update``).
+
+    Also the kill-switch check on the dispatch path:
+    ``ai_settings.service.get_effective_model_async`` calls it so disabling
+    a row stops generation for preset tenants too, not just pickers."""
     row = (
         (
             await db.execute(
@@ -211,6 +229,103 @@ async def is_model_allowed(db: AsyncSession, model_id: str) -> bool:
         .first()
     )
     return row is not None
+
+
+async def pick_tier_model(db: AsyncSession, provider: str, tier: str) -> str | None:
+    """Best pickable model of this provider/tier, or None.
+
+    Substitute used when a tenant's effort preset resolves to a model the
+    platform admin disabled (HRP-500, review #12). Ranking is the same
+    family preference the picker uses, so the answer is deterministic.
+
+    The kill-switch is a *family* switch (review #3): disabling
+    ``claude-sonnet-5`` left its discovered snapshot
+    ``claude-sonnet-5-20260601`` approved+enabled, and a per-row filter
+    handed back exactly the model the platform admin had just turned off.
+    Only an explicitly disabled *approved* row cascades — ``pending`` and
+    ``rejected`` rows are disabled by moderation state, and a pending
+    snapshot must not take its approved family down with it.
+    """
+    rows = list((await db.execute(_approved_rows_query(provider))).scalars().all())
+    picked = _pick_tier_row(rows, tier)
+    return picked.model_id if picked is not None else None
+
+
+def _approved_rows_query(provider: str) -> Any:
+    return select(ModelCatalogEntry).where(
+        ModelCatalogEntry.provider == provider,
+        ModelCatalogEntry.status == "approved",
+    )
+
+
+def _pick_tier_row(
+    rows: list[ModelCatalogEntry], tier: str | None
+) -> ModelCatalogEntry | None:
+    """Ranking half of :func:`pick_tier_model`, shared with the sync twin."""
+    disabled_families = {
+        normalize_model_id(row.model_id, row.provider)
+        for row in rows
+        if not row.enabled
+    }
+    candidates = [
+        row
+        for row in rows
+        if row.enabled
+        and row.tier == tier
+        and normalize_model_id(row.model_id, row.provider) not in disabled_families
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=_family_rank)
+
+
+def resolve_dispatch_model_sync(db: Session, model: str | None) -> str | None:
+    """Catalog kill-switch for Celery workers holding a synchronous Session.
+
+    Sync twin of ``ai_settings.service.get_effective_model_async``, for the
+    recruitment analysis tasks: they hand ``llm_client`` a ``credentials``
+    object and never a session, so a model the platform admin disabled kept
+    being dispatched there (HRP-500, review #5). ``model=None`` means the
+    caller picked none and ``llm_client`` would fall back to the platform
+    preset — that is the id to check.
+
+    A model the catalog has never seen (local/BYOK name) is returned as-is:
+    it is not the catalog's call to override it.
+    """
+    from app.modules.ai import llm_client
+
+    candidate = model or llm_client._get_default_model()
+    entry = (
+        db.execute(
+            select(ModelCatalogEntry)
+            .where(ModelCatalogEntry.model_id == candidate)
+            .order_by(ModelCatalogEntry.provider)
+        )
+        .scalars()
+        .first()
+    )
+    if entry is None or (entry.status == "approved" and entry.enabled):
+        return candidate
+
+    rows = list(db.execute(_approved_rows_query(entry.provider)).scalars().all())
+    # A pinned/discovered row may carry no tier; the platform preset this
+    # path falls back to is the balanced one, so that is the tier to
+    # substitute within.
+    substitute = _pick_tier_row(rows, entry.tier or "balanced")
+    if substitute is None:
+        logger.warning(
+            "model catalog: model %s is disabled and no %s replacement is "
+            "approved — keeping it",
+            candidate,
+            entry.provider,
+        )
+        return candidate
+    logger.warning(
+        "model catalog: model %s is disabled — falling back to %s",
+        candidate,
+        substitute.model_id,
+    )
+    return substitute.model_id
 
 
 async def stored_multiplier(db: AsyncSession, model_id: str) -> float | None:
@@ -353,11 +468,14 @@ def to_read_dicts(rows: list[ModelCatalogEntry]) -> list[dict[str, Any]]:
     year of snapshots never fills the picker with duplicates — the DB
     keeps every row, only the projection dedups.
 
-    Multiplier precedence: in-memory registry (curated credits.yaml or a
-    moderation upsert) → the row's own moderated value → 1.0 (community,
-    where multipliers are cosmetic). Under active billing an approved row
-    with no multiplier anywhere is a config error — logged and withheld
-    from the pickable list rather than billed at a silent default.
+    Multiplier precedence: the row's own moderated value → the in-memory
+    registry (curated credits.yaml, or a moderation upsert this process
+    served) → 1.0 (community, where multipliers are cosmetic). The catalog
+    leads because it is the value every worker bills from (HRP-500, review
+    #10/#14) — curated seed rows carry NULL and still take their
+    credits.yaml price. Under active billing an approved row with no
+    multiplier anywhere is a config error — logged and withheld from the
+    pickable list rather than billed at a silent default.
     """
     from app.modules.ai_settings import service as ai_settings_service
 
@@ -372,13 +490,12 @@ def to_read_dicts(rows: list[ModelCatalogEntry]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in deduped:
         registry_entry = ai_settings_service._model_lookup(row.model_id)
-        multiplier: float | None
+        multiplier: float | None = row.credit_multiplier
         label = row.label
         if registry_entry is not None:
-            multiplier = float(registry_entry["credit_multiplier"])
             label = registry_entry.get("label") or label
-        else:
-            multiplier = row.credit_multiplier
+            if multiplier is None:
+                multiplier = float(registry_entry["credit_multiplier"])
         if multiplier is None:
             if billing_active():
                 logger.warning(

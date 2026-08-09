@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.modules.ai.providers import decrypt_row_key
 from app.modules.recruitment.models import TranscriptionProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -379,7 +380,13 @@ async def get_transcription_provider(
 
     if row and row.provider:
         provider = row.provider
-        api_key = row.api_key_encrypted or _platform_key_for(provider)
+        # HRP-506: the column holds ciphertext — decrypting it here is what
+        # keeps a tenant BYOK key working (and keeps the ciphertext from
+        # travelling to the provider as a Bearer token). An unreadable key
+        # degrades to the platform credential, like the LLM dispatch path.
+        api_key = decrypt_row_key(row, kind="transcription_provider") or (
+            _platform_key_for(provider)
+        )
     else:
         provider = settings.transcription_provider_default or "whisper"
         api_key = _platform_key_for(provider)
@@ -403,7 +410,13 @@ def get_transcription_provider_sync(
 
     if row and row.provider:
         provider = row.provider
-        api_key = row.api_key_encrypted or _platform_key_for(provider)
+        # HRP-506: the column holds ciphertext — decrypting it here is what
+        # keeps a tenant BYOK key working (and keeps the ciphertext from
+        # travelling to the provider as a Bearer token). An unreadable key
+        # degrades to the platform credential, like the LLM dispatch path.
+        api_key = decrypt_row_key(row, kind="transcription_provider") or (
+            _platform_key_for(provider)
+        )
     else:
         provider = settings.transcription_provider_default or "whisper"
         api_key = _platform_key_for(provider)

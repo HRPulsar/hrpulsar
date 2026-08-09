@@ -538,6 +538,93 @@ class AssessmentGroupDetail(AssessmentGroupRead):
     skipped_capped_count: int | None = None
 
 
+# --- HRP-528: mass assessment analytics ---
+#
+# The endpoint returns per-employee raw values (already computed with the
+# HRP-62 formulas) plus the two unfiltered highlight lists. Averages for the
+# "Detailed results" sub-block are derived on the client, because the filter
+# bar (divisions / specializations / competences / employees) has to reshape
+# them without a round-trip.
+
+
+class GroupAnalyticsCompetenceRef(BaseModel):
+    competence_id: uuid.UUID
+    competence_title: str
+
+
+class GroupAnalyticsGradeRef(BaseModel):
+    grade_id: uuid.UUID
+    grade_title: str | None = None
+    grade_i18n_key: str | None = None
+    sort_index: int = 0
+
+
+class GroupAnalyticsDivisionRef(BaseModel):
+    division_id: uuid.UUID
+    division_name: str
+
+
+class GroupAnalyticsSpecializationRef(BaseModel):
+    specialization_id: uuid.UUID
+    specialization_title: str | None = None
+    specialization_i18n_key: str | None = None
+
+
+class GroupAnalyticsCompetenceAverage(BaseModel):
+    competence_id: uuid.UUID
+    competence_title: str
+    percent: int
+
+
+class GroupAnalyticsEmployeeCompetence(BaseModel):
+    competence_id: uuid.UUID
+    percent: int | None = None
+
+
+class GroupAnalyticsEmployeeGrade(BaseModel):
+    grade_id: uuid.UUID
+    percent: int | None = None
+
+
+class GroupAnalyticsEmployee(BaseModel):
+    assessment_id: uuid.UUID
+    employee_id: uuid.UUID
+    full_name: str | None = None
+    avatar_url: str | None = None
+    division_id: uuid.UUID | None = None
+    division_name: str | None = None
+    specialization_id: uuid.UUID | None = None
+    specialization_title: str | None = None
+    specialization_i18n_key: str | None = None
+    grade_id: uuid.UUID | None = None
+    grade_title: str | None = None
+    grade_i18n_key: str | None = None
+    position_title: str | None = None
+    #: Overall match percent; ``None`` when every answer was "Don't know".
+    percent: int | None = None
+    all_dont_know: bool = False
+    competences: list[GroupAnalyticsEmployeeCompetence] = []
+    grades: list[GroupAnalyticsEmployeeGrade] = []
+
+
+class GroupAnalyticsResponse(BaseModel):
+    group_id: uuid.UUID
+    criteria_type: str | None = None
+    #: ``target_position`` without a grade — drives the grade matrix/chart.
+    is_all_grades: bool = False
+    #: Children counted into the analytics (status ``done``).
+    done_count: int = 0
+    #: Children that exist but were skipped (cancelled / still in flight).
+    excluded_count: int = 0
+    employees: list[GroupAnalyticsEmployee] = []
+    competences: list[GroupAnalyticsCompetenceRef] = []
+    grades: list[GroupAnalyticsGradeRef] = []
+    divisions: list[GroupAnalyticsDivisionRef] = []
+    specializations: list[GroupAnalyticsSpecializationRef] = []
+    growth_zones: list[GroupAnalyticsCompetenceAverage] = []
+    top_competences: list[GroupAnalyticsCompetenceAverage] = []
+
+
 class GroupedAssessmentListItem(BaseModel):
     kind: str  # "single" | "group"
     assessment: AssessmentRead | None = None

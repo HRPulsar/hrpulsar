@@ -1,8 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import {
+  nextInterviewNumber,
+  sortRounds,
+} from "@/lib/manager-assessment-rounds";
 import { useAuth } from "@/context/auth-context";
 import {
   clearIndicatorsFor,
@@ -30,10 +35,26 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { Loader2, Mail, Plus, UserPlus, X } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Loader2, Mail, MoreVertical, Plus, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 
 type RoundType = "pre_interview" | "interview" | "final";
+
+// HRP-376: round lifecycle transitions offered by the tab kebab.
+type RoundAction = "complete" | "reopen" | "archive" | "restore";
+
+const ROUND_ACTION_TOASTS: Record<RoundAction, string> = {
+  complete: "managerAssessmentRoundCompleted",
+  reopen: "managerAssessmentRoundReopened",
+  archive: "managerAssessmentRoundArchived",
+  restore: "managerAssessmentRoundRestored",
+};
 
 interface RoundDto {
   id: string;
@@ -43,7 +64,23 @@ interface RoundDto {
   completed_at: string | null;
   archived_at: string | null;
   invites: InviteDto[];
-  evaluators: { user_id: string }[];
+  evaluators: RoundEvaluator[];
+}
+
+// HRP-373: a round can hold several internal evaluators; the header shows
+// one avatar per evaluator so it is obvious who else is scoring.
+interface RoundEvaluator {
+  user_id: string;
+  full_name: string | null;
+  initials: string;
+  submitted: boolean;
+}
+
+interface EligibleEvaluator {
+  id: string;
+  email: string;
+  full_name: string;
+  already_evaluator: boolean;
 }
 
 interface InviteDto {
@@ -63,6 +100,8 @@ interface AssessmentSheet {
   round_id: string;
   evaluator_type: "user" | "invited";
   evaluator_user_id: string | null;
+  /** HRP-377: lets the recruiter pull one external evaluator's sheet. */
+  evaluator_invite_id: string | null;
   evaluator_display_name: string | null;
   status: "draft" | "submitted";
   final_notes: string | null;
@@ -165,24 +204,42 @@ export function ManagerAssessmentSection({
   );
   const [rounds, setRounds] = useState<RoundDto[]>([]);
   const [activeRoundId, setActiveRoundId] = useState<string | null>(null);
+  // Mirror of activeRoundId readable from inside async callbacks, so a late
+  // response for a round the user already tabbed away from can be dropped.
+  // Written synchronously by `selectRound` — a state read captured in a
+  // `useCallback([])` closure would forever see the first render's value.
+  const activeRoundIdRef = useRef<string | null>(null);
+  const selectRound = useCallback((roundId: string | null) => {
+    activeRoundIdRef.current = roundId;
+    setActiveRoundId(roundId);
+  }, []);
   const [sheet, setSheet] = useState<AssessmentSheet | null>(null);
   const [scaleLevels, setScaleLevels] = useState<ScaleLevel[]>([]);
   const [profileCompetences, setProfileCompetences] = useState<
     ProfileCompetence[]
   >([]);
-  const [invites, setInvites] = useState<InviteDto[]>([]);
   const [aggregate, setAggregate] = useState<RoundAggregate | null>(null);
   // HRP-186 REDO: spec §3 — `+ New round` must surface a confirm dialog
   // ("Add new interview round? This will create Interview {N+1}.") so a
   // recruiter cannot accidentally insert a 4th round during a hectic
   // interview day.
   const [pendingNewRound, setPendingNewRound] = useState(false);
+  // HRP-377: the invite whose submitted sheet the recruiter is reading.
+  const [viewingInvite, setViewingInvite] = useState<InviteDto | null>(null);
   const [savingState, setSavingState] = useState<"idle" | "saving" | "saved">(
     "idle",
   );
   const [loadingRounds, setLoadingRounds] = useState(false);
   const { user } = useAuth();
   const t = useTranslations("recruitment");
+
+  // HRP-373: the "you were added as an evaluator" email links here with
+  // `?round=`. Consumed once — after that the user's tab clicks win, so a
+  // later reload of the round list does not yank them back.
+  const searchParams = useSearchParams();
+  const pendingDeepLinkRound = useRef<string | null>(
+    searchParams.get("round"),
+  );
 
   // HRP-348 REDO: one debounce timer per score row — a shared timer would
   // silently drop the previous row's PATCH when the evaluator moves fast
@@ -191,30 +248,82 @@ export function ManagerAssessmentSection({
     new Map(),
   );
   const pendingSaves = useRef(0);
+  // The "Saved" badge fades on its own timer; it has to die with the
+  // component too, or it calls setState on an unmounted tree.
+  const savedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Leaving the card mid-edit must not leave PATCHes armed: the timers
+  // outlive the component and fire against a sheet nobody is looking at.
+  useEffect(() => {
+    const timers = debounceTimers.current;
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+      pendingSaves.current = 0;
+      if (savedResetTimer.current) clearTimeout(savedResetTimer.current);
+    };
+  }, []);
 
   const activeVacancy = useMemo(
     () => vacancies.find((v) => v.id === activeCvId) ?? null,
     [vacancies, activeCvId],
   );
+  const activeRound = useMemo(
+    () => rounds.find((r) => r.id === activeRoundId) ?? null,
+    [rounds, activeRoundId],
+  );
+  // HRP-377 REDO: the invite list is derived from the round record, never
+  // held in a second state. A local copy drifted from `rounds`, so every
+  // optimistic write (revoke, resend, send) was rolled back to the stale
+  // server row the moment the round list was re-read.
+  const invites = activeRound?.invites ?? [];
+  // HRP-376: a completed or archived round is read-only end to end — own
+  // sheet, new evaluators, new external links.
+  const roundClosed =
+    activeRound !== null && activeRound.status !== "in_progress";
+  // HRP-373: a pre-interview round holds exactly one evaluator (HRP-369),
+  // and a completed or archived round takes no new ones at all (HRP-376).
+  const canAddEvaluator =
+    activeRound !== null &&
+    activeRound.type !== "pre_interview" &&
+    !roundClosed;
 
   // ── Load rounds for the active CV ────────────────────────────────────
-  const loadRounds = useCallback(async (cvId: string) => {
-    setLoadingRounds(true);
-    try {
-      const rows = await api.get<RoundDto[]>(
-        `/v1/candidate-vacancies/${cvId}/assessment-rounds`,
-      );
-      setRounds(rows);
-      if (rows.length && !rows.find((r) => r.id === activeRoundId)) {
-        setActiveRoundId(rows[rows.length - 1]!.id);
+  const loadRounds = useCallback(
+    async (cvId: string) => {
+      setLoadingRounds(true);
+      try {
+        const rows = sortRounds(
+          await api.get<RoundDto[]>(
+            `/v1/candidate-vacancies/${cvId}/assessment-rounds`,
+          ),
+        );
+        setRounds(rows);
+        const deepLink = pendingDeepLinkRound.current;
+        // HRP-373 REDO: the current tab is read from the ref, not from a
+        // captured state value — every reload (add evaluator, start
+        // scoring) used to see `null` here and yank the recruiter to the
+        // last round mid-assessment.
+        const current = activeRoundIdRef.current;
+        if (deepLink && rows.some((r) => r.id === deepLink)) {
+          pendingDeepLinkRound.current = null;
+          selectRound(deepLink);
+        } else if (rows.length && !rows.some((r) => r.id === current)) {
+          // HRP-376: an archived round is read-only, so default to the
+          // last live one and only fall back to an archived tab when the
+          // candidate has nothing else.
+          const live = rows.filter((r) => r.status !== "archived");
+          const fallback = live[live.length - 1] ?? rows[rows.length - 1]!;
+          selectRound(fallback.id);
+        }
+      } catch {
+        setRounds([]);
+      } finally {
+        setLoadingRounds(false);
       }
-    } catch {
-      setRounds([]);
-    } finally {
-      setLoadingRounds(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    },
+    [selectRound],
+  );
 
   useEffect(() => {
     if (!activeCvId) return;
@@ -290,6 +399,10 @@ export function ManagerAssessmentSection({
         const list = await api.get<AssessmentSheet[]>(
           `/v1/assessment-rounds/${roundId}/assessments`,
         );
+        // A tab switch while this was in flight makes the answer stale —
+        // writing it would hand the visible form a foreign assessment id
+        // and the autosave would PATCH into the wrong round.
+        if (activeRoundIdRef.current !== roundId) return;
         // HRP-348 REDO: sheets are per evaluator — pick the one owned by
         // the signed-in user, never a colleague's. Falling back to any
         // "user" sheet would show (and let us PATCH into) foreign scores.
@@ -306,18 +419,11 @@ export function ManagerAssessmentSection({
         // We surface a placeholder so the user can still start scoring.
         setSheet(null);
       } catch {
-        setSheet(null);
+        if (activeRoundIdRef.current === roundId) setSheet(null);
       }
     },
     [user],
   );
-
-  // Mirror of activeRoundId readable from inside async callbacks, so a late
-  // response for a round the user already tabbed away from can be dropped.
-  const activeRoundIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    activeRoundIdRef.current = activeRoundId;
-  }, [activeRoundId]);
 
   // HRP-374: the round header average spans every evaluator, so it can only
   // come from the server — a local sheet knows nothing about colleagues or
@@ -334,6 +440,10 @@ export function ManagerAssessmentSection({
     if (activeRoundIdRef.current === roundId) setAggregate(agg);
   }, []);
 
+  // Deliberately keyed on the round alone: `rounds` changes identity on
+  // every reload and on every optimistic invite write, and re-running the
+  // sheet fetch there would overwrite scores still sitting in the 1.5s
+  // autosave debounce. The invite list reads straight off `activeRound`.
   useEffect(() => {
     if (!activeRoundId) return;
     void ensureSheet(activeRoundId);
@@ -342,9 +452,7 @@ export function ManagerAssessmentSection({
     // full round-trip.
     setAggregate(null);
     void loadAggregate(activeRoundId);
-    const round = rounds.find((r) => r.id === activeRoundId);
-    setInvites(round?.invites ?? []);
-  }, [activeRoundId, rounds, ensureSheet, loadAggregate]);
+  }, [activeRoundId, ensureSheet, loadAggregate]);
 
   const aggregatesByCompetence = useMemo(() => {
     const out: Record<string, CompetenceAggregate> = {};
@@ -365,8 +473,10 @@ export function ManagerAssessmentSection({
         `/v1/candidate-vacancies/${activeCvId}/assessment-rounds`,
         { type },
       );
-      setRounds((prev) => [...prev, r]);
-      setActiveRoundId(r.id);
+      // HRP-372: a round created now must slot into its place in the strip
+      // (a late Pre-interview belongs first), not append to the end.
+      setRounds((prev) => sortRounds([...prev, r]));
+      selectRound(r.id);
     } catch (err) {
       toast.error(
         err instanceof Error
@@ -376,21 +486,54 @@ export function ManagerAssessmentSection({
     }
   }
 
+  // HRP-376: one call for every kebab action. The server decides where
+  // `restore` lands (complete vs in_progress), so the response is the only
+  // source of truth for the new round state.
+  const runRoundAction = useCallback(
+    async (roundId: string, action: RoundAction) => {
+      try {
+        const r = await api.patch<RoundDto>(
+          `/v1/assessment-rounds/${roundId}`,
+          { action },
+        );
+        setRounds((prev) => prev.map((x) => (x.id === r.id ? r : x)));
+        toast.success(t(ROUND_ACTION_TOASTS[action]));
+        // The kebab fires for any tab, so only the round on screen may
+        // touch the visible sheet — refetching for a background round
+        // would bind the form (and its autosave) to a foreign assessment.
+        if (activeRoundIdRef.current !== roundId) return;
+        // Completing submits the acting evaluator's own sheet and revokes
+        // the round's live external links, and archiving drops the round
+        // out of the aggregate — refetch rather than guess.
+        void ensureSheet(roundId);
+        void loadAggregate(roundId);
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : t("managerAssessmentFailed"),
+        );
+      }
+    },
+    [t, ensureSheet, loadAggregate],
+  );
+
   async function completeRound() {
     if (!activeRoundId) return;
-    try {
-      const r = await api.patch<RoundDto>(
-        `/v1/assessment-rounds/${activeRoundId}`,
-        { status: "complete" },
-      );
-      setRounds((prev) => prev.map((x) => (x.id === r.id ? r : x)));
-      toast.success(t("managerAssessmentRoundCompleted"));
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : t("managerAssessmentFailed"),
-      );
-    }
+    await runRoundAction(activeRoundId, "complete");
   }
+
+  /** Write an invite change back onto its round — the single place the
+   * list lives, so the chip cannot be reverted by the next round read. */
+  const patchRoundInvites = useCallback(
+    (roundId: string | null, patch: (rows: InviteDto[]) => InviteDto[]) => {
+      if (!roundId) return;
+      setRounds((prev) =>
+        prev.map((r) =>
+          r.id === roundId ? { ...r, invites: patch(r.invites ?? []) } : r,
+        ),
+      );
+    },
+    [],
+  );
 
   function scheduleAutosave(key: string, fn: () => Promise<void>) {
     setSavingState("saving");
@@ -406,7 +549,11 @@ export function ManagerAssessmentSection({
           if (--pendingSaves.current <= 0) {
             pendingSaves.current = 0;
             setSavingState("saved");
-            setTimeout(() => setSavingState("idle"), 1200);
+            if (savedResetTimer.current) clearTimeout(savedResetTimer.current);
+            savedResetTimer.current = setTimeout(
+              () => setSavingState("idle"),
+              1200,
+            );
           }
         } catch {
           toast.error(t("managerAssessmentScoreSaveFailed"));
@@ -630,20 +777,36 @@ export function ManagerAssessmentSection({
                 <Loader2 className="size-4 animate-spin text-muted-foreground" />
               )}
               {rounds.map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => setActiveRoundId(r.id)}
-                  className={`rounded-full px-3 py-1 text-xs ${
-                    r.id === activeRoundId
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground"
-                  }`}
-                  data-testid={`assessment-round-tab-${r.id}`}
-                >
-                  {labelForRound(t, r)}
-                  {r.status === "complete" && <span className="ml-1">·✓</span>}
-                </button>
+                <span key={r.id} className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => selectRound(r.id)}
+                    className={`rounded-full px-3 py-1 text-xs ${
+                      r.id === activeRoundId
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground"
+                    } ${r.status === "archived" ? "line-through opacity-60" : ""}`}
+                    data-testid={`assessment-round-tab-${r.id}`}
+                  >
+                    {labelForRound(t, r)}
+                    {r.status === "complete" && <span className="ml-1">·✓</span>}
+                  </button>
+                  {/* HRP-376: Complete / Reopen / Archive / Restore. */}
+                  <RoundKebab
+                    round={r}
+                    onAction={runRoundAction}
+                    // HRP-348: Complete obeys the same gate as the button.
+                    // `canComplete` is only knowable for the round whose
+                    // sheet is loaded, so any other tab has to be opened
+                    // first rather than completed blind from the strip.
+                    canComplete={r.id === activeRoundId ? canComplete : false}
+                    completeHint={
+                      r.id === activeRoundId
+                        ? completeHint
+                        : t("managerAssessmentRoundCompleteHintInactive")
+                    }
+                  />
+                </span>
               ))}
               <Button
                 size="sm"
@@ -684,6 +847,42 @@ export function ManagerAssessmentSection({
                 : savingState === "saved"
                   ? t("managerAssessmentSaved")
                   : null}
+            </div>
+
+            {/* Evaluators on this round (HRP-373) */}
+            <div
+              className="flex flex-wrap items-center justify-between gap-2"
+              data-testid="assessment-round-evaluators"
+            >
+              <div>
+                {!sheet && !roundClosed && (
+                  <AddSelfAsEvaluator
+                    roundId={activeRoundId}
+                    onAdded={(s) => {
+                      setSheet(s);
+                      if (activeCvId) void loadRounds(activeCvId);
+                    }}
+                  />
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(activeRound?.evaluators ?? []).map((ev) => (
+                  <EvaluatorAvatar
+                    key={ev.user_id}
+                    evaluator={ev}
+                    isSelf={ev.user_id === user?.id}
+                    t={t}
+                  />
+                ))}
+                {canAddEvaluator && (
+                  <AddEvaluatorButton
+                    roundId={activeRoundId!}
+                    onAdded={() => {
+                      if (activeCvId) void loadRounds(activeCvId);
+                    }}
+                  />
+                )}
+              </div>
             </div>
 
             {/* Form */}
@@ -739,25 +938,53 @@ export function ManagerAssessmentSection({
                       </span>
                     )}
                   </span>
-                  {/* Disabled buttons swallow hover (pointer-events:none),
-                      so the explainer tooltip lives on the wrapper span. */}
-                  <span title={completeHint}>
-                    <Button
-                      size="sm"
+                  {/* HRP-376: once the round is closed the button is gone
+                      and its place is taken by the round's status, so it is
+                      obvious why the sheet no longer accepts input. */}
+                  {roundClosed ? (
+                    <Badge
                       variant="outline"
-                      onClick={completeRound}
-                      disabled={!canComplete}
-                      data-testid="assessment-round-complete-btn"
+                      className={
+                        activeRound?.status === "archived"
+                          ? "bg-muted text-muted-foreground"
+                          : "bg-emerald-50 text-emerald-700"
+                      }
+                      data-testid="assessment-round-status-badge"
                     >
-                      {t("managerAssessmentMarkComplete")}
-                    </Button>
-                  </span>
+                      {activeRound?.status === "archived"
+                        ? t("managerAssessmentRoundArchivedBadge")
+                        : t("managerAssessmentRoundCompletedBadge")}
+                    </Badge>
+                  ) : (
+                    // Disabled buttons swallow hover (pointer-events:none),
+                    // so the explainer tooltip lives on the wrapper span.
+                    <span title={completeHint}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={completeRound}
+                        disabled={!canComplete}
+                        data-testid="assessment-round-complete-btn"
+                      >
+                        {t("managerAssessmentMarkComplete")}
+                      </Button>
+                    </span>
+                  )}
+                  {activeRound?.status === "archived" && (
+                    <span
+                      className="text-[11px] italic"
+                      data-testid="assessment-round-excluded-note"
+                    >
+                      {t("managerAssessmentRoundExcluded")}
+                    </span>
+                  )}
                 </div>
                 <CompetenceScoreList
                   competences={profileCompetences}
                   scaleLevels={scaleLevels}
                   competenceScores={sheet.competence_scores}
                   indicatorScores={sheet.indicator_scores}
+                  disabled={roundClosed}
                   emptyHint={t("managerAssessmentEmptyHint")}
                   aggregates={aggregatesByCompetence}
                   onCompetenceScore={(compId, value) =>
@@ -771,12 +998,7 @@ export function ManagerAssessmentSection({
                   }
                 />
               </div>
-            ) : (
-              <AddSelfAsEvaluator
-                roundId={activeRoundId}
-                onAdded={(s) => setSheet(s)}
-              />
-            )}
+            ) : null}
 
             {/* Invites */}
             <div className="space-y-2 border-t pt-3">
@@ -787,8 +1009,14 @@ export function ManagerAssessmentSection({
                 <InviteEvaluatorButton
                   cvId={activeCvId}
                   roundId={activeRoundId}
+                  roundClosed={roundClosed}
                   hasProfileCompetences={profileCompetences.length > 0}
-                  onSent={(rows) => setInvites((prev) => [...prev, ...rows])}
+                  onSent={(rows) =>
+                    patchRoundInvites(activeRoundId, (prev) => [
+                      ...prev,
+                      ...rows,
+                    ])
+                  }
                 />
               </div>
               {invites.length === 0 ? (
@@ -821,13 +1049,27 @@ export function ManagerAssessmentSection({
                           <Mail className="size-3 text-muted-foreground" />
                           {inv.evaluator_name || inv.email}
                         </span>
-                        <Badge
-                          data-testid={`assessment-round-invite-${inv.id}-status-badge`}
-                          variant="outline"
-                          className={chip.className}
-                        >
-                          {chip.label}
-                        </Badge>
+                        <span className="flex items-center gap-1">
+                          <Badge
+                            data-testid={`assessment-round-invite-${inv.id}-status-badge`}
+                            variant="outline"
+                            className={chip.className}
+                          >
+                            {chip.label}
+                          </Badge>
+                          {/* HRP-377: Resend / Revoke / View submission. */}
+                          <InviteKebab
+                            invite={inv}
+                            onChanged={(updated) =>
+                              patchRoundInvites(activeRoundId, (prev) =>
+                                prev.map((x) =>
+                                  x.id === updated.id ? updated : x,
+                                ),
+                              )
+                            }
+                            onViewSubmission={() => setViewingInvite(inv)}
+                          />
+                        </span>
                       </li>
                     );
                   })}
@@ -837,6 +1079,15 @@ export function ManagerAssessmentSection({
           </>
         )}
       </CardContent>
+      {viewingInvite && activeRoundId && (
+        <SubmissionDrawer
+          invite={viewingInvite}
+          roundId={activeRoundId}
+          competences={profileCompetences}
+          scaleLevels={scaleLevels}
+          onClose={() => setViewingInvite(null)}
+        />
+      )}
       <ConfirmDialog
         open={pendingNewRound}
         onOpenChange={setPendingNewRound}
@@ -853,13 +1104,6 @@ export function ManagerAssessmentSection({
       />
     </Card>
   );
-}
-
-function nextInterviewNumber(rounds: RoundDto[]): number {
-  const highest = rounds
-    .filter((r) => r.type === "interview" && r.round_number !== null)
-    .reduce((acc, r) => Math.max(acc, r.round_number ?? 0), 0);
-  return highest + 1;
 }
 
 function labelForRound(
@@ -911,6 +1155,432 @@ function AddSelfAsEvaluator({
   );
 }
 
+/** Invite statuses no action can move any more. */
+const TERMINAL_INVITE_STATUSES = new Set([
+  "submitted",
+  "declined",
+  "revoked",
+  "expired",
+]);
+
+/** HRP-377: per-invite kebab — Resend, Revoke, View submission. */
+function InviteKebab({
+  invite,
+  onChanged,
+  onViewSubmission,
+}: {
+  invite: InviteDto;
+  onChanged: (invite: InviteDto) => void;
+  onViewSubmission: () => void;
+}) {
+  const t = useTranslations("recruitment");
+  const [busy, setBusy] = useState(false);
+  const terminal = TERMINAL_INVITE_STATUSES.has(invite.status);
+  // A bounce is worth retrying even once the evaluator has opened nothing:
+  // the mail never arrived, so the lifecycle status is not the whole story.
+  const canResend =
+    !terminal &&
+    (invite.status === "pending" ||
+      invite.delivery_status === "delivery_failed");
+  const canRevoke = !terminal;
+  const canView = invite.status === "submitted";
+
+  async function run(action: "resend" | "revoke") {
+    setBusy(true);
+    try {
+      const updated = await api.post<InviteDto>(
+        `/v1/manager-assessment-invites/${invite.id}/${action}`,
+        {},
+      );
+      onChanged(updated);
+      toast.success(
+        t(
+          action === "resend"
+            ? "managerAssessmentInviteResent"
+            : "managerAssessmentInviteRevoked",
+        ),
+      );
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : t("managerAssessmentFailed"),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!canResend && !canRevoke && !canView) return null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        data-testid={`assessment-round-invite-${invite.id}-kebab`}
+        aria-label={t("managerAssessmentInviteActionsAria")}
+        disabled={busy}
+        render={<Button variant="ghost" size="sm" className="size-6 px-0" />}
+      >
+        <MoreVertical className="size-3.5" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        data-testid={`assessment-round-invite-${invite.id}-kebab-menu`}
+      >
+        {canResend && (
+          <DropdownMenuItem
+            onClick={() => void run("resend")}
+            data-testid={`assessment-round-invite-${invite.id}-resend`}
+          >
+            {t("managerAssessmentInviteResend")}
+          </DropdownMenuItem>
+        )}
+        {canRevoke && (
+          <DropdownMenuItem
+            onClick={() => void run("revoke")}
+            data-testid={`assessment-round-invite-${invite.id}-revoke`}
+          >
+            {t("managerAssessmentInviteRevoke")}
+          </DropdownMenuItem>
+        )}
+        {canView && (
+          <DropdownMenuItem
+            onClick={onViewSubmission}
+            data-testid={`assessment-round-invite-${invite.id}-view`}
+          >
+            {t("managerAssessmentInviteViewSubmission")}
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** HRP-377: read-only panel showing what an external evaluator filled in. */
+function SubmissionDrawer({
+  invite,
+  roundId,
+  competences,
+  scaleLevels,
+  onClose,
+}: {
+  invite: InviteDto;
+  roundId: string;
+  competences: ProfileCompetence[];
+  scaleLevels: ScaleLevel[];
+  onClose: () => void;
+}) {
+  const t = useTranslations("recruitment");
+  const [sheet, setSheet] = useState<AssessmentSheet | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const rows = await api.get<AssessmentSheet[]>(
+          `/v1/assessment-rounds/${roundId}/assessments`,
+        );
+        if (cancelled) return;
+        setSheet(
+          rows.find((a) => a.evaluator_invite_id === invite.id) ?? null,
+        );
+      } catch {
+        if (!cancelled) setSheet(null);
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [roundId, invite.id]);
+
+  return (
+    <div
+      className="fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col border-l bg-background shadow-xl"
+      data-testid="assessment-invite-submission-drawer"
+    >
+      <div className="flex items-center justify-between border-b p-4">
+        <div>
+          <h3 className="text-base font-semibold">
+            {t("managerAssessmentInviteViewSubmission")}
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            {invite.evaluator_name || invite.email}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-muted-foreground"
+          data-testid="assessment-invite-submission-drawer-close"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+      <div className="flex-1 space-y-3 overflow-y-auto p-4">
+        {!loaded ? (
+          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        ) : sheet ? (
+          <>
+            <CompetenceScoreList
+              competences={competences}
+              scaleLevels={scaleLevels}
+              competenceScores={sheet.competence_scores}
+              indicatorScores={sheet.indicator_scores}
+              disabled
+              emptyHint={t("managerAssessmentEmptyHint")}
+              onCompetenceScore={() => undefined}
+              onCompetenceComment={() => undefined}
+              onIndicatorScore={() => undefined}
+            />
+            {sheet.final_notes && (
+              <div className="rounded-md border bg-muted/20 p-3 text-xs whitespace-pre-wrap">
+                {sheet.final_notes}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {t("managerAssessmentInviteNoSubmission")}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** HRP-376: per-round kebab — Complete/Archive, Reopen/Archive, Restore. */
+function RoundKebab({
+  round,
+  onAction,
+  canComplete,
+  completeHint,
+}: {
+  round: RoundDto;
+  onAction: (roundId: string, action: RoundAction) => void;
+  /** HRP-348: same gate as the `Mark as complete` button. */
+  canComplete: boolean;
+  /** Why completion is blocked, shown on hover like the button's. */
+  completeHint?: string;
+}) {
+  const t = useTranslations("recruitment");
+  const archived = round.status === "archived";
+  const complete = round.status === "complete";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        data-testid={`assessment-round-kebab-${round.id}`}
+        aria-label={t("managerAssessmentRoundActionsAria")}
+        render={<Button variant="ghost" size="sm" className="size-6 px-0" />}
+      >
+        <MoreVertical className="size-3.5" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        data-testid={`assessment-round-kebab-menu-${round.id}`}
+      >
+        {archived ? (
+          <DropdownMenuItem
+            onClick={() => onAction(round.id, "restore")}
+            data-testid={`assessment-round-restore-${round.id}`}
+          >
+            {t("managerAssessmentRoundRestore")}
+          </DropdownMenuItem>
+        ) : (
+          <>
+            {complete ? (
+              <DropdownMenuItem
+                onClick={() => onAction(round.id, "reopen")}
+                data-testid={`assessment-round-reopen-${round.id}`}
+              >
+                {t("managerAssessmentRoundReopen")}
+              </DropdownMenuItem>
+            ) : (
+              // A disabled item swallows hover (pointer-events:none), so
+              // the explainer rides on the wrapper — same as the button.
+              <span role="none" title={canComplete ? undefined : completeHint}>
+                <DropdownMenuItem
+                  disabled={!canComplete}
+                  onClick={() => onAction(round.id, "complete")}
+                  data-testid={`assessment-round-complete-${round.id}`}
+                >
+                  {t("managerAssessmentRoundComplete")}
+                </DropdownMenuItem>
+              </span>
+            )}
+            <DropdownMenuItem
+              onClick={() => onAction(round.id, "archive")}
+              data-testid={`assessment-round-archive-${round.id}`}
+            >
+              {t("managerAssessmentRoundArchive")}
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** HRP-373: one evaluator on the round header. Own avatar is outlined so
+ * it stands out from colleagues at a glance. */
+function EvaluatorAvatar({
+  evaluator,
+  isSelf,
+  t,
+}: {
+  evaluator: RoundEvaluator;
+  isSelf: boolean;
+  t: (key: string, values?: Record<string, string | number>) => string;
+}) {
+  const name = evaluator.full_name ?? evaluator.initials;
+  return (
+    <span
+      title={
+        isSelf
+          ? t("managerAssessmentEvaluatorYou", { name })
+          : evaluator.submitted
+            ? t("managerAssessmentEvaluatorSubmitted", { name })
+            : name
+      }
+      className={`inline-flex size-7 items-center justify-center rounded-full text-[11px] font-medium ${
+        isSelf
+          ? "bg-primary text-primary-foreground ring-2 ring-primary/40"
+          : "bg-muted text-muted-foreground"
+      }`}
+      data-testid={`assessment-round-evaluator-${evaluator.user_id}`}
+    >
+      {evaluator.initials}
+    </span>
+  );
+}
+
+/** HRP-373: `+ Add evaluator` — picks a colleague and mails them the link. */
+function AddEvaluatorButton({
+  roundId,
+  onAdded,
+}: {
+  roundId: string;
+  onAdded: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [options, setOptions] = useState<EligibleEvaluator[] | null>(null);
+  const [selected, setSelected] = useState("");
+  const [busy, setBusy] = useState(false);
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
+
+  async function openDialog() {
+    setOpen(true);
+    setSelected("");
+    setOptions(null);
+    try {
+      setOptions(
+        await api.get<EligibleEvaluator[]>(
+          `/v1/assessment-rounds/${roundId}/eligible-evaluators`,
+        ),
+      );
+    } catch {
+      setOptions([]);
+    }
+  }
+
+  async function submit() {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await api.post(`/v1/assessment-rounds/${roundId}/evaluators`, {
+        user_id: selected,
+      });
+      toast.success(t("managerAssessmentEvaluatorAdded"));
+      setOpen(false);
+      onAdded();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : t("managerAssessmentFailed"),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selectable = (options ?? []).filter((o) => !o.already_evaluator);
+
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={openDialog}
+        data-testid="assessment-add-evaluator-btn"
+      >
+        <UserPlus className="size-3.5" /> {t("managerAssessmentAddEvaluator")}
+      </Button>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          data-testid="assessment-add-evaluator-modal"
+        >
+          <div className="w-full max-w-md space-y-3 rounded-lg bg-background p-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold">
+                {t("managerAssessmentAddEvaluator")}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="text-muted-foreground"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            {options === null ? (
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            ) : selectable.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {t("managerAssessmentNoEligibleEvaluators")}
+              </p>
+            ) : (
+              <select
+                className="w-full rounded-md border px-2 py-1 text-sm"
+                value={selected}
+                onChange={(e) => setSelected(e.target.value)}
+                data-testid="assessment-add-evaluator-select"
+              >
+                <option value="">
+                  {t("managerAssessmentSelectEvaluator")}
+                </option>
+                {selectable.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.full_name} ({o.email})
+                  </option>
+                ))}
+              </select>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => setOpen(false)}
+                disabled={busy}
+              >
+                {tc("cancel")}
+              </Button>
+              <Button
+                onClick={submit}
+                disabled={busy || !selected}
+                data-testid="assessment-add-evaluator-submit"
+              >
+                {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+                {t("managerAssessmentAddEvaluatorConfirm")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // HRP-350: real format check, not just a length guard — mirrors the
 // backend's EmailStr validation so the error surfaces before the POST.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -918,11 +1588,14 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 function InviteEvaluatorButton({
   cvId,
   roundId,
+  roundClosed,
   hasProfileCompetences,
   onSent,
 }: {
   cvId: string;
   roundId: string | null;
+  /** HRP-376: a completed / archived round issues no new links. */
+  roundClosed: boolean;
   hasProfileCompetences: boolean;
   onSent: (invites: InviteDto[]) => void;
 }) {
@@ -998,7 +1671,9 @@ function InviteEvaluatorButton({
     ? t("managerAssessmentInviteDisabledNoCompetences")
     : !roundId
       ? t("managerAssessmentInviteDisabledNoRound")
-      : undefined;
+      : roundClosed
+        ? t("managerAssessmentInviteDisabledRoundClosed")
+        : undefined;
 
   return (
     <>
@@ -1009,7 +1684,7 @@ function InviteEvaluatorButton({
           size="sm"
           variant="outline"
           onClick={() => setOpen(true)}
-          disabled={!roundId || !hasProfileCompetences}
+          disabled={!roundId || !hasProfileCompetences || roundClosed}
           data-testid="invite-evaluator-modal-open"
         >
           <UserPlus className="size-3.5" /> {t("managerAssessmentInviteEvaluator")}

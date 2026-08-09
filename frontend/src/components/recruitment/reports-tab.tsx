@@ -24,6 +24,7 @@ import { ReportWizardDialog } from "./report-wizard-dialog";
 import { api } from "@/lib/api";
 import {
   reportSectionLabel,
+  reportStatusLabel,
   type ReportExport,
   type ReportExportList,
   type ReportSectionCode,
@@ -161,7 +162,6 @@ export function ReportsTab({ vacancyId }: ReportsTabProps) {
             <TableHeader>
               <TableRow>
                 <TableHead>{t("reportsColRequested")}</TableHead>
-                <TableHead>{t("reportsColTemplate")}</TableHead>
                 <TableHead>{t("reportsColSections")}</TableHead>
                 <TableHead>{t("columnStatus")}</TableHead>
                 <TableHead>{t("reportsTabColReady")}</TableHead>
@@ -186,9 +186,6 @@ export function ReportsTab({ vacancyId }: ReportsTabProps) {
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {row.template_name || t("reportsTemplateCustom")}
-                  </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
                       {row.sections.map((s: ReportSectionCode) => (
@@ -203,7 +200,7 @@ export function ReportsTab({ vacancyId }: ReportsTabProps) {
                       variant="secondary"
                       className={STATUS_COLORS[row.status] || ""}
                     >
-                      {row.status}
+                      {reportStatusLabel(t, row.status)}
                     </Badge>
                     {row.status === "failed" && row.error && (
                       <p

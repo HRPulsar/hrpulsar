@@ -74,9 +74,7 @@ async def add_question(
     vacancy_id: uuid.UUID,
     data: QuestionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
 ):
     return await service.add_question(
         db, current_user.tenant_id, candidate_id, vacancy_id, data
@@ -91,22 +89,16 @@ async def update_question(
     question_id: uuid.UUID,
     data: QuestionUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
 ):
-    return await service.update_question(
-        db, current_user.tenant_id, question_id, data
-    )
+    return await service.update_question(db, current_user.tenant_id, question_id, data)
 
 
 @router.delete("/recruitment/questions/{question_id}", status_code=204)
 async def delete_question(
     question_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
 ):
     await service.delete_question(db, current_user.tenant_id, question_id)
 
@@ -119,9 +111,7 @@ async def export_questions_pdf(
     vacancy_id: uuid.UUID,
     data: QuestionsPDFExportRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
 ):
     pdf_bytes = await service.export_questions_pdf(
         db,
@@ -179,9 +169,7 @@ async def record_assessment(
     request: Request,
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
 ):
     result = await service.record_human_assessment(
         db,
@@ -207,9 +195,7 @@ async def update_assessment(
     request: Request,
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
 ):
     result = await service.update_human_assessment(
         db,
@@ -281,9 +267,7 @@ async def revert_assessment(
     request: Request,
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
 ):
     """Restore an evaluator's cell to a prior audit-event score (HRP-266).
 
@@ -405,6 +389,10 @@ async def get_canvas(
 @router.get("/recruitment/vacancies/{vacancy_id}/assessment-matrix")
 async def get_assessment_matrix(
     vacancy_id: uuid.UUID,
+    round: str = Query(
+        default="latest",
+        description="AI round scope: 'latest', 'all', or a 1-based round number.",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(
         require_role("admin", "recruiter", "hrd", "hr", "hiring_manager")
@@ -417,9 +405,46 @@ async def get_assessment_matrix(
     flags. HM scoping at the per-row level is a separate ticket — for now
     every recruitment role inside the tenant sees the full matrix, same as
     the existing ``/canvas`` endpoint.
+
+    ``round`` (HRP-510) scopes the AI side to an interview round; manager
+    scores have no round dimension and are unaffected.
     """
     return await service.get_assessment_matrix(
-        db, current_user.tenant_id, vacancy_id
+        db, current_user.tenant_id, vacancy_id, round_filter=round
+    )
+
+
+@router.get("/recruitment/vacancies/{vacancy_id}/assessment-matrix/export.xlsx")
+async def export_assessment_matrix_xlsx(
+    vacancy_id: uuid.UUID,
+    round: str = Query(default="latest"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(
+        require_role("admin", "recruiter", "hrd", "hr", "hiring_manager")
+    ),
+):
+    """HRP-510 — the fullscreen canvas' XLSX export.
+
+    Same data and the same role gate as the matrix endpoint; rendered
+    server-side because openpyxl already lives here and the browser has
+    no zip writer.
+    """
+    payload = await service.get_assessment_matrix(
+        db, current_user.tenant_id, vacancy_id, round_filter=round
+    )
+    vacancy = await service.get_vacancy(db, current_user.tenant_id, vacancy_id)
+    title = getattr(vacancy, "title", None) or "Vacancy"
+    from app.modules.recruitment.report_xlsx import render_canvas_xlsx
+
+    content = render_canvas_xlsx(payload, vacancy_title=title)
+    return Response(
+        content=content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": (f'attachment; filename="canvas-{vacancy_id}.xlsx"')
+        },
     )
 
 
@@ -546,9 +571,7 @@ async def delete_question_v2(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
 ):
-    await question_service.soft_delete_question(
-        db, current_user.tenant_id, question_id
-    )
+    await question_service.soft_delete_question(db, current_user.tenant_id, question_id)
 
 
 @router.post(
@@ -575,8 +598,6 @@ async def export_question_set_pdf(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": (
-                f'attachment; filename="question-set-{set_id}.pdf"'
-            )
+            "Content-Disposition": (f'attachment; filename="question-set-{set_id}.pdf"')
         },
     )

@@ -1614,6 +1614,64 @@ export type AssessmentMatrixAIStatus =
   | "missing"
   | string;
 
+// The backend normalises every AIAssessment.status into these three
+// buckets (`assessment_service._normalize_ai_status`); anything else is
+// passed through lowercased. Machine tokens never reach the screen —
+// callers resolve them through `matrixAiStatusLabel`.
+export const MATRIX_AI_STATUS_LABEL_KEYS: Record<string, string> = {
+  ready: "canvasAiStatusReady",
+  not_covered: "canvasAiStatusNotCovered",
+  missing: "canvasAiStatusMissing",
+};
+
+/** i18n key for a known matrix AI status, or `null` for anything else. */
+export function matrixAiStatusKey(status: string): string | null {
+  return MATRIX_AI_STATUS_LABEL_KEYS[status] ?? null;
+}
+
+/** Translated AI-status label, or `null` when the backend passed through
+ *  a status we have no wording for — callers then render nothing rather
+ *  than a raw enum. */
+export function matrixAiStatusLabel(
+  t: (key: string) => string,
+  status: string,
+): string | null {
+  const key = matrixAiStatusKey(status);
+  return key ? t(key) : null;
+}
+
+// CandidateVacancy.status is a free-form column seeded with "new"; the
+// default funnel drives it to the three terminal codes below. Unknown
+// (tenant-authored) values fall back to the raw string — at that point
+// it is tenant data, not a machine enum.
+export const CANDIDATE_VACANCY_STATUS_LABEL_KEYS: Record<string, string> = {
+  new: "candidateStatusNew",
+  hired: "candidateStatusHired",
+  rejected: "candidateStatusRejected",
+  withdrew: "candidateStatusWithdrew",
+  withdrawn: "candidateStatusWithdrew",
+};
+
+/** Statuses that take a candidate out of the running. Kept next to the
+ *  labels so the report wizard's "all active" scope and the canvas panel
+ *  agree on what "active" means. */
+export const CANDIDATE_VACANCY_TERMINAL_STATUSES: ReadonlySet<string> =
+  new Set(["hired", "rejected", "withdrew", "withdrawn"]);
+
+/** i18n key for a known candidate status, or `null` for anything else. */
+export function candidateVacancyStatusKey(status: string): string | null {
+  return CANDIDATE_VACANCY_STATUS_LABEL_KEYS[status.toLowerCase()] ?? null;
+}
+
+/** Translated candidate-status label with a raw-value fallback. */
+export function candidateVacancyStatusLabel(
+  t: (key: string) => string,
+  status: string,
+): string {
+  const key = candidateVacancyStatusKey(status);
+  return key ? t(key) : status;
+}
+
 export interface AssessmentMatrixCompetence {
   id: string;
   name: string;
@@ -1652,6 +1710,12 @@ export interface AssessmentMatrixData {
   max_score: number;
   scale_name: string | null;
   total_competences: number;
+  // HRP-510 — interview rounds available for the Round selector on the
+  // fullscreen canvas, and the round this payload is scoped to
+  // ("latest" | "all" | a 1-based round number). Only the AI side has a
+  // round dimension; manager scores are identical under every value.
+  round_count?: number;
+  round?: string;
   competences: AssessmentMatrixCompetence[];
   candidates: AssessmentMatrixCandidate[];
 }
@@ -1783,6 +1847,8 @@ export interface InterviewAIAssessment {
   status: string;
   citations?: Array<Record<string, unknown>>;
   reasoning?: string | null;
+  /** HRP-418: the interview these scores came from has been archived. */
+  source_archived?: boolean;
 }
 
 export interface InterviewAnalysisCompetence {
@@ -1825,6 +1891,8 @@ export interface InterviewAnalysis {
 export interface Interview {
   id: string;
   candidate_vacancy_id: string;
+  /** HRP-386: Manager-assessment round this interview belongs to. */
+  round_id?: string | null;
   title?: string | null;
   type?: InterviewType | null;
   timezone?: string | null;
@@ -1846,6 +1914,9 @@ export interface Interview {
   av_scanned_at?: string | null;
   version?: number;
   archived_at?: string | null;
+  /** HRP-418: media dropped by the retention sweeper; metadata kept. */
+  purged_at?: string | null;
+  created_at?: string | null;
   created_by?: string | null;
   transcription_provider?: string | null;
   transcription_status: InterviewProcessingStatus;
@@ -1859,6 +1930,21 @@ export interface Interview {
   segments: InterviewSegment[];
   ai_assessments: InterviewAIAssessment[];
   analysis?: InterviewAnalysis | null;
+}
+
+/** HRP-386: one entry of the Interviewer(s) multi-select. */
+export interface InterviewerOption {
+  id: string;
+  full_name: string;
+  email: string;
+}
+
+/** HRP-386: Manager-assessment round offered in the Schedule modal. */
+export interface InterviewRoundOption {
+  id: string;
+  type: "pre_interview" | "interview" | "final";
+  round_number: number | null;
+  status: string;
 }
 
 export interface InterviewMediaURL {
@@ -1925,43 +2011,30 @@ export interface ConsentTokenView {
 // --- Recruitment R4a (reports + comparison) ---
 
 export type ReportSectionCode =
-  | "vacancy_summary"
-  | "competence_profile"
-  | "candidates_summary"
-  | "comparison_grid"
-  | "interview_analysis"
-  | "human_assessments"
-  | "process_findings"
-  | "red_flags"
-  | "verdict";
+  | "summary_ranking"
+  | "competency_matrix"
+  | "detailed_analysis"
+  | "incomplete_data";
 
+// HRP-521 — one code per sheet the workbook can contain, in workbook
+// order. Report templates were removed; the Generate-report dialog is
+// the only place the sheet set is chosen.
 export const REPORT_SECTION_CODES: ReportSectionCode[] = [
-  "vacancy_summary",
-  "competence_profile",
-  "candidates_summary",
-  "comparison_grid",
-  "interview_analysis",
-  "human_assessments",
-  "process_findings",
-  "red_flags",
-  "verdict",
+  "summary_ranking",
+  "competency_matrix",
+  "detailed_analysis",
+  "incomplete_data",
 ];
 
 // HRP-476 (i18n F2): the section wording lives in the `recruitment` i18n
-// namespace — this map only owns the code → key relation (same shape as
+// namespace — this map only owns the code -> key relation (same shape as
 // `lib/assessment-status.ts`). Consumers: the reports list, the report
-// detail page, the report-templates settings page, the report wizard and
-// the vacancy Reports tab.
+// detail page, the report wizard and the vacancy Reports tab.
 export const REPORT_SECTION_LABEL_KEYS: Record<ReportSectionCode, string> = {
-  vacancy_summary: "reportSectionVacancySummary",
-  competence_profile: "reportSectionCompetenceProfile",
-  candidates_summary: "reportSectionCandidatesSummary",
-  comparison_grid: "reportSectionComparisonGrid",
-  interview_analysis: "reportSectionInterviewAnalysis",
-  human_assessments: "reportSectionHumanAssessments",
-  process_findings: "reportSectionProcessFindings",
-  red_flags: "reportSectionRedFlags",
-  verdict: "reportSectionVerdict",
+  summary_ranking: "reportSectionSummaryRanking",
+  competency_matrix: "reportSectionCompetencyMatrix",
+  detailed_analysis: "reportSectionDetailedAnalysis",
+  incomplete_data: "reportSectionIncompleteData",
 };
 
 /** i18n key for a known report section code, or `null` for anything else. */
@@ -1985,38 +2058,37 @@ export type ReportStatus =
   | "completed"
   | "failed";
 
-export interface ReportTemplate {
-  id: string;
-  name: string;
-  sections: ReportSectionCode[];
-  is_active: boolean;
-  is_default: boolean;
-  template_data?: Record<string, unknown> | null;
-  created_at: string;
-  updated_at: string;
+// The export lifecycle is a machine enum — never render it verbatim.
+// Same code -> key shape as REPORT_SECTION_LABEL_KEYS; wording lives in
+// the `recruitment` namespace. "cancelled" is accepted because the
+// generic export row can be cancelled even though ReportStatus (the
+// report-specific union) does not list it.
+export const REPORT_STATUS_LABEL_KEYS: Record<string, string> = {
+  pending: "reportStatusPending",
+  processing: "reportStatusProcessing",
+  completed: "reportStatusCompleted",
+  failed: "reportStatusFailed",
+  cancelled: "reportStatusCancelled",
+};
+
+/** i18n key for a known export status, or `null` for anything else. */
+export function reportStatusKey(status: string): string | null {
+  return REPORT_STATUS_LABEL_KEYS[status] ?? null;
 }
 
-export interface ReportTemplateCreate {
-  name: string;
-  sections: ReportSectionCode[];
-  is_active?: boolean;
-  is_default?: boolean;
-  template_data?: Record<string, unknown> | null;
-}
-
-export interface ReportTemplateUpdate {
-  name?: string;
-  sections?: ReportSectionCode[];
-  is_active?: boolean;
-  is_default?: boolean;
-  template_data?: Record<string, unknown> | null;
+/** Translated export-status label; unknown codes fall back to the raw
+ *  value so a future backend status is still visible. */
+export function reportStatusLabel(
+  t: (key: string) => string,
+  status: string,
+): string {
+  const key = reportStatusKey(status);
+  return key ? t(key) : status;
 }
 
 export interface ReportExport {
   id: string;
   vacancy_id: string;
-  template_id: string | null;
-  template_name: string | null;
   sections: ReportSectionCode[];
   status: ReportStatus;
   error: string | null;
@@ -2045,7 +2117,6 @@ export interface ReportPreview {
 }
 
 export interface ReportGenerateRequest {
-  template_id?: string | null;
   sections?: ReportSectionCode[];
   // HRP-268 — when audience='hiring_manager' the Detail sheet replaces
   // raw process findings with a neutral reframe; default is recruiter.
@@ -2166,4 +2237,81 @@ export interface ComparisonRadar {
   vacancy_id: string;
   candidates: RadarCandidate[];
   competences: ComparisonCompetence[];
+}
+
+// --- HRP-528: mass assessment analytics ---
+
+export interface GroupAnalyticsCompetenceRef {
+  competence_id: string;
+  competence_title: string;
+}
+
+export interface GroupAnalyticsGradeRef {
+  grade_id: string;
+  grade_title: string | null;
+  grade_i18n_key: string | null;
+  sort_index: number;
+}
+
+export interface GroupAnalyticsDivisionRef {
+  division_id: string;
+  division_name: string;
+}
+
+export interface GroupAnalyticsSpecializationRef {
+  specialization_id: string;
+  specialization_title: string | null;
+  specialization_i18n_key: string | null;
+}
+
+export interface GroupAnalyticsCompetenceAverage {
+  competence_id: string;
+  competence_title: string;
+  percent: number;
+}
+
+export interface GroupAnalyticsEmployeeCompetence {
+  competence_id: string;
+  percent: number | null;
+}
+
+export interface GroupAnalyticsEmployeeGrade {
+  grade_id: string;
+  percent: number | null;
+}
+
+export interface GroupAnalyticsEmployee {
+  assessment_id: string;
+  employee_id: string;
+  full_name: string | null;
+  avatar_url: string | null;
+  division_id: string | null;
+  division_name: string | null;
+  specialization_id: string | null;
+  specialization_title: string | null;
+  specialization_i18n_key: string | null;
+  grade_id: string | null;
+  grade_title: string | null;
+  grade_i18n_key: string | null;
+  position_title: string | null;
+  /** Overall match percent; null when every answer was "Don't know". */
+  percent: number | null;
+  all_dont_know: boolean;
+  competences: GroupAnalyticsEmployeeCompetence[];
+  grades: GroupAnalyticsEmployeeGrade[];
+}
+
+export interface GroupAnalyticsResponse {
+  group_id: string;
+  criteria_type: string | null;
+  is_all_grades: boolean;
+  done_count: number;
+  excluded_count: number;
+  employees: GroupAnalyticsEmployee[];
+  competences: GroupAnalyticsCompetenceRef[];
+  grades: GroupAnalyticsGradeRef[];
+  divisions: GroupAnalyticsDivisionRef[];
+  specializations: GroupAnalyticsSpecializationRef[];
+  growth_zones: GroupAnalyticsCompetenceAverage[];
+  top_competences: GroupAnalyticsCompetenceAverage[];
 }

@@ -175,6 +175,142 @@ class TestLLMProviders:
         await db.refresh(cfg)
         assert cfg.api_key_encrypted is None
 
+    async def test_create_rejects_model_from_another_provider(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        """HRP-498: an {openai, claude-…} pair used to be storable and sat
+        inert until the pipeline started dispatching on it."""
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError, match="does not belong"):
+            LLMProviderCreate(
+                provider="openai",
+                model="claude-sonnet-5",
+                api_key="sk-test",
+            )
+
+    async def test_create_allows_local_model_names(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # A local server serves arbitrary model names — no provider claims
+        # them by prefix, so the pair stays free-form.
+        cfg = await settings_service.create_llm_provider(
+            db,
+            tenant.id,
+            LLMProviderCreate(
+                provider="gigachat",
+                model="GigaChat-Pro",
+                settings={"base_url": "https://gigachat.example.com/v1"},
+            ),
+        )
+        assert cfg.model == "GigaChat-Pro"
+
+    async def test_create_allows_azure_serving_an_openai_model(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        """HRP-498 review: azure/yandex/gigachat canonicalize onto
+        ``openai_compatible``, which owns no model prefix — so the pair
+        {azure, gpt-4o} (the *normal* Azure configuration) was read as a
+        mismatch and rejected with 422."""
+        cfg = await settings_service.create_llm_provider(
+            db,
+            tenant.id,
+            LLMProviderCreate(
+                provider="azure",
+                model="gpt-4o",
+                api_key="sk-azure",
+                settings={"base_url": "https://acme.openai.azure.example/v1"},
+            ),
+        )
+        assert cfg.model == "gpt-4o"
+
+    async def test_create_allows_openai_compatible_with_any_model(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # A LiteLLM/vLLM proxy serves upstream ids verbatim — including
+        # Claude ones — so openai_compatible never mismatches.
+        cfg = await settings_service.create_llm_provider(
+            db,
+            tenant.id,
+            LLMProviderCreate(
+                provider="gigachat",
+                model="claude-sonnet-5",
+                settings={"base_url": "https://proxy.example.com/v1"},
+            ),
+        )
+        assert cfg.model == "claude-sonnet-5"
+
+    async def test_base_url_row_escapes_prefix_ownership(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # With a base_url the endpoint, not the model name, decides what is
+        # served — the same pair without one stays a mismatch.
+        import pydantic
+
+        cfg = await settings_service.create_llm_provider(
+            db,
+            tenant.id,
+            LLMProviderCreate(
+                provider="openai",
+                model="claude-sonnet-5",
+                api_key="sk-proxy",
+                settings={"base_url": "https://litellm.example.com/v1"},
+            ),
+        )
+        assert cfg.model == "claude-sonnet-5"
+
+        with pytest.raises(pydantic.ValidationError, match="does not belong"):
+            LLMProviderCreate(
+                provider="openai",
+                model="claude-sonnet-5",
+                api_key="sk-proxy",
+            )
+
+    async def test_update_allows_proxy_model_on_a_base_url_row(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # The PATCH guard reads the row's stored settings, so a proxy row
+        # can be repointed at another upstream model.
+        cfg = await settings_service.create_llm_provider(
+            db,
+            tenant.id,
+            LLMProviderCreate(
+                provider="openai",
+                model="gpt-4o",
+                api_key="sk-proxy",
+                settings={"base_url": "https://litellm.example.com/v1"},
+            ),
+        )
+        await settings_service.update_llm_provider(
+            db,
+            tenant.id,
+            cfg.id,
+            LLMProviderUpdate(model="claude-sonnet-5"),
+        )
+        await db.refresh(cfg)
+        assert cfg.model == "claude-sonnet-5"
+
+    async def test_update_rejects_model_from_another_provider(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        cfg = await settings_service.create_llm_provider(
+            db,
+            tenant.id,
+            LLMProviderCreate(
+                provider="openai", model="gpt-4o", api_key="sk-test"
+            ),
+        )
+        with pytest.raises(HTTPException) as exc:
+            await settings_service.update_llm_provider(
+                db,
+                tenant.id,
+                cfg.id,
+                LLMProviderUpdate(model="claude-sonnet-5"),
+            )
+        assert exc.value.status_code == 422
+        await db.refresh(cfg)
+        assert cfg.model == "gpt-4o"
+
     async def test_graceful_decrypt_failure_marks_key_status(
         self, db: AsyncSession, tenant, monkeypatch
     ) -> None:

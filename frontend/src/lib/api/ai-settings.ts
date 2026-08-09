@@ -17,6 +17,10 @@ export interface ProviderStatus {
   configured: boolean;
   source: "global" | "byok" | "local" | null;
   supports_local: boolean;
+  /** State of the tenant's stored key, when there is one (HRP-514).
+   * `decrypt_failed` → the row exists but its key is unreadable, so
+   * generation falls back to the platform key. */
+  key_status: "ok" | "decrypt_failed" | null;
 }
 
 export interface AISettings {

@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import uuid
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, TypeVar
 
 import anthropic
@@ -51,7 +53,29 @@ class LLMOutputTruncatedError(RuntimeError):
 # tenants get their own client while the common global-key path still reuses
 # one connection pool (HRP-465). The fingerprint keeps raw keys out of the
 # cache keys (and out of any accidental debug output).
-_client_cache: dict[tuple[str, str, str], Any] = {}
+#
+# HRP-501: bounded LRU. Every distinct fingerprint (a rotated BYOK key, a
+# new tenant base_url) used to add a client — with its whole connection
+# pool — that was never released, so a BYOK fleet leaked file descriptors
+# for the process lifetime. Evicted clients are closed; the ceiling is
+# generous enough that the hot set (platform keys + active BYOK tenants)
+# never thrashes.
+_CLIENT_CACHE_MAX = 64
+_client_cache: OrderedDict[tuple[str, str, str], Any] = OrderedDict()
+
+# HRP-501 review: eviction used to close the client immediately, but the
+# evicted entry may still be serving an in-flight generation (up to 600 s
+# on the plain paths, 1800 s on the Anthropic streaming one) — closing the
+# pool under it aborts a request that already cost the tenant credits.
+# Wait out the widest request window (``_ANTHROPIC_STREAM_TIMEOUT_S``,
+# literal here because it is defined further down) before releasing it;
+# nothing can still be borrowing the client by then.
+_EVICTED_CLIENT_GRACE_S = 1800.0
+
+# Deferred closes must be strong-referenced: asyncio only keeps a weak
+# reference to a running task, so a create_task() whose handle is dropped
+# can be garbage-collected mid-sleep and never close anything.
+_pending_closes: set[asyncio.Task[None]] = set()
 
 
 def _cache_key(
@@ -61,11 +85,74 @@ def _cache_key(
     return (provider, fingerprint, base_url or "")
 
 
+async def _close_client(client: Any) -> None:
+    """Release one evicted SDK client's connection pool.
+
+    ``close()`` is a coroutine on the OpenAI/Anthropic async clients and a
+    plain method on the Gemini one — accept both, and never let a failing
+    close propagate into a generation call.
+    """
+    closer = getattr(client, "aclose", None) or getattr(client, "close", None)
+    if closer is None:
+        return
+    try:
+        result = closer()
+        if inspect.isawaitable(result):
+            await result
+    except Exception:  # noqa: BLE001 — eviction is best-effort housekeeping
+        logger.debug("evicted LLM client failed to close", exc_info=True)
+
+
+def _cache_get(key: tuple[str, str, str]) -> Any | None:
+    client = _client_cache.get(key)
+    if client is not None:
+        _client_cache.move_to_end(key)
+    return client
+
+
+async def _close_client_after_grace(client: Any) -> None:
+    """Close an evicted client once no request can still be borrowing it."""
+    try:
+        await asyncio.sleep(_EVICTED_CLIENT_GRACE_S)
+    except asyncio.CancelledError:
+        # The loop is being torn down (Celery runs every task under its own
+        # asyncio.run) — nothing is in flight any more, so release the pool
+        # now instead of leaking it into the next task on this worker.
+        await _close_client(client)
+        raise
+    await _close_client(client)
+
+
+def _schedule_close(client: Any) -> None:
+    """Hand an evicted client to the deferred-close task, if we can."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is None or loop.is_closed():
+        # Built outside a loop (sync Celery bootstrap, tests) — drop the
+        # reference and let GC reclaim the pool; there is no loop to run
+        # the async close on.
+        logger.debug("evicted LLM client dropped without a loop to close it on")
+        return
+    task = loop.create_task(_close_client_after_grace(client))
+    _pending_closes.add(task)
+    task.add_done_callback(_pending_closes.discard)
+
+
+def _cache_put(key: tuple[str, str, str], client: Any) -> None:
+    _client_cache[key] = client
+    _client_cache.move_to_end(key)
+    while len(_client_cache) > _CLIENT_CACHE_MAX:
+        _, evicted = _client_cache.popitem(last=False)
+        _schedule_close(evicted)
+
+
 def _get_openai(
     api_key: str | None = None, base_url: str | None = None
 ) -> openai.AsyncOpenAI:
     key = _cache_key("openai", api_key, base_url)
-    client = _client_cache.get(key)
+    client = _cache_get(key)
     if client is None:
         # A tenant-supplied base_url must NEVER fall back to the platform
         # key: the key would be sent as a Bearer token to an arbitrary
@@ -80,29 +167,29 @@ def _get_openai(
             max_retries=3,
             timeout=httpx.Timeout(600.0, connect=30.0),
         )
-        _client_cache[key] = client
+        _cache_put(key, client)
     return client
 
 
 def _get_anthropic(api_key: str | None = None) -> anthropic.AsyncAnthropic:
     key = _cache_key("anthropic", api_key, None)
-    client = _client_cache.get(key)
+    client = _cache_get(key)
     if client is None:
         client = anthropic.AsyncAnthropic(
             api_key=api_key or settings.anthropic_api_key,
             max_retries=3,
             timeout=httpx.Timeout(600.0, connect=30.0),
         )
-        _client_cache[key] = client
+        _cache_put(key, client)
     return client
 
 
 def _get_gemini(api_key: str | None = None) -> genai.Client:
     key = _cache_key("gemini", api_key, None)
-    client = _client_cache.get(key)
+    client = _cache_get(key)
     if client is None:
         client = genai.Client(api_key=api_key or settings.gemini_api_key)
-        _client_cache[key] = client
+        _cache_put(key, client)
     return client
 
 
@@ -135,7 +222,14 @@ async def generate(
         from app.modules.ai_settings import service as ai_settings_service
 
         if model is None:
-            model = ai_settings_service.get_effective_model(tenant_settings)
+            # HRP-500: with a session, resolve through the catalog so a
+            # model the platform admin disabled is not dispatched to
+            # tenants that never pinned one (effort presets).
+            model = (
+                await ai_settings_service.get_effective_model_async(db, tenant_settings)
+                if db is not None
+                else ai_settings_service.get_effective_model(tenant_settings)
+            )
         if temperature is None:
             temperature = ai_settings_service.get_effective_temperature(tenant_settings)
         if tenant_id is None:
@@ -298,7 +392,14 @@ async def _generate_openai(
     client = _get_openai(api_key, base_url)
     messages: list[dict[str, str]] = []
     if system:
-        messages.append({"role": "system", "content": system})
+        if base_url is None and not model_registry.openai_accepts_system_role(model):
+            # HRP-500 review: o1-mini/o1-preview reject a `system` message
+            # with HTTP 400. The standard workaround is to fold it into the
+            # first user turn — dropping it would silently lose the whole
+            # JSON-schema contract generate_json appends there.
+            prompt = f"{system}\n\n{prompt}"
+        else:
+            messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
     # HRP-134: gpt-4o family rejects max_tokens > 16384 with HTTP 400 —
@@ -307,12 +408,16 @@ async def _generate_openai(
     # set) serve arbitrary models with their own limits — don't clamp.
     if base_url is None:
         max_tokens = _clamp_openai_max_tokens(model, max_tokens)
-    response = await client.chat.completions.create(
-        model=model,
-        messages=messages,  # type: ignore[arg-type]
-        temperature=temperature,
-        max_tokens=max_tokens,  # type: ignore[arg-type]
-    )
+    kwargs: dict[str, Any] = {"model": model, "messages": messages}
+    if base_url is None and model_registry.openai_is_reasoning_model(model):
+        # HRP-500: o-series models reject `temperature` and `max_tokens`
+        # with HTTP 400 — the budget goes in `max_completion_tokens` (it
+        # also covers the hidden reasoning tokens) and sampling is fixed.
+        kwargs["max_completion_tokens"] = max_tokens
+    else:
+        kwargs["temperature"] = temperature
+        kwargs["max_tokens"] = max_tokens
+    response = await client.chat.completions.create(**kwargs)
     choice = response.choices[0]
     if choice.finish_reason == "length":
         raise LLMOutputTruncatedError(model, max_tokens)
@@ -320,10 +425,15 @@ async def _generate_openai(
 
 
 def _clamp_openai_max_tokens(model: str, requested: int) -> int:
-    for prefix, cap in model_registry.OPENAI_OUTPUT_CAPS.items():
-        if model.startswith(prefix):
-            return min(requested, cap)
-    return min(requested, model_registry.OPENAI_DEFAULT_OUTPUT_CAP)
+    # Longest matching prefix wins: "o1-mini" carries its own ceiling and
+    # must not inherit the wider "o1" one just because that key comes first
+    # in the map (first-match made the table order load-bearing).
+    cap = model_registry.OPENAI_DEFAULT_OUTPUT_CAP
+    matched = -1
+    for prefix, value in model_registry.OPENAI_OUTPUT_CAPS.items():
+        if len(prefix) > matched and model.startswith(prefix):
+            matched, cap = len(prefix), value
+    return min(requested, cap)
 
 
 async def _generate_anthropic(

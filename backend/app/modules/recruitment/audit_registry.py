@@ -137,9 +137,6 @@ AUDITED: dict[str, list[tuple[str, str]]] = {
     "app.modules.recruitment.report_service": [
         ("enqueue_report", "report.generate"),
         ("delete_report", "report.delete"),
-        ("create_report_template", "report.template_create"),
-        ("update_report_template", "report.template_update"),
-        ("delete_report_template", "report.template_delete"),
     ],
     # R4c: onboarding mutations
     "app.modules.recruitment.onboarding_service": [
@@ -212,6 +209,10 @@ AUDIT_EXEMPT: set[str] = {
     # mutations worth a per-event audit row.
     "app.modules.recruitment.interview_service:ack_uploaded_chunk",
     "app.modules.recruitment.interview_service:cleanup_orphan_upload_sessions",
+    # HRP-418: retention sweeper — runs from celery beat with no actor and
+    # no tenant scope; the archive event that started the clock is already
+    # audited on ``archive_interview``.
+    "app.modules.recruitment.interview_service:purge_expired_archived_interviews",
     "app.modules.recruitment.candidate_service:get_resume_download_url",
     "app.modules.recruitment.assessment_service:get_invite_canvas",
     "app.modules.recruitment.assessment_service:get_invite_context",

@@ -7,7 +7,7 @@
 // must stay visually identical, so the JSX lives here once.
 
 import { useTranslations } from "next-intl";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ChevronRight } from "lucide-react";
 
 import {
   competenceScoreId,
@@ -280,15 +280,24 @@ export function CompetenceScoreList({
         return (
           <details
             key={comp.id}
-            className={`rounded-md border p-3 ${
+            className={`group rounded-md border p-3 ${
               aggregate?.diverges
                 ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30"
                 : "bg-muted/20"
             }`}
             data-testid={`assessment-competence-card-${comp.id}`}
           >
-            <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-medium">
+            {/* HRP-368: without a disclosure affordance the card reads as a
+                static row and evaluators never discover the questions inside.
+                The marker is suppressed in favour of an explicit chevron that
+                rotates with the native `open` state. */}
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-medium [&::-webkit-details-marker]:hidden">
               <span className="flex items-center gap-2">
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+                  data-testid={`assessment-competence-chevron-${comp.id}`}
+                />
                 {comp.name}
                 {comp.criticality && (
                   <span

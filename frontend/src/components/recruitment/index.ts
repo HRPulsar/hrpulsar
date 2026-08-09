@@ -21,6 +21,7 @@ export { ProfileGenerationDialog } from "./profile-generation-dialog";
 export { ProfileGenerationStatus } from "./profile-generation-status";
 export { QuestionCard } from "./question-card";
 export { ReportWizardDialog } from "./report-wizard-dialog";
+export { ScheduleInterviewDialog } from "./schedule-interview-dialog";
 export { ReportsTab } from "./reports-tab";
 export { QuestionDetailSheet } from "./question-detail-sheet";
 export { QuestionsExportDialog } from "./questions-export-dialog";

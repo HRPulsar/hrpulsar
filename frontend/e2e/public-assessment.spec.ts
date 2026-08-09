@@ -249,6 +249,11 @@ test.describe("Public assessment page (HRP-186)", () => {
     const criticalCard = page
       .locator('details[data-testid^="assessment-competence-card-"]')
       .first();
+    // HRP-368: the disclosure chevron is what tells an external evaluator
+    // the card opens — it ships on the shared sheet, so it must render here.
+    await expect(
+      criticalCard.locator('[data-testid^="assessment-competence-chevron-"]'),
+    ).toBeVisible();
     await criticalCard.locator("summary").click();
     const scorePatch = page.waitForRequest(
       (req) =>

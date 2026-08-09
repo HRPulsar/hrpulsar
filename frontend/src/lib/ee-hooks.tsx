@@ -36,3 +36,15 @@ export function useEENavItems(_isAdmin: boolean): { items: EENavItem[]; credits:
 export function useEESettings() {
   return [];
 }
+
+interface EECreditCostBadgeProps {
+  action: string;
+  className?: string;
+}
+
+/** Credit price tag — no-op in community (there is no billing, and
+ *  `credit-cost-badge.tsx` is not part of the public repo). */
+export function EECreditCostBadge(_props: EECreditCostBadgeProps) {
+  void _props;
+  return null;
+}

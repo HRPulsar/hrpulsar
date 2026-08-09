@@ -1,5 +1,6 @@
 """HRP-465 — LLM provider registry, key-based gating, BYOK/local resolution."""
 
+import asyncio
 import uuid
 from unittest.mock import patch
 
@@ -137,6 +138,95 @@ class TestConfiguredProviders:
         assert rows["openai_compatible"]["source"] == "local"
         assert rows["openai_compatible"]["supports_local"] is True
 
+    async def test_unreadable_key_is_not_reported_as_byok(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        """HRP-514: configured-ness was derived from a non-empty ciphertext.
+        A key that no longer decrypts silently falls back to the platform
+        key at generation time, so the UI must not show BYOK."""
+        row = LLMProviderConfig(
+            tenant_id=tenant.id,
+            provider="anthropic",
+            model="claude-sonnet-5",
+            api_key_encrypted="not-a-valid-ciphertext",
+            is_active=True,
+        )
+        db.add(row)
+        await db.commit()
+
+        with _no_global_keys():
+            rows = {
+                r["provider"]: r
+                for r in await providers.configured_providers(db, tenant.id)
+            }
+        assert rows["anthropic"]["configured"] is False
+        assert rows["anthropic"]["source"] is None
+        assert rows["anthropic"]["key_status"] == "decrypt_failed"
+
+        # With a platform key the tenant keeps generating — through the
+        # global credential, which is what the UI must show.
+        with (
+            _no_global_keys(),
+            patch.object(settings, "anthropic_api_key", "sk-ant-global"),
+        ):
+            rows = {
+                r["provider"]: r
+                for r in await providers.configured_providers(db, tenant.id)
+            }
+        assert rows["anthropic"]["source"] == "global"
+        assert rows["anthropic"]["key_status"] == "decrypt_failed"
+
+    async def test_readable_key_reports_ok_status(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        await _add_config(
+            db, tenant.id, provider="gemini", model="gemini-2.5-pro", api_key="sk-gem"
+        )
+        with _no_global_keys():
+            rows = {
+                r["provider"]: r
+                for r in await providers.configured_providers(db, tenant.id)
+            }
+        assert rows["gemini"]["source"] == "byok"
+        assert rows["gemini"]["key_status"] == "ok"
+        assert rows["openai"]["key_status"] is None
+
+    async def test_key_status_does_not_leak_onto_a_local_row(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        """HRP-514 review: ``key_status`` was computed across the whole
+        provider's row list, so a stale ciphertext on one row was still
+        reported after the loop broke out on an unrelated local row — which
+        needs no key at all."""
+        from datetime import datetime, timezone
+
+        broken = LLMProviderConfig(
+            tenant_id=tenant.id,
+            provider="openai_compatible",
+            model="qwen2.5-72b",
+            api_key_encrypted="not-a-valid-ciphertext",
+            is_active=True,
+            updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        local = LLMProviderConfig(
+            tenant_id=tenant.id,
+            provider="openai_compatible",
+            model="qwen2.5-72b",
+            is_active=True,
+            settings={"base_url": "http://ollama.internal:11434/v1"},
+            updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        db.add_all([broken, local])
+        await db.commit()
+
+        with _no_global_keys():
+            rows = {
+                r["provider"]: r
+                for r in await providers.configured_providers(db, tenant.id)
+            }
+        assert rows["openai_compatible"]["source"] == "local"
+        assert rows["openai_compatible"]["key_status"] is None
+
     async def test_inactive_rows_are_ignored(self, db: AsyncSession, tenant) -> None:
         await _add_config(
             db,
@@ -256,6 +346,93 @@ class TestResolveGenerationTarget:
         assert target.base_url == "https://acme.openai.azure.example/v1"
         assert target.api_key == "sk-azure"
 
+    async def test_mismatched_row_is_not_dispatched_without_a_model(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        """HRP-498: a legacy {provider: openai, model: claude-…} row must
+        not become the recruitment pipeline's dispatch target — OpenAI
+        would 404 on a Claude model."""
+        await _add_config(
+            db,
+            tenant.id,
+            provider="openai",
+            model="claude-sonnet-5",
+            api_key="sk-tenant",
+        )
+        target = await providers.resolve_generation_target(db, tenant.id, None)
+        assert target.source == "global"
+        assert target.model is None
+
+    async def test_consistent_row_still_dispatches_without_a_model(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        await _add_config(
+            db,
+            tenant.id,
+            provider="openai",
+            model="gpt-4o",
+            api_key="sk-tenant",
+        )
+        target = await providers.resolve_generation_target(db, tenant.id, None)
+        assert target.source == "byok"
+        assert target.model == "gpt-4o"
+
+    async def test_local_row_without_classifiable_model_still_dispatches(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        await _add_config(
+            db,
+            tenant.id,
+            provider="openai_compatible",
+            model="qwen2.5-72b",
+            base_url="http://vllm.internal:8000/v1",
+        )
+        target = await providers.resolve_generation_target(db, tenant.id, None)
+        assert target.source == "local"
+        assert target.model == "qwen2.5-72b"
+
+    async def test_mismatched_row_is_not_dispatched_for_its_exact_model(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        """HRP-498 review: the consistency guard only ran in the *no model
+        requested* branch, so asking for gpt-4o still picked an
+        {anthropic, gpt-4o} row and sent gpt-4o to Anthropic."""
+        await _add_config(
+            db,
+            tenant.id,
+            provider="anthropic",
+            model="gpt-4o",
+            api_key="sk-tenant",
+        )
+        target = await providers.resolve_generation_target(db, tenant.id, "gpt-4o")
+        assert target.source == "global"
+        assert target.provider == "openai"
+
+    async def test_proxy_row_is_consistent_with_an_upstream_model(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # openai_compatible owns no prefix and a base_url row is defined by
+        # its endpoint — neither may be read as a mismatch (HRP-498 review).
+        azure = await _add_config(
+            db,
+            tenant.id,
+            provider="azure",
+            model="gpt-4o",
+            api_key="sk-azure",
+            base_url="https://acme.openai.azure.example/v1",
+        )
+        assert providers.row_is_consistent(azure) is True
+        assert providers.model_matches_provider("azure", "claude-sonnet-5") is True
+        assert (
+            providers.model_matches_provider(
+                "openai", "claude-sonnet-5", "https://litellm.example/v1"
+            )
+            is True
+        )
+        assert providers.model_matches_provider("openai", "claude-sonnet-5") is False
+        assert providers.model_matches_provider("openai", "gpt-4o") is True
+        assert providers.model_matches_provider("openai", "qwen2.5-72b") is True
+
     async def test_sync_resolver_matches_async(self) -> None:
         # The sync twin shares _pick_target — a smoke check that it exists
         # and produces the fallback shape without a DB.
@@ -345,6 +522,77 @@ class TestLLMClientDispatch:
         c = llm_client._get_anthropic("sk-two")
         assert a is b
         assert a is not c
+        llm_client._client_cache.clear()
+
+    async def test_client_cache_is_bounded_and_closes_evicted(
+        self, monkeypatch
+    ) -> None:
+        """HRP-501: the cache used to be an unbounded dict — every rotated
+        BYOK key left its connection pool behind for the process lifetime.
+        It is an LRU now, and the evicted client is closed."""
+        from app.modules.ai import llm_client
+
+        # The close is deferred by a grace period in production; collapse it
+        # so the eviction is observable in one loop turn.
+        monkeypatch.setattr(llm_client, "_EVICTED_CLIENT_GRACE_S", 0)
+        llm_client._client_cache.clear()
+        closed: list[str] = []
+
+        class _FakeClient:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            async def close(self) -> None:
+                closed.append(self.name)
+
+        for i in range(llm_client._CLIENT_CACHE_MAX):
+            llm_client._cache_put(("openai", f"fp{i}", ""), _FakeClient(f"fp{i}"))
+        assert len(llm_client._client_cache) == llm_client._CLIENT_CACHE_MAX
+
+        # Touch the oldest entry so the LRU order — not insertion order —
+        # decides who leaves.
+        llm_client._cache_get(("openai", "fp0", ""))
+        llm_client._cache_put(("openai", "overflow", ""), _FakeClient("overflow"))
+
+        await asyncio.sleep(0.05)  # let the deferred close task run
+        assert len(llm_client._client_cache) == llm_client._CLIENT_CACHE_MAX
+        assert closed == ["fp1"]
+        assert llm_client._cache_get(("openai", "fp0", "")) is not None
+        assert llm_client._cache_get(("openai", "fp1", "")) is None
+        llm_client._client_cache.clear()
+
+    async def test_eviction_does_not_close_under_an_in_flight_request(self) -> None:
+        """HRP-501 review: closing on eviction tore the connection pool out
+        from under a generation that was still running (up to 1800 s on the
+        streaming path) — and the create_task handle was dropped, so the
+        close could also be garbage-collected before it ran."""
+        from app.modules.ai import llm_client
+
+        llm_client._client_cache.clear()
+        closed: list[str] = []
+
+        class _FakeClient:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            async def close(self) -> None:
+                closed.append(self.name)
+
+        for i in range(llm_client._CLIENT_CACHE_MAX):
+            llm_client._cache_put(("openai", f"fp{i}", ""), _FakeClient(f"fp{i}"))
+        llm_client._cache_put(("openai", "overflow", ""), _FakeClient("overflow"))
+
+        await asyncio.sleep(0)
+        assert closed == []  # still inside the grace window
+        pending = [t for t in llm_client._pending_closes if not t.done()]
+        assert pending, "the deferred close must be strong-referenced"
+
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        # Cancellation means the loop is going away — the pool is released
+        # rather than leaked into the next task on this worker.
+        assert closed == ["fp0"]
         llm_client._client_cache.clear()
 
     async def test_platform_key_never_sent_to_tenant_base_url(

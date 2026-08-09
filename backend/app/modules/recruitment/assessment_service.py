@@ -690,7 +690,8 @@ async def list_assessment_history(
         filters.append(RecruitmentAuditLog.created_at <= until)
 
     query = (
-        select(RecruitmentAuditLog).where(*filters)
+        select(RecruitmentAuditLog)
+        .where(*filters)
         # ``id`` tiebreaker keeps two events written in the same
         # transaction in a stable order across reloads — without it the
         # Versions panel reorders rows depending on the SQL execution
@@ -1414,6 +1415,8 @@ async def get_assessment_matrix(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     vacancy_id: uuid.UUID,
+    *,
+    round_filter: str = "latest",
 ) -> dict:
     """Compact-view aggregates: per-cell M vs AI + per-candidate %.
 
@@ -1432,6 +1435,15 @@ async def get_assessment_matrix(
     Per-candidate aggregates follow the spec formula: the denominator is
     ``max_score * (total_competences - not_covered_count)``; not-covered
     competences only drop out of the AI % side, never the manager %.
+
+    ``round_filter`` (HRP-510) scopes the **AI** side to an interview
+    round: ``latest`` (default, the newest interview per candidate),
+    ``all`` (mean across every interview) or ``1``..``N`` (the n-th
+    interview by date). Manager scores carry no round dimension —
+    ``HumanAssessment`` rows are per (candidate, competence, evaluator)
+    — so they are identical under every filter; ``rounds`` in the
+    response reports how many interview rounds exist so the UI can build
+    the selector and label the difference.
     """
 
     # Local imports avoid a circular dependency with settings_service
@@ -1483,6 +1495,8 @@ async def get_assessment_matrix(
             "divergence_threshold": threshold,
             "max_score": max_score,
             "scale_name": scale_name,
+            "round_count": 0,
+            "round": "latest",
             "competences": [
                 {
                     "id": normalize_competence_id(
@@ -1515,12 +1529,19 @@ async def get_assessment_matrix(
         .all()
     )
 
+    # Archived interviews are out of scope everywhere else the matrix
+    # reads them (``_latest_transcribed_interview``, ``_load_transcripts``,
+    # ``apply_ai_analysis_state``). Without the same filter here the
+    # HRP-510 Round selector counted and numbered archived rows, so
+    # "Latest" could resolve to a recording the recruiter had already
+    # thrown away while the rest of the payload described a live one.
     interview_rows = (
         (
             await db.execute(
                 select(Interview).where(
                     Interview.candidate_vacancy_id.in_(cv_ids),
                     Interview.tenant_id == tenant_id,
+                    Interview.archived_at.is_(None),
                 )
             )
         )
@@ -1587,6 +1608,39 @@ async def get_assessment_matrix(
             }
         )
 
+    # HRP-510 — interview rounds, ordered oldest-first per candidate. The
+    # AI side is the only one with a round dimension (one analysis per
+    # interview), so this ordering is what the Round selector scopes.
+    interviews_by_cv: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for iv in sorted(
+        interview_rows,
+        key=lambda row: (row.created_at or _EPOCH, row.id),
+    ):
+        interviews_by_cv.setdefault(iv.candidate_vacancy_id, []).append(iv.id)
+    round_count = max((len(ids) for ids in interviews_by_cv.values()), default=0)
+
+    normalized_round = str(round_filter or "latest").strip().lower()
+    round_index: int | None = None
+    if normalized_round not in {"latest", "all"}:
+        try:
+            # 1-based in the API, 0-based internally.
+            round_index = int(normalized_round) - 1
+        except ValueError:
+            normalized_round = "latest"
+        else:
+            if round_index < 0:
+                normalized_round, round_index = "latest", None
+
+    def _interview_in_scope(cv_id: uuid.UUID, interview_id: uuid.UUID) -> bool:
+        ordered = interviews_by_cv.get(cv_id) or []
+        if not ordered:
+            return False
+        if normalized_round == "all":
+            return True
+        if round_index is not None:
+            return round_index < len(ordered) and ordered[round_index] == interview_id
+        return ordered[-1] == interview_id
+
     # Index AI: cv_id -> comp_id -> latest entry (by interview.created_at, then by
     # AIAssessment.updated_at). Older runs are kept only as ``ai_history`` so the
     # footer can show what was superseded.
@@ -1594,6 +1648,8 @@ async def get_assessment_matrix(
     for ai in ai_rows:
         cv_id = interview_cv_map.get(ai.interview_id)
         if cv_id is None:
+            continue
+        if not _interview_in_scope(cv_id, ai.interview_id):
             continue
         comp_key = str(ai.competence_id)
         candidate_bucket = ai_index.setdefault(cv_id, {})
@@ -1618,6 +1674,29 @@ async def get_assessment_matrix(
             "updated_at": ai.updated_at,
             "interview_id": ai.interview_id,
         }
+
+    if normalized_round == "all":
+        # "All combined" means the mean across rounds, not the newest
+        # round winning — otherwise the option would be identical to
+        # "Latest". Only numeric ``ready`` scores contribute; a cell the
+        # AI never covered in any round stays not-covered.
+        combined: dict[uuid.UUID, dict[str, list[float]]] = {}
+        for ai in ai_rows:
+            cv_id = interview_cv_map.get(ai.interview_id)
+            if cv_id is None or ai.score is None:
+                continue
+            if _normalize_ai_status(ai.status) != "ready":
+                continue
+            combined.setdefault(cv_id, {}).setdefault(str(ai.competence_id), []).append(
+                float(ai.score)
+            )
+        for cv_id, per_comp in combined.items():
+            for comp_key, values in per_comp.items():
+                entry = ai_index.setdefault(cv_id, {}).get(comp_key)
+                if entry is None:
+                    continue
+                entry["score"] = round(sum(values) / len(values), 2)
+                entry["status"] = "ready"
 
     competences_payload: list[dict] = []
     competence_keys: list[str] = []
@@ -1738,6 +1817,10 @@ async def get_assessment_matrix(
         "max_score": max_score,
         "scale_name": scale_name,
         "total_competences": total_competences,
+        # HRP-510 — how many interview rounds exist on the busiest
+        # candidate, and which one this payload is scoped to.
+        "round_count": round_count,
+        "round": normalized_round if round_index is None else str(round_index + 1),
         "competences": competences_payload,
         "candidates": candidates_payload,
     }
@@ -1804,7 +1887,7 @@ async def get_assessment_matrix_cell_detail(
     manager_entries: list[dict] = []
     for hs in sorted(
         human_rows,
-        key=lambda r: (r.updated_at or r.created_at or _EPOCH),
+        key=lambda r: r.updated_at or r.created_at or _EPOCH,
         reverse=True,
     ):
         if hs.evaluator_id is not None:

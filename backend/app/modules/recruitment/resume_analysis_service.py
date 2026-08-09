@@ -67,9 +67,7 @@ async def _get_cv_or_404(
         )
     )
     if cv is None:
-        raise AppError(
-            "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
-        )
+        raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
     return cv
 
 
@@ -199,9 +197,7 @@ async def current_resume_hash_for_cv(
     )
     if candidate_id is None:
         return None
-    return await current_resume_hash_for_candidate(
-        db, tenant_id, candidate_id
-    )
+    return await current_resume_hash_for_candidate(db, tenant_id, candidate_id)
 
 
 async def _acquire_cv_lock(db: AsyncSession, cv_id: uuid.UUID) -> None:
@@ -246,9 +242,7 @@ async def _enqueue_resume_only_unbilled(
     cv = await _get_cv_or_404(db, tenant_id, candidate_vacancy_id)
 
     if await _pending_run(db, tenant_id, candidate_vacancy_id):
-        raise AppError(
-            "analysis_already_in_progress", status.HTTP_409_CONFLICT
-        )
+        raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
 
     resume = await _latest_parsed_resume(db, tenant_id, cv.candidate_id)
     if resume is None or not (resume.parsed_data or {}):
@@ -275,9 +269,7 @@ async def _enqueue_resume_only_unbilled(
     # Re-check pending after acquiring the lock — a sibling request
     # may have inserted a row between our first check and the lock.
     if await _pending_run(db, tenant_id, candidate_vacancy_id):
-        raise AppError(
-            "analysis_already_in_progress", status.HTTP_409_CONFLICT
-        )
+        raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
 
     run = AIAnalysisRun(
         tenant_id=tenant_id,
@@ -350,30 +342,26 @@ async def enqueue_resume_only_analysis(
 # ---------------------------------------------------------------------------
 
 
-async def evaluate_topup_eligibility(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    candidate_vacancy_id: uuid.UUID,
-) -> dict:
-    """Pure read: decide whether a top-up is currently allowed.
+def _aware(value: datetime | None) -> datetime | None:
+    """Treat a naive timestamp as UTC (Postgres may hand back either)."""
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
-    Used by the UI to swap the ``Run full (40 cr)`` button for
-    ``Upgrade to full (+20 cr)`` and tell the recruiter why a top-up
-    has expired.
-    """
 
-    cv = await _get_cv_or_404(db, tenant_id, candidate_vacancy_id)
+def _run_age(run: AIAnalysisRun) -> timedelta:
+    created = _aware(run.created_at) or datetime.now(UTC)
+    return datetime.now(UTC) - created
 
-    # HRP-269: load the latest transcribed interview up front so we can
-    # always surface ``transcribed_interview_id`` to the candidate-card
-    # split-button. The other early-return branches below still gate
-    # ``eligible`` / ``interview_id`` on the resume-only-baseline checks
-    # — they only mean a *top-up* is blocked, not that the recruiter
-    # can't kick off a full run from scratch.
-    transcribed_interview = await db.scalar(
+
+async def _latest_transcribed_interview(
+    db: AsyncSession, tenant_id: uuid.UUID, cv_id: uuid.UUID
+) -> Interview | None:
+    """Newest non-archived interview with a completed transcript."""
+    return await db.scalar(
         select(Interview)
         .where(
-            Interview.candidate_vacancy_id == cv.id,
+            Interview.candidate_vacancy_id == cv_id,
             Interview.tenant_id == tenant_id,
             Interview.transcription_status == "completed",
             # HRP-269: do not surface archived interviews as
@@ -387,17 +375,116 @@ async def evaluate_topup_eligibility(
         .order_by(Interview.created_at.desc(), Interview.id.desc())
         .limit(1)
     )
+
+
+async def evaluate_analysis_staleness(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cv: CandidateVacancy,
+    active: AIAnalysisRun | None,
+    transcribed_interview: Interview | None,
+) -> dict:
+    """HRP-489 / HRP-492 — why the active analysis may no longer hold.
+
+    Four independent signals, all evaluated so the UI can apply its own
+    banner priority (resume → competences → age → transcript):
+
+    * ``resume_outdated`` — the candidate's parsed resume changed after
+      the run was stamped. Only provable when the run carries a
+      ``resume_snapshot_hash``.
+    * ``profile_outdated`` — the vacancy competency profile was edited
+      (``VacancyProfile.version`` moved) since the run.
+    * ``analysis_expired`` — the run is older than ``TOPUP_WINDOW_DAYS``.
+    * ``transcript_outdated`` — full-mode only: a transcript newer than
+      the analysed one exists, so the verdict does not cover the latest
+      interview. ``newer_transcribed_interview_id`` names the transcript
+      a fresh full run would use (always the most recent one).
+    """
+    out: dict[str, Any] = {
+        "active_run_mode": None,
+        "resume_outdated": False,
+        "profile_outdated": False,
+        "analysis_expired": False,
+        "transcript_outdated": False,
+        "newer_transcribed_interview_id": None,
+    }
+    if active is None:
+        return out
+    out["active_run_mode"] = active.mode
+
+    if active.resume_snapshot_hash is not None:
+        current_hash = await current_resume_hash_for_candidate(
+            db, tenant_id, cv.candidate_id
+        )
+        # A missing current hash means the parsed resume vanished — we
+        # never claim outdated on evidence we do not have.
+        out["resume_outdated"] = (
+            current_hash is not None and current_hash != active.resume_snapshot_hash
+        )
+
+    profile = await _vacancy_profile(db, tenant_id, cv.vacancy_id)
+    if profile is not None and active.vacancy_profile_version is not None:
+        out["profile_outdated"] = profile.version != active.vacancy_profile_version
+
+    out["analysis_expired"] = _run_age(active) > timedelta(days=TOPUP_WINDOW_DAYS)
+
+    if active.mode == "full" and transcribed_interview is not None:
+        analysed_at = _aware(active.created_at)
+        transcript_at = _aware(transcribed_interview.updated_at)
+        newer = transcribed_interview.id != active.interview_id or (
+            analysed_at is not None
+            and transcript_at is not None
+            and transcript_at > analysed_at
+        )
+        if newer:
+            out["transcript_outdated"] = True
+            out["newer_transcribed_interview_id"] = str(transcribed_interview.id)
+
+    return out
+
+
+async def evaluate_topup_eligibility(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    candidate_vacancy_id: uuid.UUID,
+) -> dict:
+    """Pure read: decide whether a top-up is currently allowed.
+
+    Used by the UI to swap the ``Run full (40 cr)`` button for
+    ``Upgrade to full (+20 cr)`` and tell the recruiter why a top-up
+    has expired.
+
+    HRP-489 / HRP-492: the response also carries the staleness block
+    computed by :func:`evaluate_analysis_staleness` — every branch,
+    eligible or not, so the AI Insights banners never depend on which
+    early return fired.
+    """
+
+    cv = await _get_cv_or_404(db, tenant_id, candidate_vacancy_id)
+
+    # HRP-269: load the latest transcribed interview up front so we can
+    # always surface ``transcribed_interview_id`` to the candidate-card
+    # split-button. The other early-return branches below still gate
+    # ``eligible`` / ``interview_id`` on the resume-only-baseline checks
+    # — they only mean a *top-up* is blocked, not that the recruiter
+    # can't kick off a full run from scratch.
+    transcribed_interview = await _latest_transcribed_interview(db, tenant_id, cv.id)
     transcribed_interview_id = (
         str(transcribed_interview.id) if transcribed_interview is not None else None
     )
 
     active = await _active_run(db, tenant_id, cv.id)
+    staleness = await evaluate_analysis_staleness(
+        db, tenant_id, cv, active, transcribed_interview
+    )
+
     if active is None or active.mode != "resume_only":
         return {
             "eligible": False,
             "reason": "no_active_resume_only_run",
             "active_run_id": str(active.id) if active else None,
             "transcribed_interview_id": transcribed_interview_id,
+            **staleness,
         }
 
     if transcribed_interview is None:
@@ -406,13 +493,23 @@ async def evaluate_topup_eligibility(
             "reason": "no_transcribed_interview",
             "active_run_id": str(active.id),
             "transcribed_interview_id": None,
+            **staleness,
         }
 
-    age = datetime.now(UTC) - (
-        active.created_at.replace(tzinfo=UTC)
-        if active.created_at.tzinfo is None
-        else active.created_at
-    )
+    # HRP-489 (case 3): a resume edited after the baseline run kills the
+    # +20-cr upgrade the same way an expired window or a re-edited
+    # profile does — the top-up reuses the resume-only findings, so a
+    # stale resume would contaminate the full verdict.
+    if staleness["resume_outdated"]:
+        return {
+            "eligible": False,
+            "reason": "resume_changed",
+            "active_run_id": str(active.id),
+            "transcribed_interview_id": transcribed_interview_id,
+            **staleness,
+        }
+
+    age = _run_age(active)
     if age > timedelta(days=TOPUP_WINDOW_DAYS):
         return {
             "eligible": False,
@@ -421,6 +518,7 @@ async def evaluate_topup_eligibility(
             "age_days": age.days,
             "window_days": TOPUP_WINDOW_DAYS,
             "transcribed_interview_id": transcribed_interview_id,
+            **staleness,
         }
 
     # Profile version must match — a recruiter edit to the competency
@@ -432,6 +530,7 @@ async def evaluate_topup_eligibility(
             "reason": "profile_missing",
             "active_run_id": str(active.id),
             "transcribed_interview_id": transcribed_interview_id,
+            **staleness,
         }
     if (
         active.vacancy_profile_version is not None
@@ -444,6 +543,7 @@ async def evaluate_topup_eligibility(
             "stored_version": active.vacancy_profile_version,
             "current_version": profile.version,
             "transcribed_interview_id": transcribed_interview_id,
+            **staleness,
         }
 
     return {
@@ -451,6 +551,7 @@ async def evaluate_topup_eligibility(
         "active_run_id": str(active.id),
         "interview_id": transcribed_interview_id,
         "transcribed_interview_id": transcribed_interview_id,
+        **staleness,
     }
 
 
@@ -480,9 +581,7 @@ async def enqueue_topup_to_full(
 
     from app.modules.recruitment.tasks import analyze_interview_task
 
-    eligibility = await evaluate_topup_eligibility(
-        db, tenant_id, candidate_vacancy_id
-    )
+    eligibility = await evaluate_topup_eligibility(db, tenant_id, candidate_vacancy_id)
     if not eligibility.get("eligible"):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -500,9 +599,7 @@ async def enqueue_topup_to_full(
     # between, or a concurrent resume-only may have flipped the active
     # run.
     if await _pending_run(db, tenant_id, candidate_vacancy_id):
-        raise AppError(
-            "analysis_already_in_progress", status.HTTP_409_CONFLICT
-        )
+        raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
 
     interview_id = uuid.UUID(eligibility["interview_id"])
     interview = await db.scalar(
@@ -512,14 +609,10 @@ async def enqueue_topup_to_full(
         )
     )
     if interview is None:
-        raise AppError(
-            "interview_vanished_between_checks", status.HTTP_409_CONFLICT
-        )
+        raise AppError("interview_vanished_between_checks", status.HTTP_409_CONFLICT)
 
     if interview.analysis_status == "processing":
-        raise AppError(
-            "analysis_already_in_progress", status.HTTP_409_CONFLICT
-        )
+        raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
 
     prior_run_id = uuid.UUID(eligibility["active_run_id"])
     profile = await _vacancy_profile(db, tenant_id, cv.vacancy_id)
@@ -739,9 +832,7 @@ async def enqueue_bulk_resume_only(
     # Validate the vacancy exists (guards against rogue ids across
     # tenants — the per-cv check below catches the rest).
     vacancy = await db.scalar(
-        select(Vacancy).where(
-            Vacancy.id == vacancy_id, Vacancy.tenant_id == tenant_id
-        )
+        select(Vacancy).where(Vacancy.id == vacancy_id, Vacancy.tenant_id == tenant_id)
     )
     if vacancy is None:
         raise AppError("vacancy_not_found", status.HTTP_404_NOT_FOUND)
@@ -892,6 +983,153 @@ def serialize_run_for_read(
     return read
 
 
+def candidate_ai_insights_deep_link(
+    candidate_id: uuid.UUID,
+    vacancy_id: uuid.UUID,
+) -> str:
+    """HRP-494 — deep link to the AI Insights block of a candidate card.
+
+    ``vacancyId`` is the query key the candidate page already reads (it
+    also preselects the vacancy inside AI Insights), and the fragment
+    scrolls to the block. Relative on purpose: in-app notifications
+    route on it directly and the email dispatcher prefixes the absolute
+    base — same contract as ``candidate_question_deep_link``.
+    """
+    return f"/recruitment/candidates/{candidate_id}?vacancyId={vacancy_id}#ai-insights"
+
+
+# ---------------------------------------------------------------------------
+# HRP-493 — read-derived AI state for the candidates table
+# ---------------------------------------------------------------------------
+
+
+def _derive_readiness(has_resume: bool, has_transcript: bool) -> str:
+    """AI DATA column value (HRP-493, task 2).
+
+    Spec: readiness follows the *inputs the model could see*, not the
+    last analysis that happened to run — ``resume_only`` as soon as a
+    resume is parsed, ``resume_and_transcript`` once an interview for
+    this vacancy is transcribed.
+    """
+    if has_transcript and has_resume:
+        return "resume_and_transcript"
+    if has_resume:
+        return "resume_only"
+    return "none"
+
+
+async def apply_ai_analysis_state(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    items: list[dict],
+) -> None:
+    """HRP-493 — refresh ``ai_readiness`` + stamp ``ai_analysis_in_progress``.
+
+    The mirror columns on ``candidate_vacancies`` only move when an
+    analysis runs, so a candidate whose resume was parsed (or whose
+    interview was transcribed) but never analysed kept advertising the
+    readiness of the last run — or ``none`` forever. Deriving both
+    values here keeps the table honest for historical rows too, without
+    a backfill migration or a write on every parse/transcribe task.
+
+    Three bounded queries for the whole page; ``items`` is mutated in
+    place (same contract as ``apply_matrix_aggregates``).
+    """
+    if not items:
+        return
+
+    from app.modules.recruitment.models import Candidate
+
+    cv_ids = [i["id"] for i in items]
+    candidate_ids = {i["candidate_id"] for i in items}
+
+    # Candidates with at least one successfully parsed resume. The
+    # canonical mirror on ``Candidate.parsed_resume_jsonb`` counts too:
+    # manual entry and the bulk-import finaliser write it without
+    # leaving a ``CandidateFile`` behind.
+    parsed_from_files = set(
+        (
+            await db.execute(
+                select(CandidateFile.candidate_id).where(
+                    CandidateFile.tenant_id == tenant_id,
+                    CandidateFile.candidate_id.in_(candidate_ids),
+                    CandidateFile.file_type == "resume",
+                    CandidateFile.parse_status == "completed",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    parsed_from_candidates = set(
+        (
+            await db.execute(
+                select(Candidate.id).where(
+                    Candidate.tenant_id == tenant_id,
+                    Candidate.id.in_(candidate_ids),
+                    Candidate.parsed_resume_jsonb.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    with_resume = parsed_from_files | parsed_from_candidates
+
+    with_transcript = set(
+        (
+            await db.execute(
+                select(Interview.candidate_vacancy_id).where(
+                    Interview.tenant_id == tenant_id,
+                    Interview.candidate_vacancy_id.in_(cv_ids),
+                    Interview.transcription_status == "completed",
+                    Interview.archived_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # In flight = a queued/running ``AIAnalysisRun`` (resume-only and
+    # top-up create one) OR an interview mid-analysis (the legacy
+    # interview-page entry point only flips ``analysis_status``).
+    running_runs = set(
+        (
+            await db.execute(
+                select(AIAnalysisRun.candidate_vacancy_id).where(
+                    AIAnalysisRun.tenant_id == tenant_id,
+                    AIAnalysisRun.candidate_vacancy_id.in_(cv_ids),
+                    AIAnalysisRun.status.in_(("pending", "processing")),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    running_interviews = set(
+        (
+            await db.execute(
+                select(Interview.candidate_vacancy_id).where(
+                    Interview.tenant_id == tenant_id,
+                    Interview.candidate_vacancy_id.in_(cv_ids),
+                    Interview.analysis_status == "processing",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    running = running_runs | running_interviews
+
+    for item in items:
+        item["ai_readiness"] = _derive_readiness(
+            item["candidate_id"] in with_resume,
+            item["id"] in with_transcript,
+        )
+        item["ai_analysis_in_progress"] = item["id"] in running
+
+
 def apply_resume_only_verdict_guard(
     verdict: str | None,
 ) -> tuple[str, bool]:
@@ -905,6 +1143,52 @@ def apply_resume_only_verdict_guard(
     if verdict in {"needs_check", "not_recommended"}:
         return verdict, False
     return "needs_check", verdict is not None
+
+
+def aggregate_ai_score_sync(
+    db: Any,
+    tenant_id: uuid.UUID,
+    candidate_vacancy_id: uuid.UUID,
+    scores: list[float],
+    *,
+    exclude_run_id: uuid.UUID | None = None,
+) -> float | None:
+    """HRP-493 (task 1) — aggregate AI score with a baseline fallback.
+
+    The mean of the competences the model actually scored is the answer
+    whenever there is one. It is not when *every* competence came back
+    ``not_covered`` / ``insufficient`` — a real outcome for a short
+    interview against a narrow profile — and the old code then wrote
+    ``NULL`` onto ``candidate_vacancies.ai_score``. On a top-up that
+    silently erased the number the recruiter already had from the
+    resume-only baseline: the candidates table went from "0.23" back to
+    "—" *because* the candidate was analysed more deeply.
+
+    So when the current run scores nothing, carry the last completed
+    run's aggregate forward instead of blanking the column. The verdict
+    and the mode badge still come from the new run — only the numeric
+    score is inherited, and only when the new run has no opinion of its
+    own.
+
+    Sync (Celery) callers only; ``db`` is a ``sqlalchemy.orm.Session``.
+    """
+    from app.modules.recruitment.score_normalization import clamp_unit_score
+
+    if scores:
+        return clamp_unit_score(sum(scores) / len(scores))
+
+    query = select(AIAnalysisRun).where(
+        AIAnalysisRun.tenant_id == tenant_id,
+        AIAnalysisRun.candidate_vacancy_id == candidate_vacancy_id,
+        AIAnalysisRun.status == "completed",
+        AIAnalysisRun.ai_score.is_not(None),
+    )
+    if exclude_run_id is not None:
+        query = query.where(AIAnalysisRun.id != exclude_run_id)
+    prior = db.execute(
+        query.order_by(AIAnalysisRun.created_at.desc()).limit(1)
+    ).scalar_one_or_none()
+    return prior.ai_score if prior is not None else None
 
 
 async def finalize_topup_after_full_analysis(
@@ -951,13 +1235,17 @@ async def finalize_topup_after_full_analysis(
 
 __all__ = [
     "TOPUP_WINDOW_DAYS",
+    "aggregate_ai_score_sync",
+    "apply_ai_analysis_state",
     "apply_resume_only_verdict_guard",
     "cancel_ai_analysis_run",
+    "candidate_ai_insights_deep_link",
     "current_resume_hash_for_candidate",
     "current_resume_hash_for_cv",
     "enqueue_bulk_resume_only",
     "enqueue_resume_only_analysis",
     "enqueue_topup_to_full",
+    "evaluate_analysis_staleness",
     "evaluate_topup_eligibility",
     "extract_resume_excerpts",
     "finalize_topup_after_full_analysis",

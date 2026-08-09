@@ -29,29 +29,22 @@ from app.modules.recruitment.models import (
     ConsolidatedReport,
     HumanAssessment,
     Interview,
-    ReportTemplate,
     VacancyProfile,
 )
 from app.modules.recruitment.schemas import (
     REPORT_SECTION_CODES,
     ReportGenerateRequest,
-    ReportTemplateCreate,
-    ReportTemplateUpdate,
 )
 from app.modules.storage.models import File
 
 # ---------------------------------------------------------------------------
-# Reports + Templates (R4a) — see RECRUITING_MODULE.md §11.2 SCR-80..83
+# Reports (R4a) — see RECRUITING_MODULE.md §11.2 SCR-80..83.
+# HRP-521 removed the report-template surface: the sheet set now comes
+# straight from the Generate-report dialog.
 # ---------------------------------------------------------------------------
 
 
-_DEFAULT_REPORT_SECTIONS: list[str] = [
-    "vacancy_summary",
-    "competence_profile",
-    "candidates_summary",
-    "comparison_grid",
-    "interview_analysis",
-]
+_DEFAULT_REPORT_SECTIONS: list[str] = list(REPORT_SECTION_CODES)
 
 
 def _validate_sections(sections: list[str] | None) -> list[str]:
@@ -67,142 +60,15 @@ def _validate_sections(sections: list[str] | None) -> list[str]:
     return cleaned or list(_DEFAULT_REPORT_SECTIONS)
 
 
-def _report_template_to_read(t: ReportTemplate) -> dict:
-    return {
-        "id": t.id,
-        "name": t.name,
-        "sections": list(t.sections or []),
-        "is_active": bool(t.is_active),
-        "is_default": bool(t.is_default),
-        "template_data": t.template_data or {},
-        "created_at": t.created_at,
-        "updated_at": t.updated_at,
-    }
-
-
-async def list_report_templates(
-    db: AsyncSession, tenant_id: uuid.UUID
-) -> list[dict]:
-    rows = (
-        await db.execute(
-            select(ReportTemplate)
-            .where(ReportTemplate.tenant_id == tenant_id)
-            .order_by(ReportTemplate.created_at.desc())
-        )
-    ).scalars().all()
-    return [_report_template_to_read(t) for t in rows]
-
-
-async def create_report_template(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    data: ReportTemplateCreate,
-) -> dict:
-    sections = _validate_sections(list(data.sections) if data.sections else None)
-
-    if data.is_default:
-        # Only one default per tenant — clear the previous one.
-        existing_defaults = (
-            await db.execute(
-                select(ReportTemplate).where(
-                    ReportTemplate.tenant_id == tenant_id,
-                    ReportTemplate.is_default.is_(True),
-                )
-            )
-        ).scalars().all()
-        for row in existing_defaults:
-            row.is_default = False
-
-    template = ReportTemplate(
-        tenant_id=tenant_id,
-        name=data.name,
-        sections=sections,
-        is_active=data.is_active,
-        is_default=data.is_default,
-        template_data=data.template_data or {},
-    )
-    db.add(template)
-    await db.commit()
-    await db.refresh(template)
-    return _report_template_to_read(template)
-
-
-async def update_report_template(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    template_id: uuid.UUID,
-    data: ReportTemplateUpdate,
-) -> dict:
-    template = (
-        await db.execute(
-            select(ReportTemplate).where(
-                ReportTemplate.id == template_id,
-                ReportTemplate.tenant_id == tenant_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if not template:
-        raise AppError("report_template_not_found", status.HTTP_404_NOT_FOUND)
-
-    if data.name is not None:
-        template.name = data.name
-    if data.sections is not None:
-        template.sections = _validate_sections(list(data.sections))
-    if data.is_active is not None:
-        template.is_active = data.is_active
-    if data.template_data is not None:
-        template.template_data = data.template_data
-    if data.is_default is not None:
-        template.is_default = data.is_default
-        if data.is_default:
-            others = (
-                await db.execute(
-                    select(ReportTemplate).where(
-                        ReportTemplate.tenant_id == tenant_id,
-                        ReportTemplate.is_default.is_(True),
-                        ReportTemplate.id != template.id,
-                    )
-                )
-            ).scalars().all()
-            for row in others:
-                row.is_default = False
-
-    await db.commit()
-    await db.refresh(template)
-    return _report_template_to_read(template)
-
-
-async def delete_report_template(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    template_id: uuid.UUID,
-) -> None:
-    template = (
-        await db.execute(
-            select(ReportTemplate).where(
-                ReportTemplate.id == template_id,
-                ReportTemplate.tenant_id == tenant_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if not template:
-        raise AppError("report_template_not_found", status.HTTP_404_NOT_FOUND)
-    await db.delete(template)
-    await db.commit()
-
-
 def _report_export_to_read(
     export: ConsolidatedReport,
     *,
-    template_name: str | None = None,
     requested_by_name: str | None = None,
     download_url: str | None = None,
 ) -> dict:
     return {
         "id": export.id,
         "vacancy_id": export.vacancy_id,
-        "template_id": export.template_id,
-        "template_name": template_name,
         "sections": list(export.sections or []),
         "status": export.status,
         "error": export.error,
@@ -217,29 +83,20 @@ def _report_export_to_read(
 
 async def _name_lookup_for_exports(
     db: AsyncSession, exports: list[ConsolidatedReport]
-) -> tuple[dict[uuid.UUID, str], dict[uuid.UUID, str]]:
-    template_ids = {e.template_id for e in exports if e.template_id}
+) -> dict[uuid.UUID, str]:
     user_ids = {e.generated_by for e in exports if e.generated_by}
-    template_names: dict[uuid.UUID, str] = {}
     user_names: dict[uuid.UUID, str] = {}
-    if template_ids:
-        template_rows = (
-            await db.execute(
-                select(ReportTemplate).where(
-                    ReportTemplate.id.in_(template_ids)
-                )
-            )
-        ).scalars().all()
-        template_names = {r.id: r.name for r in template_rows}
     if user_ids:
         user_rows = (
-            await db.execute(select(User).where(User.id.in_(user_ids)))
-        ).scalars().all()
+            (await db.execute(select(User).where(User.id.in_(user_ids))))
+            .scalars()
+            .all()
+        )
         user_names = {
             u.id: f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email
             for u in user_rows
         }
-    return template_names, user_names
+    return user_names
 
 
 async def enqueue_report(
@@ -262,22 +119,6 @@ async def enqueue_report(
     sections: list[str] | None = (
         [str(s) for s in data.sections] if data.sections else None
     )
-    if data.template_id is not None:
-        template = (
-            await db.execute(
-                select(ReportTemplate).where(
-                    ReportTemplate.id == data.template_id,
-                    ReportTemplate.tenant_id == tenant_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if not template:
-            raise AppError("report_template_not_found", status.HTTP_404_NOT_FOUND)
-        if not template.is_active:
-            raise AppError("report_template_inactive", status.HTTP_409_CONFLICT)
-        if sections is None:
-            sections = list(template.sections or [])
-
     sections_clean = _validate_sections(sections)
 
     # HRP-268 — stash the audience + candidate whitelist inside the
@@ -289,7 +130,18 @@ async def enqueue_report(
     if audience not in {"recruiter", "hiring_manager"}:
         audience = "recruiter"
     report_data: dict = {"audience": audience}
-    if data.candidate_vacancy_ids:
+    # Omitting the field means "every active candidate" (the wizard's
+    # "All active" scope sends no whitelist). Sending an empty list is a
+    # different statement: the caller picked a scope — Finalists, Custom —
+    # that resolved to nobody. Truthiness collapsed the two, so an empty
+    # selection silently produced a report on the whole vacancy, which is
+    # the opposite of what was asked for. The wizard disables its button
+    # in that state; the server says so too.
+    if data.candidate_vacancy_ids is not None:
+        if not data.candidate_vacancy_ids:
+            raise AppError(
+                "report_candidate_selection_empty", status.HTTP_400_BAD_REQUEST
+            )
         report_data["candidate_vacancy_ids"] = [
             str(cv_id) for cv_id in data.candidate_vacancy_ids
         ]
@@ -297,7 +149,6 @@ async def enqueue_report(
     export = ConsolidatedReport(
         tenant_id=tenant_id,
         vacancy_id=vacancy_id,
-        template_id=data.template_id,
         sections=sections_clean,
         status="pending",
         generated_by=user_id,
@@ -320,37 +171,36 @@ async def list_reports(
     skip: int = 0,
     limit: int = 50,
 ) -> tuple[list[dict], int]:
-    query = select(ConsolidatedReport).where(
-        ConsolidatedReport.tenant_id == tenant_id
-    )
+    query = select(ConsolidatedReport).where(ConsolidatedReport.tenant_id == tenant_id)
     count_query = select(func.count(ConsolidatedReport.id)).where(
         ConsolidatedReport.tenant_id == tenant_id
     )
     if vacancy_id is not None:
         query = query.where(ConsolidatedReport.vacancy_id == vacancy_id)
-        count_query = count_query.where(
-            ConsolidatedReport.vacancy_id == vacancy_id
-        )
+        count_query = count_query.where(ConsolidatedReport.vacancy_id == vacancy_id)
     if status_filter:
         query = query.where(ConsolidatedReport.status == status_filter)
-        count_query = count_query.where(
-            ConsolidatedReport.status == status_filter
-        )
+        count_query = count_query.where(ConsolidatedReport.status == status_filter)
 
     total = (await db.execute(count_query)).scalar() or 0
     rows = (
-        await db.execute(
-            query.order_by(ConsolidatedReport.created_at.desc())
-            .offset(skip)
-            .limit(limit)
+        (
+            await db.execute(
+                query.order_by(ConsolidatedReport.created_at.desc())
+                .offset(skip)
+                .limit(limit)
+            )
         )
-    ).scalars().all()
-    template_names, user_names = await _name_lookup_for_exports(db, list(rows))
+        .scalars()
+        .all()
+    )
+    user_names = await _name_lookup_for_exports(db, list(rows))
     items = [
         _report_export_to_read(
             r,
-            template_name=template_names.get(r.template_id) if r.template_id else None,
-            requested_by_name=user_names.get(r.generated_by) if r.generated_by else None,
+            requested_by_name=user_names.get(r.generated_by)
+            if r.generated_by
+            else None,
         )
         for r in rows
     ]
@@ -371,23 +221,10 @@ async def get_report(
     if not export:
         raise AppError("report_not_found", status.HTTP_404_NOT_FOUND)
 
-    template_name: str | None = None
-    if export.template_id:
-        tpl = (
-            await db.execute(
-                select(ReportTemplate).where(
-                    ReportTemplate.id == export.template_id
-                )
-            )
-        ).scalar_one_or_none()
-        template_name = tpl.name if tpl else None
-
     requested_by_name: str | None = None
     if export.generated_by:
         usr = (
-            await db.execute(
-                select(User).where(User.id == export.generated_by)
-            )
+            await db.execute(select(User).where(User.id == export.generated_by))
         ).scalar_one_or_none()
         if usr:
             requested_by_name = (
@@ -408,7 +245,6 @@ async def get_report(
 
     return _report_export_to_read(
         export,
-        template_name=template_name,
         requested_by_name=requested_by_name,
         download_url=download_url,
     )
@@ -656,20 +492,25 @@ async def compare_candidates(
     )
 
     cvs = (
-        await db.execute(
-            select(CandidateVacancy)
-            .options(
-                selectinload(CandidateVacancy.candidate).selectinload(
-                    Candidate.person
+        (
+            await db.execute(
+                select(CandidateVacancy)
+                .options(
+                    selectinload(CandidateVacancy.candidate).selectinload(
+                        Candidate.person
+                    )
+                )
+                .where(
+                    CandidateVacancy.vacancy_id == vacancy_id,
+                    CandidateVacancy.tenant_id == tenant_id,
+                    CandidateVacancy.candidate_id.in_(unique_ids),
                 )
             )
-            .where(
-                CandidateVacancy.vacancy_id == vacancy_id,
-                CandidateVacancy.tenant_id == tenant_id,
-                CandidateVacancy.candidate_id.in_(unique_ids),
-            )
         )
-    ).scalars().unique().all()
+        .scalars()
+        .unique()
+        .all()
+    )
 
     if not cvs:
         return {
@@ -681,22 +522,30 @@ async def compare_candidates(
     cv_ids = [cv.id for cv in cvs]
 
     human_rows = (
-        await db.execute(
-            select(HumanAssessment).where(
-                HumanAssessment.candidate_vacancy_id.in_(cv_ids),
-                HumanAssessment.tenant_id == tenant_id,
+        (
+            await db.execute(
+                select(HumanAssessment).where(
+                    HumanAssessment.candidate_vacancy_id.in_(cv_ids),
+                    HumanAssessment.tenant_id == tenant_id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     interviews = (
-        await db.execute(
-            select(Interview).where(
-                Interview.candidate_vacancy_id.in_(cv_ids),
-                Interview.tenant_id == tenant_id,
+        (
+            await db.execute(
+                select(Interview).where(
+                    Interview.candidate_vacancy_id.in_(cv_ids),
+                    Interview.tenant_id == tenant_id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     interview_cv_map = {iv.id: iv.candidate_vacancy_id for iv in interviews}
     ai_rows: list[AIAssessment] = []
     if interviews:
@@ -704,9 +553,7 @@ async def compare_candidates(
             (
                 await db.execute(
                     select(AIAssessment).where(
-                        AIAssessment.interview_id.in_(
-                            [iv.id for iv in interviews]
-                        ),
+                        AIAssessment.interview_id.in_([iv.id for iv in interviews]),
                         AIAssessment.tenant_id == tenant_id,
                     )
                 )
@@ -726,9 +573,7 @@ async def compare_candidates(
     for hs in human_rows:
         if hs.score is None:
             continue
-        target = next(
-            (cv for cv in cvs if cv.id == hs.candidate_vacancy_id), None
-        )
+        target = next((cv for cv in cvs if cv.id == hs.candidate_vacancy_id), None)
         if target is None:
             continue
         cand_id = target.candidate_id

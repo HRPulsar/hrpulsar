@@ -5,7 +5,9 @@ Handles three transitions plus the Slack moderation side effects:
 * ``create_signup_request``  — landing form submit, sends verify email.
 * ``verify_signup_request``  — visitor clicks emailed link, flips to
   ``pending_moderation`` and emits ``signup.email_verified`` so the
-  enterprise Slack handler can post the moderation card.
+  enterprise Slack handler can post the moderation card. A repeat
+  submit / re-click for a request already in the queue emits a
+  Redis-throttled ``signup.moderation_reminder`` instead (HRP-538).
 * ``approve_signup`` / ``reject_signup`` — invoked by the EE Slack
   Bolt listener (see ``ee.slack_signup_actions``); approve provisions
   a real Tenant + User pair and emails a one-time magic-login link.
@@ -21,7 +23,7 @@ import contextlib
 import logging
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -186,6 +188,12 @@ async def create_signup_request(
         # on the old link must still flip a pending_email_verify row
         # to pending_moderation; a click on the new link is harmless.
         await _send_signup_verify_email(existing, accept_language=accept_language)
+        if existing.status == "pending_moderation":
+            # The visitor came back and re-submitted the form while their
+            # request is still sitting in the moderation queue — the
+            # strongest signal we have that the original moderation card
+            # was lost or forgotten (HRP-538).
+            await _maybe_publish_moderation_reminder(existing)
         return existing
 
     row = SignupRequest(
@@ -289,11 +297,35 @@ async def verify_signup_request(
     if row.status == "pending_moderation":
         # Visitor clicked the verify link twice — already in the queue.
         # The row was locked by the first call, so we observe the
-        # post-transition state without re-publishing.
+        # post-transition state without re-publishing the original
+        # event. A genuinely later re-click is a stuck-request signal,
+        # so fire the throttled reminder instead (HRP-538).
+        # Commit FIRST to release the FOR UPDATE lock: the EE reminder
+        # handler may persist slack_message_ts on this very row from
+        # its own session, and publishing while still holding the lock
+        # would self-deadlock until idle_in_transaction_session_timeout
+        # kills the connection. Nothing was written in this branch —
+        # the commit only ends the transaction (expire_on_commit=False
+        # keeps ``row`` readable).
+        await db.commit()
+        await _maybe_publish_moderation_reminder(row)
         return row, True
 
     # approved / rejected / expired — the request is no longer pending.
     raise AppError("signup_request_already_processed", status.HTTP_409_CONFLICT)
+
+
+def _event_payload(row: SignupRequest) -> dict[str, Any]:
+    """Shared payload for signup.* events — keyed by the request row."""
+    return {
+        "signup_request_id": str(row.id),
+        "email": row.email,
+        "first_name": row.first_name,
+        "last_name": row.last_name,
+        "company_name": row.company_name,
+        "role": row.role,
+        "source": row.source,
+    }
 
 
 async def _publish_email_verified(row: SignupRequest) -> None:
@@ -306,21 +338,77 @@ async def _publish_email_verified(row: SignupRequest) -> None:
     try:
         from app.core.events import publish
 
-        await publish(
-            "signup.email_verified",
-            {
-                "signup_request_id": str(row.id),
-                "email": row.email,
-                "first_name": row.first_name,
-                "last_name": row.last_name,
-                "company_name": row.company_name,
-                "role": row.role,
-                "source": row.source,
-            },
-        )
+        await publish("signup.email_verified", _event_payload(row))
     except Exception:
         logger.exception(
             "signup: failed to publish signup.email_verified for %s", row.id
+        )
+
+
+_REMINDER_MIN_AGE = timedelta(minutes=15)
+
+
+async def _maybe_publish_moderation_reminder(row: SignupRequest) -> None:
+    """Emit ``signup.moderation_reminder`` for a stuck request (HRP-538).
+
+    Fired when the visitor re-submits the landing form or re-clicks the
+    verify link while their request is still ``pending_moderation`` —
+    evidence the original moderation card was lost or forgotten.
+
+    Two guards keep the moderation channel quiet:
+
+    * Age gate — no reminder within ``_REMINDER_MIN_AGE`` of the email
+      being verified. A mail-scanner prefetch (Outlook SafeLinks,
+      Gmail) routinely flips the row seconds before the visitor's own
+      click; without the gate that second click would produce a false
+      "still awaiting moderation" ping right after the original card
+      (and could race the card's ``slack_message_ts`` persist into a
+      duplicate card). Redis-independent, so it holds across restarts.
+    * Redis throttle — at most one event per request per hour
+      (``SET NX EX``), so repeated clicks past the age gate can't spam.
+
+    Best-effort on both legs: a Redis or bus failure is logged and
+    swallowed — a reminder must never break the visitor-facing flow,
+    and unlike the anti-abuse rate limit there is nothing to fail
+    closed over.
+    """
+    verified_at = row.email_verified_at
+    if verified_at is None:
+        return
+    if verified_at.tzinfo is None:
+        verified_at = verified_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - verified_at < _REMINDER_MIN_AGE:
+        return
+
+    client = None
+    try:
+        client = aioredis.from_url(settings.redis_url, decode_responses=True)
+        first = await client.set(
+            f"signup:remind:{row.id}", "1", nx=True, ex=3600
+        )
+        if not first:
+            return
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "signup: reminder throttle unavailable — skipping reminder "
+            "for %s",
+            row.id,
+            exc_info=True,
+        )
+        return
+    finally:
+        if client is not None:
+            with contextlib.suppress(Exception):
+                await client.aclose()  # type: ignore[attr-defined]
+
+    try:
+        from app.core.events import publish
+
+        await publish("signup.moderation_reminder", _event_payload(row))
+    except Exception:
+        logger.exception(
+            "signup: failed to publish signup.moderation_reminder for %s",
+            row.id,
         )
 
 

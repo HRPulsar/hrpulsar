@@ -340,3 +340,101 @@ async def test_deepgram_provider_surfaces_timeout(monkeypatch):
     provider = DeepgramProvider(api_key="x")
     with pytest.raises(httpx.ConnectTimeout):
         await provider.transcribe("https://signed/example")
+
+
+# ---------------------------------------------------------------------------
+# BYOK key handling (HRP-506)
+# ---------------------------------------------------------------------------
+
+
+class _FakeSyncResult:
+    def __init__(self, row):
+        self._row = row
+
+    def scalar_one_or_none(self):
+        return self._row
+
+
+class _FakeSyncSession:
+    def __init__(self, row):
+        self._row = row
+
+    def execute(self, _query):
+        return _FakeSyncResult(self._row)
+
+
+@pytest.mark.asyncio
+async def test_byok_transcription_key_is_decrypted(db, tenant, monkeypatch):
+    """The stored column is ciphertext — the provider must receive the
+    plaintext key, never the blob (HRP-506)."""
+    import uuid as _uuid
+
+    from app.core.crypto import encrypt_secret
+    from app.modules.recruitment import transcription_service
+    from app.modules.recruitment.models import TranscriptionProviderConfig
+
+    monkeypatch.setattr(
+        transcription_service.settings, "deepgram_api_key", "platform-deepgram"
+    )
+    row = TranscriptionProviderConfig(
+        tenant_id=tenant.id,
+        provider="deepgram",
+        api_key_encrypted=encrypt_secret("dg-tenant-key"),
+        is_active=True,
+    )
+    db.add(row)
+    await db.commit()
+
+    provider = await transcription_service.get_transcription_provider(db, tenant.id)
+    assert provider._api_key == "dg-tenant-key"
+
+    sync_provider = transcription_service.get_transcription_provider_sync(
+        _FakeSyncSession(row), _uuid.uuid4()
+    )
+    assert sync_provider._api_key == "dg-tenant-key"
+
+
+@pytest.mark.asyncio
+async def test_row_without_key_falls_back_to_platform_key(db, tenant, monkeypatch):
+    from app.modules.recruitment import transcription_service
+    from app.modules.recruitment.models import TranscriptionProviderConfig
+
+    monkeypatch.setattr(
+        transcription_service.settings, "deepgram_api_key", "platform-deepgram"
+    )
+    db.add(
+        TranscriptionProviderConfig(
+            tenant_id=tenant.id,
+            provider="deepgram",
+            api_key_encrypted=None,
+            is_active=True,
+        )
+    )
+    await db.commit()
+
+    provider = await transcription_service.get_transcription_provider(db, tenant.id)
+    assert provider._api_key == "platform-deepgram"
+
+
+@pytest.mark.asyncio
+async def test_unreadable_key_falls_back_to_platform_key(db, tenant, monkeypatch):
+    """A key encrypted under a rotated ENCRYPTION_KEY must degrade to the
+    platform credential instead of shipping garbage to the provider."""
+    from app.modules.recruitment import transcription_service
+    from app.modules.recruitment.models import TranscriptionProviderConfig
+
+    monkeypatch.setattr(
+        transcription_service.settings, "deepgram_api_key", "platform-deepgram"
+    )
+    db.add(
+        TranscriptionProviderConfig(
+            tenant_id=tenant.id,
+            provider="deepgram",
+            api_key_encrypted="not-a-valid-ciphertext",
+            is_active=True,
+        )
+    )
+    await db.commit()
+
+    provider = await transcription_service.get_transcription_provider(db, tenant.id)
+    assert provider._api_key == "platform-deepgram"

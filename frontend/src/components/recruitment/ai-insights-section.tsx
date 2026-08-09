@@ -16,7 +16,6 @@ import {
   ChevronDown,
   History,
   Loader2,
-  RefreshCw,
   Sparkles,
   X,
 } from "lucide-react";
@@ -35,12 +34,14 @@ import {
   AI_ANALYSIS_PRICING,
   AI_ANALYSIS_STAGES,
   aiAnalysisStageLabel,
+  analysisStalenessKind,
   extractResumeExcerpts,
 } from "@/lib/recruitment-types";
 import { ALERT_TONE, BADGE_COLOR } from "@/lib/badge-tones";
 import type {
   AiAnalysisRun,
   AiAnalysisStage,
+  AnalysisStalenessKind,
   CandidateVacancyApplication,
   ResumeExcerpt,
   ResumeExcerptSection,
@@ -71,12 +72,16 @@ interface Props {
   /** HRP-361/366: the vacancy the user navigated from — it becomes the
    * default selection instead of the most recent application. */
   initialVacancyId?: string;
+  /** HRP-488: a candidate added by hand has nothing to analyse, so the
+   * empty state says "upload a resume" and keeps Analyze disabled. */
+  hasParsedResume?: boolean;
 }
 
 export function AiInsightsSection({
   candidateId,
   vacancyApplications,
   initialVacancyId,
+  hasParsedResume = false,
 }: Props) {
   const t = useTranslations("recruitment");
   // Credit pricing copy is SaaS-only; on-prem (community) builds have no
@@ -268,8 +273,32 @@ export function AiInsightsSection({
     return null;
   }
 
+  // HRP-489 / HRP-492: one banner at a time, priority owned by
+  // ``analysisStalenessKind``. Only meaningful once a run has completed
+  // — an in-flight or absent analysis has nothing to be stale about.
+  const staleness: AnalysisStalenessKind =
+    activeRun && !inFlightRun ? analysisStalenessKind(eligibility) : null;
+
+  // A prior run proves a resume existed at some point, so it keeps the
+  // button live even if the page did not pass ``hasParsedResume``.
+  const resumeAvailable = hasParsedResume || runs.length > 0;
+
+  const analyzeSplitButton = (
+    <AnalyzeSplitButton
+      disabled={
+        !selectedCvId || busy || !!inFlightRun || !resumeAvailable
+      }
+      busy={busy}
+      showCredits={showCredits}
+      hasTranscribedInterview={!!eligibility?.transcribed_interview_id}
+      topupEligible={!!eligibility?.eligible}
+      onResumeOnly={() => void trigger("resume_only")}
+      onFullMode={() => void trigger("full")}
+    />
+  );
+
   return (
-    <Card data-testid="candidate-section-ai-insights">
+    <Card id="ai-insights" data-testid="candidate-section-ai-insights">
       <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-amber-600" />
@@ -290,28 +319,21 @@ export function AiInsightsSection({
               ))}
             </select>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setHistoryOpen(true)}
-            disabled={runs.length === 0}
-            aria-label={t("aiInsightsHistoryAria")}
-            data-testid="ai-analysis-history-btn"
-          >
-            <History className="size-4" aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => void refresh()}
-            disabled={loading}
-            aria-label={t("actionRefresh")}
-          >
-            <RefreshCw
-              className={cn("size-4", loading && "animate-spin")}
-              aria-hidden
-            />
-          </Button>
+          {/* HRP-489: the manual refresh control is gone — the section
+              already refetches on every trigger and polls while a run is
+              in flight, so the button did nothing a user could observe.
+              History stays, but only once there is history to open. */}
+          {runs.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setHistoryOpen(true)}
+              aria-label={t("aiInsightsHistoryAria")}
+              data-testid="ai-analysis-history-btn"
+            >
+              <History className="size-4" aria-hidden />
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -327,38 +349,23 @@ export function AiInsightsSection({
             candidateId={candidateId}
             eligibility={eligibility}
             showCredits={showCredits}
+            staleness={staleness}
+            analyzeSplitButton={analyzeSplitButton}
             onTopup={() => void trigger("topup_to_full")}
-            onReanalyze={() => void trigger("resume_only")}
+            onFullMode={() => void trigger("full")}
             busy={busy}
             inFlight={!!inFlightRun}
           />
         ) : (
-          <EmptyState />
-        )}
-
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
-          <p className="text-xs text-muted-foreground">
-            {activeRun
-              ? t("aiInsightsFooterActive")
-              : showCredits
-                ? t("aiInsightsFooterCredits", {
-                    resumeOnly: AI_ANALYSIS_PRICING.resume_only,
-                    full: AI_ANALYSIS_PRICING.full,
-                  })
-                : t("aiInsightsFooterNoCredits")}
-          </p>
-          <AnalyzeSplitButton
-            disabled={!selectedCvId || busy || !!inFlightRun}
-            busy={busy}
-            showCredits={showCredits}
-            hasTranscribedInterview={
-              !!eligibility?.transcribed_interview_id
-            }
-            topupEligible={!!eligibility?.eligible}
-            onResumeOnly={() => void trigger("resume_only")}
-            onFullMode={() => void trigger("full")}
+          <EmptyState
+            loading={loading}
+            // Same signal that keeps the Analyze button live: a prior run
+            // proves a resume exists, so the hint must not tell the user
+            // to upload one while the button is clickable.
+            hasResume={resumeAvailable}
+            analyzeSplitButton={analyzeSplitButton}
           />
-        </div>
+        )}
       </CardContent>
 
       <HistoryDialog
@@ -423,21 +430,42 @@ export function AiInsightsSection({
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function EmptyState() {
+// HRP-488 — the empty state now mirrors the Interview questions block:
+// a placeholder line and the action directly beneath it, nothing else.
+// Two cases: no parsed resume (there is nothing to analyse, so the
+// split-button is disabled and the hint says so) and a parsed resume
+// (Analyze is live).
+function EmptyState({
+  loading,
+  hasResume,
+  analyzeSplitButton,
+}: {
+  loading: boolean;
+  hasResume: boolean;
+  analyzeSplitButton: React.ReactNode;
+}) {
   const t = useTranslations("recruitment");
   return (
     <div
-      className="rounded-md border border-dashed bg-muted/40 p-4 text-center text-sm text-muted-foreground"
+      className="rounded-lg border border-dashed p-10 text-center"
       data-testid="candidate-section-ai-insights-empty-state"
     >
-      <p className="font-medium text-foreground">
-        {t("aiInsightsEmptyTitle")}
+      <p className="text-sm font-medium">{t("aiInsightsEmptyTitle")}</p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {hasResume
+          ? t("aiInsightsEmptyHasResume")
+          : t("aiInsightsEmptyNoResume")}
       </p>
-      <p className="mt-1">
-        {t.rich("aiInsightsEmptyHint", {
-          strong: (chunks) => <span className="font-medium">{chunks}</span>,
-        })}
-      </p>
+      <div className="mt-4 flex items-center justify-center">
+        {loading ? (
+          <Loader2
+            className="size-4 animate-spin text-muted-foreground"
+            aria-hidden
+          />
+        ) : (
+          analyzeSplitButton
+        )}
+      </div>
     </div>
   );
 }
@@ -577,8 +605,10 @@ function ActiveRunCard({
   candidateId,
   eligibility,
   showCredits,
+  staleness,
+  analyzeSplitButton,
   onTopup,
-  onReanalyze,
+  onFullMode,
   busy,
   inFlight,
 }: {
@@ -586,8 +616,10 @@ function ActiveRunCard({
   candidateId: string;
   eligibility: TopupEligibility | null;
   showCredits: boolean;
+  staleness: AnalysisStalenessKind;
+  analyzeSplitButton: React.ReactNode;
   onTopup: () => void;
-  onReanalyze: () => void;
+  onFullMode: () => void;
   busy: boolean;
   inFlight: boolean;
 }) {
@@ -598,22 +630,19 @@ function ActiveRunCard({
   // pre-flattened by the backend. Each renders as a click-to-locate
   // chip that focuses the matching block in ParsedResumeEditor.
   const excerpts = useMemo(() => extractResumeExcerpts(run), [run]);
-  // HRP-272: backend flips ``resume_outdated`` on when the candidate
-  // uploaded a fresh resume after this run was enqueued. The banner is
-  // resume-only-only — full runs and legacy rows without a stamped
-  // snapshot hash keep the flag at False.
-  const showOutdatedBanner = isResumeOnly && run.resume_outdated;
   return (
     <div className="space-y-3">
-      {showOutdatedBanner && (
-        <OutdatedResumeBanner
-          onReanalyze={onReanalyze}
+      {staleness && (
+        <StalenessBanner
+          kind={staleness}
           showCredits={showCredits}
           // Review #2 (HRP-272): mirror AnalyzeSplitButton's
           // ``disabled={busy || !!inFlight}`` so a future refactor
           // that decouples ``setBusy(false)`` from the post-trigger
           // refresh cannot re-open a double-click 409 race.
           busy={busy || inFlight}
+          analyzeSplitButton={analyzeSplitButton}
+          onFullMode={onFullMode}
         />
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -621,14 +650,10 @@ function ActiveRunCard({
           verdict={run.verdict ?? "needs_check"}
           score={run.ai_score}
         />
+        {/* HRP-489/492: the ``data: {completeness}`` chip is gone — it
+            restated the mode chip next to it without adding a decision
+            the recruiter could act on. */}
         <ModeBadge mode={run.mode} />
-        {run.data_completeness && (
-          <Badge variant="outline" className="text-[10px]">
-            {t("aiInsightsDataCompleteness", {
-              value: run.data_completeness,
-            })}
-          </Badge>
-        )}
         <span className="ml-auto text-xs text-muted-foreground">
           {new Date(run.created_at).toLocaleDateString(locale)}
         </span>
@@ -681,57 +706,73 @@ function ActiveRunCard({
   );
 }
 
-// HRP-272 — "Resume updated — re-analyze" banner. Shown above the
-// active resume-only run when the backend has flagged
-// ``run.resume_outdated`` because the candidate uploaded a fresh CV
-// after the run was enqueued. Re-analyze re-uses the same billable
-// entry point as the primary analyze split-button — the worker
-// archives the prior active run on success.
-function OutdatedResumeBanner({
-  onReanalyze,
+// HRP-489 / HRP-492 — "this analysis no longer describes the current
+// inputs" banner. Replaces the HRP-272 resume-only banner and covers
+// all four signals the backend evaluates; the priority order lives in
+// ``analysisStalenessKind``.
+//
+// Three of the four are fixed by any fresh analysis, so they carry the
+// same split-button the empty state uses. A newer transcript is the
+// exception: only a resume + interview run consumes it, so that case
+// offers exactly that one action.
+const STALENESS_TEXT_KEYS: Record<
+  NonNullable<AnalysisStalenessKind>,
+  string
+> = {
+  resume: "aiInsightsStaleResume",
+  profile: "aiInsightsStaleProfile",
+  expired: "aiInsightsStaleExpired",
+  transcript: "aiInsightsStaleTranscript",
+};
+
+function StalenessBanner({
+  kind,
   showCredits,
   busy,
+  analyzeSplitButton,
+  onFullMode,
 }: {
-  onReanalyze: () => void;
+  kind: NonNullable<AnalysisStalenessKind>;
   showCredits: boolean;
   busy: boolean;
+  analyzeSplitButton: React.ReactNode;
+  onFullMode: () => void;
 }) {
   const t = useTranslations("recruitment");
   return (
     <div
       className={`flex flex-wrap items-center justify-between gap-3 rounded-md p-3 text-sm ${ALERT_TONE.amber}`}
       data-testid="ai-analysis-outdated-banner"
+      data-staleness={kind}
     >
       <div className="flex items-start gap-2">
         <AlertCircle
           className="size-4 shrink-0 text-amber-700 dark:text-amber-300"
           aria-hidden
         />
-        <p>
-          {t.rich("aiInsightsOutdatedBanner", {
-            strong: (chunks) => <span className="font-medium">{chunks}</span>,
-          })}
-        </p>
+        <p>{t(STALENESS_TEXT_KEYS[kind])}</p>
       </div>
-      <Button
-        size="sm"
-        onClick={onReanalyze}
-        disabled={busy}
-        data-testid="ai-analysis-reanalyze-btn"
-      >
-        {busy ? (
-          <Loader2 className="size-3.5 animate-spin" aria-hidden />
-        ) : (
-          <RefreshCw className="size-3.5" aria-hidden />
-        )}
-        <span className="ml-1">
-          {showCredits
-            ? t("aiInsightsReanalyzeCr", {
-                cost: AI_ANALYSIS_PRICING.resume_only,
-              })
-            : t("aiInsightsReanalyze")}
-        </span>
-      </Button>
+      {kind === "transcript" ? (
+        <Button
+          size="sm"
+          onClick={onFullMode}
+          disabled={busy}
+          data-testid="ai-analysis-reanalyze-full-btn"
+        >
+          {busy ? (
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+          ) : (
+            <Sparkles className="size-3.5" aria-hidden />
+          )}
+          <span className="ml-1">
+            {showCredits
+              ? t("aiInsightsFullBtnCr", { cost: AI_ANALYSIS_PRICING.full })
+              : t("aiInsightsFullBtn")}
+          </span>
+        </Button>
+      ) : (
+        analyzeSplitButton
+      )}
     </div>
   );
 }
@@ -836,9 +877,19 @@ function TopupCallout({
   busy: boolean;
 }) {
   const t = useTranslations("recruitment");
+  const upgradeLabel = showCredits
+    ? t("aiInsightsUpgradeToFullCr", {
+        cost: AI_ANALYSIS_PRICING.topup_to_full,
+      })
+    : t("aiInsightsUpgradeToFull");
+
   if (eligibility.eligible) {
     return (
-      <div className={`flex items-center justify-between gap-3 rounded-md p-3 text-sm ${ALERT_TONE.emerald}`}>
+      <div
+        className={`flex flex-wrap items-center justify-between gap-3 rounded-md p-3 text-sm ${ALERT_TONE.emerald}`}
+        data-testid="ai-analysis-topup-callout"
+        data-eligible="true"
+      >
         <div className="flex items-center gap-2">
           <CheckCircle2
             className="size-4 text-emerald-700 dark:text-emerald-300"
@@ -852,11 +903,7 @@ function TopupCallout({
           disabled={busy}
           data-testid="ai-analysis-upgrade-to-full-btn"
         >
-          {showCredits
-            ? t("aiInsightsUpgradeToFullCr", {
-                cost: AI_ANALYSIS_PRICING.topup_to_full,
-              })
-            : t("aiInsightsUpgradeToFull")}
+          {upgradeLabel}
         </Button>
       </div>
     );
@@ -865,21 +912,45 @@ function TopupCallout({
   // Resume-only run exists, but top-up is blocked — surface the reason
   // so the recruiter knows whether the answer is "schedule an
   // interview", "rerun from scratch" or "wait for a profile freeze".
+  //
+  // HRP-489: the blocked case keeps the upgrade button visible but
+  // disabled. Hiding it made the +20-cr path look unavailable to the
+  // product rather than unavailable *right now* — recruiters could not
+  // tell the two apart, and the reason line alone did not read as an
+  // action they were one transcript away from.
   const reasonMap: Record<string, string> = {
     no_transcribed_interview: t("aiInsightsReasonNoInterview"),
     resume_only_too_old: t("aiInsightsReasonTooOld", {
       days: eligibility.window_days ?? 30,
     }),
     profile_changed: t("aiInsightsReasonProfileChanged"),
+    resume_changed: t("aiInsightsReasonResumeChanged"),
     profile_missing: t("aiInsightsReasonProfileMissing"),
     no_active_resume_only_run: "",
   };
   const text = reasonMap[eligibility.reason ?? ""] ?? "";
   if (!text) return null;
   return (
-    <div className="flex items-start gap-2 rounded-md bg-muted/60 p-3 text-xs text-muted-foreground">
-      <AlertCircle className="size-4 shrink-0" aria-hidden />
-      <p>{text}</p>
+    <div
+      className={`flex flex-wrap items-center justify-between gap-3 rounded-md p-3 text-sm ${ALERT_TONE.amber}`}
+      data-testid="ai-analysis-topup-callout"
+      data-eligible="false"
+    >
+      <div className="flex items-start gap-2">
+        <AlertCircle
+          className="size-4 shrink-0 text-amber-700 dark:text-amber-300"
+          aria-hidden
+        />
+        <p>{text}</p>
+      </div>
+      <Button
+        size="sm"
+        disabled
+        title={text}
+        data-testid="ai-analysis-upgrade-to-full-btn"
+      >
+        {upgradeLabel}
+      </Button>
     </div>
   );
 }
@@ -984,73 +1055,76 @@ function AnalyzeSplitButton({
         ? t("aiInsightsFullReasonCr", { cost: AI_ANALYSIS_PRICING.full })
         : t("aiInsightsFullReason");
 
+  // HRP-488: the primary half no longer fires resume-only on its own —
+  // both modes live in the menu, so "Analyze" names the decision and
+  // the menu makes the price of each option explicit before it is
+  // spent. Both halves open the same menu; the split is visual.
   return (
-    <div className="inline-flex items-stretch">
-      <Button
-        size="sm"
-        onClick={onResumeOnly}
+    <DropdownMenu>
+      <DropdownMenuTrigger
         disabled={disabled}
-        title={
-          showCredits
-            ? t("aiInsightsResumeOnlyTitleCr", {
-                cost: AI_ANALYSIS_PRICING.resume_only,
-              })
-            : t("aiInsightsResumeOnlyTitle")
+        render={
+          <Button
+            size="sm"
+            disabled={disabled}
+            aria-label={t("aiInsightsMoreOptionsAria")}
+            data-testid="candidate-section-ai-insights-analyze-menu-trigger"
+          />
         }
-        className="rounded-r-none"
-        data-testid="candidate-section-ai-insights-analyze-resume-only"
       >
         {busy ? (
           <Loader2 className="size-3.5 animate-spin" aria-hidden />
         ) : (
           <Sparkles className="size-3.5" aria-hidden />
         )}
-        <span className="ml-1">
-          {showCredits
-            ? t("aiInsightsResumeOnlyBtnCr", {
-                cost: AI_ANALYSIS_PRICING.resume_only,
-              })
-            : t("aiInsightsResumeOnlyBtn")}
-        </span>
-      </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          disabled={disabled}
-          render={
-            <Button
-              size="sm"
-              disabled={disabled}
-              className="rounded-l-none border-l border-l-primary-foreground/20 px-2"
-              aria-label={t("aiInsightsMoreOptionsAria")}
-              data-testid="candidate-section-ai-insights-analyze-menu-trigger"
-            />
+        <span className="ml-1">{t("aiInsightsAnalyzeBtn")}</span>
+        <ChevronDown
+          className="ml-2 size-3.5 border-l border-l-primary-foreground/20 pl-0.5"
+          aria-hidden
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        data-testid="candidate-section-ai-insights-analyze-menu"
+      >
+        <DropdownMenuItem
+          onClick={onResumeOnly}
+          title={
+            showCredits
+              ? t("aiInsightsResumeOnlyTitleCr", {
+                  cost: AI_ANALYSIS_PRICING.resume_only,
+                })
+              : t("aiInsightsResumeOnlyTitle")
           }
+          data-testid="candidate-section-ai-insights-analyze-resume-only"
         >
-          <ChevronDown className="size-3.5" aria-hidden />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          data-testid="candidate-section-ai-insights-analyze-menu"
+          <Sparkles className="mr-2 size-3.5" aria-hidden />
+          <span>
+            {showCredits
+              ? t("aiInsightsResumeOnlyBtnCr", {
+                  cost: AI_ANALYSIS_PRICING.resume_only,
+                })
+              : t("aiInsightsResumeOnlyBtn")}
+          </span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => {
+            if (fullModeBlocked) return;
+            onFullMode();
+          }}
+          disabled={fullModeBlocked}
+          title={fullModeReason}
+          data-testid="candidate-section-ai-insights-analyze-full"
         >
-          <DropdownMenuItem
-            onClick={() => {
-              if (fullModeBlocked) return;
-              onFullMode();
-            }}
-            disabled={fullModeBlocked}
-            title={fullModeReason}
-            data-testid="candidate-section-ai-insights-analyze-full"
-          >
-            <Sparkles className="mr-2 size-3.5" aria-hidden />
-            <span>
-              {showCredits
-                ? t("aiInsightsFullBtnCr", { cost: AI_ANALYSIS_PRICING.full })
-                : t("aiInsightsFullBtn")}
-            </span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+          <Sparkles className="mr-2 size-3.5" aria-hidden />
+          <span>
+            {showCredits
+              ? t("aiInsightsFullBtnCr", { cost: AI_ANALYSIS_PRICING.full })
+              : t("aiInsightsFullBtn")}
+          </span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

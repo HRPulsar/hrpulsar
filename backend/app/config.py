@@ -399,8 +399,17 @@ class Settings(BaseSettings):
         browser, so every logo/avatar/attachment link silently 404s — the
         exact failure of the 2026-07-20 self-hosted smoke. A hostname
         without dots (other than ``localhost``, valid in single-machine
-        dev) can only be a container-network name; fail fast instead of
-        serving broken links.
+        dev) can only be a container-network name.
+
+        HRP-496: hard-failing there crash-looped the stock self-hosted
+        stack (its compose pins ``S3_ENDPOINT=http://minio:9000`` and the
+        operator has no reason to also set ``S3_PUBLIC_ENDPOINT``). When
+        the operator did declare the instance's public origin via
+        ``FRONTEND_URL``, that origin is exactly what the bundled Caddy
+        proxies ``/<S3_BUCKET>/*`` from — adopt it and log the
+        substitution instead of refusing to boot. With no public origin
+        known at all there is still nothing safe to sign against, so the
+        fail-fast stays.
         """
         if not self.s3_endpoint or self.s3_public_endpoint:
             return self
@@ -411,13 +420,26 @@ class Settings(BaseSettings):
             endpoint = f"//{endpoint}"
         host = urlsplit(endpoint).hostname or ""
         if host and "." not in host and host not in {"localhost", "::1"}:
+            derived = self.frontend_url.strip().rstrip("/")
+            if derived.startswith(("http://", "https://")):
+                logging.getLogger(__name__).warning(
+                    "S3_ENDPOINT '%s' is internal-only and S3_PUBLIC_ENDPOINT "
+                    "is unset — signing presigned file URLs against "
+                    "FRONTEND_URL '%s'. Set S3_PUBLIC_ENDPOINT explicitly if "
+                    "storage is proxied from another origin.",
+                    self.s3_endpoint,
+                    derived,
+                )
+                self.s3_public_endpoint = derived
+                return self
             raise ValueError(
                 f"S3_ENDPOINT '{self.s3_endpoint}' is an internal-only "
                 "hostname: browsers cannot reach it, so presigned file "
                 "URLs (logos, avatars, attachments) would be broken. Set "
                 "S3_PUBLIC_ENDPOINT to the public base URL that proxies "
                 "to storage (self-hosted: your app domain — the bundled "
-                "Caddyfile forwards /<S3_BUCKET>/* to MinIO)."
+                "Caddyfile forwards /<S3_BUCKET>/* to MinIO), or set "
+                "FRONTEND_URL to that same origin."
             )
         return self
 

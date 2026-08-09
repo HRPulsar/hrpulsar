@@ -23,7 +23,7 @@ async def get_settings(
     current_user: User = Depends(require_role("admin")),
 ):
     row = await service.get_or_default(db, current_user.tenant_id)
-    return service.to_read_dict(row)
+    return await service.to_read_dict_async(db, row)
 
 
 @router.patch("", response_model=AISettingsRead)
@@ -33,7 +33,7 @@ async def update_settings(
     current_user: User = Depends(require_role("admin")),
 ):
     row = await service.update(db, current_user.tenant_id, patch)
-    return service.to_read_dict(row)
+    return await service.to_read_dict_async(db, row)
 
 
 @router.post("/reset", response_model=AISettingsRead)
@@ -42,7 +42,7 @@ async def reset_settings(
     current_user: User = Depends(require_role("admin")),
 ):
     row = await service.reset(db, current_user.tenant_id)
-    return service.to_read_dict(row)
+    return await service.to_read_dict_async(db, row)
 
 
 @router.get("/presets", response_model=list[EffortPresetRead])

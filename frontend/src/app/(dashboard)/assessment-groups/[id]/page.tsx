@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CriteriaSummary } from "@/components/assessment/criteria-summary";
+import { GroupAnalytics } from "@/components/assessment/analytics/group-analytics";
 import { Input } from "@/components/ui/input";
 import {
   answerScaleDescription,
@@ -445,6 +446,10 @@ export default function AssessmentGroupPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* HRP-528: appears once at least one child assessment is Done; the
+          component hides itself otherwise (and for non-admins). */}
+      <GroupAnalytics groupId={id} />
 
       <CriteriaSheet
         open={criteriaOpen}

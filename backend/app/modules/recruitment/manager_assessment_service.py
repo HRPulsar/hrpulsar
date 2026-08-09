@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import status
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, case, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
@@ -468,6 +468,18 @@ async def _snapshot_vacancy_scale(
 # ---------------------------------------------------------------------------
 
 
+#: HRP-372: hiring order of the round types, used to sort the tab strip.
+#: ``created_at`` only accidentally matches it — a Pre-interview added
+#: after Interview 2, or a Final created before the last interview, made
+#: the tabs read as random. The rank is the same one the client applies.
+_ROUND_TYPE_RANK = case(
+    (AssessmentRound.type == "pre_interview", 0),
+    (AssessmentRound.type == "interview", 1),
+    (AssessmentRound.type == "final", 2),
+    else_=3,
+)
+
+
 async def list_rounds(
     db: AsyncSession, tenant_id: uuid.UUID, cv_id: uuid.UUID
 ) -> list[dict[str, Any]]:
@@ -479,7 +491,12 @@ async def list_rounds(
             AssessmentRound.tenant_id == tenant_id,
         )
         .order_by(
+            _ROUND_TYPE_RANK,
+            # Only ``interview`` carries a number; the NULLs of the other
+            # two types never collide because each is unique per CV.
+            AssessmentRound.round_number.nulls_first(),
             AssessmentRound.created_at,
+            AssessmentRound.id,
         )
     )
     rounds = result.scalars().all()
@@ -539,6 +556,20 @@ async def create_round(
     return await _round_to_dict(db, rd)
 
 
+#: HRP-376: the kebab actions a round tab offers, keyed by what they do
+#: rather than by a target status — "restore" has to land on ``complete``
+#: or ``in_progress`` depending on where the round was archived from, so
+#: a bare status write cannot express it.
+ROUND_ACTIONS = ("complete", "reopen", "archive", "restore")
+
+#: Legacy PATCH shape (``{"status": ...}``) mapped onto the actions.
+_STATUS_TO_ACTION = {
+    "complete": "complete",
+    "in_progress": "reopen",
+    "archived": "archive",
+}
+
+
 async def update_round_status(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -547,27 +578,149 @@ async def update_round_status(
     new_status: str,
     archived_reason: str | None = None,
 ) -> dict[str, Any]:
-    if new_status not in {"in_progress", "complete", "archived"}:
+    """Legacy entry point — ``{"status": ...}`` mapped onto an action."""
+    action = _STATUS_TO_ACTION.get(new_status)
+    if action is None:
         raise AppError("invalid_round_status", status.HTTP_400_BAD_REQUEST)
-    rd = await _load_round(db, tenant_id, round_id)
-    rd.status = new_status
-    if new_status == "complete":
+    return await apply_round_action(
+        db, tenant_id, user_id, round_id, action, archived_reason=archived_reason
+    )
+
+
+async def apply_round_action(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    round_id: uuid.UUID,
+    action: str,
+    *,
+    archived_reason: str | None = None,
+) -> dict[str, Any]:
+    """Run one round-lifecycle transition (HRP-376).
+
+    * ``complete`` — freezes the round: the acting evaluator's own sheet is
+      submitted, and every non-terminal external invite is revoked so a
+      link that is already in someone's inbox stops working. The evaluator
+      who follows it sees "This invitation was revoked".
+    * ``reopen`` — hands scoring back. Revoked invites are deliberately
+      *not* resurrected: the token was handed out as dead, so bringing it
+      back would silently re-open a link its holder was told was closed,
+      and we would have no record of who still has it. Re-inviting is one
+      click and leaves an audit trail (decision recorded on HRP-376 §7c).
+    * ``archive`` — drops the round out of the candidate's aggregate while
+      keeping every score readable.
+    * ``restore`` — returns the round to whichever side of complete it was
+      archived from.
+    """
+    if action not in ROUND_ACTIONS:
+        raise AppError("invalid_round_status", status.HTTP_400_BAD_REQUEST)
+    # Every guard below is read-then-write on the same row, so the round
+    # has to be locked *before* they run — otherwise a concurrent
+    # archive + complete both pass and the loser's write lands on top.
+    rd = await _load_round(db, tenant_id, round_id, for_update=True)
+
+    if action == "complete":
+        if rd.archived_at is not None:
+            raise AppError("round_archived_read_only", status.HTTP_409_CONFLICT)
+        if rd.status == "complete":
+            raise AppError("round_already_complete", status.HTTP_409_CONFLICT)
+        rd.status = "complete"
         rd.completed_at = datetime.now(timezone.utc)
-    elif new_status == "archived":
+        if user_id is not None:
+            await _submit_own_sheet(db, tenant_id, rd, user_id)
+        await _revoke_round_invites(db, rd, user_id)
+    elif action == "reopen":
+        if rd.archived_at is not None:
+            raise AppError("round_archived_read_only", status.HTTP_409_CONFLICT)
+        rd.status = "in_progress"
+        rd.completed_at = None
+    elif action == "archive":
+        # Archiving twice would restamp ``archived_at`` and drop the
+        # original reason when the second call carries none — the kebab
+        # only offers Restore at that point, so a second archive is a
+        # stale tab or a double click.
+        if rd.archived_at is not None:
+            raise AppError("round_already_archived", status.HTTP_409_CONFLICT)
+        rd.status = "archived"
         rd.archived_at = datetime.now(timezone.utc)
         rd.archived_reason = archived_reason
+    else:  # restore
+        if rd.archived_at is None:
+            raise AppError("round_not_archived", status.HTTP_409_CONFLICT)
+        rd.archived_at = None
+        rd.archived_reason = None
+        rd.status = "complete" if rd.completed_at is not None else "in_progress"
+
     await db.commit()
     await db.refresh(rd)
+    # Archiving/restoring changes which rounds feed the candidate's
+    # Average score, so it always has to be recomputed here.
     await recompute_manager_score(db, tenant_id, rd.candidate_vacancy_id)
     await audit_service.record_event(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
-        action=f"assessment_round.{new_status}",
+        action=f"assessment_round.{action}",
         entity_type="assessment_round",
         entity_id=rd.id,
     )
     return await _round_to_dict(db, rd)
+
+
+async def _submit_own_sheet(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    rd: AssessmentRound,
+    user_id: uuid.UUID,
+) -> None:
+    """Mark the acting evaluator's sheet submitted when they complete.
+
+    "Mark as complete" *is* the internal evaluator's submit — there is no
+    separate button — so the sheet has to record it, otherwise the round
+    would close with everyone's work still flagged as a draft.
+    """
+    result = await db.execute(
+        select(RecruitmentAssessment).where(
+            RecruitmentAssessment.round_id == rd.id,
+            RecruitmentAssessment.evaluator_user_id == user_id,
+        )
+    )
+    own = result.scalar_one_or_none()
+    if own is None or own.status == "submitted":
+        return
+    own.status = "submitted"
+    own.submitted_at = datetime.now(timezone.utc)
+    own.version += 1
+
+
+async def _revoke_round_invites(
+    db: AsyncSession, rd: AssessmentRound, user_id: uuid.UUID | None
+) -> int:
+    """Kill every still-live external invite on a round. Returns the count.
+
+    Terminal invites (submitted / declined / expired) are left alone: a
+    submitted evaluation must keep counting towards the aggregate, and
+    rewriting a declined one would lose why it ended.
+    """
+    result = await db.execute(
+        select(AssessmentInvite).where(
+            AssessmentInvite.round_id == rd.id,
+            AssessmentInvite.status.in_(INVITE_ACTIVE_STATUSES),
+            AssessmentInvite.revoked_at.is_(None),
+        )
+    )
+    revoked = 0
+    now = datetime.now(timezone.utc)
+    for inv in result.scalars().all():
+        # An invite past its deadline is already dead; leaving it as
+        # ``expired`` keeps the recruiter-facing history honest.
+        if inv.expires_at < now:
+            continue
+        inv.status = "revoked"
+        inv.revoked_at = now
+        inv.revoked_by = user_id
+        revoked += 1
+    return revoked
 
 
 async def _assert_pre_interview_slot_free(
@@ -641,6 +794,82 @@ async def _assert_pre_interview_slot_free(
         raise AppError("pre_interview_single_evaluator", status.HTTP_409_CONFLICT)
 
 
+#: HRP-373: who may be picked in the `+ Add evaluator` dialog. Taken
+#: verbatim from the ticket — the hiring decision belongs to the people
+#: who own the org chart, not to every account that can open a vacancy.
+#: A user adding *themselves* bypasses this list: "Start scoring this
+#: round" is gated by the router's own require_role and must keep working
+#: for recruiters.
+ELIGIBLE_EVALUATOR_ROLES = ("platform_admin", "admin", "manager")
+
+
+async def list_eligible_evaluators(
+    db: AsyncSession, tenant_id: uuid.UUID, round_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    """Tenant users that can be added as evaluators on ``round_id``.
+
+    Rows already on the round are returned with ``already_evaluator`` set
+    so the picker can grey them out rather than silently drop them (a
+    missing colleague reads as a bug to the recruiter).
+    """
+    from app.modules.auth.models import Role, User, user_roles
+
+    rd = await _load_round(db, tenant_id, round_id)
+    existing_rows = await db.execute(
+        select(AssessmentRoundEvaluator.user_id).where(
+            AssessmentRoundEvaluator.round_id == rd.id
+        )
+    )
+    existing = set(existing_rows.scalars().all())
+
+    rows = await db.execute(
+        select(User)
+        .join(user_roles, user_roles.c.user_id == User.id)
+        .join(Role, Role.id == user_roles.c.role_id)
+        .where(
+            User.tenant_id == tenant_id,
+            User.is_active.is_(True),
+            Role.code.in_(ELIGIBLE_EVALUATOR_ROLES),
+        )
+        .distinct()
+        .order_by(User.first_name, User.last_name, User.email)
+    )
+    return [
+        {
+            "id": u.id,
+            "email": u.email,
+            "first_name": u.first_name,
+            "last_name": u.last_name,
+            "full_name": _user_full_name(u),
+            "already_evaluator": u.id in existing,
+        }
+        for u in rows.scalars().all()
+    ]
+
+
+async def _assert_evaluator_eligible(
+    db: AsyncSession, tenant_id: uuid.UUID, evaluator_user_id: uuid.UUID
+) -> Any:
+    """Load the target user and refuse anyone outside the allowed roles."""
+    from app.modules.auth.models import Role, User, user_roles
+
+    target = await db.get(User, evaluator_user_id)
+    if target is None or target.tenant_id != tenant_id or not target.is_active:
+        raise AppError("evaluator_user_not_found", status.HTTP_404_NOT_FOUND)
+    allowed = await db.execute(
+        select(Role.code)
+        .join(user_roles, user_roles.c.role_id == Role.id)
+        .where(
+            user_roles.c.user_id == evaluator_user_id,
+            Role.code.in_(ELIGIBLE_EVALUATOR_ROLES),
+        )
+        .limit(1)
+    )
+    if allowed.first() is None:
+        raise AppError("evaluator_role_not_eligible", status.HTTP_403_FORBIDDEN)
+    return target
+
+
 async def add_evaluator(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -648,7 +877,21 @@ async def add_evaluator(
     round_id: uuid.UUID,
     evaluator_user_id: uuid.UUID,
 ) -> dict[str, Any]:
-    rd = await _load_round(db, tenant_id, round_id)
+    # The membership row has a composite PK, so the check-then-insert
+    # below is a race: two parallel adds of the same evaluator would both
+    # see "not there yet" and the loser would 500 on the unique index.
+    # Locking the round first makes the pair atomic (and keeps the lock
+    # ordering identical to apply_round_action's).
+    rd = await _load_round(db, tenant_id, round_id, for_update=True)
+    # HRP-376: a completed or archived round takes no new evaluators —
+    # reopening it is the documented way back in.
+    _assert_round_open(rd)
+    # HRP-373: adding a *colleague* is role-gated and notifies them;
+    # claiming your own sheet ("Start scoring this round") is neither.
+    is_self = user_id is not None and user_id == evaluator_user_id
+    target = None
+    if not is_self:
+        target = await _assert_evaluator_eligible(db, tenant_id, evaluator_user_id)
     # HRP-369: the FIRST user to start scoring becomes the round's only
     # evaluator (re-adding themselves stays idempotent); any other claim
     # on the slot is rejected.
@@ -659,7 +902,8 @@ async def add_evaluator(
             AssessmentRoundEvaluator.user_id == evaluator_user_id,
         )
     )
-    if existing.scalar_one_or_none() is None:
+    is_new = existing.scalar_one_or_none() is None
+    if is_new:
         db.add(AssessmentRoundEvaluator(round_id=rd.id, user_id=evaluator_user_id))
         await db.commit()
     # Pre-create the draft assessment sheet so PATCH endpoints can hit it.
@@ -675,7 +919,55 @@ async def add_evaluator(
         entity_id=rd.id,
         payload_diff={"evaluator_user_id": str(evaluator_user_id)},
     )
+    if is_new and target is not None:
+        # Re-adding an existing evaluator must not spam them again.
+        await _notify_evaluator_invited(db, tenant_id, rd, evaluator_user_id)
     return await _round_to_dict(db, rd)
+
+
+async def _notify_evaluator_invited(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    rd: AssessmentRound,
+    evaluator_user_id: uuid.UUID,
+) -> None:
+    """Publish the "you were asked to evaluate X" notification (HRP-373).
+
+    The link points at the candidate page in the vacancy's context — the
+    surface that already renders the Manager assessments block (HRP-366)
+    — with the round preselected. A dedicated ``/assess`` route would be a
+    second copy of the same sheet with none of the surrounding context.
+
+    Best-effort: a notification failure must never lose the evaluator that
+    was just added.
+    """
+    from app.core.events import publish
+
+    cv = await db.get(CandidateVacancy, rd.candidate_vacancy_id)
+    if cv is None:
+        return
+    candidate = await db.get(Candidate, cv.candidate_id)
+    vacancy = await db.get(Vacancy, cv.vacancy_id)
+    try:
+        await publish(
+            "recruitment.assessment.evaluator_invited",
+            {
+                "tenant_id": str(tenant_id),
+                "evaluator_user_id": str(evaluator_user_id),
+                "candidate_name": candidate_display_name(candidate, fallback=""),
+                "vacancy_title": vacancy.title if vacancy else None,
+                # Type + number rather than a rendered label: the round
+                # name is prose and belongs in the per-locale template.
+                "round_type": rd.type,
+                "round_number": rd.round_number,
+                "link": (
+                    f"/recruitment/candidates/{cv.candidate_id}"
+                    f"?vacancyId={cv.vacancy_id}&round={rd.id}"
+                ),
+            },
+        )
+    except Exception:  # noqa: BLE001 - notification is not the transaction
+        log.exception("evaluator_invited notification failed for round=%s", rd.id)
 
 
 # ---------------------------------------------------------------------------
@@ -754,23 +1046,136 @@ async def get_or_create_assessment(
 
 
 async def list_assessments_for_round(
-    db: AsyncSession, tenant_id: uuid.UUID, round_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    round_id: uuid.UUID,
+    *,
+    viewer_user_id: uuid.UUID | None = None,
 ) -> list[dict[str, Any]]:
-    await _load_round(db, tenant_id, round_id)
+    """Evaluation sheets on a round, filtered for the requesting viewer.
+
+    HRP-373: an evaluator must not read a colleague's scores before their
+    own sheet is in. Seeing someone else's answers first anchors your own
+    — the whole point of collecting several independent opinions. The gate
+    lifts once the viewer's own sheet is submitted (which is also what
+    completing the round does), or once the round itself is closed.
+
+    Invited (external) sheets are never hidden: they are the recruiter's
+    collected material, and HRP-377's "View submission" reads them.
+    ``viewer_user_id=None`` keeps the unfiltered view for internal callers
+    (aggregates, exports) that have already done their own gating.
+    """
+    rd = await _load_round(db, tenant_id, round_id)
     result = await db.execute(
         select(RecruitmentAssessment).where(
             RecruitmentAssessment.round_id == round_id,
             RecruitmentAssessment.tenant_id == tenant_id,
         )
     )
-    assessments = result.scalars().all()
+    assessments = list(result.scalars().all())
+    if viewer_user_id is not None and not _round_is_closed(rd):
+        own = next(
+            (a for a in assessments if a.evaluator_user_id == viewer_user_id), None
+        )
+        if own is None or own.status != "submitted":
+            assessments = [
+                a
+                for a in assessments
+                if a.evaluator_user_id is None or a.evaluator_user_id == viewer_user_id
+            ]
     return [await _assessment_to_dict(db, a) for a in assessments]
 
 
+def _round_is_closed(rd: AssessmentRound) -> bool:
+    """True once the round no longer accepts scoring (HRP-376)."""
+    return rd.archived_at is not None or rd.status in ("complete", "archived")
+
+
+def _assert_round_open(rd: AssessmentRound) -> None:
+    """Refuse a mutation on a completed or archived round (HRP-376)."""
+    if rd.archived_at is not None or rd.status == "archived":
+        raise AppError("round_archived_read_only", status.HTTP_409_CONFLICT)
+    if rd.status == "complete":
+        raise AppError("round_completed_read_only", status.HTTP_409_CONFLICT)
+
+
+async def assert_round_open(
+    db: AsyncSession, tenant_id: uuid.UUID, round_id: uuid.UUID
+) -> AssessmentRound:
+    """Load ``round_id`` and refuse the call unless it still takes writes.
+
+    The public (token) surface needs the same HRP-376 read-only rule the
+    authenticated one enforces, but it never holds an ``AssessmentRound``
+    of its own — it only knows the invite's ``round_id``.
+    """
+    rd = await _load_round(db, tenant_id, round_id)
+    _assert_round_open(rd)
+    return rd
+
+
+async def _anchoring_gate_active(
+    db: AsyncSession,
+    rd: AssessmentRound,
+    viewer_user_id: uuid.UUID | None,
+) -> bool:
+    """True while ``viewer_user_id`` must not read a colleague's scores.
+
+    HRP-373: an evaluator who has not submitted yet would anchor their own
+    judgement on whatever a colleague already entered, which defeats the
+    point of collecting independent opinions. The gate lifts on their own
+    submit, or once the round itself is closed — the same two conditions
+    :func:`list_assessments_for_round` uses.
+
+    Membership matters here in a way it does not there: an admin or
+    recruiter *watching* the round (no sheet, not on the evaluator list)
+    has nothing to anchor and keeps the full view.
+    """
+    if viewer_user_id is None or _round_is_closed(rd):
+        return False
+    own = (
+        await db.execute(
+            select(RecruitmentAssessment).where(
+                RecruitmentAssessment.round_id == rd.id,
+                RecruitmentAssessment.evaluator_user_id == viewer_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if own is not None:
+        return own.status != "submitted"
+    listed = await db.execute(
+        select(AssessmentRoundEvaluator.user_id).where(
+            AssessmentRoundEvaluator.round_id == rd.id,
+            AssessmentRoundEvaluator.user_id == viewer_user_id,
+        )
+    )
+    return listed.first() is not None
+
+
 async def get_assessment(
-    db: AsyncSession, tenant_id: uuid.UUID, assessment_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    assessment_id: uuid.UUID,
+    *,
+    viewer_user_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
+    """One evaluation sheet, gated the same way the round listing is.
+
+    HRP-373: fetching a colleague's sheet by id is the same disclosure
+    :func:`list_assessments_for_round` filters out, so it is refused while
+    the anti-anchoring gate is up. ``viewer_user_id=None`` keeps the
+    unfiltered read for internal callers (the public token flow reads its
+    own external sheet through here).
+    """
     a = await _load_assessment(db, tenant_id, assessment_id)
+    if viewer_user_id is not None and a.evaluator_user_id not in (
+        None,
+        viewer_user_id,
+    ):
+        rd = await _load_round(db, tenant_id, a.round_id)
+        if await _anchoring_gate_active(db, rd, viewer_user_id):
+            raise AppError(
+                "assessment_hidden_until_own_submitted", status.HTTP_403_FORBIDDEN
+            )
     return await _assessment_to_dict(db, a)
 
 
@@ -789,6 +1194,12 @@ async def set_competence_score(
         and a.evaluator_user_id != user_id
     ):
         raise AppError("assessment_sheet_owner_only", status.HTTP_403_FORBIDDEN)
+    # HRP-376: once the round is complete or archived every sheet on it is
+    # read-only — including the external ones still holding a live token.
+    # The round is locked for the (short) write transaction so a score
+    # cannot slip in between another request's "is it open?" check and its
+    # complete/archive write.
+    _assert_round_open(await _load_round(db, tenant_id, a.round_id, for_update=True))
     result = await db.execute(
         select(AssessmentCompetenceScore).where(
             AssessmentCompetenceScore.assessment_id == a.id,
@@ -801,9 +1212,7 @@ async def set_competence_score(
     # through this same endpoint — would have to replay the current score,
     # and any client whose mirror of it lagged (the common case while an
     # indicator save is still in flight) would silently rewrite the score.
-    scores_touched = bool(
-        payload.model_fields_set & {"score_value", "score_source"}
-    )
+    scores_touched = bool(payload.model_fields_set & {"score_value", "score_source"})
     comment_touched = "comment" in payload.model_fields_set
     # HRP-378: a *manual* overall edit resets the competence's indicator
     # answers, so the two can never disagree. Only a real score edit counts —
@@ -883,6 +1292,7 @@ async def set_indicator_score(
         and a.evaluator_user_id != user_id
     ):
         raise AppError("assessment_sheet_owner_only", status.HTTP_403_FORBIDDEN)
+    _assert_round_open(await _load_round(db, tenant_id, a.round_id, for_update=True))
     result = await db.execute(
         select(AssessmentIndicatorScore).where(
             AssessmentIndicatorScore.assessment_id == a.id,
@@ -1069,7 +1479,11 @@ async def recompute_manager_score(
 
 
 async def round_aggregate(
-    db: AsyncSession, tenant_id: uuid.UUID, round_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    round_id: uuid.UUID,
+    *,
+    viewer_user_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Round-level and per-competence averages for the round header.
 
@@ -1079,6 +1493,16 @@ async def round_aggregate(
     level rebased onto the scale's weights the same way
     ``candidate_vacancies.manager_score_weight`` is. Both are ``None`` when
     nothing has been scored yet, which the UI renders as an em dash.
+
+    HRP-373: this payload names every scorer and their individual score,
+    so it obeys the same anti-anchoring gate as
+    :func:`list_assessments_for_round` — while the gate is up for
+    ``viewer_user_id`` the aggregate is computed over *only* the sheets
+    that listing would show them (their own plus the external ones).
+    Hiding ``scorers`` alone would not be enough: with two evaluators the
+    colleague's exact score is recoverable from ``average``/``min``/``max``
+    and the viewer's own number. ``viewer_user_id=None`` keeps the
+    unfiltered aggregate for internal callers.
     """
     rd = await _load_round(db, tenant_id, round_id)
     a_result = await db.execute(
@@ -1088,7 +1512,15 @@ async def round_aggregate(
             _COUNTABLE_SHEET,
         )
     )
-    assessments = a_result.scalars().all()
+    assessments = list(a_result.scalars().all())
+    visible_ids: set[uuid.UUID] | None = None
+    if await _anchoring_gate_active(db, rd, viewer_user_id):
+        assessments = [
+            a
+            for a in assessments
+            if a.evaluator_user_id is None or a.evaluator_user_id == viewer_user_id
+        ]
+        visible_ids = {a.id for a in assessments}
     evaluator_names = await _resolve_evaluator_names(db, tenant_id, assessments)
 
     by_competence: dict[str, list[dict[str, Any]]] = {}
@@ -1134,7 +1566,7 @@ async def round_aggregate(
                 "scorers": entries,
             }
         )
-    overall = await _round_average(db, rd.id)
+    overall = await _round_average(db, rd.id, only_assessment_ids=visible_ids)
     return {
         "round_id": rd.id,
         "average": overall,
@@ -1166,9 +1598,7 @@ async def _resolve_evaluator_names(
     by_user: dict[uuid.UUID, str] = {}
     if user_ids:
         rows = await db.execute(
-            select(User).where(
-                User.id.in_(user_ids), User.tenant_id == tenant_id
-            )
+            select(User).where(User.id.in_(user_ids), User.tenant_id == tenant_id)
         )
         for u in rows.scalars().all():
             by_user[u.id] = f"{u.first_name} {u.last_name}".strip()
@@ -1256,6 +1686,9 @@ async def create_invites(
             raise AppError(
                 "round_id_candidate_vacancy_mismatch", status.HTTP_400_BAD_REQUEST
             )
+        # HRP-376: no new external links on a closed round — the ones
+        # already out there were just revoked.
+        _assert_round_open(rd)
         if rd.type == "pre_interview":
             # HRP-369: refuse upfront instead of letting the evaluator
             # discover the occupied slot at consent time. A live invite
@@ -1414,6 +1847,100 @@ async def revoke_invite(
     return _invite_to_dict(inv)
 
 
+#: HRP-377: statuses whose invite can still be mailed again. ``opened`` /
+#: ``in_progress`` are excluded on purpose — the evaluator already has the
+#: link open, and a second copy reads as a nag.
+RESENDABLE_INVITE_STATUSES = ("pending",)
+
+#: Statuses whose token is already dead. Re-mailing one of these sends a
+#: link that answers 410 the moment it is followed — and the email would
+#: claim it "expires in 1 day" on top of that.
+TERMINAL_INVITE_STATUSES = ("submitted", "declined", "revoked", "expired")
+
+
+async def resend_invite(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    invite_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Re-send an external evaluator invitation (HRP-377).
+
+    The same token is mailed again: issuing a new one would silently kill
+    a link the evaluator may already have open in another tab, and the
+    reason to resend is almost always a bounced or lost email rather than
+    a compromised token.
+    """
+    inv = await _load_invite(db, tenant_id, invite_id)
+    effective = effective_invite_status(inv)
+    # A bounced delivery re-opens the resend for a link the evaluator
+    # never got — but only while that link is still alive. It is not a way
+    # around the status gate: mailing an expired or declined invite would
+    # deliver a token ``resolve_invite_by_token`` answers 410 to.
+    resendable = effective not in TERMINAL_INVITE_STATUSES and (
+        effective in RESENDABLE_INVITE_STATUSES
+        or inv.delivery_status == "delivery_failed"
+    )
+    if not resendable or inv.revoked_at is not None:
+        raise AppError("invite_resend_terminal_status", status.HTTP_409_CONFLICT)
+    if inv.token is None:
+        raise AppError("invite_not_found", status.HTTP_404_NOT_FOUND)
+
+    cv = await _load_cv(db, tenant_id, inv.candidate_vacancy_id)
+    candidate = await db.get(Candidate, cv.candidate_id)
+    vacancy = await db.get(Vacancy, cv.vacancy_id)
+
+    from app.core.i18n import resolve_locale, translate
+    from app.modules.company.models import Tenant
+
+    tenant = await db.get(Tenant, tenant_id)
+    locale = resolve_locale(tenant_default=tenant.default_locale if tenant else None)
+    candidate_name = candidate_display_name(
+        candidate, fallback=translate("email.fallback.unnamed", locale)
+    )
+    remaining_days = max(1, (inv.expires_at - datetime.now(timezone.utc)).days)
+
+    try:
+        from app.core.email import enqueue_email
+        from app.core.email_templates import render_manager_assessment_invite_email
+
+        subject, html_body = render_manager_assessment_invite_email(
+            inv.token,
+            candidate_name,
+            vacancy.title if vacancy else None,
+            evaluator_name=inv.evaluator_name,
+            personal_message=inv.personal_message,
+            expires_in_days=remaining_days,
+            locale=locale,
+        )
+        enqueue_email(
+            inv.email,
+            subject,
+            html_body,
+            tenant_id=str(tenant_id),
+            template_code="recruitment.assessment_invite",
+        )
+        inv.delivery_status = "sent"
+        inv.delivery_error = None
+    except Exception:
+        log.exception("Failed to re-enqueue recruitment invite email %s", invite_id)
+        inv.delivery_status = "delivery_failed"
+        inv.delivery_error = "Email backend rejected the send"
+    inv.delivery_retry_count = (inv.delivery_retry_count or 0) + 1
+    await db.commit()
+    await db.refresh(inv)
+    await audit_service.record_event(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        action="assessment_invite.resend",
+        entity_type="assessment_invite",
+        entity_id=inv.id,
+        payload_diff={"retry_count": inv.delivery_retry_count},
+    )
+    return _invite_to_dict(inv)
+
+
 async def extend_invite(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1544,9 +2071,37 @@ async def _load_cv(
 
 
 async def _load_round(
-    db: AsyncSession, tenant_id: uuid.UUID, round_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    round_id: uuid.UUID,
+    *,
+    for_update: bool = False,
 ) -> AssessmentRound:
-    rd = await db.get(AssessmentRound, round_id)
+    """Load a round, optionally taking its row lock first.
+
+    ``for_update`` is what makes the lifecycle guards actually hold: the
+    round's state machine (complete / reopen / archive / restore) and the
+    "is this round still open?" checks are read-then-write, so without a
+    ``SELECT ... FOR UPDATE`` two concurrent calls both pass their guard
+    and the second silently overwrites the first. ``populate_existing``
+    goes with it so the locked SELECT refreshes an identity-map row that
+    a *different* session already advanced (memory:
+    feedback_sqlalchemy_race_fix).
+    """
+    if for_update:
+        rd = (
+            await db.execute(
+                select(AssessmentRound)
+                .where(
+                    AssessmentRound.id == round_id,
+                    AssessmentRound.tenant_id == tenant_id,
+                )
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+    else:
+        rd = await db.get(AssessmentRound, round_id)
     if rd is None or rd.tenant_id != tenant_id:
         raise AppError("assessment_round_not_found", status.HTTP_404_NOT_FOUND)
     return rd
@@ -1577,13 +2132,50 @@ async def _cv_id_for_round(db: AsyncSession, round_id: uuid.UUID) -> uuid.UUID |
     return rd.candidate_vacancy_id
 
 
+def _user_full_name(user: Any) -> str:
+    """Display name for an evaluator, falling back to the email local part."""
+    name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    return name or (user.email or "").split("@")[0]
+
+
+def _initials(full_name: str) -> str:
+    """Two-letter avatar initials — "Anna Petrova" → "AP"."""
+    parts = [p for p in full_name.split() if p]
+    if not parts:
+        return "?"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
+
+
 async def _round_to_dict(db: AsyncSession, rd: AssessmentRound) -> dict[str, Any]:
+    from app.modules.auth.models import User
+
     evaluators_result = await db.execute(
         select(AssessmentRoundEvaluator).where(
             AssessmentRoundEvaluator.round_id == rd.id
         )
     )
     evaluators = evaluators_result.scalars().all()
+    # HRP-373: the round header renders one avatar per internal evaluator,
+    # so the row needs a name and initials — not just an opaque user id.
+    by_user: dict[uuid.UUID, Any] = {}
+    if evaluators:
+        users_result = await db.execute(
+            select(User).where(
+                User.id.in_([ev.user_id for ev in evaluators]),
+                User.tenant_id == rd.tenant_id,
+            )
+        )
+        by_user = {u.id: u for u in users_result.scalars().all()}
+    submitted_result = await db.execute(
+        select(RecruitmentAssessment.evaluator_user_id).where(
+            RecruitmentAssessment.round_id == rd.id,
+            RecruitmentAssessment.evaluator_user_id.is_not(None),
+            RecruitmentAssessment.status == "submitted",
+        )
+    )
+    submitted = set(submitted_result.scalars().all())
     invite_evals_result = await db.execute(
         select(AssessmentInvite).where(AssessmentInvite.round_id == rd.id)
     )
@@ -1602,7 +2194,22 @@ async def _round_to_dict(db: AsyncSession, rd: AssessmentRound) -> dict[str, Any
         "created_at": rd.created_at,
         "updated_at": rd.updated_at,
         "evaluators": [
-            {"user_id": ev.user_id, "invited_at": ev.invited_at} for ev in evaluators
+            {
+                "user_id": ev.user_id,
+                "invited_at": ev.invited_at,
+                "full_name": (
+                    _user_full_name(by_user[ev.user_id])
+                    if ev.user_id in by_user
+                    else None
+                ),
+                "initials": (
+                    _initials(_user_full_name(by_user[ev.user_id]))
+                    if ev.user_id in by_user
+                    else "?"
+                ),
+                "submitted": ev.user_id in submitted,
+            }
+            for ev in evaluators
         ],
         "invites": [_invite_to_dict(inv) for inv in invites],
     }
@@ -1714,15 +2321,24 @@ def _invite_to_dict(inv: AssessmentInvite) -> dict[str, Any]:
     }
 
 
-async def _round_average(db: AsyncSession, round_id: uuid.UUID) -> float | None:
+async def _round_average(
+    db: AsyncSession,
+    round_id: uuid.UUID,
+    *,
+    only_assessment_ids: set[uuid.UUID] | None = None,
+) -> float | None:
     """Mean competence level across every counted sheet in the round.
 
     Single source of truth for "Average score": the round header, the
     per-round aggregate and ``candidate_vacancies.manager_score`` (which
     the vacancy Candidates block renders) all read this one number, so a
     recruiter never sees two different averages for the same round.
+
+    ``only_assessment_ids`` narrows it to the sheets a particular viewer is
+    allowed to see (HRP-373 anti-anchoring); an empty set means "nothing
+    visible" and yields ``None``, not the unfiltered average.
     """
-    result = await db.execute(
+    stmt = (
         select(AssessmentCompetenceScore.score_value)
         .join(
             RecruitmentAssessment,
@@ -1734,6 +2350,9 @@ async def _round_average(db: AsyncSession, round_id: uuid.UUID) -> float | None:
             _COUNTABLE_SHEET,
         )
     )
+    if only_assessment_ids is not None:
+        stmt = stmt.where(RecruitmentAssessment.id.in_(only_assessment_ids))
+    result = await db.execute(stmt)
     scores = [s for s in result.scalars().all() if s is not None]
     if not scores:
         return None
@@ -1765,10 +2384,15 @@ __all__ = [
     "list_rounds",
     "create_round",
     "update_round_status",
+    "apply_round_action",
+    "ROUND_ACTIONS",
     "add_evaluator",
+    "list_eligible_evaluators",
+    "ELIGIBLE_EVALUATOR_ROLES",
     "get_or_create_assessment",
     "list_assessments_for_round",
     "get_assessment",
+    "assert_round_open",
     "set_competence_score",
     "set_indicator_score",
     "submit_assessment",
@@ -1777,6 +2401,9 @@ __all__ = [
     "create_invites",
     "list_manager_invites",
     "revoke_invite",
+    "resend_invite",
+    "RESENDABLE_INVITE_STATUSES",
+    "TERMINAL_INVITE_STATUSES",
     "extend_invite",
     "hash_token",
     "issue_token",

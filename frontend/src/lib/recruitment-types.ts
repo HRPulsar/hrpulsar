@@ -87,6 +87,11 @@ export interface CandidateVacancyEnrichedRow {
   // completed yet (verdict will be ``pending``).
   ai_analysis_mode?: "resume_only" | "full" | null;
   ai_data_completeness?: string | null;
+  // HRP-493 — an analysis is queued or running for this pair. Derived
+  // per request by the backend; drives the "Analyzing…" state of the
+  // AI VERDICT column, which ``ai_verdict === "pending"`` alone cannot
+  // distinguish from "nothing has been analysed yet".
+  ai_analysis_in_progress?: boolean;
   version: number;
   added_at: string;
 }
@@ -428,6 +433,63 @@ export interface TopupEligibility {
   window_days: number | null;
   stored_version: number | null;
   current_version: number | null;
+  // HRP-489 / HRP-492 — staleness of the active run, populated on every
+  // branch (independent of ``eligible``). AI Insights renders a single
+  // banner; ``analysisStalenessKind`` owns the priority order.
+  active_run_mode?: "resume_only" | "full" | null;
+  resume_outdated?: boolean;
+  profile_outdated?: boolean;
+  analysis_expired?: boolean;
+  transcript_outdated?: boolean;
+  // Full mode only — the transcript a fresh 40-cr run would analyse.
+  newer_transcribed_interview_id?: string | null;
+}
+
+/**
+ * HRP-493 — what the AI VERDICT column renders for one row.
+ *
+ * ``ai_verdict === "pending"`` covers two states a recruiter must tell
+ * apart: an analysis is running (wait) and none has ever run (press
+ * Analyze). "none" readiness means there is not even a resume, so no
+ * analysis is possible yet.
+ */
+export type AiVerdictCellState = "analyzing" | "no-analysis" | "verdict";
+
+export function aiVerdictCellState(args: {
+  verdict: AiVerdict;
+  readiness?: AiReadiness;
+  inProgress?: boolean;
+}): AiVerdictCellState {
+  if (args.inProgress) return "analyzing";
+  if (args.verdict === "pending" && args.readiness === "none") {
+    return "no-analysis";
+  }
+  return "verdict";
+}
+
+/** HRP-489 / HRP-492 — which staleness banner AI Insights shows. */
+export type AnalysisStalenessKind =
+  | "resume"
+  | "profile"
+  | "expired"
+  | "transcript"
+  | null;
+
+/**
+ * Banner priority, pinned by the tickets: a changed resume beats
+ * changed competences, which beats an expired window. A newer
+ * transcript comes last — it is the narrowest signal and the only one
+ * whose fix is a full re-run rather than any analyze mode.
+ */
+export function analysisStalenessKind(
+  eligibility: TopupEligibility | null,
+): AnalysisStalenessKind {
+  if (!eligibility) return null;
+  if (eligibility.resume_outdated) return "resume";
+  if (eligibility.profile_outdated) return "profile";
+  if (eligibility.analysis_expired) return "expired";
+  if (eligibility.transcript_outdated) return "transcript";
+  return null;
 }
 
 export interface BulkAnalyzeResponse {

@@ -182,22 +182,32 @@ Reference data shared across the platform: specializations, grades, skill levels
 ### Interview Questions
 
 - Question sets per candidate and vacancy, generated from the resume and the competence profile, with manual editing throughout
+- Questions can be added two ways: a custom question written by hand, or generated from the vacancy's competency indicators — pick competences from a searchable tree and each becomes a question carrying the competence's indicators, follow-up questions, and rationale
+- Every question shows its goal, priority, and the profile competence it probes, so coverage gaps are visible at a glance
 - Sets evolve across rounds: covered topics are marked (by hand or from the transcript) so the next round skips answered ground, and blind spots from prior analyses become probes
+- Only the first set is written from the resume alone. A new set is created for a specific assessment round — an existing one or the next interview, opened from the dialog — and built on a completed interview, so a round can never end up with two sets or none. The generation reads the earlier transcripts, AI analyses, and unanswered blind spots, and goes deeper where the evidence was thin rather than repeating what was already answered
 - PDF export in compact, full, and card layouts
 
 ### Manager Assessments
 
 - Workspace-defined assessment scales (2–10 weighted levels); each vacancy freezes its scale on the first score
-- Assessment rounds per candidate (pre-interview, numbered interviews, final) with a separate sheet per evaluator
+- Assessment rounds per candidate (pre-interview, numbered interviews, final) with a separate sheet per evaluator, always listed in hiring order
+- Several colleagues can score the same round: add an evaluator and they get their own sheet plus an email invitation with a direct link. Each writes only their own row, and a colleague's sheet stays hidden until you submit yours, so nobody anchors on someone else's answers. Pre-interview rounds keep a single evaluator
+- Round lifecycle from the tab menu: complete, reopen, archive, restore. Completing freezes the round — sheets turn read-only and the external links stop working. An archived round keeps every score but drops out of the candidate's average and is marked as excluded; it accepts no further writes either, from the hiring team or from an external evaluator whose link is still open
 - Indicator-level and competence-level scoring with autosave and a completion marker. Scoring a competence's indicators derives its overall score; setting the overall by hand instead clears the indicator answers, so the two never contradict each other
-- The round header carries the round's average score — the mean across every evaluator and competence, alongside its position on the scale's weights — and shows an em dash until the first score lands
+- The round header carries the round's average score — the mean across every evaluator and competence, alongside its position on the scale's weights — and shows an em dash until the first score lands. While you are still scoring the round yourself, it counts only the sheets you may already read, so the header cannot hand you a colleague's number before you submit
 - Each competence shows its own cross-evaluator average, highlighted with a warning and a breakdown tooltip when evaluators differ by the scale's divergence threshold or more. External evaluators count toward these averages once they submit
-- External evaluators join through secure token links with expiry, no account needed. The public evaluation page shows the resume and question list next to the scoring sheet and keeps the platform itself closed off
-- Recruiters track invite status (pending, opened, in progress, submitted, expired) with resend, extend, and revoke actions
+- External evaluators join through secure token links with expiry, no account needed. The public evaluation page shows the resume and question list next to the scoring sheet and keeps the platform itself closed off. PDF resumes render inline; Word and text resumes are shown as an extracted preview, and the file is only downloaded when the evaluator asks for it
+- Recruiters track invite status (pending, opened, in progress, submitted, expired) and act on each invitation from its own menu — resend the same link, revoke it, or read the submitted evaluation in a read-only panel
+- The vacancy's Assessments tab expands into a full-screen canvas: a candidates-by-competences matrix with manager and AI scores side by side, view and round switches, divergence-only and no-score filters, a cell-details footer, per-candidate totals, and XLSX/CSV export
 
 ### Interviews & AI Analysis
 
-- Schedule interviews with type, timezone, duration, and interviewers directly from the candidate page
+- Schedule interviews directly from the candidate page: vacancy, assessment round, title, date and time, duration, several interviewers, recording type, and notes. New cards appear at the top of the list
+- The interviewers assigned to a future interview are emailed the candidate's name, the vacancy, and the local date and time
+- Each row links to the interview by its title and shows its round, the date it was added, its status, and a menu to edit or archive it
+- Archiving hides an interview behind a "Show archived" filter and keeps it restorable for 90 days; the round link is released and the AI scores it produced are marked as coming from an archived source. After the window closes the recording is deleted and the record stays for audit
+- The interview page opens on its title, the vacancy and round it belongs to, a Details block (candidate, type, status, added, date and time, duration, interviewers) and a Notes block — with inline editing where it still makes sense
 - Upload audio (mp3, wav, m4a) and video (mp4, webm, mov, avi) up to 500 MB, or text transcripts up to 10 MB, several files at once
 - Uploads are chunked and resumable: pause, resume, retry, and continue after a browser reload
 - The interview's recording type follows the file that is uploaded; when it contradicts the type chosen at scheduling, the recruiter is asked to confirm the switch first
@@ -206,16 +216,19 @@ Reference data shared across the platform: specializations, grades, skill levels
 - The analysis pipeline reports data completeness, competence scores, blind spots, process findings, red flags, and a verdict
 - Two modes: resume-only (a fast pre-screen that never returns "recommended") and full (interview-anchored, with citations from the transcript). A prior resume-only run upgrades to full for the price difference
 - Progress renders stage by stage with a cancel option; resume citations click through to the matching resume section
-- When a candidate uploads a newer CV after a run, the platform flags the analysis as outdated and offers a re-run
+- The platform flags an analysis that no longer matches its inputs — a re-parsed resume, edited vacancy competences, a run past 30 days, or an interview transcript the analysis never saw — and offers the re-run that fixes it. A stale baseline also closes the discounted upgrade, so a full analysis is never built on findings that have moved
+- The candidates table reports what the model can see (resume, resume + interview) and whether an analysis is running right now, both derived from the data rather than from the last run
+- Everyone the analysis concerns gets an email when it finishes or fails, naming the candidate and linking straight to the result
 - Bulk analyze queues a resume-only run for every candidate that has a parsed resume but no verdict yet
 - Hiring managers see reframed process findings rather than raw red flags; access is role-aware throughout
 
 ### Hiring Reports
 
-- Consolidated XLSX reports generated in the background: a summary sheet, a competence matrix of candidates against the profile, a detail sheet per candidate, and a data-completeness sheet
+- Consolidated XLSX reports generated in the background: a summary ranking sheet, a competence matrix of candidates against the profile, a detail sheet per candidate, and a data-completeness sheet
+- The Generate dialog picks the candidate set (all active, finalists only, or a custom selection), which of the four sheets to include, and the audience
 - An audience switch keeps recruiter-only findings out of the hiring manager's copy
-- Saved report templates with one default per workspace, a report list with filters, and download links valid for 24 hours
-- Workspace logo branding on the cover sheet
+- A report list with filters and download links valid for 24 hours
+- Workspace logo branding in the top-left corner of every sheet
 
 ### Recruitment Settings
 
@@ -271,7 +284,7 @@ What to evaluate is chosen in a dedicated panel, on single and mass assessments 
 ### Results & Calibration
 
 - Scores aggregate per role: indicator answers average within a role, roll up to skill levels using indicator weights, then to a per-competence percent, and the final score is the mean across roles. "Don't know" answers never count
-- Each competence shows a percent, a resolved level from the scale, and a per-level breakdown
+- Each competence shows a percent, a resolved level from the scale, and a per-level breakdown. Percents render as colour-coded chips — green from 75%, yellow from 50%, red below — with a muted dash when there is no result
 - The overall score is the mean of per-competence percents and appears next to the results once the assessment completes
 - Reviewers can calibrate: override per-question totals while the assessment is locked for participants. Calibrated values are marked, survive recomputes, and can be reverted in one step. While the lock is on, participants still see their Take / Evaluate actions, greyed out with a tooltip explaining that the questionnaire is closed
 - A detailed results view for reviewers shows per-role answers and comments for every indicator
@@ -290,6 +303,18 @@ Run one campaign across many employees.
 - Campaign-level type, scale, deadline, and criteria applied to every child assessment
 - Unified tracking, per-employee recommendations, and score analytics: ranking, distribution, completed versus total
 - Copy a previous round (criteria, participants, settings) and compare rounds over time
+
+#### Campaign analytics
+
+Once at least one child assessment is done, the campaign page adds an Analytics block built from the completed children only — cancelled and in-flight ones never move the numbers.
+
+- **Growth zones** and **Top competences**: the ten weakest competences at or below 75%, and everything above it, averaged across the employees who have a value for each
+- **Employees at risk** (below 50%) and **Top performers** (above 75%) as avatar plates that open a sheet listing each person with their division, result, and a jump to their assessment
+- **Detailed results**, filtered by division, specialization, competence, and employee: an average match level gauge plus either a per-employee results table (current positions) or a competence matrix crossing competences with employees, with an average column and per-column jumps into each assessment
+- On "all grades" campaigns the average shows per grade, a second matrix crosses grades with employees, and the best-matching grade is highlighted throughout
+- **Summary**: the average match per grade as a bar chart, and the competence tree carrying the campaign's average result per competence
+
+Employees answered entirely with "Don't know" stay visible in the matrices but never enter an average.
 
 ### External Reviewers
 

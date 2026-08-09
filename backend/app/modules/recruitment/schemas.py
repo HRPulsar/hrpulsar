@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 # --- Person ---
 
@@ -487,6 +487,12 @@ class CandidateVacancyEnrichedRead(BaseModel):
     # ``data_completeness``. ``None`` until the first run completes.
     ai_analysis_mode: str | None = None
     ai_data_completeness: str | None = None
+    # HRP-493 — an analysis is queued or running for this pair right
+    # now, so the AI VERDICT column shows "Analyzing…" instead of the
+    # stale (or still ``pending``) verdict. Derived per request by
+    # ``resume_analysis_service.apply_ai_analysis_state``; there is no
+    # mirror column to go stale.
+    ai_analysis_in_progress: bool = False
     version: int
     added_at: datetime
 
@@ -856,13 +862,23 @@ class AIAssessmentRead(BaseModel):
     status: str
     citations: list = Field(default_factory=list)
     reasoning: str | None = None
+    source_archived: bool = False
 
     model_config = {"from_attributes": True}
+
+
+class InterviewerOption(BaseModel):
+    """HRP-386: one entry of the Interviewer(s) multi-select."""
+
+    id: uuid.UUID
+    full_name: str
+    email: str
 
 
 class InterviewRead(BaseModel):
     id: uuid.UUID
     candidate_vacancy_id: uuid.UUID
+    round_id: uuid.UUID | None = None
     title: str | None = None
     type: str | None = None
     timezone: str | None = None
@@ -884,6 +900,8 @@ class InterviewRead(BaseModel):
     av_scanned_at: datetime | None = None
     version: int = 1
     archived_at: datetime | None = None
+    purged_at: datetime | None = None
+    created_at: datetime | None = None
     created_by: uuid.UUID | None = None
     transcription_provider: str | None = None
     transcription_status: str
@@ -1061,74 +1079,36 @@ class ConsentSignResult(BaseModel):
     status: str
 
 
-# --- Reports + Templates (R4a) ---
+# --- Reports (R4a, reworked in HRP-521) ---
 
-# Section codes mirror RECRUITING_MODULE.md §11.2 SCR-81. Frontend renders
-# one chip per code; the worker maps each to a sheet in the XLSX.
+# HRP-521 — report templates were removed; the sheet set is chosen in the
+# Generate-report dialog instead. One code per sheet the renderer emits,
+# in workbook order.
 ReportSectionCode = Literal[
-    "vacancy_summary",
-    "competence_profile",
-    "candidates_summary",
-    "comparison_grid",
-    "interview_analysis",
-    "human_assessments",
-    "process_findings",
-    "red_flags",
-    "verdict",
+    "summary_ranking",
+    "competency_matrix",
+    "detailed_analysis",
+    "incomplete_data",
 ]
 
 
 REPORT_SECTION_CODES: tuple[str, ...] = (
-    "vacancy_summary",
-    "competence_profile",
-    "candidates_summary",
-    "comparison_grid",
-    "interview_analysis",
-    "human_assessments",
-    "process_findings",
-    "red_flags",
-    "verdict",
+    "summary_ranking",
+    "competency_matrix",
+    "detailed_analysis",
+    "incomplete_data",
 )
 
 
-class ReportTemplateCreate(BaseModel):
-    name: str = Field(max_length=100)
-    sections: list[ReportSectionCode] = Field(default_factory=list)
-    is_active: bool = True
-    is_default: bool = False
-    template_data: dict | None = None
-
-
-class ReportTemplateUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=100)
-    sections: list[ReportSectionCode] | None = None
-    is_active: bool | None = None
-    is_default: bool | None = None
-    template_data: dict | None = None
-
-
-class ReportTemplateRead(BaseModel):
-    id: uuid.UUID
-    name: str
-    sections: list[str] = Field(default_factory=list)
-    is_active: bool
-    is_default: bool
-    template_data: dict | None = None
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
 class ReportGenerateRequest(BaseModel):
-    template_id: uuid.UUID | None = None
     sections: list[ReportSectionCode] | None = None
     # HRP-268 — strips Detail-sheet ``process_findings`` to a positive
     # reframe for the hiring-manager audience; full text otherwise.
     audience: Literal["recruiter", "hiring_manager"] | None = None
     # HRP-268 — optional whitelist; when present only these candidates
-    # land in the Summary / Matrix / Detail sheets. Empty / None means
-    # every active candidate-vacancy row on the vacancy.
+    # land in the Summary / Matrix / Detail sheets. Omit the field for
+    # every active candidate-vacancy row on the vacancy; an explicitly
+    # empty list is a scope that selected nobody and is rejected.
     candidate_vacancy_ids: list[uuid.UUID] | None = None
 
 
@@ -1140,8 +1120,6 @@ class ReportGenerateResponse(BaseModel):
 class ReportExportRead(BaseModel):
     id: uuid.UUID
     vacancy_id: uuid.UUID
-    template_id: uuid.UUID | None = None
-    template_name: str | None = None
     sections: list[str] = Field(default_factory=list)
     status: str
     error: str | None = None
@@ -1304,8 +1282,34 @@ class ComparisonRadar(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-QuestionGoal = Literal["clarification", "depth", "risk", "motivation", "fit"]
-QuestionPriority = Literal["must", "should", "nice_to_ask"]
+# HRP-486: one vocabulary shared by AI generation, manual add and the
+# UI. Wire codes stay English snake_case and are never translated — the
+# frontend maps them to localized labels.
+QuestionGoal = Literal[
+    "verify_skill",
+    "clarify_experience",
+    "probe_risk",
+    "explore_motivation",
+    "assess_fit",
+]
+QuestionPriority = Literal["must_ask", "should_ask", "nice_to_ask"]
+
+# HRP-503: a question's competence link. Vacancy profiles authored by the
+# LLM identify competences by kebab-case slug, while curated ones use a
+# UUID; ``normalize_competence_id`` folds both onto one stable UUID.
+CompetenceRef = uuid.UUID | None
+
+
+def _coerce_competence_ref(value: object) -> object:
+    from app.modules.recruitment.common import normalize_competence_id
+
+    if value is None or isinstance(value, uuid.UUID):
+        return value
+    if isinstance(value, str):
+        return normalize_competence_id(value)
+    return value
+
+
 QuestionSource = Literal[
     "ai_generated", "manual", "from_competency_indicator", "from_blind_spot"
 ]
@@ -1341,6 +1345,7 @@ class QuestionSetRead(BaseModel):
     id: uuid.UUID
     candidate_vacancy_id: uuid.UUID
     round_id: uuid.UUID | None = None
+    assessment_round_id: uuid.UUID | None = None
     set_type: SetType
     name: str
     status: SetStatus
@@ -1373,30 +1378,50 @@ class GenerateQuestionSetRequest(BaseModel):
     target_set_id: uuid.UUID | None = None
     set_type: SetType = "pre_interview"
     name: str | None = None
+    # HRP-444: the assessment round the new set is for. Either an
+    # existing round that has no set yet, or ``create_round=True`` to
+    # open the next Interview N first.
+    assessment_round_id: uuid.UUID | None = None
+    create_round: bool = False
 
 
 class QuestionCreate2(BaseModel):
     """Custom question add (FR-13 — manual + from_competency_indicator)."""
 
     text: str = Field(min_length=1)
-    goal: QuestionGoal = "clarification"
-    priority: QuestionPriority = "should"
-    competence_id: uuid.UUID | None = None
+    goal: QuestionGoal = "verify_skill"
+    priority: QuestionPriority = "should_ask"
+    # HRP-503: accepts either a real UUID or the kebab-case slug that
+    # AI-generated vacancy profiles use as a competence id — both are
+    # folded onto the same stable UUID the generation path stores, so a
+    # manually added question links to the profile competence exactly
+    # like a generated one.
+    competence_id: CompetenceRef = None
     resume_anchor_jsonb: dict | None = None
     expected_answer_indicators: list[str] = Field(default_factory=list)
     follow_ups: list[str] = Field(default_factory=list)
     rationale: str | None = None
     source: Literal["manual", "from_competency_indicator"] = "manual"
 
+    _normalize_competence = field_validator("competence_id", mode="before")(
+        _coerce_competence_ref
+    )
+
 
 class QuestionUpdate2(BaseModel):
     text: str | None = Field(default=None, min_length=1)
     goal: QuestionGoal | None = None
     priority: QuestionPriority | None = None
-    competence_id: uuid.UUID | None = None
+    competence_id: CompetenceRef = None
     rationale: str | None = None
     expected_answer_indicators: list[str] | None = None
     follow_ups: list[str] | None = None
+    # HRP-487: the inline editor can rewrite the resume anchor too.
+    resume_anchor_jsonb: dict | None = None
+
+    _normalize_competence = field_validator("competence_id", mode="before")(
+        _coerce_competence_ref
+    )
     # Toggle covered state. ``True`` stamps covered_at + covered_method
     # = 'manual'. ``False`` clears it.
     covered: bool | None = None
@@ -1537,6 +1562,18 @@ class TopupEligibilityResponse(BaseModel):
     window_days: int | None = None
     stored_version: int | None = None
     current_version: int | None = None
+    # HRP-489 / HRP-492 — staleness of the currently active run, always
+    # populated (independent of ``eligible``). The AI Insights block
+    # renders one banner, priority: resume → competences → age →
+    # transcript. ``active_run_mode`` says which run the flags describe.
+    active_run_mode: Literal["resume_only", "full"] | None = None
+    resume_outdated: bool = False
+    profile_outdated: bool = False
+    analysis_expired: bool = False
+    transcript_outdated: bool = False
+    # Full mode only: the transcript a fresh 40-cr run would analyse —
+    # always the most recent one when several landed since the analysis.
+    newer_transcribed_interview_id: uuid.UUID | None = None
 
 
 class BulkAnalyzeRequest(BaseModel):

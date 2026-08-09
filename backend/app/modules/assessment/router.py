@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.database import get_db
-from app.modules.assessment import pdp_service, service
+from app.modules.assessment import group_analytics, pdp_service, service
 from app.modules.assessment.schemas import (
     AnswerRecord,
     AnswerScaleCreate,
@@ -41,6 +41,7 @@ from app.modules.assessment.schemas import (
     ExternalReviewerCreate,
     ExternalReviewerRead,
     GradeOption,
+    GroupAnalyticsResponse,
     GroupedAssessmentList,
     MassAssessmentCreate,
     ParticipantAdd,
@@ -534,6 +535,45 @@ async def get_assessment_group(
         visible_employee_ids=visible_ids,
         participant_user_id=current_user.id,
         restrict_to_active=is_employee_only(current_user),
+    )
+
+
+@router.get(
+    "/assessment-groups/{group_id}/analytics",
+    response_model=GroupAnalyticsResponse,
+)
+async def get_group_analytics(
+    group_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """HRP-528: aggregated analytics for a mass assessment.
+
+    Read-only companion to ``GET /assessment-groups/{group_id}``, and it must
+    carry exactly the same guard: tenant check plus the HRP-40 scope predicate
+    (subtree / participant) and the Draft filter for regular employees.
+    Without the scope arguments this route would hand any authenticated user
+    every assessee's results in the group — the group page's own endpoint is
+    scoped, so an unscoped analytics route would be the way around it.
+
+    The scope predicate alone is not enough, though: its participant arm lets
+    a respondent through to a colleague's child assessment, and this payload
+    carries the results (percent, per-competence and per-grade matches) that
+    ``GET /assessments/{id}/results`` deliberately withholds from an
+    employee-only caller. Hence the same ``hide_results_for_employee`` gate as
+    on the results route.
+    """
+    from app.core.access_scope import get_visible_employee_ids, is_employee_only
+
+    visible_ids = await get_visible_employee_ids(db, current_user)
+    return await group_analytics.get_group_analytics(
+        db,
+        current_user.tenant_id,
+        group_id,
+        visible_employee_ids=visible_ids,
+        participant_user_id=current_user.id,
+        restrict_to_active=is_employee_only(current_user),
+        hide_results_for_employee=is_employee_only(current_user),
     )
 
 

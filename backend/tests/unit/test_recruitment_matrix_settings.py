@@ -554,3 +554,178 @@ class TestMatrixCandidateIdentity:
         cand = result["candidates"][0]
         assert cand["stage_name"] == "Interview"
         assert cand["stage_id"] == stage.id
+
+
+# ─── HRP-510: interview-round scoping + canvas export ────────────────
+
+
+class TestAssessmentMatrixRounds:
+    async def _two_rounds(self, db: AsyncSession, tenant, user, matrix_scale):
+        """One candidate with two interviews scoring the same competence
+        3.0 (first round) then 5.0 (second)."""
+        from datetime import datetime, timedelta, timezone
+
+        ctx = await _vacancy_with_competences(
+            db, tenant, user, _COMPETENCE_SEED, n_candidates=1
+        )
+        cv_id = uuid.UUID(str(ctx["cv_links"][0]["id"]))
+        python_id = service.normalize_competence_id("python-skills")
+        base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+
+        for offset_days, score in ((0, 3.0), (7, 5.0)):
+            interview = Interview(
+                tenant_id=tenant.id,
+                candidate_vacancy_id=cv_id,
+                transcription_status="completed",
+                analysis_status="completed",
+                created_at=base + timedelta(days=offset_days),
+            )
+            db.add(interview)
+            await db.commit()
+            await db.refresh(interview)
+            db.add(
+                AIAssessment(
+                    tenant_id=tenant.id,
+                    interview_id=interview.id,
+                    competence_id=python_id,
+                    score=score,
+                    status="ready",
+                    citations=[],
+                )
+            )
+        await db.commit()
+        return ctx
+
+    async def test_round_count_and_latest_default(
+        self, db: AsyncSession, tenant, user, matrix_scale
+    ) -> None:
+        ctx = await self._two_rounds(db, tenant, user, matrix_scale)
+        result = await service.get_assessment_matrix(
+            db, tenant.id, uuid.UUID(str(ctx["vacancy"]["id"]))
+        )
+        assert result["round_count"] == 2
+        assert result["round"] == "latest"
+        cell = next(
+            c
+            for c in result["candidates"][0]["cells"]
+            if c["competence_id"] == service.normalize_competence_id("python-skills")
+        )
+        # Newest interview wins by default.
+        assert cell["ai_score"] == 5.0
+
+    async def test_specific_round_scopes_to_that_interview(
+        self, db: AsyncSession, tenant, user, matrix_scale
+    ) -> None:
+        ctx = await self._two_rounds(db, tenant, user, matrix_scale)
+        result = await service.get_assessment_matrix(
+            db,
+            tenant.id,
+            uuid.UUID(str(ctx["vacancy"]["id"])),
+            round_filter="1",
+        )
+        assert result["round"] == "1"
+        cell = next(
+            c
+            for c in result["candidates"][0]["cells"]
+            if c["competence_id"] == service.normalize_competence_id("python-skills")
+        )
+        assert cell["ai_score"] == 3.0
+
+    async def test_all_combined_averages_across_rounds(
+        self, db: AsyncSession, tenant, user, matrix_scale
+    ) -> None:
+        ctx = await self._two_rounds(db, tenant, user, matrix_scale)
+        result = await service.get_assessment_matrix(
+            db,
+            tenant.id,
+            uuid.UUID(str(ctx["vacancy"]["id"])),
+            round_filter="all",
+        )
+        assert result["round"] == "all"
+        cell = next(
+            c
+            for c in result["candidates"][0]["cells"]
+            if c["competence_id"] == service.normalize_competence_id("python-skills")
+        )
+        # (3 + 5) / 2
+        assert cell["ai_score"] == 4.0
+
+    async def test_unparseable_round_falls_back_to_latest(
+        self, db: AsyncSession, tenant, user, matrix_scale
+    ) -> None:
+        ctx = await self._two_rounds(db, tenant, user, matrix_scale)
+        result = await service.get_assessment_matrix(
+            db,
+            tenant.id,
+            uuid.UUID(str(ctx["vacancy"]["id"])),
+            round_filter="not-a-round",
+        )
+        assert result["round"] == "latest"
+
+    async def test_archived_interview_drops_out_of_the_round_selector(
+        self, db: AsyncSession, tenant, user, matrix_scale
+    ) -> None:
+        """HRP-510 REDO — every other reader of these interviews
+        (``_latest_transcribed_interview``, ``_load_transcripts``,
+        ``apply_ai_analysis_state``) skips archived rows. The round list
+        did not, so "Latest" could resolve to a recording the recruiter
+        had already thrown away."""
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+
+        ctx = await self._two_rounds(db, tenant, user, matrix_scale)
+        cv_id = uuid.UUID(str(ctx["cv_links"][0]["id"]))
+        rows = list(
+            (
+                await db.execute(
+                    select(Interview)
+                    .where(
+                        Interview.tenant_id == tenant.id,
+                        Interview.candidate_vacancy_id == cv_id,
+                    )
+                    .order_by(Interview.created_at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 2
+        rows[-1].archived_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        result = await service.get_assessment_matrix(
+            db, tenant.id, uuid.UUID(str(ctx["vacancy"]["id"]))
+        )
+        assert result["round_count"] == 1
+        cell = next(
+            c
+            for c in result["candidates"][0]["cells"]
+            if c["competence_id"] == service.normalize_competence_id("python-skills")
+        )
+        # The surviving (older) round, not the archived 5.0.
+        assert cell["ai_score"] == 3.0
+
+    async def test_canvas_xlsx_export_renders_both_sources(
+        self, db: AsyncSession, tenant, user, matrix_scale
+    ) -> None:
+        import io
+
+        from app.modules.recruitment.report_xlsx import render_canvas_xlsx
+        from openpyxl import load_workbook
+
+        ctx = await self._two_rounds(db, tenant, user, matrix_scale)
+        payload = await service.get_assessment_matrix(
+            db, tenant.id, uuid.UUID(str(ctx["vacancy"]["id"]))
+        )
+        wb = load_workbook(
+            io.BytesIO(render_canvas_xlsx(payload, vacancy_title="Senior Backend"))
+        )
+        ws = wb["Canvas"]
+        assert "Assessment canvas — Senior Backend" in str(
+            ws.cell(row=1, column=1).value
+        )
+        assert ws.cell(row=4, column=1).value == "Candidate"
+        # Two rows per candidate: Manager then AI.
+        assert ws.cell(row=5, column=2).value == "Manager"
+        assert ws.cell(row=6, column=2).value == "AI"

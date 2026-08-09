@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { MatchPercentChip } from "@/components/assessment/match-percent-chip";
 import {
   Select,
   SelectContent,
@@ -470,12 +471,10 @@ export function AssessmentDetailedResults({
                   )}
                 </div>
                 <div className="flex items-center gap-3 text-sm">
-                  <span
-                    className="font-semibold"
+                  <MatchPercentChip
+                    percent={comp.all_dont_know ? null : comp.percent}
                     data-testid={`detailed-results-competence-${comp.competence_id}-percent`}
-                  >
-                    {comp.all_dont_know ? "—" : formatPercent(comp.percent)}
-                  </span>
+                  />
                   {!editMode &&
                     (isOpen ? (
                       <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -500,13 +499,13 @@ export function AssessmentDetailedResults({
                               })
                             : t("withoutLevel")}
                         </div>
-                        <div className="text-muted-foreground">
-                          {t("percentForSkillLevel")}{" "}
-                          <span className="font-medium text-foreground">
-                            {sl.all_dont_know
-                              ? "—"
-                              : formatPercent(sl.percent_for_skill_level)}
-                          </span>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          {t("percentForSkillLevel")}
+                          <MatchPercentChip
+                            percent={
+                              sl.all_dont_know ? null : sl.percent_for_skill_level
+                            }
+                          />
                         </div>
                       </div>
                       <div className="mt-2 space-y-3">

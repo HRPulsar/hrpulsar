@@ -18,6 +18,9 @@ def _settings(**overrides):
     base = {
         "s3_endpoint": "",
         "s3_public_endpoint": "",
+        # Explicit: an ambient FRONTEND_URL would otherwise be adopted as
+        # the public endpoint (HRP-496) and change what these cases assert.
+        "frontend_url": "",
     }
     base.update(overrides)
     return Settings(**base)
@@ -26,6 +29,33 @@ def _settings(**overrides):
 def test_internal_endpoint_without_public_is_rejected():
     with pytest.raises(ValueError, match="S3_PUBLIC_ENDPOINT"):
         _settings(s3_endpoint="http://minio:9000")
+
+
+def test_internal_endpoint_falls_back_to_frontend_url():
+    """HRP-496: the stock self-hosted compose pins S3_ENDPOINT to the
+    bundled MinIO; hard-failing there crash-looped the whole stack. The
+    instance origin the operator already declared is what the bundled
+    Caddy proxies /<S3_BUCKET>/* from — adopt it instead of refusing."""
+    s = _settings(
+        s3_endpoint="http://minio:9000",
+        frontend_url="https://hr.example.com/",
+    )
+    assert s.s3_public_endpoint == "https://hr.example.com"
+
+
+def test_explicit_public_endpoint_wins_over_frontend_url():
+    s = _settings(
+        s3_endpoint="http://minio:9000",
+        s3_public_endpoint="https://files.example.com",
+        frontend_url="https://hr.example.com",
+    )
+    assert s.s3_public_endpoint == "https://files.example.com"
+
+
+def test_non_url_frontend_url_still_rejected():
+    """A relative/garbage FRONTEND_URL is not a signable origin."""
+    with pytest.raises(ValueError, match="S3_PUBLIC_ENDPOINT"):
+        _settings(s3_endpoint="http://minio:9000", frontend_url="hr.example.com")
 
 
 def test_internal_endpoint_with_public_is_accepted():

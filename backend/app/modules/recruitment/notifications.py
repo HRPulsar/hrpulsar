@@ -56,12 +56,29 @@ EVENT_TEMPLATE: dict[str, str] = {
     "recruitment.interview.scheduled": "recruitment.interview_scheduled",
     "recruitment.interview.transcript_ready": "recruitment.interview_transcript_ready",
     "recruitment.interview.analysis_ready": "recruitment.interview_analysis_ready",
+    # HRP-494: AI Insights analyses report under their own codes so the
+    # subject names the mode the recruiter paid for and the body can
+    # deep-link into the AI Insights block of the right vacancy. The
+    # legacy ``interview_analysis_ready`` code above stays for the
+    # interview-page cache-hit path, which has no candidate context.
+    "recruitment.candidate.resume_analysis_ready": (
+        "recruitment.resume_analysis_ready"
+    ),
+    "recruitment.candidate.resume_analysis_failed": (
+        "recruitment.resume_analysis_failed"
+    ),
+    "recruitment.candidate.full_analysis_ready": ("recruitment.full_analysis_ready"),
+    "recruitment.candidate.full_analysis_failed": ("recruitment.full_analysis_failed"),
     "recruitment.report.generated": "recruitment.report_generated",
     "recruitment.consent.signed": "recruitment.consent_signed",
     "recruitment.invite.completed": "recruitment.invite_completed",
     "recruitment.ai.task_failed": "recruitment.ai_task_failed",
     "recruitment.question_set.ready": "recruitment.question_set_ready",
     "recruitment.question_set.failed": "recruitment.question_set_failed",
+    # HRP-373: a colleague was added as an evaluator on an assessment round.
+    "recruitment.assessment.evaluator_invited": (
+        "recruitment.assessment_evaluator_invited"
+    ),
 }
 
 # Roles that receive fan-out notifications for events without an explicit
@@ -79,6 +96,25 @@ def _coerce_uuid(value: Any) -> uuid.UUID | None:
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _add_absolute_link(ctx: dict[str, Any]) -> None:
+    """Expose ``link_url`` for templates that render a click-through.
+
+    Event payloads carry ``link`` as a site-relative path — that is what
+    the in-app bell needs. Email leaves the app, so the same target has
+    to be absolute; the base comes from ``FRONTEND_URL`` (falling back to
+    the deployment's canonical host).
+    """
+    link = ctx.get("link")
+    if not link or ctx.get("link_url"):
+        return
+    if str(link).startswith(("http://", "https://")):
+        ctx["link_url"] = link
+        return
+    from app.core.email_templates import frontend_url
+
+    ctx["link_url"] = f"{frontend_url()}{link}"
 
 
 def _dedupe(ids: Iterable[uuid.UUID | None]) -> list[uuid.UUID]:
@@ -242,6 +278,9 @@ async def _async_dispatch(
             ctx.setdefault(
                 "recipient_name", f"{user.first_name} {user.last_name}".strip()
             )
+            # HRP-442/460: payloads carry a relative ``link`` so in-app
+            # notifications can route on it; email needs it absolute.
+            _add_absolute_link(ctx)
             subject = Template(template.subject_template).render(**ctx)
             body = Template(template.body_template).render(**ctx)
         except Exception:
@@ -370,6 +409,40 @@ async def _resolve_interview_user(
     return await _async_resolve_users_by_ids(db, tenant_id, ids)
 
 
+async def _resolve_interview_scheduled(
+    db: AsyncSession, tenant_id: uuid.UUID, data: dict[str, Any]
+) -> list[User]:
+    """HRP-419: only the assigned interviewers, only for future interviews.
+
+    Deliberately narrower than :func:`_resolve_interview_user` (still used
+    by the transcript / analysis events): the vacancy owner and the person
+    who filled in the Schedule modal are not automatically attendees, and
+    an interview backfilled after the fact must not page anyone.
+    """
+
+    when = data.get("interview_date_iso")
+    if isinstance(when, str) and when:
+        try:
+            moment = datetime.fromisoformat(when)
+        except ValueError:
+            moment = None
+        if moment is not None:
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=timezone.utc)
+            if moment < datetime.now(timezone.utc):
+                return []
+
+    raw_ids = data.get("interviewer_ids")
+    ids = _dedupe(
+        [_coerce_uuid(v) for v in raw_ids]
+        if isinstance(raw_ids, list)
+        else [_coerce_uuid(data.get("interviewer_id"))]
+    )
+    if not ids:
+        return []
+    return await _async_resolve_users_by_ids(db, tenant_id, ids)
+
+
 async def _resolve_report_user(
     db: AsyncSession, tenant_id: uuid.UUID, data: dict[str, Any]
 ) -> list[User]:
@@ -398,6 +471,16 @@ async def _resolve_ai_failed(
     db: AsyncSession, tenant_id: uuid.UUID, data: dict[str, Any]
 ) -> list[User]:
     return await _async_resolve_admins(db, tenant_id)
+
+
+async def _resolve_assessment_evaluator(
+    db: AsyncSession, tenant_id: uuid.UUID, data: dict[str, Any]
+) -> list[User]:
+    """HRP-373: the invited evaluator is the only recipient."""
+    uid = _coerce_uuid(data.get("evaluator_user_id"))
+    if not uid:
+        return []
+    return await _async_resolve_users_by_ids(db, tenant_id, [uid])
 
 
 async def _resolve_question_set_user(
@@ -443,7 +526,7 @@ async def on_interview_scheduled(data: dict[str, Any]) -> None:
     await _async_handle(
         "recruitment.interview.scheduled",
         data,
-        resolve_recipients=_resolve_interview_user,
+        resolve_recipients=_resolve_interview_scheduled,
     )
 
 
@@ -497,6 +580,14 @@ async def on_question_set_ready(data: dict[str, Any]) -> None:
     )
 
 
+async def on_assessment_evaluator_invited(data: dict[str, Any]) -> None:
+    await _async_handle(
+        "recruitment.assessment.evaluator_invited",
+        data,
+        resolve_recipients=_resolve_assessment_evaluator,
+    )
+
+
 async def on_question_set_failed(data: dict[str, Any]) -> None:
     await _async_handle(
         "recruitment.question_set.failed",
@@ -523,6 +614,7 @@ HANDLERS: dict[str, Any] = {
     "recruitment.ai.task_failed": on_ai_task_failed,
     "recruitment.question_set.ready": on_question_set_ready,
     "recruitment.question_set.failed": on_question_set_failed,
+    "recruitment.assessment.evaluator_invited": on_assessment_evaluator_invited,
 }
 
 
@@ -666,6 +758,9 @@ def notify_sync(
             ctx.setdefault(
                 "recipient_name", f"{user.first_name} {user.last_name}".strip()
             )
+            # HRP-442/460: payloads carry a relative ``link`` so in-app
+            # notifications can route on it; email needs it absolute.
+            _add_absolute_link(ctx)
             subject = Template(template.subject_template).render(**ctx)
             body = Template(template.body_template).render(**ctx)
         except Exception:

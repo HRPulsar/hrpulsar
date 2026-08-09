@@ -62,7 +62,6 @@ const SEGMENT_KEYS: Record<string, string> = {
   matrix: "matrix",
   new: "new",
   positions: "positions",
-  "report-templates": "reportTemplates",
   retention: "retention",
   roles: "roles",
   scales: "scales",

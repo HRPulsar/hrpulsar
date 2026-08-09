@@ -355,3 +355,55 @@ export const emptyCertificate: () => ParsedResumeCertificate = () => ({
   issuer: "",
   issued_at: "",
 });
+
+// ── HRP-386 / HRP-418: interview ↔ Manager-assessment round labels ──────
+
+/** Minimal shape of a Manager-assessment round the Interviews block reads. */
+export interface RoundLabelSource {
+  type: string;
+  round_number?: number | null;
+}
+
+/** "Pre-interview" / "Interview 2" / "Final" — same wording as the
+ *  Manager assessments round tabs, so the two blocks agree on what a
+ *  round is called. */
+export function labelForAssessmentRound(
+  t: RecruitmentTranslate,
+  round: RoundLabelSource,
+): string {
+  if (round.type === "pre_interview") {
+    return t("managerAssessmentRoundPreInterview");
+  }
+  if (round.type === "final") return t("managerAssessmentRoundFinal");
+  return t("managerAssessmentRoundInterview", {
+    number: round.round_number ?? "?",
+  });
+}
+
+/** Splits an ISO timestamp into the `<input type="date">` /
+ *  `<input type="time">` pair the Schedule modal binds to. Local time —
+ *  the recruiter picks a wall-clock slot, not a UTC instant. */
+export function splitLocalDateTime(iso: string | null | undefined): {
+  date: string;
+  time: string;
+} {
+  if (!iso) return { date: "", time: "" };
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { date: "", time: "" };
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+  };
+}
+
+/** Inverse of {@link splitLocalDateTime}. Returns null when no date was
+ *  picked; a missing time defaults to midnight local. */
+export function joinLocalDateTime(
+  date: string,
+  time: string,
+): string | null {
+  if (!date) return null;
+  const parsed = new Date(`${date}T${time || "00:00"}`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}

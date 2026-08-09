@@ -177,6 +177,24 @@ async def _test_seed_verdict(
 
     for k, v in updates.items():
         setattr(cv, k, v)
+    # HRP-493 made the candidates table derive ``ai_readiness`` from the
+    # inputs the model can actually see, so seeding the column alone is
+    # invisible on the list. Back a resume-backed readiness with a parsed
+    # resume stub; transcript-backed readiness would need a transcribed
+    # Interview row, which no spec seeds this way today.
+    if updates.get("ai_readiness") in ("resume_only", "resume_and_transcript"):
+        from app.modules.recruitment.models import Candidate
+
+        cand = (
+            await db.execute(
+                select(Candidate).where(
+                    Candidate.id == cv.candidate_id,
+                    Candidate.tenant_id == current_user.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if cand is not None and cand.parsed_resume_jsonb is None:
+            cand.parsed_resume_jsonb = {"summary": "seeded by _test/seed-verdict"}
     cv.version = (cv.version or 1) + 1
     await db.commit()
     return {"id": str(cv.id), "version": cv.version}

@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.17.0] - 2026-08-09
+
+### Added
+- Interview questions: Add is now a split button — "Add custom question" opens a form with question text, goal, priority and an optional resume anchor, while "Add from competency indicator" opens a searchable competence tree and turns each picked competence into a question, mapping criticality to priority and carrying over its indicators, follow-up questions and rationale (HRP-485)
+- Mass assessments: an Analytics block on the campaign page with growth zones, top competences, employees at risk and top performers, a filterable detailed-results view (average match gauge, employee table or competence/grade matrix) and a summary with a per-grade chart and the competence tree; built from completed child assessments only (HRP-528)
+- Manager assessments: "+ Add evaluator" puts several colleagues on the same round, each with their own sheet and an email invitation; a colleague's sheet stays hidden until you submit yours. Pre-interview rounds stay single-evaluator (HRP-373)
+- Manager assessments: a round menu with Complete, Reopen, Archive and Restore; an archived round keeps its scores but is excluded from the candidate's average (HRP-376)
+- Manager assessments: each external evaluator invitation now has its own menu — Resend, Revoke and View submission (HRP-377)
+
+### Fixed
+- Status page: a single slow probe no longer paints a whole day amber (degraded is recorded only after 2 consecutive cycles), a failed `/health` fetch no longer marks four sub-components as outage (single shared fetch, unknown state shows amber), and degraded minutes count as half-up in daily uptime
+- AI Insights: an interview that covered none of the profile's competences no longer wipes the candidate's AI score — the score carries forward from the previous analysis instead of the candidates table falling back to a dash (HRP-493)
+- AI Insights: analysis notifications name the candidate instead of "None", say which mode ran, and link to the AI Insights block for that vacancy; resume-only and full analyses report separately, and a failed run is reported too (HRP-494)
+- AI Insights: the block flags an analysis whose inputs have moved — a re-parsed resume, edited vacancy competences, a run older than 30 days, or a transcript the analysis never saw — and offers the re-run that fixes it; an edited resume also closes the discounted upgrade (HRP-489, HRP-492)
+- AI Insights: the refresh icon, the duplicate data-completeness chip and the footer that repeated the Analyze action are gone (HRP-489, HRP-492)
+- Vacancy candidates table: AI DATA now follows what the model can see rather than the last analysis that ran, AI VERDICT distinguishes "analyzing" from "nothing to analyse yet", and it no longer repeats the AI score or the divergence marker shown in neighbouring columns (HRP-493)
+- Manager assessments: competence cards in the evaluation sheet now carry an expand chevron, on the internal sheet and the external evaluator page (HRP-368)
+- Manager assessments: round tabs are ordered Pre-interview, Interview 1..N, Final instead of by creation time (HRP-372)
+- Manager assessments: a Word resume on the external evaluator page is now shown as a preview instead of downloading itself on every page load; the file is only saved when the evaluator clicks Download (HRP-371)
+- Manager assessments: "Mark as complete" now actually closes the round — sheets turn read-only and the external links are revoked, so an evaluator following one sees "This invitation was revoked" (HRP-376)
+- Schedule interview: the dialog now asks for vacancy, assessment round, title, date and time, duration, interviewers and notes, and the new card appears at the top of the Interviews list (HRP-386)
+- Interview page: the title is the heading and is editable, the subtitle names the vacancy and round, and Details and Notes blocks render the scheduled parameters with inline editing (HRP-387)
+- Interviews block: one border, counter in the header, the title links to the interview, and each row carries a status chip, its round with the date it was added, and a kebab with Edit, Archive and Restore; archived interviews hide behind a "Show archived" filter, stay restorable for 90 days and are purged from storage afterwards (HRP-418)
+- "Interview scheduled" email now goes to the assigned interviewers only, skips interviews scheduled in the past, and names the candidate and vacancy with the date in yyyy-mm-dd hh:mm (HRP-419)
+- Send consent link without an active consent template now opens a modal explaining where to create one, instead of a snackbar that disappears before it can be read (HRP-472)
+- **Breaking (self-hosted):** the stock self-hosted stack no longer crash-loops on the internal-S3 startup check — browser-facing file links fall back to `FRONTEND_URL` (bundled compose: `http://localhost` when even that is unset), so `S3_PUBLIC_ENDPOINT` is only needed when storage is served from another origin (HRP-496)
+- AI model catalog is now the single source of truth end to end: disabling a model also stops the tenants that follow an effort preset, the model picker keeps showing the curated model instead of a newer dated snapshot, the older Claude ids keep their full output budget instead of truncating long generations, and OpenAI o-series models are called with the parameters they accept instead of failing every request (HRP-500)
+- AI providers: a stored key that can no longer be decrypted is no longer reported as a working tenant key — the provider list shows the credential generation actually uses (HRP-514)
+- AI providers (BYOK): a provider/model pair that cannot work together (e.g. OpenAI with a Claude model) is rejected on save, switching the provider in the form updates the suggested model, and existing mismatched rows are deactivated so they cannot become dispatch targets and fail every AI action (HRP-498)
+- Interview transcription with a tenant's own speech-to-text key works again: the stored key was passed to the provider still encrypted, so every BYOK transcription failed authentication (HRP-506)
+- AI provider clients are cached in a bounded LRU that closes the connection pool it evicts, so rotating tenant keys or endpoints no longer leaks file descriptors for the process lifetime (HRP-501)
+- "Interview questions ready" and "Question generation failed" notifications now carry a link to the candidate card, anchored on the Interview questions block, with the generated set already open; in-app notifications that carry a link are clickable (HRP-442, HRP-460)
+- Interview questions, Export to PDF: Format and Sort no longer resize with the chosen value, the format names spell out what they produce ("Compact (one page)", "Cards (for notes, for printing)"), and the content checkboxes are ordered Resume anchor / Expected indicators / Follow-ups / Why this question. The Export PDF button moved into the question-set card, next to Add and Re-generate, since it exports only the current set (HRP-484)
+- Interview questions: "New set" now opens a dialog that asks which round the set is for (offering to open the next Interview N) and which completed interview it builds on, instead of silently generating another pre-interview set. The set is bound to its round, one set per round, and the generation reads the prior transcripts, AI analyses and blind spots so it deepens weak coverage instead of repeating answered questions (HRP-444)
+- Interview questions: the pencil icon now opens every attribute for inline editing — text, goal, priority, linked competence, resume anchor, expected indicators, follow-ups and rationale — instead of only the question text (HRP-487)
+- Interview questions: a question keeps and displays its link to the vacancy-profile competence, whether it was AI-generated or added by hand (HRP-503)
+- Interview questions PDF, Compact format: table cells wrap on word boundaries instead of overflowing the column, and the font shrinks so the whole set still fits one portrait page (HRP-462)
+- Interview questions PDF, Cards format: every question card now reserves a fixed-height ruled Notes area regardless of which content checkboxes are ticked (HRP-483)
+
+### Changed
+- AI Insights: the empty state follows the Interview questions block — a placeholder line with the Analyze split button directly beneath it, disabled until a resume is parsed, with both modes and their prices in the menu (HRP-488)
+- Vacancy reports: the Generate dialog now asks for the candidate set (all active / finalists / custom), the sheets to include and the audience, and prices the run with the standard credit badge (HRP-521)
+- Vacancy reports: the workspace logo is placed in the top-left corner of every sheet at a fixed 120x40 px instead of being stretched into the header area (HRP-522)
+- Vacancy reports: the Summary sheet now carries the position/division/report-date line, an auto-generated data-completeness disclaimer, an AI-data column driven by each candidate's analysis readiness, a computed recommendation, and footnotes for partial AI coverage or manager-AI divergence (HRP-523)
+- Vacancy reports: the Matrix sheet now merges competence groups with a separator, abbreviates the target level (Crit/Imp/Des), marks diverging cells with a warning glyph, flags AI columns backed by a transcript, and renders per-candidate totals as "score/max (percent)" coloured by threshold (HRP-524)
+- Vacancy reports: Detail sheets are named after the candidate instead of "Detail Unknown" for resume-sourced candidates, and carry the full spec structure — resume paragraph, per-competence scores with their group, blind spots, process findings, red flags and the final verdict (HRP-525)
+- Vacancy assessments: Open fullscreen now leads to a dedicated sidebar-less canvas page with view/round/scale controls, divergence and no-score filters, a cell-details footer, per-candidate totals, and XLSX/CSV export (HRP-510)
+- Interview questions: goal and priority share one vocabulary across AI generation, manual add and display, and the interface shows readable names ("Clarify experience") instead of raw codes (HRP-486)
+- Assessment Results and Detailed results now show the match percent as a colour-coded chip (green from 75%, yellow from 50%, red below 50%, muted dash when there is no result) instead of plain text (HRP-527)
+
+### Removed
+- **Breaking (self-hosted):** Report templates (settings page, CRUD endpoints and table) — the sheet set is chosen in the Generate dialog instead; saved template rows are dropped by the migration and are not restored on downgrade (HRP-521)
+
 ## [1.16.1] - 2026-07-31
 
 ### Added

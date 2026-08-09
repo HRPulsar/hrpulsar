@@ -200,6 +200,22 @@ test.describe("Recruitment interview upload (HRP-202)", () => {
       ),
     ).toBeVisible({ timeout: 15000 });
 
+    // HRP-418: the count sits in the block header, the row carries a
+    // status chip and the "Interview N · added yyyy-mm-dd" meta line.
+    await expect(
+      section.getByTestId("recruitment-candidate-interviews-count"),
+    ).toHaveText("(1)");
+    await expect(
+      section.getByTestId(
+        `recruitment-candidate-interview-status-${interview.id}`,
+      ),
+    ).toBeVisible();
+    await expect(
+      section.getByTestId(
+        `recruitment-candidate-interview-meta-${interview.id}`,
+      ),
+    ).toContainText("added");
+
     // No signed consent yet → banner explains why uploads are locked.
     await expect(
       section.getByTestId("recruitment-candidate-interviews-consent-banner"),
@@ -227,12 +243,53 @@ test.describe("Recruitment interview upload (HRP-202)", () => {
       timeout: 15000,
     });
 
-    // Detail link navigates to the interview page.
+    // HRP-386: the newest card lands at the TOP of the list.
+    const rows = section.locator(
+      '[data-testid^="recruitment-candidate-interview-row-"]',
+    );
+    await expect(rows.first()).toContainText("Final round");
+
+    // HRP-418: the kebab offers Edit + Archive; archiving hides the row
+    // until "Show archived" is ticked, and Restore brings it back.
     await section
-      .getByTestId(`recruitment-candidate-interview-open-${interview.id}`)
+      .getByTestId(`recruitment-candidate-interview-menu-${interview.id}`)
+      .click();
+    await page
+      .getByTestId(`recruitment-candidate-interview-archive-${interview.id}`)
+      .click();
+    await page
+      .getByTestId("recruitment-candidate-interviews-archive-confirm-confirm")
+      .click();
+    await expect(
+      section.getByTestId(
+        `recruitment-candidate-interview-row-${interview.id}`,
+      ),
+    ).toBeHidden({ timeout: 15000 });
+
+    await section
+      .getByTestId("recruitment-candidate-interviews-show-archived")
+      .click();
+    await expect(
+      section.getByTestId(
+        `recruitment-candidate-interview-row-${interview.id}`,
+      ),
+    ).toBeVisible({ timeout: 15000 });
+
+    // HRP-418 / HRP-387: the title itself is the link to the detail page.
+    await section
+      .getByTestId(`recruitment-candidate-interview-title-${interview.id}`)
       .click();
     await expect(
       page.getByTestId("recruitment-interview-detail"),
     ).toBeVisible({ timeout: 15000 });
+
+    // HRP-387: the detail page renders Details + Notes blocks.
+    await expect(
+      page.getByTestId("recruitment-interview-details"),
+    ).toBeVisible();
+    await expect(page.getByTestId("recruitment-interview-notes")).toBeVisible();
+    await expect(page.getByTestId("recruitment-interview-title")).toHaveText(
+      "Screening call",
+    );
   });
 });

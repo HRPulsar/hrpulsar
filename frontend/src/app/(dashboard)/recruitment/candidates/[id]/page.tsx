@@ -102,6 +102,9 @@ export default function CandidateDetailPage() {
   // vacancy so Back lands on the vacancy detail, not the legacy
   // standalone candidates list.
   const vacancyContextId = searchParams.get("vacancyId");
+  // HRP-460: the "Interview questions ready" email links straight to
+  // the generated set.
+  const questionSetContextId = searchParams.get("questionSet");
   const backHref = vacancyContextId
     ? `/recruitment/requisitions/${vacancyContextId}`
     : "/recruitment/requisitions";
@@ -242,6 +245,7 @@ export default function CandidateDetailPage() {
                 candidateId={card.id}
                 vacancyOptions={interviewVacancyOptions}
                 initialVacancyId={vacancyContextId ?? undefined}
+                initialQuestionSetId={questionSetContextId ?? undefined}
               />
             );
             const resumeSection = (
@@ -268,6 +272,18 @@ export default function CandidateDetailPage() {
                 candidateId={card.id}
                 vacancyApplications={card.vacancy_applications}
                 initialVacancyId={vacancyContextId ?? undefined}
+                // HRP-488: a manually added candidate has nothing to
+                // analyse. Either a parsed resume file or the canonical
+                // parsed-resume mirror (manual entry, bulk import) is
+                // enough to unblock Analyze.
+                hasParsedResume={
+                  card.parsed_resume_jsonb !== null ||
+                  card.candidate_files.some(
+                    (f) =>
+                      f.file_type === "resume" &&
+                      f.parse_status === "completed",
+                  )
+                }
               />
             );
             // HRP-205: default order is Resume → AI Insights → Interview

@@ -626,6 +626,16 @@ class Interview(BaseModel, TenantMixin):
     interview_date: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # HRP-386: optional link to the Manager-assessment round this interview
+    # belongs to ("Pre-interview" / "Interview 1" / …). Nullable because an
+    # interview may be scheduled before any round exists, and because
+    # archiving clears the link (HRP-418).
+    round_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("recruitment_assessment_rounds.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # HRP-202: ``duration_seconds`` is the probed media length, populated
     # after upload completes. ``duration_minutes`` is the user-entered
     # planned duration from the Schedule modal.
@@ -679,6 +689,12 @@ class Interview(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    # HRP-418: set by the retention sweeper once the 90-day restore window
+    # has elapsed and the media object was dropped from S3. The row itself
+    # stays for audit — only the blob goes.
+    purged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     # Bumped on every PATCH; backs ``If-Match: W/"{version}"`` ETags so
     # concurrent editors get a 412 instead of silently overwriting each
@@ -899,6 +915,13 @@ class AIAssessment(BaseModel, TenantMixin):
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     citations: Mapped[list] = mapped_column(JSONB, server_default="[]")
     reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # HRP-418: the interview these scores were derived from has been
+    # archived. The rows are kept — a Manager-assessment round that already
+    # consumed them keeps its history — but the flag lets consumers mark
+    # the source as gone instead of presenting a stale live reference.
+    source_archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1163,11 +1186,6 @@ class ConsolidatedReport(BaseModel, TenantMixin):
         nullable=False,
         index=True,
     )
-    template_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("report_templates.id", ondelete="SET NULL"),
-        nullable=True,
-    )
     file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("files.id", ondelete="SET NULL"),
@@ -1219,25 +1237,6 @@ class ScaleConfig(BaseModel, TenantMixin):
             unique=True,
             postgresql_where=text("is_active"),
         ),
-    )
-
-
-# ---------------------------------------------------------------------------
-# 15. ReportTemplate
-# ---------------------------------------------------------------------------
-
-
-class ReportTemplate(BaseModel, TenantMixin):
-    __tablename__ = "report_templates"
-
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    template_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    sections: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    is_default: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default="false"
-    )
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, default=True, server_default="true"
     )
 
 
@@ -1578,6 +1577,17 @@ class QuestionSet(BaseModel, TenantMixin):
         nullable=True,
         index=True,
     )
+    # HRP-444: the assessment round this set is *for*. ``round_id`` above
+    # points at an ``interviews`` row (the recording a set was derived
+    # from); the round a set prepares lives in the Manager assessments
+    # block, which is a different table. One set per round is the rule
+    # the New set dialog enforces.
+    assessment_round_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("recruitment_assessment_rounds.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # pre_interview | interview_round | final
     set_type: Mapped[str] = mapped_column(
         String(32),
@@ -1636,16 +1646,17 @@ class Question(BaseModel, TenantMixin):
         index=True,
     )
     text: Mapped[str] = mapped_column(Text, nullable=False)
-    # clarification | depth | risk | motivation | fit
+    # HRP-486: verify_skill | clarify_experience | probe_risk |
+    # explore_motivation | assess_fit
     goal: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
-        default="clarification",
-        server_default="clarification",
+        default="verify_skill",
+        server_default="verify_skill",
     )
-    # must | should | nice_to_ask
+    # must_ask | should_ask | nice_to_ask
     priority: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="should", server_default="should"
+        String(32), nullable=False, default="should_ask", server_default="should_ask"
     )
     competence_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True, index=True

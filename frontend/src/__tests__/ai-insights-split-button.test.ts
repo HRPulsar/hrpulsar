@@ -19,9 +19,19 @@ function deriveSplitButtonState(args: {
   busy: boolean;
   inFlight: boolean;
   eligibility: TopupEligibility | null;
+  // HRP-488: nothing to analyse means the whole control is dead, not
+  // just the full-mode item. ``true`` unless a caller says otherwise so
+  // the pre-HRP-488 cases below keep asserting what they always did.
+  resumeAvailable?: boolean;
 }): SplitButtonState {
-  const { selectedCvId, busy, inFlight, eligibility } = args;
-  const disabled = !selectedCvId || busy || inFlight;
+  const {
+    selectedCvId,
+    busy,
+    inFlight,
+    eligibility,
+    resumeAvailable = true,
+  } = args;
+  const disabled = !selectedCvId || busy || inFlight || !resumeAvailable;
   const hasTranscribedInterview = !!eligibility?.transcribed_interview_id;
   const topupEligible = !!eligibility?.eligible;
   const fullModeBlocked = !hasTranscribedInterview || topupEligible;
@@ -129,6 +139,35 @@ describe("AnalyzeSplitButton state derivation", () => {
       }),
     });
     expect(state.fullModeDisabled).toBe(false);
+  });
+
+  it("disables the whole control when the candidate has no parsed resume", () => {
+    // HRP-488 case 1: a manually added candidate. The empty state still
+    // shows Analyze so the option is discoverable, but pressing it
+    // could only 409 — so it is disabled, not hidden.
+    const state = deriveSplitButtonState({
+      selectedCvId: "cv-1",
+      busy: false,
+      inFlight: false,
+      eligibility: mkEligibility({ transcribed_interview_id: "interview-1" }),
+      resumeAvailable: false,
+    });
+    expect(state.primaryDisabled).toBe(true);
+    expect(state.fullModeDisabled).toBe(true);
+  });
+
+  it("enables the control once a resume is parsed", () => {
+    // HRP-488 case 2: added through resume parsing.
+    const state = deriveSplitButtonState({
+      selectedCvId: "cv-1",
+      busy: false,
+      inFlight: false,
+      eligibility: mkEligibility(),
+      resumeAvailable: true,
+    });
+    expect(state.primaryDisabled).toBe(false);
+    // Still no transcript, so the 40-cr option stays out of reach.
+    expect(state.fullModeDisabled).toBe(true);
   });
 
   it("disables the full-mode item when topup is eligible (cheaper +20 cr upgrade exists)", () => {

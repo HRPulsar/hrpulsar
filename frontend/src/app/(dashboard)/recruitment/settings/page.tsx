@@ -10,7 +10,6 @@ import {
 import { RecruitmentBreadcrumbs, RecruitmentTabs } from "@/components/recruitment";
 import {
   Activity,
-  FileText,
   Globe2,
   Image as ImageIcon,
   ListChecks,
@@ -65,13 +64,6 @@ const TILES = [
     descriptionKey: "settingsTileRolesDesc",
     icon: UsersRound,
     testId: "rec-settings-card-roles",
-  },
-  {
-    href: "/recruitment/settings/report-templates",
-    labelKey: "settingsTileReportTemplates",
-    descriptionKey: "settingsTileReportTemplatesDesc",
-    icon: FileText,
-    testId: "rec-settings-card-report-templates",
   },
   {
     href: "/recruitment/settings/consent-templates",

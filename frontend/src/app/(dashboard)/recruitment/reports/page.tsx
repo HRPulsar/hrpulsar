@@ -189,7 +189,6 @@ export default function ReportsListPage() {
               <TableRow>
                 <TableHead>{tc("vacancy")}</TableHead>
                 <TableHead>{t("reportsColRequested")}</TableHead>
-                <TableHead>{t("reportsColTemplate")}</TableHead>
                 <TableHead>{t("reportsColSections")}</TableHead>
                 <TableHead>{t("columnStatus")}</TableHead>
                 <TableHead className="w-[140px] text-right">
@@ -226,9 +225,6 @@ export default function ReportsListPage() {
                         {row.requested_by_name}
                       </div>
                     )}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {row.template_name || t("reportsTemplateCustom")}
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">

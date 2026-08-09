@@ -112,6 +112,12 @@ def _apply_demo_killswitch_analysis(db, interview, tenant_id: _uuid.UUID) -> dic
         # UI always renders a full report instead of an empty state.
         seed_src = ELENA_INTERVIEW_ANALYSIS
 
+    # Replays must speak the same language as the seeded analysis rows
+    # (white-label deployments localize the demo seed at clone time).
+    from app.modules.demo.seed_i18n import localize as localize_seed
+
+    seed_src = localize_seed(seed_src)
+
     # Build a writable copy with the same shape as the real LLM payload:
     # list[str] entries in process_findings / blind_spots / red_flags are
     # promoted to dicts so ``_role_filter_analysis`` and the frontend

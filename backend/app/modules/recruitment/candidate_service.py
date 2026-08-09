@@ -442,9 +442,7 @@ async def change_candidate_status(
     )
     cv = result.scalar_one_or_none()
     if not cv:
-        raise AppError(
-            "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
-        )
+        raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
 
     old_stage_id = cv.stage_id
 
@@ -540,9 +538,7 @@ async def get_candidate_vacancy(
         )
     ).scalar_one_or_none()
     if not cv:
-        raise AppError(
-            "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
-        )
+        raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
     return _cv_to_read(cv)
 
 
@@ -1441,6 +1437,14 @@ async def list_vacancy_candidates_enriched(
     # Single Compact-matrix call powers the per-row % match aggregates
     # + Divergence column shown in the candidates table (HRP-267).
     await apply_matrix_aggregates(db, tenant_id, vacancy_id, items)
+    # HRP-493: AI DATA / AI VERDICT read the inputs the model can see
+    # and whether a run is in flight — both derived, never a stale
+    # mirror column.
+    from app.modules.recruitment.resume_analysis_service import (
+        apply_ai_analysis_state,
+    )
+
+    await apply_ai_analysis_state(db, tenant_id, items)
     return items, total
 
 
@@ -1474,9 +1478,7 @@ async def patch_candidate_vacancy(
         )
     ).scalar_one_or_none()
     if cv is None:
-        raise AppError(
-            "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
-        )
+        raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
 
     current_etag = candidate_vacancy_etag(cv)
     if if_match is not None and if_match != current_etag:
@@ -1495,9 +1497,7 @@ async def patch_candidate_vacancy(
         applicable = await _get_applicable_stages(db, tenant_id, cv.vacancy_id)
         target = next((s for s in applicable if s.id == new_stage_id), None)
         if target is None:
-            raise AppError(
-                "stage_not_found_for_vacancy", status.HTTP_404_NOT_FOUND
-            )
+            raise AppError("stage_not_found_for_vacancy", status.HTTP_404_NOT_FOUND)
 
         old_stage_id = cv.stage_id
         history = list(cv.status_history or [])
@@ -1530,6 +1530,13 @@ async def patch_candidate_vacancy(
     # an unnecessary load on a hot kanban path (HRP-267 wave-review).
     if "manager_score" in updates:
         await apply_matrix_aggregates(db, tenant_id, cv.vacancy_id, [payload])
+    # HRP-493: keep the PATCH response's AI block consistent with the
+    # list endpoint — the table swaps the row in place from this body.
+    from app.modules.recruitment.resume_analysis_service import (
+        apply_ai_analysis_state,
+    )
+
+    await apply_ai_analysis_state(db, tenant_id, [payload])
     payload["etag"] = candidate_vacancy_etag(cv)
     return payload
 
@@ -1551,9 +1558,7 @@ async def delete_candidate_vacancy(
         )
     ).scalar_one_or_none()
     if cv is None:
-        raise AppError(
-            "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
-        )
+        raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(cv)
     await db.commit()
 

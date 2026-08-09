@@ -17,10 +17,22 @@ const FRONTEND = path.resolve(__dirname, "../..");
 const DASHBOARD_APP = path.join(FRONTEND, "src", "app", "(dashboard)");
 const HEADER = path.join(FRONTEND, "src", "components", "header.tsx");
 
-// Route directories excluded from the public-repo sync (scripts/
-// sync_repos.sh) whose SEGMENT_KEYS entries must survive there anyway —
-// the stale check skips them, the mapped/dangling checks still cover them.
-const ENTERPRISE_ONLY_SEGMENTS = new Set(["billing"]);
+// Route subtrees excluded from the public-repo sync (scripts/sync_repos.sh),
+// relative to src/app/(dashboard). Their SEGMENT_KEYS entries must survive in
+// the public repo even though the route directories are absent there, so the
+// stale check skips every segment in ENTERPRISE_ONLY_SEGMENTS. The set is
+// pinned to the actual subtree contents by the "mirrors the sync-excluded
+// subtrees" test below, which runs wherever the subtrees exist (monorepo,
+// enterprise) — a new enterprise-only route fails there instead of surfacing
+// as a stale entry in the public repo after sync (v1.16.1 shipped
+// prices/transactions exactly that way).
+const SYNC_EXCLUDED_SUBTREES = ["settings/billing"];
+const ENTERPRISE_ONLY_SEGMENTS = new Set([
+  "billing",
+  "prices",
+  "settings",
+  "transactions",
+]);
 
 function collectStaticSegments(dir: string, acc: Set<string>): Set<string> {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -100,4 +112,26 @@ describe("breadcrumb SEGMENT_KEYS completeness", () => {
       .sort();
     expect(stale, "remove these from SEGMENT_KEYS in header.tsx").toEqual([]);
   });
+
+  // Skipped in the public repo, where the subtrees are stripped by the sync
+  // and there is nothing on disk to compare against.
+  const subtreesPresent = SYNC_EXCLUDED_SUBTREES.every((rel) =>
+    fs.existsSync(path.join(DASHBOARD_APP, rel)),
+  );
+
+  it.runIf(subtreesPresent)(
+    "mirrors the sync-excluded subtrees in ENTERPRISE_ONLY_SEGMENTS",
+    () => {
+      const expected = new Set<string>();
+      for (const rel of SYNC_EXCLUDED_SUBTREES) {
+        expected.add(path.basename(rel)); // the subtree root is a segment too
+        collectStaticSegments(path.join(DASHBOARD_APP, rel), expected);
+      }
+      expect(
+        [...ENTERPRISE_ONLY_SEGMENTS].sort(),
+        "keep ENTERPRISE_ONLY_SEGMENTS equal to the segments under " +
+          "SYNC_EXCLUDED_SUBTREES — the public repo cannot check them itself",
+      ).toEqual([...expected].sort());
+    },
+  );
 });

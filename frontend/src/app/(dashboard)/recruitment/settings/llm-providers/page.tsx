@@ -35,6 +35,30 @@ const PROVIDERS = [
   { value: "gigachat", labelKey: "llmProviderGigachat" },
 ];
 
+// Suggested model per provider. Switching providers replaces a model that
+// belongs to another one — the backend rejects such pairs (HRP-498), and
+// silently saved mismatches used to break the whole recruitment pipeline.
+const DEFAULT_MODELS: Record<string, string> = {
+  anthropic: "claude-sonnet-5",
+  openai: "gpt-4o",
+  gemini: "gemini-2.5-pro",
+};
+
+// Mirrors ai.providers.classify_model / PROVIDER_ALIASES: a name no
+// provider claims by prefix (local servers) belongs to whoever is picked.
+function modelOwner(model: string): string | null {
+  if (model.startsWith("claude")) return "anthropic";
+  if (/^(gpt|o1|o3|o4|text-embedding)/.test(model)) return "openai";
+  if (model.startsWith("gemini")) return "gemini";
+  return null;
+}
+
+function canonicalProvider(provider: string): string {
+  if (provider === "azure" || provider === "yandex" || provider === "gigachat")
+    return "openai_compatible";
+  return provider;
+}
+
 export default function LLMProvidersPage() {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
@@ -80,7 +104,11 @@ export default function LLMProvidersPage() {
         is_active: true,
       });
       toast.success(t("llmToastAdded"));
-      setDraft({ provider: "anthropic", model: "claude-sonnet-5", api_key: "" });
+      setDraft({
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        api_key: "",
+      });
       void load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("toastGenericError"));
@@ -148,7 +176,19 @@ export default function LLMProvidersPage() {
                 id="llm-provider"
                 value={draft.provider}
                 onChange={(e) =>
-                  setDraft((d) => ({ ...d, provider: e.target.value }))
+                  setDraft((d) => {
+                    const provider = e.target.value;
+                    const owner = modelOwner(d.model);
+                    const keepModel =
+                      owner === null || owner === canonicalProvider(provider);
+                    return {
+                      ...d,
+                      provider,
+                      model: keepModel
+                        ? d.model
+                        : (DEFAULT_MODELS[provider] ?? ""),
+                    };
+                  })
                 }
                 className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
                 data-testid="llm-input-provider"

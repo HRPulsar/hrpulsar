@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,8 @@ from app.modules.ai_settings.schemas import AISettingsUpdate
 
 if TYPE_CHECKING:
     pass
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -269,13 +272,71 @@ def get_effective_provider(row: TenantAISettings) -> str:
 
 
 def get_effective_model(row: TenantAISettings) -> str:
-    """Override wins; otherwise pull from preset for the active provider."""
+    """Override wins; otherwise pull from preset for the active provider.
+
+    Catalog-blind: use :func:`get_effective_model_async` wherever a
+    session is available, so a model the platform admin disabled stops
+    being dispatched (HRP-500).
+    """
     if row.llm_model:
         return row.llm_model
 
     provider = _platform_provider()
     preset = EFFORT_PRESETS.get(row.effort_level) or EFFORT_PRESETS[DEFAULT_EFFORT]
     return preset["models"].get(provider, preset["models"]["anthropic"])
+
+
+async def get_effective_model_async(db: AsyncSession, row: TenantAISettings) -> str:
+    """Effective model, checked against the catalog kill-switch.
+
+    HRP-500 (review #12): disabling a catalog row blocked *picking* the
+    model but not *using* it — tenants on an effort preset never pin a
+    model, so ``get_effective_model`` kept resolving the hard-coded preset
+    id and every unpinned tenant went on calling a model the platform
+    admin had just turned off. When the resolved model is not pickable any
+    more, fall back to another approved+enabled model of the same tier and
+    provider; with no substitute the preset id stands (killing generation
+    outright would be worse than one more call to a deprecated model).
+    """
+    from app.modules.ai import model_catalog_service
+
+    model = get_effective_model(row)
+    if await model_catalog_service.is_model_allowed(db, model):
+        return model
+    entry = await model_catalog_service.get_entry(db, model)
+    if entry is None:
+        # The catalog has never seen this model (local/BYOK name, or a
+        # fresh install before the first seed) — it is not the catalog's
+        # call to override it.
+        return model
+
+    # The replacement must stay on the provider of the model being
+    # replaced, not on the platform default: a tenant pinned to gpt-4o
+    # through its own OpenAI key would otherwise be handed a Claude model,
+    # silently bypassing its BYOK credentials and contradicting the
+    # ``effective_provider`` the same projection reports (review #2).
+    # Same for the tier — a pinned model's tier is the catalog row's, not
+    # the tenant's effort level (which is "custom" for every pinned row).
+    provider = entry.provider or get_effective_provider(row)
+    tier = entry.tier or (
+        row.effort_level if row.effort_level in EFFORT_PRESETS else DEFAULT_EFFORT
+    )
+    substitute = await model_catalog_service.pick_tier_model(db, provider, tier)
+    if substitute is None:
+        logger.warning(
+            "ai settings: model %s is disabled in the catalog and no %s/%s "
+            "replacement is approved — keeping it",
+            model,
+            provider,
+            tier,
+        )
+        return model
+    logger.warning(
+        "ai settings: model %s is disabled in the catalog — falling back to %s",
+        model,
+        substitute,
+    )
+    return substitute
 
 
 def get_effective_temperature(row: TenantAISettings) -> float:
@@ -317,24 +378,38 @@ def get_effective_credit_multiplier(row: TenantAISettings) -> float:
 async def get_effective_credit_multiplier_async(
     db: AsyncSession, row: TenantAISettings
 ) -> float:
-    """Billing-grade multiplier: registry, then the catalog row, then 1.0.
+    """Billing-grade multiplier: the catalog row, then the registry, then 1.0.
 
-    A moderation approval upserts the in-memory registry only in the uvicorn
-    worker that served it — sibling workers would bill at 1.0 until their
-    next restart. This resolver falls through to the catalog row's stored
-    multiplier (`model_catalog_service.stored_multiplier`) so every worker
-    bills at the moderated price. Used by `ee.credits._resolve_cost`.
+    HRP-500 (review #10): the catalog is the source of truth and the
+    in-memory registry is a per-process cache of it. A moderation approval
+    (or a later multiplier edit) upserts the registry only in the uvicorn
+    worker that served the request, so a registry-first lookup billed the
+    same tenant differently depending on which worker answered. Reading
+    the moderated row first makes every worker agree; curated seed rows
+    carry NULL and still fall through to their credits.yaml price.
+
+    Used by `ee.credits._resolve_cost`.
     """
-    model = get_effective_model(row)
+    from app.modules.ai import model_catalog_service
+
+    model = await get_effective_model_async(db, row)
+    stored = await model_catalog_service.stored_multiplier(db, model)
+    if stored is not None:
+        return float(stored)
+
     entry = _model_lookup(model)
     if entry is not None:
         return float(entry["credit_multiplier"])
 
-    from app.modules.ai import model_catalog_service
-
-    stored = await model_catalog_service.stored_multiplier(db, model)
-    if stored is not None:
-        return float(stored)
+    # HRP-500 (review #11): a tenant pinned to a model that was dropped
+    # from credits.yaml and never moderated in the catalog would bill at
+    # 1.0 silently — a 3.0× model charged as 1.0×. Still bill (refusing
+    # the action helps nobody), but leave a trace an operator can find.
+    logger.warning(
+        "billing: no credit multiplier for model %s (tenant %s) — charging 1.0",
+        model,
+        row.tenant_id,
+    )
     return 1.0
 
 
@@ -379,7 +454,31 @@ def build_system_prompt_extras(row: TenantAISettings | None) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def to_read_dict(row: TenantAISettings) -> dict[str, Any]:
+async def to_read_dict_async(db: AsyncSession, row: TenantAISettings) -> dict[str, Any]:
+    """Read projection with the multiplier billing will actually charge.
+
+    HRP-500 (review #14): the sync projection resolves the multiplier from
+    the in-memory registry only, while billing reads the catalog — so the
+    settings page could quote x1.0 for a model charged at x2.5 (and the
+    spend preview inherited the same phantom delta).
+    """
+    effective_model = await get_effective_model_async(db, row)
+    return to_read_dict(
+        row,
+        effective_model=effective_model,
+        credit_multiplier=await get_effective_credit_multiplier_async(db, row),
+    )
+
+
+def to_read_dict(
+    row: TenantAISettings,
+    *,
+    effective_model: str | None = None,
+    credit_multiplier: float | None = None,
+) -> dict[str, Any]:
+    """Read projection. ``effective_model``/``credit_multiplier`` come from
+    the catalog-aware async resolvers when the caller has a session —
+    without them this falls back to the registry-only values."""
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
@@ -396,11 +495,15 @@ def to_read_dict(row: TenantAISettings) -> dict[str, Any]:
         "temperature": row.temperature,
         "max_retries": row.max_retries,
         "company_context": row.company_context,
-        "effective_model": get_effective_model(row),
+        "effective_model": effective_model or get_effective_model(row),
         "effective_provider": get_effective_provider(row),
         "effective_temperature": get_effective_temperature(row),
         "effective_max_retries": get_effective_max_retries(row),
-        "effective_credit_multiplier": get_effective_credit_multiplier(row),
+        "effective_credit_multiplier": (
+            credit_multiplier
+            if credit_multiplier is not None
+            else get_effective_credit_multiplier(row)
+        ),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }

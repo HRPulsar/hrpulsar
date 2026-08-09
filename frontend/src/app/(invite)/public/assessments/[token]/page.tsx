@@ -52,6 +52,21 @@ interface PublicAssessment {
   indicator_scores: IndicatorScore[];
 }
 
+// HRP-371: a browser cannot render a .docx, so the old unconditional
+// iframe left the pane blank and shoved the file into Downloads on every
+// load. The server classifies the file and — for anything text-bearing —
+// extracts it so the pane shows a real preview; the raw file is fetched
+// only when the evaluator clicks Download.
+interface ResumePreview {
+  kind: "pdf" | "text" | "unsupported" | "none";
+  filename: string | null;
+  mime_type: string | null;
+  preview_url: string | null;
+  download_url: string | null;
+  blocks: string[];
+  truncated: boolean;
+}
+
 type PublicContext = {
   invite_id: string;
   status: string;
@@ -113,6 +128,7 @@ export default function PublicAssessmentPage() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [ctx, setCtx] = useState<PublicContext | null>(null);
   const [competences, setCompetences] = useState<ProfileCompetence[]>([]);
+  const [resume, setResume] = useState<ResumePreview | null>(null);
   const [sheet, setSheet] = useState<PublicAssessment | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -151,6 +167,19 @@ export default function PublicAssessmentPage() {
       setFinalNotes(data.assessment?.final_notes ?? "");
       setCompetences(await toProfileCompetences(data.competences ?? []));
       setPhase(data.consent_accepted ? "form" : "consent");
+      if (data.consent_accepted) {
+        // Separate call: extracting a docx is slower than the context read
+        // and must never hold the evaluation form back.
+        try {
+          setResume(
+            await api.get<ResumePreview>(
+              `/v1/public/assessments/${token}/resume-preview`,
+            ),
+          );
+        } catch {
+          setResume(null);
+        }
+      }
     } catch (err: unknown) {
       const e = err as { status?: number; message?: string };
       if (e.status === 410) {
@@ -657,22 +686,22 @@ export default function PublicAssessmentPage() {
         {/* Pane A — candidate context */}
         <div className="space-y-4" data-testid="public-assessment-context-pane">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-sm">{t("resume")}</CardTitle>
+              {resume?.download_url && (
+                // HRP-371: the only path that puts the file on disk, and it
+                // takes a deliberate click.
+                <a
+                  href={resume.download_url}
+                  className="text-xs underline"
+                  data-testid="public-assessment-resume-download-btn"
+                >
+                  {t("downloadResume")}
+                </a>
+              )}
             </CardHeader>
             <CardContent>
-              {ctx?.resume_url ? (
-                <iframe
-                  src={ctx.resume_url}
-                  title={ctx.resume_filename ?? t("resume")}
-                  className="h-[480px] w-full rounded-md border"
-                  data-testid="public-assessment-resume-frame"
-                />
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  {t("noResumeUploaded")}
-                </p>
-              )}
+              <ResumePane preview={resume} fallbackUrl={ctx?.resume_url} t={t} />
             </CardContent>
           </Card>
           {(ctx?.questions?.length ?? 0) > 0 && (
@@ -800,6 +829,73 @@ export default function PublicAssessmentPage() {
         testId="public-assessment-submit-warning-modal"
       />
     </div>
+  );
+}
+
+/** HRP-371: resume pane — inline pdf, extracted text, or download-only. */
+function ResumePane({
+  preview,
+  fallbackUrl,
+  t,
+}: {
+  preview: ResumePreview | null;
+  /** Pre-HRP-371 context field, still the source for the pdf iframe when
+   * the preview call itself failed (expired presign, transient 5xx). */
+  fallbackUrl?: string | null;
+  t: Translator;
+}) {
+  if (preview === null) {
+    return fallbackUrl ? (
+      <iframe
+        src={fallbackUrl}
+        title={t("resume")}
+        className="h-[480px] w-full rounded-md border"
+        data-testid="public-assessment-resume-frame"
+      />
+    ) : (
+      <p className="text-sm text-muted-foreground">{t("noResumeUploaded")}</p>
+    );
+  }
+  if (preview.kind === "none") {
+    return <p className="text-sm text-muted-foreground">{t("noResumeUploaded")}</p>;
+  }
+  if (preview.kind === "pdf" && preview.preview_url) {
+    return (
+      <iframe
+        src={preview.preview_url}
+        title={preview.filename ?? t("resume")}
+        className="h-[480px] w-full rounded-md border"
+        data-testid="public-assessment-resume-frame"
+      />
+    );
+  }
+  if (preview.kind === "text" && preview.blocks.length > 0) {
+    return (
+      <div
+        className="h-[480px] space-y-2 overflow-y-auto rounded-md border p-3 text-sm"
+        data-testid="public-assessment-resume-preview"
+      >
+        {preview.blocks.map((block, i) => (
+          <p key={i} className="whitespace-pre-wrap break-words">
+            {block}
+          </p>
+        ))}
+        {preview.truncated && (
+          <p className="pt-2 text-xs text-muted-foreground">
+            {t("resumePreviewTruncated")}
+          </p>
+        )}
+      </div>
+    );
+  }
+  // Readable file we cannot turn into text (scans, legacy .doc, oversize).
+  return (
+    <p
+      className="text-sm text-muted-foreground"
+      data-testid="public-assessment-resume-preview-unavailable"
+    >
+      {t("resumePreviewUnavailable")}
+    </p>
   );
 }
 

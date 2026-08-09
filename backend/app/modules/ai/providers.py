@@ -130,27 +130,76 @@ class GenerationTarget:
     model: str | None = None
 
 
-def _row_base_url(row: Any) -> str | None:
-    raw = (row.settings or {}).get("base_url") if row.settings else None
+def base_url_from_settings(provider_settings: dict[str, Any] | None) -> str | None:
+    """The HTTP(S) ``base_url`` stored in a config row's ``settings`` JSON.
+
+    Shared with the recruitment settings validator, which has the raw dict
+    rather than a row (HRP-498).
+    """
+    raw = (provider_settings or {}).get("base_url")
     if isinstance(raw, str) and raw.startswith(("http://", "https://")):
         return raw
     return None
 
 
-def _decrypt_row_key(row: Any) -> str | None:
-    if not row.api_key_encrypted:
-        return None
-    from app.core.crypto import decrypt_secret
+def _row_base_url(row: Any) -> str | None:
+    return base_url_from_settings(row.settings)
 
-    try:
-        return decrypt_secret(row.api_key_encrypted)
-    except Exception:  # noqa: BLE001 — a stale key must not kill generation
-        logger.warning(
-            "LLM provider config %s: stored API key failed to decrypt; "
-            "falling back to the platform key",
-            row.id,
-        )
-        return None
+
+def row_key_status(row: Any, *, kind: str = "llm_provider") -> tuple[str | None, str]:
+    """``(plaintext, status)`` for one BYOK config row.
+
+    Status is ``missing`` / ``ok`` / ``decrypt_failed``; see
+    :func:`app.core.crypto.decrypt_optional_secret`. A stale key must not
+    kill generation — every caller falls back to the platform credential —
+    but callers that report configuration state need to tell "no key" from
+    "unreadable key" (HRP-514).
+    """
+    from app.core.crypto import decrypt_optional_secret
+
+    return decrypt_optional_secret(row.api_key_encrypted, context=f"{kind}:{row.id}")
+
+
+def decrypt_row_key(row: Any, *, kind: str = "llm_provider") -> str | None:
+    """Plaintext API key of a BYOK config row, or None when absent/stale.
+
+    Shared with the transcription BYOK path, which used to pass the stored
+    ciphertext to the provider as a Bearer token (HRP-506).
+    """
+    return row_key_status(row, kind=kind)[0]
+
+
+def model_matches_provider(
+    provider: str | None, model: str | None, base_url: str | None = None
+) -> bool:
+    """False only when a model name provably belongs to another provider.
+
+    Prefix ownership says nothing about OpenAI-compatible proxies:
+    ``openai_compatible`` owns no prefix at all (local model names are
+    arbitrary) and ``azure``/``yandex``/``gigachat`` canonicalize onto it
+    while serving upstream ids verbatim — ``{provider: "azure", model:
+    "gpt-4o"}`` is the *normal* Azure configuration. Treating it as a
+    mismatch rejected every proxy BYOK row (HRP-498 review). The same
+    applies to any row carrying a ``base_url``: there the endpoint, not
+    the model name, decides what is served (see :func:`_pick_target`).
+    """
+    canonical = resolve_provider_name(provider)
+    if canonical is None or not model:
+        return True
+    if canonical == "openai_compatible" or base_url is not None:
+        return True
+    owner = classify_model(model)
+    return owner is None or owner == canonical
+
+
+def row_is_consistent(row: Any) -> bool:
+    """False when a config row's model belongs to another provider.
+
+    HRP-498 backfilled and now validates such pairs, but a row saved
+    before the guard (or edited straight in the DB) must not become a
+    dispatch target — its provider would 404 on a model it never served.
+    """
+    return model_matches_provider(row.provider, row.model, _row_base_url(row))
 
 
 def _pick_target(rows: list[Any], model: str | None) -> GenerationTarget | None:
@@ -164,7 +213,7 @@ def _pick_target(rows: list[Any], model: str | None) -> GenerationTarget | None:
 
     def _target(row: Any, provider: str) -> GenerationTarget | None:
         base_url = _row_base_url(row)
-        api_key = _decrypt_row_key(row)
+        api_key = decrypt_row_key(row)
         if provider == "openai_compatible" or (
             provider == "openai" and base_url is not None
         ):
@@ -193,6 +242,12 @@ def _pick_target(rows: list[Any], model: str | None) -> GenerationTarget | None:
         provider = resolve_provider_name(row.provider)
         if provider is None or not model or row.model != model:
             continue
+        if not row_is_consistent(row):
+            # HRP-498 review: an exact model match does not redeem an
+            # inconsistent row — {provider: "anthropic", model: "gpt-4o"}
+            # would send gpt-4o to Anthropic and 404. Only the *no model
+            # requested* branch used to check this.
+            continue
         resolved = _target(row, provider)
         if resolved is not None:
             return resolved
@@ -211,7 +266,7 @@ def _pick_target(rows: list[Any], model: str | None) -> GenerationTarget | None:
         # recently updated dispatchable config wins, model included.
         for row in rows:
             provider = resolve_provider_name(row.provider)
-            if provider is None:
+            if provider is None or not row_is_consistent(row):
                 continue
             resolved = _target(row, provider)
             if resolved is not None:
@@ -263,6 +318,12 @@ async def configured_providers(
     ``byok`` (tenant key), ``local`` (tenant base_url), or ``global``
     (platform env key). Only configured providers should be offered in
     model/provider selectors.
+
+    HRP-514: a non-empty ciphertext is not a usable key. When it fails to
+    decrypt, generation silently falls back to the platform key, so the
+    row must not be reported as BYOK — ``key_status`` carries
+    ``decrypt_failed`` instead, and the effective source is whatever the
+    fallback actually uses.
     """
     result = await db.execute(_rows_query(tenant_id))
     rows = list(result.scalars().all())
@@ -276,12 +337,21 @@ async def configured_providers(
     out: list[dict[str, Any]] = []
     for spec in PROVIDERS.values():
         source: str | None = None
+        key_status: str | None = None
         for row in by_provider.get(spec.name, []):
             if _row_base_url(row) is not None:
+                # A local row needs no key at all — a ``decrypt_failed``
+                # picked up from an unrelated earlier row of the same
+                # provider must not be reported against it.
                 source = "local"
+                key_status = None
                 break
-            if row.api_key_encrypted and source is None:
+            plaintext, status = row_key_status(row)
+            if status == "decrypt_failed" and key_status is None:
+                key_status = "decrypt_failed"
+            if plaintext is not None and source is None:
                 source = "byok"
+                key_status = "ok"
         if source is None and global_key(spec.name) is not None:
             source = "global"
         out.append(
@@ -291,6 +361,7 @@ async def configured_providers(
                 "configured": source is not None,
                 "source": source,
                 "supports_local": spec.supports_local,
+                "key_status": key_status,
             }
         )
     return out

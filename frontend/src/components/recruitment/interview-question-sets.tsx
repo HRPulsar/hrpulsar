@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
@@ -10,6 +10,7 @@ import {
   Download,
   FileQuestion,
   Lightbulb,
+  Loader2,
   PencilLine,
   Pin,
   Plus,
@@ -47,14 +48,41 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { CompetenceItem } from "@/lib/types";
+import { inlineEditKeys, useInlineEdit } from "@/hooks/use-inline-edit";
+import { AddFromCompetencyDialog } from "./add-from-competency-dialog";
+import type { NewQuestionPayload } from "./question-payload";
 
-type QuestionSource =
-  | "ai_generated"
-  | "manual"
-  | "from_competency_indicator"
-  | "from_blind_spot";
-type QuestionPriority = "must" | "should" | "nice_to_ask";
-type QuestionGoal = "clarification" | "depth" | "risk" | "motivation" | "fit";
+import {
+  GOAL_LABEL_KEYS,
+  PRIORITY_LABEL_KEYS,
+  type QuestionGoal,
+  type QuestionPriority,
+  type QuestionSource,
+} from "@/lib/question-enums";
+import {
+  type AssessmentRoundRow,
+  buildNewSetBody,
+  interviewLabel,
+  type NewSetSelection,
+  setSourceInterviewIds,
+  type TranscribedInterviewRow,
+  transcribedInterviews,
+} from "@/lib/new-question-set";
+import { NewQuestionSetDialog } from "./new-question-set-dialog";
+import { formatDate } from "@/lib/date-format";
+
+// HRP-485 task 2: the ticket pins the custom-question form bounds.
+const QUESTION_TEXT_MIN = 10;
+const QUESTION_TEXT_MAX = 500;
+const RESUME_ANCHOR_MAX = 60;
+
 type GenerationMode = "initial" | "regenerated" | "dynamic_next" | "manual";
 type SetType = "pre_interview" | "interview_round" | "final";
 type SetStatus = "ready" | "generating" | "failed" | "sample";
@@ -84,6 +112,8 @@ interface QuestionSet {
   id: string | null;
   candidate_vacancy_id: string | null;
   round_id: string | null;
+  /** HRP-444: assessment round this set prepares, if any. */
+  assessment_round_id: string | null;
   set_type: SetType;
   name: string;
   status: SetStatus;
@@ -107,6 +137,8 @@ interface Props {
   candidateId: string;
   vacancyOptions: VacancyOption[];
   initialVacancyId?: string;
+  /** HRP-460: set id from the notification deep link, if any. */
+  initialQuestionSetId?: string;
 }
 
 const GENERATE_ACTION = "recruitment.generate_question_set";
@@ -140,25 +172,9 @@ const SOURCE_META: Record<
 };
 
 const PRIORITY_BADGE: Record<QuestionPriority, string> = {
-  must: BADGE_COLOR.rose,
-  should: BADGE_COLOR.amber,
+  must_ask: BADGE_COLOR.rose,
+  should_ask: BADGE_COLOR.amber,
   nice_to_ask: BADGE_COLOR.emerald,
-};
-
-// Lowercase badge wording — the chip renders the priority inline, the
-// dialog selects use the capitalised ``questionSetsPriority*`` keys.
-const PRIORITY_BADGE_LABEL_KEYS: Record<QuestionPriority, string> = {
-  must: "questionSetsPriorityBadgeMust",
-  should: "questionSetsPriorityBadgeShould",
-  nice_to_ask: "questionSetsPriorityBadgeNiceToAsk",
-};
-
-const GOAL_LABEL_KEYS: Record<QuestionGoal, string> = {
-  clarification: "questionSetsGoalClarification",
-  depth: "questionSetsGoalDepth",
-  risk: "questionSetsGoalRisk",
-  motivation: "questionSetsGoalMotivation",
-  fit: "questionSetsGoalFit",
 };
 
 function activeQuestions(set: QuestionSet): QuestionRow[] {
@@ -169,6 +185,7 @@ export function InterviewQuestionSets({
   candidateId,
   vacancyOptions,
   initialVacancyId,
+  initialQuestionSetId,
 }: Props) {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
@@ -177,6 +194,12 @@ export function InterviewQuestionSets({
   );
   const [sets, setSets] = useState<QuestionSet[]>([]);
   const [activeSetId, setActiveSetId] = useState<string | null>(null);
+  // HRP-460: the notification deep link names one set to open. It is
+  // consumed once — the query param is never cleared from the URL, so
+  // re-reading it on every load pinned the user to that tab for good.
+  const pendingDeepLinkSet = useRef<string | null>(
+    initialQuestionSetId ?? null,
+  );
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const {
@@ -188,12 +211,22 @@ export function InterviewQuestionSets({
   } = useCreditGate(GENERATE_ACTION);
   const [sample, setSample] = useState<QuestionSet | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [competencyOpen, setCompetencyOpen] = useState(false);
+  // HRP-485 / HRP-503: the vacancy profile backs both the competency
+  // picker and the competence name shown on each question.
+  const [competences, setCompetences] = useState<CompetenceItem[]>([]);
   const [exportOpen, setExportOpen] = useState(false);
   const [regenerateConfirm, setRegenerateConfirm] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  // HRP-205: transcribed interview rounds for this candidate-vacancy.
-  // Their presence unlocks "Generate next set" (mode=dynamic_next).
-  const [transcribedRounds, setTranscribedRounds] = useState<string[]>([]);
+  // Transcribed interviews for this candidate-vacancy: what a next-round
+  // set can be built on. HRP-444 keeps the whole row rather than the id —
+  // the New set dialog has to name each interview, and the set header has
+  // to say which transcripts a set was built on.
+  const [transcribed, setTranscribed] = useState<TranscribedInterviewRow[]>([]);
+  // HRP-444: assessment rounds (Manager assessments block) a new set can
+  // be bound to.
+  const [rounds, setRounds] = useState<AssessmentRoundRow[]>([]);
+  const [newSetOpen, setNewSetOpen] = useState(false);
 
   const currentVacancy = useMemo(
     () => vacancyOptions.find((v) => v.id === vacancyId),
@@ -203,36 +236,73 @@ export function InterviewQuestionSets({
   useEffect(() => {
     const cvId = currentVacancy?.candidate_vacancy_id;
     if (!cvId) {
-      setTranscribedRounds([]);
+      setTranscribed([]);
+      setRounds([]);
       return;
     }
     let cancelled = false;
     api
-      .get<
-        Array<{
-          id: string;
-          transcription_status: string;
-          archived_at: string | null;
-        }>
-      >(`/recruitment/candidate-vacancies/${cvId}/interviews`)
+      .get<TranscribedInterviewRow[]>(
+        `/recruitment/candidate-vacancies/${cvId}/interviews`,
+      )
       .then((rows) => {
         if (cancelled) return;
-        setTranscribedRounds(
-          rows
-            .filter(
-              (r) =>
-                r.transcription_status === "completed" && !r.archived_at,
-            )
-            .map((r) => r.id),
-        );
+        setTranscribed(transcribedInterviews(rows));
       })
       .catch(() => {
-        if (!cancelled) setTranscribedRounds([]);
+        if (!cancelled) setTranscribed([]);
+      });
+    // HRP-444: rounds decide what a new set can be bound to. A failure
+    // here only costs the "existing round" options — the dialog can
+    // still open the next round itself.
+    api
+      .get<AssessmentRoundRow[]>(
+        `/v1/candidate-vacancies/${cvId}/assessment-rounds`,
+      )
+      .then((rows) => {
+        if (!cancelled) setRounds(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setRounds([]);
       });
     return () => {
       cancelled = true;
     };
   }, [currentVacancy?.candidate_vacancy_id]);
+
+  useEffect(() => {
+    if (!vacancyId) {
+      setCompetences([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .get<{
+        profile_data?: { competences?: CompetenceItem[] };
+      }>(`/recruitment/vacancies/${vacancyId}/profile`)
+      .then((profile) => {
+        if (cancelled) return;
+        const items = profile?.profile_data?.competences;
+        setCompetences(Array.isArray(items) ? items : []);
+      })
+      .catch(() => {
+        if (!cancelled) setCompetences([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [vacancyId]);
+
+  // HRP-503: questions store a normalized competence UUID; the profile
+  // is the only place the human-readable name lives. AI profiles key
+  // competences by slug, so index both forms.
+  const competenceNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of competences) {
+      if (c.id) m.set(String(c.id), c.name);
+    }
+    return m;
+  }, [competences]);
 
   const loadSets = useCallback(async () => {
     if (!vacancyId) {
@@ -247,17 +317,26 @@ export function InterviewQuestionSets({
       );
       const ours = data.filter((s) => s.archived_at === null);
       setSets(ours);
-      if (ours.length && !ours.some((s) => s.id === activeSetId)) {
-        setActiveSetId(ours[0].id);
+      // A deep link wins once; after that the user's tab clicks do.
+      const deepLink = pendingDeepLinkSet.current;
+      if (deepLink && ours.some((s) => s.id === deepLink)) {
+        pendingDeepLinkSet.current = null;
+        setActiveSetId(deepLink);
+        return;
       }
-      if (!ours.length) setActiveSetId(null);
+      // Functional update on purpose: reading `activeSetId` here would put
+      // it in this callback's deps, and the effect below would then refetch
+      // the whole list (loading flash included) on every tab click.
+      setActiveSetId((prev) =>
+        ours.some((s) => s.id === prev) ? prev : (ours[0]?.id ?? null),
+      );
     } catch {
       setSets([]);
       setActiveSetId(null);
     } finally {
       setLoading(false);
     }
-  }, [candidateId, vacancyId, activeSetId]);
+  }, [candidateId, vacancyId]);
 
   useEffect(() => {
     loadSets();
@@ -265,6 +344,43 @@ export function InterviewQuestionSets({
 
   const currentSet =
     sample ?? sets.find((s) => s.id === activeSetId) ?? null;
+
+  const interviewLabels = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const iv of transcribed) {
+      m.set(iv.id, interviewLabel(iv, t, formatDate));
+    }
+    return m;
+  }, [transcribed, t]);
+
+  // HRP-444: "Generated {date} by AI · Based on resume + transcripts of
+  // Interview 1". Hand-built and sample sets have no generation story to
+  // tell, so they get no subtitle.
+  const setSubtitle = useMemo(() => {
+    if (!currentSet || currentSet.status === "sample") return null;
+    if (currentSet.generation_mode === "manual" || !currentSet.created_at) {
+      return null;
+    }
+    const date = formatDate(currentSet.created_at);
+    const names = setSourceInterviewIds(currentSet)
+      .map((id) => interviewLabels.get(id))
+      .filter((n): n is string => Boolean(n));
+    if (!names.length) return t("questionSetsGeneratedSubtitle", { date });
+    return t("questionSetsGeneratedSubtitleFrom", {
+      date,
+      rounds: names.join(", "),
+    });
+  }, [currentSet, interviewLabels, t]);
+
+  // Which round a derived question follows from — the same transcripts
+  // the set header names.
+  const followsFromLabel = useMemo(() => {
+    if (!currentSet) return undefined;
+    const names = setSourceInterviewIds(currentSet)
+      .map((id) => interviewLabels.get(id))
+      .filter((n): n is string => Boolean(n));
+    return names.length ? names.join(", ") : undefined;
+  }, [currentSet, interviewLabels]);
 
   // Credit copy only renders on SaaS builds where billing is active; the
   // number is server-priced so it stays in sync with backend/ee/credits.yaml.
@@ -283,20 +399,13 @@ export function InterviewQuestionSets({
     }
   }
 
-  async function handleGenerate(mode: GenerationMode) {
-    if (!currentVacancy?.candidate_vacancy_id) return;
+  async function runGeneration(body: Record<string, unknown>): Promise<boolean> {
+    const cvId = currentVacancy?.candidate_vacancy_id;
+    if (!cvId) return false;
     setGenerating(true);
     try {
-      const body: Record<string, unknown> = { mode, set_type: "pre_interview" };
-      if (mode === "regenerated" && currentSet?.id) {
-        body.target_set_id = currentSet.id;
-      }
-      if (mode === "dynamic_next") {
-        body.set_type = "interview_round";
-        body.source_round_ids = transcribedRounds;
-      }
       const created = await api.post<QuestionSet>(
-        `/v1/candidate-vacancies/${currentVacancy.candidate_vacancy_id}/question-sets`,
+        `/v1/candidate-vacancies/${cvId}/question-sets`,
         body,
       );
       setSample(null);
@@ -307,42 +416,71 @@ export function InterviewQuestionSets({
       setActiveSetId(created.id);
       toast.success(t("questionSetsToastReady"));
       refreshBalance();
+      return true;
     } catch (err) {
       const msg =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: unknown }).message)
           : t("questionSetsGenerateFailed");
       toast.error(msg);
+      return false;
     } finally {
       setGenerating(false);
     }
   }
 
-  async function handleAdd(payload: Partial<QuestionRow>) {
-    if (!currentSet?.id) return;
+  async function handleGenerate(mode: GenerationMode) {
+    const body: Record<string, unknown> = { mode, set_type: "pre_interview" };
+    if (mode === "regenerated" && currentSet?.id) {
+      body.target_set_id = currentSet.id;
+    }
+    await runGeneration(body);
+  }
+
+  // HRP-444: the New set dialog has already resolved the round and the
+  // transcript, so this only ships the choice and re-reads the rounds —
+  // one of them may have just been opened by the server.
+  async function handleGenerateNext(selection: NewSetSelection) {
+    const cvId = currentVacancy?.candidate_vacancy_id;
+    const ok = await runGeneration(buildNewSetBody(selection));
+    if (!ok) return;
+    setNewSetOpen(false);
+    if (!cvId) return;
     try {
-      const created = await api.post<QuestionRow>(
-        `/v1/question-sets/${currentSet.id}/questions`,
-        {
-          text: payload.text || "",
-          goal: payload.goal || "clarification",
-          priority: payload.priority || "should",
-          competence_id: payload.competence_id || null,
-          rationale: payload.rationale || null,
-          source: payload.source || "manual",
-          expected_answer_indicators: payload.expected_answer_indicators || [],
-          follow_ups: payload.follow_ups || [],
-        },
+      const rows = await api.get<AssessmentRoundRow[]>(
+        `/v1/candidate-vacancies/${cvId}/assessment-rounds`,
       );
+      setRounds(Array.isArray(rows) ? rows : []);
+    } catch {
+      // Non-fatal: the set is generated either way.
+    }
+  }
+
+  async function postQuestions(payloads: NewQuestionPayload[]) {
+    if (!currentSet?.id || !payloads.length) return;
+    const setId = currentSet.id;
+    try {
+      // Sequential on purpose: sort_order is derived server-side from
+      // the current max, so parallel posts would collide on it.
+      const created: QuestionRow[] = [];
+      for (const payload of payloads) {
+        created.push(
+          await api.post<QuestionRow>(
+            `/v1/question-sets/${setId}/questions`,
+            payload,
+          ),
+        );
+      }
       setSets((prev) =>
         prev.map((s) =>
-          s.id === currentSet.id
-            ? { ...s, questions: [...s.questions, created] }
-            : s,
+          s.id === setId ? { ...s, questions: [...s.questions, ...created] } : s,
         ),
       );
-      toast.success(t("questionSetsToastAdded"));
+      toast.success(
+        t("questionSetsToastAddedCount", { count: created.length }),
+      );
       setAddOpen(false);
+      setCompetencyOpen(false);
     } catch (err) {
       const msg =
         err && typeof err === "object" && "message" in err
@@ -421,6 +559,7 @@ export function InterviewQuestionSets({
 
   return (
     <section
+      id="interview-questions"
       data-testid="recruitment-interview-questions-section"
       className="space-y-3"
     >
@@ -452,17 +591,6 @@ export function InterviewQuestionSets({
               </SelectContent>
             </Select>
           )}
-          {sets.length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              data-testid="recruitment-interview-questions-export-btn"
-              onClick={() => setExportOpen(true)}
-            >
-              <Download className="mr-1 h-4 w-4" />
-              {t("questionSetsExportPdf")}
-            </Button>
-          )}
         </div>
       </header>
 
@@ -493,29 +621,23 @@ export function InterviewQuestionSets({
               </span>
             </button>
           ))}
+          {/* HRP-444: a second set is never another from-scratch
+              pre-interview set — the dialog resolves which round it is
+              for and which transcript it builds on. */}
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => handleGenerate("initial")}
-            disabled={generating || resumeMissing}
+            onClick={() => setNewSetOpen(true)}
+            disabled={generating || resumeMissing || insufficient}
             data-testid="recruitment-interview-questions-new-set-btn"
           >
-            <Plus className="mr-1 h-4 w-4" />
-            {t("questionSetsNewSet")}
+            {generating ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="mr-1 h-4 w-4" />
+            )}
+            {generating ? t("questionSetsGenerating") : t("questionSetsNewSet")}
           </Button>
-          {transcribedRounds.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleGenerate("dynamic_next")}
-              disabled={generating || resumeMissing || insufficient}
-              data-testid="recruitment-interview-questions-next-set-btn"
-            >
-              <Sparkles className="mr-1 h-4 w-4" />
-              {t("questionSetsGenerateNextSet")}
-              {creditSuffix}
-            </Button>
-          )}
         </div>
       )}
 
@@ -551,6 +673,17 @@ export function InterviewQuestionSets({
                   </Badge>
                 )}
               </CardTitle>
+              {/* HRP-444: say when the set was made and what it was
+                  made from, so a round set is distinguishable from the
+                  pre-interview one at a glance. */}
+              {setSubtitle && (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-testid="recruitment-interview-questions-set-subtitle"
+                >
+                  {setSubtitle}
+                </p>
+              )}
               {currentSet.coverage_note && (
                 <p
                   className="text-xs text-muted-foreground"
@@ -563,15 +696,53 @@ export function InterviewQuestionSets({
             <div className="flex items-center gap-2">
               {currentSet.status !== "sample" && (
                 <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setAddOpen(true)}
-                    data-testid="recruitment-interview-questions-add-btn"
-                  >
-                    <Plus className="mr-1 h-4 w-4" />
-                    {t("questionSetsAdd")}
-                  </Button>
+                  {/* HRP-485 task 1: split button — the primary half
+                      opens the custom-question dialog, the caret offers
+                      both entry points explicitly. */}
+                  <span className="inline-flex">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="rounded-r-none"
+                      onClick={() => setAddOpen(true)}
+                      data-testid="recruitment-interview-questions-add-btn"
+                    >
+                      <Plus className="mr-1 h-4 w-4" />
+                      {t("questionSetsAdd")}
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        data-testid="recruitment-interview-questions-add-menu-btn"
+                        aria-label={t("questionSetsAddMenuAria")}
+                        render={
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="rounded-l-none border-l-0 px-2"
+                          />
+                        }
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="end"
+                        data-testid="recruitment-interview-questions-add-menu"
+                      >
+                        <DropdownMenuItem
+                          onClick={() => setAddOpen(true)}
+                          data-testid="recruitment-interview-questions-add-custom-item"
+                        >
+                          {t("questionSetsAddMenuCustom")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => setCompetencyOpen(true)}
+                          data-testid="recruitment-interview-questions-add-competency-item"
+                        >
+                          {t("questionSetsAddMenuFromCompetency")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </span>
                   <Button
                     variant="outline"
                     size="sm"
@@ -582,6 +753,18 @@ export function InterviewQuestionSets({
                     <RefreshCw className="mr-1 h-4 w-4" />
                     {t("questionSetsRegenerate")}
                     {creditSuffix}
+                  </Button>
+                  {/* HRP-484 task 2: export covers the current set only,
+                      so the action belongs to the set card, not the
+                      section header. */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setExportOpen(true)}
+                    data-testid="recruitment-interview-questions-export-btn"
+                  >
+                    <Download className="mr-1 h-4 w-4" />
+                    {t("questionSetsExportPdf")}
                   </Button>
                 </>
               )}
@@ -598,6 +781,15 @@ export function InterviewQuestionSets({
                   key={q.id || `${q.sort_order}-${q.text.slice(0, 8)}`}
                   question={q}
                   readOnly={currentSet.status === "sample"}
+                  competenceName={
+                    q.competence_id
+                      ? competenceNames.get(String(q.competence_id))
+                      : undefined
+                  }
+                  competences={competences}
+                  followsFrom={
+                    q.source === "from_blind_spot" ? followsFromLabel : undefined
+                  }
                   onToggleCovered={() => handleToggleCovered(q)}
                   onEdit={(patch) => handleEdit(q, patch)}
                   onDelete={() => q.id && setDeleteId(q.id)}
@@ -608,10 +800,28 @@ export function InterviewQuestionSets({
         </Card>
       ) : null}
 
+      <NewQuestionSetDialog
+        open={newSetOpen}
+        onOpenChange={setNewSetOpen}
+        rounds={rounds}
+        interviews={transcribed}
+        sets={sets}
+        generating={generating}
+        costSuffix={creditSuffix}
+        onSubmit={handleGenerateNext}
+      />
+
       <AddQuestionDialog
         open={addOpen}
         onOpenChange={setAddOpen}
-        onSubmit={handleAdd}
+        onSubmit={(payload) => postQuestions([payload])}
+      />
+
+      <AddFromCompetencyDialog
+        open={competencyOpen}
+        onOpenChange={setCompetencyOpen}
+        competences={competences}
+        onSubmit={postQuestions}
       />
 
       <ExportDialog
@@ -730,31 +940,287 @@ function EmptyState({
 interface QuestionItemProps {
   question: QuestionRow;
   readOnly: boolean;
+  /** HRP-503: resolved from the vacancy profile; absent when unlinked. */
+  competenceName?: string;
+  /** HRP-487: options for the inline competence picker. */
+  competences: CompetenceItem[];
+  /** HRP-444: round label this question follows from, if it derives. */
+  followsFrom?: string;
   onToggleCovered: () => void;
   onEdit: (patch: Partial<QuestionRow>) => void;
   onDelete: () => void;
 }
 
+// HRP-487: the pencil used to reveal only the question text. The draft
+// below carries every editable attribute; ``source`` is deliberately
+// absent — it records where the question came from and is not a user
+// choice.
+interface QuestionDraft {
+  text: string;
+  goal: QuestionGoal;
+  priority: QuestionPriority;
+  competenceId: string;
+  resumeAnchor: string;
+  indicators: string;
+  followUps: string;
+  rationale: string;
+}
+
+const UNLINKED = "__none__";
+
+function toDraft(q: QuestionRow): QuestionDraft {
+  return {
+    text: q.text,
+    goal: q.goal,
+    priority: q.priority,
+    competenceId: q.competence_id ? String(q.competence_id) : UNLINKED,
+    resumeAnchor: q.resume_anchor_jsonb?.quote || "",
+    indicators: (q.expected_answer_indicators || []).join("\n"),
+    followUps: (q.follow_ups || []).join("\n"),
+    rationale: q.rationale || "",
+  };
+}
+
+function toLines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 function QuestionItem({
   question,
   readOnly,
+  competenceName,
+  competences,
+  followsFrom,
   onToggleCovered,
   onEdit,
   onDelete,
 }: QuestionItemProps) {
   const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const [expanded, setExpanded] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(question.text);
+  const edit = useInlineEdit<QuestionDraft>(() => toDraft(question));
 
   const meta = SOURCE_META[question.source];
   const Icon = meta.icon;
 
   function commitEdit() {
-    if (draft.trim() && draft !== question.text) {
-      onEdit({ text: draft.trim() });
+    const text = edit.draft.text.trim();
+    if (!text) {
+      toast.error(t("questionSetsTextRequiredInline"));
+      return;
     }
-    setEditing(false);
+    onEdit({
+      text,
+      goal: edit.draft.goal,
+      priority: edit.draft.priority,
+      competence_id:
+        edit.draft.competenceId === UNLINKED ? null : edit.draft.competenceId,
+      expected_answer_indicators: toLines(edit.draft.indicators),
+      follow_ups: toLines(edit.draft.followUps),
+      rationale: edit.draft.rationale.trim() || null,
+      resume_anchor_jsonb: edit.draft.resumeAnchor.trim()
+        ? { quote: edit.draft.resumeAnchor.trim(), section: null }
+        : null,
+    });
+    edit.close();
+  }
+
+  const keyHandler = inlineEditKeys<HTMLDivElement>({
+    onCommit: commitEdit,
+    onCancel: edit.cancel,
+  });
+
+  if (edit.editing) {
+    return (
+      <div
+        className="space-y-3 rounded-md border bg-card p-3"
+        onKeyDown={keyHandler}
+        data-testid={`recruitment-interview-question-editor-${question.id}`}
+      >
+        <div>
+          <Label htmlFor={`qe-text-${question.id}`}>
+            {t("questionSetsFieldQuestion")}
+          </Label>
+          <Textarea
+            id={`qe-text-${question.id}`}
+            autoFocus
+            rows={3}
+            value={edit.draft.text}
+            maxLength={QUESTION_TEXT_MAX}
+            onChange={(e) => edit.setDraft({ ...edit.draft, text: e.target.value })}
+            data-testid={`recruitment-interview-question-edit-${question.id}`}
+          />
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div>
+            <Label>{t("questionSetsFieldGoal")}</Label>
+            <Select
+              value={edit.draft.goal}
+              onValueChange={(v) =>
+                edit.setDraft({ ...edit.draft, goal: v as QuestionGoal })
+              }
+            >
+              <SelectTrigger
+                className="w-full"
+                data-testid={`recruitment-interview-question-edit-goal-${question.id}`}
+              >
+                <SelectValue>{t(GOAL_LABEL_KEYS[edit.draft.goal])}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(GOAL_LABEL_KEYS).map(([k, labelKey]) => (
+                  <SelectItem key={k} value={k}>
+                    {t(labelKey)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>{t("questionSetsFieldPriority")}</Label>
+            <Select
+              value={edit.draft.priority}
+              onValueChange={(v) =>
+                edit.setDraft({ ...edit.draft, priority: v as QuestionPriority })
+              }
+            >
+              <SelectTrigger
+                className="w-full"
+                data-testid={`recruitment-interview-question-edit-priority-${question.id}`}
+              >
+                <SelectValue>
+                  {t(PRIORITY_LABEL_KEYS[edit.draft.priority])}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(PRIORITY_LABEL_KEYS).map(([k, labelKey]) => (
+                  <SelectItem key={k} value={k}>
+                    {t(labelKey)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>{t("questionSetsCompetence")}</Label>
+            <Select
+              value={edit.draft.competenceId}
+              onValueChange={(v) =>
+                edit.setDraft({ ...edit.draft, competenceId: v })
+              }
+            >
+              <SelectTrigger
+                className="w-full"
+                data-testid={`recruitment-interview-question-edit-competence-${question.id}`}
+              >
+                <SelectValue>
+                  {edit.draft.competenceId === UNLINKED
+                    ? t("questionSetsCompetenceUnlinked")
+                    : competences.find(
+                        (c) => String(c.id) === edit.draft.competenceId,
+                      )?.name || competenceName || t("questionSetsCompetence")}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNLINKED}>
+                  {t("questionSetsCompetenceUnlinked")}
+                </SelectItem>
+                {competences
+                  .filter((c) => Boolean(c.id))
+                  .map((c) => (
+                    <SelectItem key={String(c.id)} value={String(c.id)}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div>
+          <Label htmlFor={`qe-anchor-${question.id}`}>
+            {t("questionSetsFieldResumeAnchor")}
+          </Label>
+          <Textarea
+            id={`qe-anchor-${question.id}`}
+            rows={2}
+            value={edit.draft.resumeAnchor}
+            onChange={(e) =>
+              edit.setDraft({ ...edit.draft, resumeAnchor: e.target.value })
+            }
+            data-testid={`recruitment-interview-question-edit-anchor-${question.id}`}
+          />
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label htmlFor={`qe-ind-${question.id}`}>
+              {t("questionSetsExpectedIndicators")}
+            </Label>
+            <Textarea
+              id={`qe-ind-${question.id}`}
+              rows={3}
+              value={edit.draft.indicators}
+              onChange={(e) =>
+                edit.setDraft({ ...edit.draft, indicators: e.target.value })
+              }
+              data-testid={`recruitment-interview-question-edit-indicators-${question.id}`}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("questionSetsOnePerLine")}
+            </p>
+          </div>
+          <div>
+            <Label htmlFor={`qe-fu-${question.id}`}>
+              {t("questionSetsFollowUps")}
+            </Label>
+            <Textarea
+              id={`qe-fu-${question.id}`}
+              rows={3}
+              value={edit.draft.followUps}
+              onChange={(e) =>
+                edit.setDraft({ ...edit.draft, followUps: e.target.value })
+              }
+              data-testid={`recruitment-interview-question-edit-followups-${question.id}`}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("questionSetsOnePerLine")}
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <Label htmlFor={`qe-rat-${question.id}`}>
+            {t("questionSetsWhyThisQuestion")}
+          </Label>
+          <Textarea
+            id={`qe-rat-${question.id}`}
+            rows={2}
+            value={edit.draft.rationale}
+            onChange={(e) =>
+              edit.setDraft({ ...edit.draft, rationale: e.target.value })
+            }
+            data-testid={`recruitment-interview-question-edit-rationale-${question.id}`}
+          />
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={edit.cancel}>
+            {tc("cancel")}
+          </Button>
+          <Button
+            size="sm"
+            onClick={commitEdit}
+            data-testid={`recruitment-interview-question-edit-save-${question.id}`}
+          >
+            {t("questionSetsSaveQuestion")}
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -782,46 +1248,56 @@ function QuestionItem({
           <Check className="h-3.5 w-3.5" />
         </button>
 
+        {/* Source stays a read-only icon — see QuestionDraft. */}
         <Icon
           className={`mt-0.5 h-4 w-4 shrink-0 ${meta.tint}`}
           aria-label={t(meta.labelKey)}
         />
 
         <div className="min-w-0 flex-1 space-y-1">
-          {editing ? (
-            <Textarea
-              autoFocus
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onBlur={commitEdit}
-              rows={2}
-              data-testid={`recruitment-interview-question-edit-${question.id}`}
-            />
-          ) : (
-            <button
-              type="button"
-              className={`block w-full text-left text-sm leading-snug ${
-                question.covered_at ? "text-muted-foreground line-through" : ""
-              }`}
-              onClick={() => setExpanded((v) => !v)}
-            >
-              {question.text}
-            </button>
-          )}
+          <button
+            type="button"
+            className={`block w-full text-left text-sm leading-snug ${
+              question.covered_at ? "text-muted-foreground line-through" : ""
+            }`}
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {question.text}
+          </button>
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             <Badge
               variant="secondary"
               className={PRIORITY_BADGE[question.priority]}
             >
-              {PRIORITY_BADGE_LABEL_KEYS[question.priority]
-                ? t(PRIORITY_BADGE_LABEL_KEYS[question.priority])
-                : question.priority.replace("_", " ")}
+              {PRIORITY_LABEL_KEYS[question.priority]
+                ? t(PRIORITY_LABEL_KEYS[question.priority])
+                : question.priority}
             </Badge>
             <Badge variant="outline">
               {GOAL_LABEL_KEYS[question.goal]
                 ? t(GOAL_LABEL_KEYS[question.goal])
                 : question.goal}
             </Badge>
+            {/* HRP-444: a question raised by the previous round says so,
+                so it reads as a follow-up rather than a fresh idea. */}
+            {followsFrom && (
+              <span
+                className="text-[11px] text-muted-foreground underline decoration-dotted"
+                data-testid={`recruitment-interview-question-follows-from-${question.id ?? "preview"}`}
+              >
+                {t("questionSetsFollowsFrom", { round: followsFrom })}
+              </span>
+            )}
+            {/* HRP-503: which profile competence this question probes. */}
+            {competenceName && (
+              <Badge
+                variant="secondary"
+                title={t("questionSetsCompetence")}
+                data-testid={`recruitment-interview-question-competence-${question.id ?? "preview"}`}
+              >
+                {competenceName}
+              </Badge>
+            )}
             {question.resume_anchor_jsonb?.quote && (
               <span
                 className="truncate text-muted-foreground"
@@ -885,7 +1361,7 @@ function QuestionItem({
               variant="ghost"
               size="icon"
               className="h-7 w-7"
-              onClick={() => setEditing(true)}
+              onClick={() => edit.start(toDraft(question))}
               aria-label={t("questionSetsEditQuestionAria")}
               data-testid={`recruitment-interview-question-edit-btn-${question.id}`}
             >
@@ -922,9 +1398,15 @@ function QuestionItem({
 interface AddQuestionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (payload: Partial<QuestionRow>) => void;
+  onSubmit: (payload: NewQuestionPayload) => void;
 }
 
+/**
+ * HRP-485 task 2: the "Add custom question" form. Source is fixed to
+ * ``manual`` here — questions bound to a profile competence come from
+ * AddFromCompetencyDialog instead, so the old free-choice Source select
+ * is gone.
+ */
 function AddQuestionDialog({
   open,
   onOpenChange,
@@ -933,17 +1415,20 @@ function AddQuestionDialog({
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
   const [text, setText] = useState("");
-  const [goal, setGoal] = useState<QuestionGoal>("clarification");
-  const [priority, setPriority] = useState<QuestionPriority>("should");
-  const [source, setSource] =
-    useState<"manual" | "from_competency_indicator">("manual");
+  const [goal, setGoal] = useState<QuestionGoal>("verify_skill");
+  const [priority, setPriority] = useState<QuestionPriority>("should_ask");
+  const [anchor, setAnchor] = useState("");
 
   function reset() {
     setText("");
-    setGoal("clarification");
-    setPriority("should");
-    setSource("manual");
+    setGoal("verify_skill");
+    setPriority("should_ask");
+    setAnchor("");
   }
+
+  const trimmed = text.trim();
+  const lengthInvalid =
+    trimmed.length < QUESTION_TEXT_MIN || trimmed.length > QUESTION_TEXT_MAX;
 
   return (
     <Dialog
@@ -967,22 +1452,31 @@ function AddQuestionDialog({
               id="q-text"
               rows={3}
               value={text}
+              maxLength={QUESTION_TEXT_MAX}
               onChange={(e) => setText(e.target.value)}
               placeholder={t("questionSetsQuestionPlaceholder")}
               data-testid="recruitment-interview-questions-add-text"
             />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("questionSetsTextLengthHint", {
+                min: QUESTION_TEXT_MIN,
+                max: QUESTION_TEXT_MAX,
+                count: trimmed.length,
+              })}
+            </p>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>{t("questionSetsFieldGoal")}</Label>
               <Select
                 value={goal}
                 onValueChange={(v) => setGoal(v as QuestionGoal)}
               >
-                <SelectTrigger data-testid="recruitment-interview-questions-add-goal">
-                  <SelectValue>
-                    {GOAL_LABEL_KEYS[goal] ? t(GOAL_LABEL_KEYS[goal]) : goal}
-                  </SelectValue>
+                <SelectTrigger
+                  className="w-full"
+                  data-testid="recruitment-interview-questions-add-goal"
+                >
+                  <SelectValue>{t(GOAL_LABEL_KEYS[goal])}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {Object.entries(GOAL_LABEL_KEYS).map(([k, labelKey]) => (
@@ -999,53 +1493,38 @@ function AddQuestionDialog({
                 value={priority}
                 onValueChange={(v) => setPriority(v as QuestionPriority)}
               >
-                <SelectTrigger data-testid="recruitment-interview-questions-add-priority">
-                  <SelectValue>
-                    {priority === "must"
-                      ? t("questionSetsPriorityMust")
-                      : priority === "nice_to_ask"
-                        ? t("questionSetsPriorityNiceToAsk")
-                        : t("questionSetsPriorityShould")}
-                  </SelectValue>
+                <SelectTrigger
+                  className="w-full"
+                  data-testid="recruitment-interview-questions-add-priority"
+                >
+                  <SelectValue>{t(PRIORITY_LABEL_KEYS[priority])}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="must">
-                    {t("questionSetsPriorityMust")}
-                  </SelectItem>
-                  <SelectItem value="should">
-                    {t("questionSetsPriorityShould")}
-                  </SelectItem>
-                  <SelectItem value="nice_to_ask">
-                    {t("questionSetsPriorityNiceToAsk")}
-                  </SelectItem>
+                  {Object.entries(PRIORITY_LABEL_KEYS).map(([k, labelKey]) => (
+                    <SelectItem key={k} value={k}>
+                      {t(labelKey)}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label>{t("questionSetsFieldType")}</Label>
-              <Select
-                value={source}
-                onValueChange={(v) =>
-                  setSource(v as "manual" | "from_competency_indicator")
-                }
-              >
-                <SelectTrigger data-testid="recruitment-interview-questions-add-source">
-                  <SelectValue>
-                    {source === "from_competency_indicator"
-                      ? t("questionSetsSourceFromIndicator")
-                      : t("questionSetsSourceCustom")}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="manual">
-                    {t("questionSetsSourceCustom")}
-                  </SelectItem>
-                  <SelectItem value="from_competency_indicator">
-                    {t("questionSetsSourceFromIndicator")}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+          </div>
+          <div>
+            <Label htmlFor="q-anchor">
+              {t("questionSetsFieldResumeAnchor")}
+            </Label>
+            <Textarea
+              id="q-anchor"
+              rows={2}
+              value={anchor}
+              maxLength={RESUME_ANCHOR_MAX}
+              onChange={(e) => setAnchor(e.target.value)}
+              placeholder={t("questionSetsResumeAnchorPlaceholder")}
+              data-testid="recruitment-interview-questions-add-anchor"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("questionSetsResumeAnchorHint", { max: RESUME_ANCHOR_MAX })}
+            </p>
           </div>
         </div>
         <DialogFooter>
@@ -1054,11 +1533,28 @@ function AddQuestionDialog({
           </Button>
           <Button
             onClick={() => {
-              if (!text.trim()) {
-                toast.error(t("questionSetsTextRequired"));
+              if (lengthInvalid) {
+                toast.error(
+                  t("questionSetsTextLengthError", {
+                    min: QUESTION_TEXT_MIN,
+                    max: QUESTION_TEXT_MAX,
+                  }),
+                );
                 return;
               }
-              onSubmit({ text, goal, priority, source });
+              onSubmit({
+                text: trimmed,
+                goal,
+                priority,
+                competence_id: null,
+                expected_answer_indicators: [],
+                follow_ups: [],
+                rationale: null,
+                source: "manual",
+                resume_anchor_jsonb: anchor.trim()
+                  ? { quote: anchor.trim(), section: null }
+                  : null,
+              });
               reset();
             }}
             data-testid="recruitment-interview-questions-add-submit"
@@ -1162,7 +1658,10 @@ function ExportDialog({
               value={format}
               onValueChange={(v) => setFormat(v as typeof format)}
             >
-              <SelectTrigger>
+              <SelectTrigger
+                className="w-full"
+                data-testid="recruitment-interview-questions-export-format"
+              >
                 <SelectValue>
                   {format === "full"
                     ? t("questionSetsFormatFull")
@@ -1190,7 +1689,10 @@ function ExportDialog({
               value={sort}
               onValueChange={(v) => setSort(v as typeof sort)}
             >
-              <SelectTrigger>
+              <SelectTrigger
+                className="w-full"
+                data-testid="recruitment-interview-questions-export-sort"
+              >
                 <SelectValue>
                   {sort === "priority"
                     ? t("questionSetsSortPriority")
@@ -1212,13 +1714,25 @@ function ExportDialog({
               </SelectContent>
             </Select>
           </div>
-          <div className="grid grid-cols-2 gap-2 text-sm">
+          {/* HRP-484 task 1.3: fixed order, top to bottom. */}
+          <div className="space-y-2 text-sm">
+            <label className="flex items-center gap-2">
+              <Input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={includeResumeAnchor}
+                onChange={(e) => setIncludeResumeAnchor(e.target.checked)}
+                data-testid="recruitment-interview-questions-export-opt-anchor"
+              />
+              {t("questionSetsOptResumeAnchor")}
+            </label>
             <label className="flex items-center gap-2">
               <Input
                 type="checkbox"
                 className="h-4 w-4"
                 checked={includeIndicators}
                 onChange={(e) => setIncludeIndicators(e.target.checked)}
+                data-testid="recruitment-interview-questions-export-opt-indicators"
               />
               {t("questionSetsOptIndicators")}
             </label>
@@ -1228,8 +1742,9 @@ function ExportDialog({
                 className="h-4 w-4"
                 checked={includeFollowUps}
                 onChange={(e) => setIncludeFollowUps(e.target.checked)}
+                data-testid="recruitment-interview-questions-export-opt-followups"
               />
-              {t("questionSetsFollowUps")}
+              {t("questionSetsOptFollowUps")}
             </label>
             <label className="flex items-center gap-2">
               <Input
@@ -1237,17 +1752,9 @@ function ExportDialog({
                 className="h-4 w-4"
                 checked={includeRationale}
                 onChange={(e) => setIncludeRationale(e.target.checked)}
+                data-testid="recruitment-interview-questions-export-opt-rationale"
               />
               {t("questionSetsOptRationale")}
-            </label>
-            <label className="flex items-center gap-2">
-              <Input
-                type="checkbox"
-                className="h-4 w-4"
-                checked={includeResumeAnchor}
-                onChange={(e) => setIncludeResumeAnchor(e.target.checked)}
-              />
-              {t("questionSetsOptResumeAnchor")}
             </label>
           </div>
         </div>

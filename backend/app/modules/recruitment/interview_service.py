@@ -15,10 +15,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import status
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import billing_hooks
 from app.core.errors import AppError
 
 # Role constants live in recruitment.common because resolve_user_role()
@@ -54,6 +55,11 @@ logger = logging.getLogger(__name__)
 # HRP-202: TUS-style upload sessions linger for 24h before the orphan
 # cleanup task aborts the underlying S3 multipart and deletes the row.
 UPLOAD_SESSION_TTL = timedelta(hours=24)
+
+# HRP-418: an archived interview can be restored from the "Show archived"
+# filter for this long. Afterwards the recording is purged from object
+# storage; the row itself survives for audit.
+ARCHIVE_RETENTION_DAYS = 90
 
 # Strict MIME allow-list per acceptance criteria. The frontend pre-checks
 # this same set; the backend re-checks because client-side validation
@@ -303,6 +309,7 @@ def _interview_to_read(
                     "reasoning": (
                         ai.reasoning if (role or "").lower() in _FULL_ROLES else None
                     ),
+                    "source_archived": bool(ai.source_archived),
                 }
             )
 
@@ -313,6 +320,7 @@ def _interview_to_read(
     return {
         "id": interview.id,
         "candidate_vacancy_id": interview.candidate_vacancy_id,
+        "round_id": interview.round_id,
         "title": interview.title,
         "type": interview.type,
         "timezone": interview.timezone,
@@ -334,6 +342,8 @@ def _interview_to_read(
         "av_scanned_at": interview.av_scanned_at,
         "version": interview.version,
         "archived_at": interview.archived_at,
+        "purged_at": interview.purged_at,
+        "created_at": interview.created_at,
         "created_by": interview.created_by,
         "transcription_provider": interview.transcription_provider,
         "transcription_status": interview.transcription_status,
@@ -405,6 +415,83 @@ def _parse_speaker_segments(text: str) -> list[dict]:
     return segments
 
 
+def _ordered_interviewers(
+    primary: uuid.UUID | None,
+    others: list[uuid.UUID] | None,
+) -> list[uuid.UUID]:
+    """Dedupe the legacy single + HRP-202 multi interviewer payloads.
+
+    Order is stable (primary first) because the first entry becomes
+    ``interviews.interviewer_id``, which downstream notifications treat
+    as "the" interviewer.
+    """
+
+    ordered: list[uuid.UUID] = []
+    for uid in [primary, *(others or [])]:
+        if uid is None or uid in ordered:
+            continue
+        ordered.append(uid)
+    return ordered
+
+
+async def _validate_round(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cv_id: uuid.UUID,
+    round_id: uuid.UUID | None,
+) -> uuid.UUID | None:
+    """HRP-386: a linked round must belong to the same candidate-vacancy.
+
+    Reading the Manager-assessment round table is deliberate — the
+    Schedule modal offers exactly the rounds of the current
+    candidate-vacancy, so a payload pointing anywhere else is either a
+    stale client or a cross-tenant probe.
+    """
+
+    if round_id is None:
+        return None
+    from app.modules.recruitment.manager_assessment_models import AssessmentRound
+
+    row = (
+        await db.execute(
+            select(AssessmentRound).where(
+                AssessmentRound.id == round_id,
+                AssessmentRound.tenant_id == tenant_id,
+                AssessmentRound.candidate_vacancy_id == cv_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise AppError("assessment_round_not_found", status.HTTP_404_NOT_FOUND)
+    return row.id
+
+
+def _format_interview_datetime(
+    moment: datetime | None, tz_name: str | None
+) -> str | None:
+    """HRP-419: ``yyyy-mm-dd hh:mm`` in the interview's own timezone.
+
+    The column is timezone-aware (stored UTC); ``interviews.timezone``
+    carries the IANA zone the recruiter scheduled in. Falls back to UTC
+    when the zone is missing or unknown so the email never leaks an ISO
+    timestamp to the reader.
+    """
+
+    if moment is None:
+        return None
+    aware = moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+
+            aware = aware.astimezone(ZoneInfo(tz_name))
+        except Exception:  # noqa: BLE001 — unknown zone: keep UTC
+            aware = aware.astimezone(timezone.utc)
+    else:
+        aware = aware.astimezone(timezone.utc)
+    return aware.strftime("%Y-%m-%d %H:%M")
+
+
 async def create_interview(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -430,11 +517,15 @@ async def create_interview(
     if not cv:
         raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
 
-    primary_interviewer = data.interviewer_id
-    if not primary_interviewer and data.interviewers:
-        primary_interviewer = data.interviewers[0]
-    if not primary_interviewer:
-        primary_interviewer = user_id
+    round_id = await _validate_round(db, tenant_id, cv_id, data.round_id)
+
+    # HRP-386: Interviewer(s) is an optional field. The creator is NOT
+    # silently promoted to interviewer any more — a card created by the
+    # bulk-upload flow has to render an em dash there (HRP-387), and the
+    # "Interview scheduled" email (HRP-419) goes to the people actually
+    # assigned, not to whoever dropped the file.
+    interviewer_ids = _ordered_interviewers(data.interviewer_id, data.interviewers)
+    primary_interviewer = interviewer_ids[0] if interviewer_ids else None
 
     # HRP-202 REDO: inherit the candidate's most recent *signed* consent.
     # ``sign_consent`` only back-fills interviews that existed at signing
@@ -458,6 +549,7 @@ async def create_interview(
     interview = Interview(
         tenant_id=tenant_id,
         candidate_vacancy_id=cv_id,
+        round_id=round_id,
         title=data.title,
         type=data.type or "undecided",
         timezone=data.timezone,
@@ -475,16 +567,7 @@ async def create_interview(
     db.add(interview)
     await db.flush()
 
-    seen: set[uuid.UUID] = set()
-    additional = list(data.interviewers or [])
-    if primary_interviewer:
-        additional = [primary_interviewer] + [
-            u for u in additional if u != primary_interviewer
-        ]
-    for uid in additional:
-        if uid in seen:
-            continue
-        seen.add(uid)
+    for uid in interviewer_ids:
         db.add(
             InterviewInterviewer(
                 tenant_id=tenant_id,
@@ -509,9 +592,15 @@ async def create_interview(
     vacancy_title = None
     owner_id: uuid.UUID | None = None
     if cv_row:
-        if cv_row.candidate and cv_row.candidate.person:
-            p = cv_row.candidate.person
-            candidate_name = f"{p.first_name} {p.last_name}".strip()
+        if cv_row.candidate:
+            # HRP-419: ``candidates.full_name`` is NOT NULL and is the
+            # denormalised source of truth for the card. The old lookup went
+            # through ``candidate.person``, which is absent for externally
+            # sourced candidates — that is why the email said "None".
+            candidate_name = (cv_row.candidate.full_name or "").strip() or None
+            if not candidate_name and cv_row.candidate.person:
+                p = cv_row.candidate.person
+                candidate_name = f"{p.first_name} {p.last_name}".strip() or None
         if cv_row.vacancy:
             vacancy_title = cv_row.vacancy.title
             owner_id = cv_row.vacancy.owner_id
@@ -523,10 +612,17 @@ async def create_interview(
             "interviewer_id": (
                 str(interview.interviewer_id) if interview.interviewer_id else None
             ),
+            # HRP-419: the notification goes to the assigned interviewers,
+            # not to the vacancy owner / creator. ``owner_id`` stays in the
+            # payload for template context only.
+            "interviewer_ids": [str(uid) for uid in interviewer_ids],
             "owner_id": str(owner_id) if owner_id else None,
             "candidate_name": candidate_name,
             "vacancy_title": vacancy_title,
-            "interview_date": (
+            "interview_date": _format_interview_datetime(
+                interview.interview_date, interview.timezone
+            ),
+            "interview_date_iso": (
                 interview.interview_date.isoformat()
                 if interview.interview_date
                 else None
@@ -552,21 +648,33 @@ async def update_interview(
             status.HTTP_412_PRECONDITION_FAILED,
         )
 
-    if data.title is not None:
+    # Every nullable column below is read off ``model_fields_set`` rather
+    # than "is not None": an explicit ``null`` is the client clearing the
+    # field, and under "is not None" the Edit form's Clear button returned
+    # 200 while the old value stayed in the row. ``type`` / ``status`` stay
+    # on the is-not-None form — they are NOT NULL with a default, so there
+    # is nothing to clear them to.
+    if "title" in data.model_fields_set:
         interview.title = data.title
     if data.interviewer_id is not None:
         interview.interviewer_id = data.interviewer_id
-    if data.interview_date is not None:
+    # HRP-386: ``round_id`` is nullable on purpose — an explicit ``null``
+    # detaches the interview from its Manager-assessment round.
+    if "round_id" in data.model_fields_set:
+        interview.round_id = await _validate_round(
+            db, tenant_id, interview.candidate_vacancy_id, data.round_id
+        )
+    if "interview_date" in data.model_fields_set:
         interview.interview_date = data.interview_date
     if data.timezone is not None:
         interview.timezone = data.timezone
-    if data.duration_minutes is not None:
+    if "duration_minutes" in data.model_fields_set:
         interview.duration_minutes = data.duration_minutes
     if data.type is not None:
         interview.type = data.type
     if data.status is not None:
         interview.status = data.status
-    if data.notes is not None:
+    if "notes" in data.model_fields_set:
         interview.notes = data.notes
 
     if data.interviewers is not None:
@@ -575,11 +683,8 @@ async def update_interview(
                 InterviewInterviewer.interview_id == interview.id
             )
         )
-        seen: set[uuid.UUID] = set()
-        for uid in data.interviewers:
-            if uid in seen:
-                continue
-            seen.add(uid)
+        replacement = _ordered_interviewers(data.interviewer_id, data.interviewers)
+        for uid in replacement:
             db.add(
                 InterviewInterviewer(
                     tenant_id=tenant_id,
@@ -587,6 +692,10 @@ async def update_interview(
                     user_id=uid,
                 )
             )
+        # Keep the legacy single-interviewer column in sync with the list —
+        # clearing the list has to clear it too, otherwise the interview
+        # page would keep showing a removed interviewer (HRP-387).
+        interview.interviewer_id = replacement[0] if replacement else None
 
     interview.version = (interview.version or 1) + 1
     await db.commit()
@@ -612,7 +721,9 @@ async def list_interviews(
             Interview.tenant_id == tenant_id,
             Interview.candidate_vacancy_id == cv_id,
         )
-        .order_by(Interview.created_at.asc())
+        # HRP-386: newest first — a freshly scheduled card has to land at
+        # the TOP of the Interviews block, not below a year of history.
+        .order_by(Interview.created_at.desc(), Interview.id.desc())
     )
     if not include_archived:
         stmt = stmt.where(Interview.archived_at.is_(None))
@@ -816,6 +927,12 @@ async def init_interview_upload(
     _validate_upload_payload(
         data.mime_type, data.size_bytes, data.kind, is_demo=is_demo
     )
+
+    # HRP-312: the upload is charged on completion, so a failed transfer
+    # costs nothing. Check the balance up-front anyway — a tenant that
+    # cannot afford the upload is stopped with a 402 before any S3
+    # multipart session is opened. No-op in community builds.
+    await billing_hooks.precheck_action(db, tenant_id, "recruitment.upload_interview")
 
     key = _interview_storage_key(tenant_id, interview_id)
     upload_id = init_multipart_upload(key, data.mime_type)
@@ -1345,7 +1462,14 @@ async def archive_interview(
     interview_id: uuid.UUID,
     data: InterviewArchiveRequest | None = None,
 ) -> dict:
-    """Soft-delete an interview (HRP-202)."""
+    """Soft-delete an interview (HRP-202, HRP-418).
+
+    Besides the ``archived_at`` stamp the archive detaches the interview
+    from its Manager-assessment round and flags the AI scores it produced
+    as ``source_archived``. The scores themselves stay — a round that has
+    already consumed them keeps its historical record; the flag is what
+    tells consumers the source recording is no longer in the active list.
+    """
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     if interview.archived_at is not None:
@@ -1353,6 +1477,15 @@ async def archive_interview(
     interview.archived_at = datetime.now(timezone.utc)
     interview.archived_by = user_id
     interview.status = "archived"
+    interview.round_id = None
+    await db.execute(
+        update(AIAssessment)
+        .where(
+            AIAssessment.interview_id == interview.id,
+            AIAssessment.tenant_id == tenant_id,
+        )
+        .values(source_archived=True)
+    )
     if data and data.reason:
         note_prefix = "[Archived] "
         interview.notes = f"{note_prefix}{data.reason}\n{interview.notes or ''}".strip()
@@ -1374,7 +1507,9 @@ async def restore_interview(
     if interview.archived_at is None:
         return _interview_to_read(interview, role="recruiter")
 
-    retention_cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    retention_cutoff = datetime.now(timezone.utc) - timedelta(
+        days=ARCHIVE_RETENTION_DAYS
+    )
     archived_at = interview.archived_at
     if archived_at.tzinfo is None:
         archived_at = archived_at.replace(tzinfo=timezone.utc)
@@ -1383,6 +1518,17 @@ async def restore_interview(
 
     interview.archived_at = None
     interview.archived_by = None
+    # Mirror of ``archive_interview``: the AI scores point at a live
+    # recording again. The round link is NOT restored — it was cleared on
+    # archive and re-linking is an explicit editorial decision.
+    await db.execute(
+        update(AIAssessment)
+        .where(
+            AIAssessment.interview_id == interview.id,
+            AIAssessment.tenant_id == tenant_id,
+        )
+        .values(source_archived=False)
+    )
     interview.status = (
         "uploaded"
         if (interview.audio_file_id or interview.video_file_id or interview.transcript)
@@ -1392,6 +1538,118 @@ async def restore_interview(
     await db.commit()
     await db.refresh(interview, attribute_names=["segments", "interviewers"])
     return _interview_to_read(interview, role="recruiter")
+
+
+async def purge_expired_archived_interviews(
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """HRP-418: drop media of interviews archived past the restore window.
+
+    The row and every piece of metadata survive — the audit trail must
+    still show that the interview existed and who archived it. Only the
+    object-storage blob and the file pointers go, which is also what makes
+    the interview unrestorable (``restore_interview`` refuses past the
+    same window). Idempotent via ``purged_at``.
+
+    Returns the number of interviews purged so the caller can emit a
+    metric.
+    """
+
+    from app.core.s3 import delete_file
+
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(
+        days=ARCHIVE_RETENTION_DAYS
+    )
+    rows = (
+        (
+            await db.execute(
+                select(Interview).where(
+                    Interview.archived_at.is_not(None),
+                    Interview.archived_at < cutoff,
+                    Interview.purged_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    purged = 0
+    orphaned_file_ids: set[uuid.UUID] = set()
+    for interview in rows:
+        if interview.file_s3_key:
+            try:
+                delete_file(interview.file_s3_key)
+            except Exception:  # noqa: BLE001 — best effort, retried next run
+                logger.exception(
+                    "Failed to purge archived interview media %s",
+                    interview.file_s3_key,
+                )
+                continue
+        orphaned_file_ids.update(
+            fid
+            for fid in (
+                interview.audio_file_id,
+                interview.video_file_id,
+                interview.transcript_file_id,
+            )
+            if fid is not None
+        )
+        interview.audio_file_id = None
+        interview.video_file_id = None
+        interview.transcript_file_id = None
+        interview.file_s3_key = None
+        interview.purged_at = datetime.now(timezone.utc)
+        purged += 1
+    if purged:
+        if orphaned_file_ids:
+            # The blob is gone, so the ``files`` rows written when the
+            # upload completed now point at nothing. Leaving them behind
+            # makes every storage listing and size report count media that
+            # no longer exists. Flush the nulled FKs first so the DELETE
+            # is not fighting them inside one statement batch.
+            await db.flush()
+            await db.execute(delete(File).where(File.id.in_(orphaned_file_ids)))
+        await db.commit()
+    return purged
+
+
+async def list_interviewer_options(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> list[dict]:
+    """HRP-386: active tenant users offered in the Interviewer(s) picker.
+
+    Deliberately wider than ``list_hiring_manager_options`` — anyone in
+    the tenant can sit in an interview, including engineers without an
+    admin-tier role.
+    """
+
+    from app.modules.auth.models import User
+
+    rows = (
+        (
+            await db.execute(
+                select(User)
+                .where(
+                    User.tenant_id == tenant_id,
+                    User.is_active.is_(True),
+                )
+                .order_by(User.first_name, User.last_name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "id": row.id,
+            "full_name": f"{row.first_name} {row.last_name}".strip() or row.email,
+            "email": row.email,
+        }
+        for row in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1634,6 +1892,7 @@ async def enqueue_analyze_or_cached(
 
 # Backwards-compat for callers that imported helpers from this module.
 __all__: list[str] = [
+    "ARCHIVE_RETENTION_DAYS",
     "UPLOAD_SESSION_TTL",
     "ack_uploaded_chunk",
     "abort_interview_upload",
@@ -1649,8 +1908,10 @@ __all__: list[str] = [
     "get_upload_part_url",
     "get_upload_session_head",
     "init_interview_upload",
+    "list_interviewer_options",
     "list_interviews",
     "paste_text_transcript",
+    "purge_expired_archived_interviews",
     "record_av_scan_result",
     "replace_interview_file",
     "restore_interview",

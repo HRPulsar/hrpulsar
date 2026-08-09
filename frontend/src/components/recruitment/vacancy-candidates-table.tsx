@@ -630,12 +630,20 @@ function Row({
           <span>
             {row.manager_score !== null ? row.manager_score.toFixed(1) : "—"}
           </span>
-          <span
-            className="text-[10px] text-muted-foreground"
-            data-testid={`vacancy-candidates-row-${row.id}-manager-percent`}
-          >
-            {formatPercent(row.manager_percent ?? null)}
-          </span>
+          {/* HRP-493 (task 3): the second line is the % match from the
+              Compact matrix, not a duplicate of the score. It used to
+              render a bare "—" on every unscored row — a dash under a
+              dash that read as a rendering artefact. It now appears
+              only when there is a percentage to show. */}
+          {row.manager_percent !== null &&
+            row.manager_percent !== undefined && (
+              <span
+                className="text-[10px] text-muted-foreground"
+                data-testid={`vacancy-candidates-row-${row.id}-manager-percent`}
+              >
+                {formatPercent(row.manager_percent)}
+              </span>
+            )}
         </div>
       </td>
       <td
@@ -649,12 +657,14 @@ function Row({
           <span data-testid={`vacancy-candidates-row-${row.id}-ai-score-value`}>
             {formatAiScoreForView(row, aiScoreView)}
           </span>
-          <span
-            className="text-[10px] text-muted-foreground"
-            data-testid={`vacancy-candidates-row-${row.id}-ai-percent`}
-          >
-            {formatPercent(row.ai_percent ?? null)}
-          </span>
+          {row.ai_percent !== null && row.ai_percent !== undefined && (
+            <span
+              className="text-[10px] text-muted-foreground"
+              data-testid={`vacancy-candidates-row-${row.id}-ai-percent`}
+            >
+              {formatPercent(row.ai_percent)}
+            </span>
+          )}
         </div>
       </td>
       <td
@@ -672,10 +682,9 @@ function Row({
       <td className="px-3 py-2 align-top">
         <AiVerdictBadge
           verdict={row.ai_verdict}
-          aiScore={row.ai_score}
           aiReadiness={row.ai_readiness}
           analysisMode={row.ai_analysis_mode ?? null}
-          scoreDivergence={row.score_divergence}
+          inProgress={row.ai_analysis_in_progress ?? false}
           summary={row.ai_verdict_summary}
           keyStrength={row.ai_key_strength}
           keyRisk={row.ai_key_risk}
@@ -821,10 +830,9 @@ function MobileCard({
         </Select>
         <AiVerdictBadge
           verdict={row.ai_verdict}
-          aiScore={row.ai_score}
           aiReadiness={row.ai_readiness}
           analysisMode={row.ai_analysis_mode ?? null}
-          scoreDivergence={row.score_divergence}
+          inProgress={row.ai_analysis_in_progress ?? false}
           summary={row.ai_verdict_summary}
           keyStrength={row.ai_key_strength}
           keyRisk={row.ai_key_risk}

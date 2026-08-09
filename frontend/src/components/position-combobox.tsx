@@ -158,7 +158,7 @@ export function PositionCombobox({
         <Popover.Content
           align="start"
           sideOffset={4}
-          className="z-50 w-[--radix-popover-trigger-width] rounded-lg border bg-popover shadow-md outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+          className="z-50 w-(--radix-popover-trigger-width) rounded-lg border bg-popover shadow-md outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <Command shouldFilter={false} className="flex flex-col">

@@ -15,7 +15,7 @@ import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, get_args
 
 import redis.asyncio as aioredis
 from fastapi import HTTPException, status
@@ -29,6 +29,9 @@ from app.core.security import (
     decode_token,
     hash_password,
 )
+from app.modules.ai_settings.models import TenantAISettings
+from app.modules.ai_settings.schemas import ContentLanguage
+from app.modules.ai_settings.service import DEFAULT_LANGUAGE
 from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Tenant
 from app.modules.demo.seed import clone_seed_into_demo_tenant
@@ -195,6 +198,21 @@ async def _create_demo_user(
             user_roles.insert().values(user_id=user.id, role_id=role.id)
         )
     return user
+
+
+def _demo_content_language() -> str:
+    """AI content language for a fresh demo tenant.
+
+    White-label deployments run with ``DEFAULT_LOCALE`` other than
+    ``en``; demo visitors there must get AI-generated content in the
+    platform's language, not the global English default that
+    ``ai_settings.get_or_default`` would lazily create on the first AI
+    call. Interface locales and content languages are orthogonal axes,
+    so a locale the AI layer doesn't support falls back to English.
+    """
+    if settings.default_locale in get_args(ContentLanguage):
+        return settings.default_locale
+    return DEFAULT_LANGUAGE
 
 
 async def _grant_demo_credits(
@@ -405,6 +423,17 @@ async def create_demo_session(
     # lock held, so parallel /demo/start calls can run their heavy
     # provisioning in parallel.
     user = await _create_demo_user(db, tenant.id, now=now)
+
+    # Pin the tenant's AI content language to the platform default
+    # locale up front — without an explicit row the first AI call would
+    # lazily create one with the global English default, which is wrong
+    # on white-label deployments.
+    db.add(
+        TenantAISettings(
+            tenant_id=tenant.id,
+            content_language=_demo_content_language(),
+        )
+    )
 
     await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
 

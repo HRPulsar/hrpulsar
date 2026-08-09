@@ -337,6 +337,114 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
         engine.dispose()
 
 
+def _candidate_name_for_cv(db, candidate_vacancy_id) -> str | None:
+    """Full name of the candidate behind a candidate-vacancy link.
+
+    Used on the failure paths, where the task bailed before the happy
+    path resolved the person row (HRP-494).
+
+    HRP-494 REDO: resolved through ``candidate_display_name``. Reading
+    ``candidate.person`` alone returned ``None`` for every resume-sourced
+    candidate — ``person_id`` is optional since HRP-181 REDO and
+    ``Candidate.full_name`` is the NOT NULL source of truth — so the
+    failure emails went out as "Resume analysis failed for " with a hole
+    where the name belongs.
+    """
+    from app.modules.recruitment.common import candidate_display_name
+    from app.modules.recruitment.models import Candidate, CandidateVacancy
+
+    if candidate_vacancy_id is None:
+        return None
+    cv = db.get(CandidateVacancy, candidate_vacancy_id)
+    if cv is None:
+        return None
+    candidate = db.get(Candidate, cv.candidate_id)
+    return candidate_display_name(candidate, fallback="") or None
+
+
+def _notify_analysis_result(
+    db,
+    *,
+    tenant_id,
+    cv,
+    mode: str,
+    ok: bool,
+    candidate_name: str | None,
+    recipient_ids: list | None = None,
+    extra: dict | None = None,
+) -> None:
+    """HRP-494 — one dispatcher for the four AI Insights notifications.
+
+    ``resume_analysis_ready`` / ``resume_analysis_failed`` /
+    ``full_analysis_ready`` / ``full_analysis_failed``. Every payload
+    carries the candidate's full name (the old fan-out hardcoded
+    ``candidate_name=None`` and the email read "AI analysis ready:
+    None"), the analysis mode, and a relative deep link the dispatcher
+    turns into an absolute URL for email.
+
+    Best effort: a notification failure must never fail the analysis
+    that already succeeded.
+    """
+    try:
+        from app.modules.recruitment.notifications import notify_sync
+        from app.modules.recruitment.resume_analysis_service import (
+            candidate_ai_insights_deep_link,
+        )
+
+        if cv is None:
+            return
+        event = f"recruitment.candidate.{mode}_analysis_{'ready' if ok else 'failed'}"
+        context = {
+            "candidate_vacancy_id": str(cv.id),
+            "candidate_name": candidate_name,
+            "analysis_mode": mode,
+            "link": candidate_ai_insights_deep_link(cv.candidate_id, cv.vacancy_id),
+        }
+        if extra:
+            context.update(extra)
+        notify_sync(
+            db,
+            event=event,
+            tenant_id=tenant_id,
+            recipient_ids=[r for r in (recipient_ids or []) if r],
+            fallback_admins=True,
+            context=context,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "analysis notification failed for cv %s", getattr(cv, "id", None)
+        )
+
+
+def _current_resume_hash_sync(db, tenant_id, candidate_id):
+    """Sync twin of ``current_resume_hash_for_candidate`` (HRP-492).
+
+    The Celery worker runs on a plain ``Session``; the async helper in
+    ``resume_analysis_service`` cannot be awaited here.
+    """
+    from sqlalchemy import select
+
+    from app.modules.recruitment.models import CandidateFile
+    from app.modules.recruitment.resume_analysis_service import (
+        _compute_resume_snapshot_hash,
+    )
+
+    latest = db.execute(
+        select(CandidateFile)
+        .where(
+            CandidateFile.tenant_id == tenant_id,
+            CandidateFile.candidate_id == candidate_id,
+            CandidateFile.file_type == "resume",
+            CandidateFile.parse_status == "completed",
+        )
+        .order_by(CandidateFile.created_at.desc(), CandidateFile.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if latest is None:
+        return None
+    return _compute_resume_snapshot_hash(latest.parsed_data)
+
+
 def _finalize_full_analysis_run(
     db,
     *,
@@ -389,6 +497,11 @@ def _finalize_full_analysis_run(
         )
     ).scalar_one_or_none()
 
+    # HRP-492: full runs stamp the parsed-resume snapshot too, so the
+    # "Resume was updated" banner works after a Resume + interview
+    # analysis and not only after a resume-only one.
+    resume_hash = _current_resume_hash_sync(db, tenant_id, cv.candidate_id)
+
     # HRP-274: ``cv.ai_score`` keeps the raw LLM mean on the canonical
     # 0..1 scale (per-competence scores are clamped at ingestion by the
     # schema validators in ``prompts_interview``). ``cv.ai_score_normalized``
@@ -397,15 +510,27 @@ def _finalize_full_analysis_run(
     # ``manager_score`` — ``compute_score_divergence`` consumes the
     # normalized value, never the raw one.
     from app.modules.recruitment.models import ScaleConfig
+    from app.modules.recruitment.resume_analysis_service import (
+        aggregate_ai_score_sync,
+    )
     from app.modules.recruitment.score_normalization import (
-        clamp_unit_score,
         compute_normalized_ai_score,
     )
 
     scores = [
         ca.score for ca in analysis.competence_assessments if ca.score is not None
     ]
-    ai_score = clamp_unit_score(sum(scores) / len(scores)) if scores else None
+    # HRP-493 (task 1): an interview that covered none of the profile's
+    # competences leaves ``scores`` empty. Inheriting the prior run's
+    # aggregate keeps the candidates table from regressing to "—" the
+    # moment a candidate is analysed more deeply.
+    ai_score = aggregate_ai_score_sync(
+        db,
+        tenant_id,
+        cv.id,
+        scores,
+        exclude_run_id=pending.id if pending is not None else None,
+    )
 
     active_scale = db.execute(
         select(ScaleConfig)
@@ -486,6 +611,7 @@ def _finalize_full_analysis_run(
         pending.risk_mitigation = analysis.risk_mitigation
         pending.ai_score = ai_score
         pending.analysis_data = payload
+        pending.resume_snapshot_hash = resume_hash
     else:
         # Plain analyze path — archive any other active runs for the
         # pair, flush the archive UPDATE (see the index note above),
@@ -522,6 +648,7 @@ def _finalize_full_analysis_run(
             risk_mitigation=analysis.risk_mitigation,
             ai_score=ai_score,
             analysis_data=payload,
+            resume_snapshot_hash=resume_hash,
         )
         db.add(run)
         db.flush()
@@ -776,6 +903,9 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 pending_run.current_stage = "competences"
                 db.commit()
 
+            from app.modules.ai.model_catalog_service import (
+                resolve_dispatch_model_sync,
+            )
             from app.modules.ai.providers import resolve_generation_target_sync
 
             creds = resolve_generation_target_sync(db, interview.tenant_id, None)
@@ -787,6 +917,10 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                     temperature=0.2,
                     max_tokens=RECRUITMENT_MAX_TOKENS,
                     credentials=creds,
+                    # HRP-500 (review #5): this worker holds a sync Session,
+                    # so llm_client cannot run the catalog kill-switch for
+                    # it — resolve the dispatched id here instead.
+                    model=resolve_dispatch_model_sync(db, creds.model),
                 )
             )
             assert isinstance(analysis_raw, InterviewAnalysisResult)
@@ -957,23 +1091,22 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 logger.exception(
                     "question auto-cover failed for interview %s", interview_id
                 )
-            # R4c N-06: notify the interviewer + recruiter (admin fan-out).
-            try:
-                from app.modules.recruitment.notifications import notify_sync
-
-                notify_sync(
-                    db,
-                    event="recruitment.interview.analysis_ready",
-                    tenant_id=uuid.UUID(tenant_id),
-                    recipient_ids=[interviewer_id] if interviewer_id else [],
-                    fallback_admins=True,
-                    context={
-                        "interview_id": interview_id,
-                        "candidate_name": None,
-                    },
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception("analysis notification failed for %s", interview_id)
+            # R4c N-06 / HRP-494: notify the interviewer + recruiter
+            # (admin fan-out) under the full-analysis code, with the
+            # candidate's name and a deep link into AI Insights.
+            _notify_analysis_result(
+                db,
+                tenant_id=uuid.UUID(tenant_id),
+                cv=cv,
+                mode="full",
+                ok=True,
+                candidate_name=candidate_name,
+                recipient_ids=[interviewer_id] if interviewer_id else [],
+                extra={
+                    "interview_id": interview_id,
+                    "verdict": analysis.verdict,
+                },
+            )
             logger.info("Interview %s analyzed", interview_id)
             return {
                 "status": "completed",
@@ -990,6 +1123,22 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                     row.analysis_status = "failed"
                     row.analysis_error = str(exc)[:1000]
                     db.commit()
+                    # HRP-494: tell the recruiter the 40-cr run died —
+                    # only on the final attempt, so two retries do not
+                    # send three identical failure emails.
+                    if self.request.retries >= self.max_retries:
+                        _notify_analysis_result(
+                            db,
+                            tenant_id=uuid.UUID(tenant_id),
+                            cv=db.get(CandidateVacancy, row.candidate_vacancy_id),
+                            mode="full",
+                            ok=False,
+                            candidate_name=_candidate_name_for_cv(
+                                db, row.candidate_vacancy_id
+                            ),
+                            recipient_ids=[row.interviewer_id],
+                            extra={"error": str(exc)[:200]},
+                        )
         except Exception:
             logger.exception(
                 "Failed to mark interview %s analysis as failed", interview_id
@@ -1122,6 +1271,9 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
             run.current_stage = "competences"
             db.commit()
 
+            from app.modules.ai.model_catalog_service import (
+                resolve_dispatch_model_sync,
+            )
             from app.modules.ai.providers import resolve_generation_target_sync
 
             creds = resolve_generation_target_sync(db, resume.tenant_id, None)
@@ -1133,6 +1285,10 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                     temperature=0.2,
                     max_tokens=RECRUITMENT_MAX_TOKENS,
                     credentials=creds,
+                    # HRP-500 (review #5): sync Session — llm_client cannot
+                    # apply the catalog kill-switch here, so resolve the
+                    # dispatched id up front.
+                    model=resolve_dispatch_model_sync(db, creds.model),
                 )
             )
             assert isinstance(analysis_raw, ResumeOnlyAnalysisResult)
@@ -1166,8 +1322,10 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
             # on the canonical 0..1 scale (each score is clamped at
             # ingestion by the ``ResumeOnlyCompetenceAssessment``
             # validator; the mean is clamped again as belt-and-braces).
-            from app.modules.recruitment.score_normalization import (
-                clamp_unit_score,
+            # HRP-493 (task 1): when nothing scored, inherit the prior
+            # completed run's aggregate rather than blanking the column.
+            from app.modules.recruitment.resume_analysis_service import (
+                aggregate_ai_score_sync,
             )
 
             scores = [
@@ -1175,7 +1333,13 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                 for ca in analysis.competence_assessments
                 if ca.score is not None
             ]
-            ai_score = clamp_unit_score(sum(scores) / len(scores)) if scores else None
+            ai_score = aggregate_ai_score_sync(
+                db,
+                uuid.UUID(tenant_id),
+                run.candidate_vacancy_id,
+                scores,
+                exclude_run_id=run.id,
+            )
 
             # Archive any prior active run for the same pair so the
             # candidate list never reads two active rows. This must
@@ -1273,25 +1437,19 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
 
             db.commit()
 
-            # Notify the recruiter (R4c-style notification — reuses the
-            # existing notification fan-out).
-            try:
-                from app.modules.recruitment.notifications import notify_sync
-
-                notify_sync(
-                    db,
-                    event="recruitment.candidate.resume_analysis_ready",
-                    tenant_id=uuid.UUID(tenant_id),
-                    recipient_ids=[run.created_by_id] if run.created_by_id else [],
-                    fallback_admins=True,
-                    context={
-                        "candidate_vacancy_id": str(run.candidate_vacancy_id),
-                        "candidate_name": candidate_name,
-                        "verdict": final_verdict,
-                    },
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception("resume_analysis notification failed for %s", run_id)
+            # HRP-494: notify the recruiter under the resume-only code —
+            # real candidate name, and a deep link into the AI Insights
+            # block for this exact vacancy.
+            _notify_analysis_result(
+                db,
+                tenant_id=uuid.UUID(tenant_id),
+                cv=cv,
+                mode="resume_only",
+                ok=True,
+                candidate_name=candidate_name,
+                recipient_ids=[run.created_by_id] if run.created_by_id else [],
+                extra={"verdict": final_verdict},
+            )
 
             logger.info(
                 "Resume-only analysis %s completed (verdict=%s, override=%s)",
@@ -1315,6 +1473,20 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                     row.status = "failed"
                     row.error_message = str(exc)[:1000]
                     db.commit()
+                    # HRP-494: one failure notice, on the last attempt.
+                    if self.request.retries >= self.max_retries:
+                        _notify_analysis_result(
+                            db,
+                            tenant_id=uuid.UUID(tenant_id),
+                            cv=db.get(CandidateVacancy, row.candidate_vacancy_id),
+                            mode="resume_only",
+                            ok=False,
+                            candidate_name=_candidate_name_for_cv(
+                                db, row.candidate_vacancy_id
+                            ),
+                            recipient_ids=[row.created_by_id],
+                            extra={"error": str(exc)[:200]},
+                        )
         except Exception:
             logger.exception("Failed to mark resume-only run %s as failed", run_id)
         raise self.retry(exc=exc)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
   Dialog,
@@ -16,14 +16,24 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, FileSpreadsheet } from "lucide-react";
 import { api } from "@/lib/api";
+// `credit-cost-badge.tsx` is enterprise-only (excluded from the public
+// sync) — the badge is reached through the ee-hooks seam so the
+// community build compiles without it.
+import { EECreditCostBadge } from "@/lib/ee-hooks";
+import type {
+  CandidateVacancyEnrichedRow,
+  VacancyStage,
+} from "@/lib/recruitment-types";
 import {
+  CANDIDATE_VACANCY_TERMINAL_STATUSES,
   REPORT_SECTION_CODES,
   reportSectionLabel,
+  reportStatusLabel,
   type ReportExport,
   type ReportGenerateRequest,
   type ReportGenerateResponse,
   type ReportSectionCode,
-  type ReportTemplate,
+  type Vacancy,
 } from "@/lib/types";
 import { toast } from "sonner";
 import { formatDateTime } from "@/lib/date-format";
@@ -35,15 +45,15 @@ interface ReportWizardDialogProps {
   onCreated?: (exportRow: ReportExport) => void;
 }
 
-const DEFAULT_SECTIONS: ReportSectionCode[] = [
-  "vacancy_summary",
-  "competence_profile",
-  "candidates_summary",
-  "comparison_grid",
-  "interview_analysis",
-];
-
 type WizardStep = "configure" | "submitting" | "result";
+
+/** Include-candidates scope from the HRP-521 mockup. */
+type CandidateScope = "all_active" | "finalists" | "custom";
+
+/** Billing action code the Generate button prices. The cost map itself
+ *  lives in `ee/billing.py`; recalculating it is HRP-519, not this
+ *  dialog's job — we only render the current price. */
+const REPORT_ACTION = "recruitment.generate_report";
 
 export function ReportWizardDialog({
   open,
@@ -54,11 +64,16 @@ export function ReportWizardDialog({
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
   const [step, setStep] = useState<WizardStep>("configure");
-  const [templates, setTemplates] = useState<ReportTemplate[]>([]);
-  const [templateId, setTemplateId] = useState<string>("");
-  const [sections, setSections] = useState<ReportSectionCode[]>(
-    DEFAULT_SECTIONS,
+  const [vacancy, setVacancy] = useState<Vacancy | null>(null);
+  const [candidates, setCandidates] = useState<CandidateVacancyEnrichedRow[]>(
+    [],
   );
+  const [stages, setStages] = useState<VacancyStage[]>([]);
+  const [scope, setScope] = useState<CandidateScope>("all_active");
+  const [customIds, setCustomIds] = useState<string[]>([]);
+  const [sections, setSections] = useState<ReportSectionCode[]>([
+    ...REPORT_SECTION_CODES,
+  ]);
   // HRP-268 — audience controls Detail-sheet rendering: recruiters see
   // the raw process-findings text, hiring managers see the positive
   // reframe (or a neutral "Recommendation for the next interview").
@@ -66,9 +81,20 @@ export function ReportWizardDialog({
     "recruiter",
   );
   const [latest, setLatest] = useState<ReportExport | null>(null);
+  // The poll below runs for up to 5 minutes. Closing the dialog (or
+  // unmounting the page) must stop it — otherwise it keeps hitting the
+  // API and calls setState / onCreated on a dialog nobody is looking at.
+  const pollCancelled = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      pollCancelled.current = true;
+    };
+  }, []);
 
   function handleOpenChange(next: boolean) {
     if (!next) {
+      pollCancelled.current = true;
       // Reset wizard state when the dialog closes so reopening starts
       // from a clean slate (otherwise we'd briefly flash the last
       // result). Reset audience back to the safe default — without
@@ -78,33 +104,99 @@ export function ReportWizardDialog({
       setStep("configure");
       setLatest(null);
       setAudience("recruiter");
+      setScope("all_active");
+      setCustomIds([]);
+      setSections([...REPORT_SECTION_CODES]);
     }
     onOpenChange(next);
   }
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     api
-      .get<ReportTemplate[]>("/recruitment/report-templates")
-      .then((rows) => {
-        const active = rows.filter((r) => r.is_active);
-        setTemplates(active);
-        const def = active.find((r) => r.is_default) || active[0];
-        if (def) {
-          setTemplateId(def.id);
-          if (def.sections.length > 0) setSections(def.sections);
-        } else {
-          setTemplateId("");
-          setSections(DEFAULT_SECTIONS);
-        }
+      .get<Vacancy>(`/recruitment/vacancies/${vacancyId}`)
+      .then((row) => {
+        if (!cancelled) setVacancy(row);
       })
-      .catch(() => setTemplates([]));
-  }, [open]);
+      .catch(() => {});
+    api
+      .get<CandidateVacancyEnrichedRow[]>(
+        `/recruitment/vacancies/${vacancyId}/candidates/enriched?limit=200`,
+      )
+      .then((rows) => {
+        if (!cancelled) setCandidates(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setCandidates([]);
+      });
+    api
+      .get<VacancyStage[]>(`/recruitment/vacancies/${vacancyId}/funnel-stages`)
+      .then((rows) => {
+        if (!cancelled) setStages(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setStages([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, vacancyId]);
 
-  const selectedTemplate = useMemo(
-    () => templates.find((tpl) => tpl.id === templateId) || null,
-    [templates, templateId],
+  // "Active" is the absence of a terminal outcome, not a stored flag:
+  // CandidateVacancy.status starts at "new" and only the funnel's
+  // terminal stages drive it to hired / rejected / withdrew. The old
+  // `status === "active"` test matched nothing, so every scope counted
+  // zero and the custom list rendered empty.
+  const activeCandidates = useMemo(
+    () =>
+      candidates.filter(
+        (c) =>
+          !CANDIDATE_VACANCY_TERMINAL_STATUSES.has(
+            (c.status || "").toLowerCase(),
+          ),
+      ),
+    [candidates],
   );
+
+  // "Finalists" is not a stored flag — it is the tail of the funnel:
+  // whoever sits in the last *active* stage (highest sort_order) or has
+  // already reached a positive terminal stage (hired). Resolves to an
+  // empty set when the vacancy has no stages configured, which is why
+  // the radio is disabled at zero. Built on top of `activeCandidates`,
+  // so anyone explicitly closed out (status hired/rejected/withdrew) is
+  // already gone — the stage is what puts a still-open candidate in the
+  // finalist bucket.
+  const finalistIds = useMemo(() => {
+    const activeStages = stages.filter((s) => s.stage_type === "active");
+    const lastActiveOrder =
+      activeStages.length > 0
+        ? Math.max(...activeStages.map((s) => s.sort_order))
+        : null;
+    const finalStageIds = new Set(
+      stages
+        .filter(
+          (s) =>
+            s.stage_type === "terminal_positive" ||
+            (s.stage_type === "active" && s.sort_order === lastActiveOrder),
+        )
+        .map((s) => s.id),
+    );
+    return new Set(
+      activeCandidates
+        .filter((c) => c.stage_id && finalStageIds.has(c.stage_id))
+        .map((c) => c.id),
+    );
+  }, [stages, activeCandidates]);
+
+  const selectedCandidateIds = useMemo(() => {
+    if (scope === "all_active") return activeCandidates.map((c) => c.id);
+    if (scope === "finalists")
+      return activeCandidates
+        .filter((c) => finalistIds.has(c.id))
+        .map((c) => c.id);
+    return customIds;
+  }, [scope, activeCandidates, finalistIds, customIds]);
 
   function toggleSection(code: ReportSectionCode) {
     setSections((prev) =>
@@ -112,17 +204,35 @@ export function ReportWizardDialog({
     );
   }
 
+  function toggleCustomCandidate(cvId: string) {
+    setCustomIds((prev) =>
+      prev.includes(cvId) ? prev.filter((id) => id !== cvId) : [...prev, cvId],
+    );
+  }
+
   async function handleGenerate() {
     if (sections.length === 0) {
-      toast.error(t("reportTemplateSectionRequired"));
+      toast.error(t("reportWizardSheetRequired"));
+      return;
+    }
+    if (selectedCandidateIds.length === 0) {
+      toast.error(t("reportWizardCandidateRequired"));
       return;
     }
     setStep("submitting");
+    pollCancelled.current = false;
     try {
       const body: ReportGenerateRequest = {
-        template_id: templateId || null,
         sections,
         audience,
+        // "All active" omits the whitelist: the worker excludes terminal
+        // candidates on its own, and an explicit list would silently cap
+        // the report at the picker's 200-row page. Finalists/Custom send
+        // the exact ids; an empty list never reaches the API (the server
+        // would 400 on it).
+        ...(scope === "all_active"
+          ? {}
+          : { candidate_vacancy_ids: selectedCandidateIds }),
       };
       const created = await api.post<ReportGenerateResponse>(
         `/recruitment/vacancies/${vacancyId}/reports`,
@@ -134,10 +244,15 @@ export function ReportWizardDialog({
       // last-known row instead of throwing the export id away — the
       // user can keep an eye on the Reports list once they close.
       const exportRow = await pollExport(created.export_id);
+      // The dialog was closed (or unmounted) while we were polling —
+      // the export keeps generating and the Reports list will show it,
+      // but this instance must not touch state or fire onCreated.
+      if (pollCancelled.current) return;
       setLatest(exportRow);
       setStep("result");
       onCreated?.(exportRow);
     } catch (err) {
+      if (pollCancelled.current) return;
       toast.error(
         err instanceof Error ? err.message : t("reportWizardStartFailed"),
       );
@@ -148,7 +263,7 @@ export function ReportWizardDialog({
   async function pollExport(exportId: string): Promise<ReportExport> {
     const deadline = Date.now() + 5 * 60_000;
     let last: ReportExport | null = null;
-    while (Date.now() < deadline) {
+    while (Date.now() < deadline && !pollCancelled.current) {
       const row = await api.get<ReportExport>(
         `/recruitment/reports/${exportId}`,
       );
@@ -165,7 +280,7 @@ export function ReportWizardDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-lg"
+        className="max-h-[85vh] overflow-y-auto sm:max-w-lg"
         data-testid="recruitment-report-wizard"
       >
         <DialogHeader>
@@ -174,50 +289,104 @@ export function ReportWizardDialog({
         </DialogHeader>
 
         {step !== "result" && (
-          <div className="space-y-4">
-            <div className="space-y-1">
-              <Label htmlFor="rep-tpl">{t("reportsColTemplate")}</Label>
-              <select
-                id="rep-tpl"
-                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
-                data-testid="recruitment-report-input-template"
-                value={templateId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setTemplateId(id);
-                  const tpl = templates.find((row) => row.id === id);
-                  if (tpl && tpl.sections.length > 0) {
-                    setSections(tpl.sections);
-                  }
-                }}
-              >
-                <option value="">{t("reportWizardNoTemplate")}</option>
-                {templates.map((tpl) => (
-                  <option key={tpl.id} value={tpl.id}>
-                    {tpl.is_default
-                      ? t("reportWizardTemplateOptionDefault", {
-                          name: tpl.name,
-                        })
-                      : tpl.name}
-                  </option>
-                ))}
-              </select>
-              {selectedTemplate && (
-                <p className="text-xs text-muted-foreground">
-                  {t("reportWizardTemplateSections", {
-                    count: String(selectedTemplate.sections.length),
-                  })}
-                </p>
+          <div className="space-y-5">
+            <p
+              className="text-sm"
+              data-testid="recruitment-report-vacancy-title"
+            >
+              <span className="text-muted-foreground">
+                {t("reportWizardVacancyLabel")}
+              </span>{" "}
+              <span className="font-medium">{vacancy?.title || "—"}</span>
+            </p>
+
+            <div className="space-y-2">
+              <Label>{t("reportWizardScopeLabel")}</Label>
+              <div className="space-y-2" data-testid="recruitment-report-scope">
+                <label className="flex items-start gap-2 rounded-md border border-border bg-card p-2 text-sm">
+                  <input
+                    type="radio"
+                    name="report-scope"
+                    value="all_active"
+                    checked={scope === "all_active"}
+                    disabled={activeCandidates.length === 0}
+                    onChange={() => setScope("all_active")}
+                    data-testid="recruitment-report-scope-all"
+                  />
+                  <span>
+                    {t("reportWizardScopeAllActive", {
+                      count: String(activeCandidates.length),
+                    })}
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 rounded-md border border-border bg-card p-2 text-sm">
+                  <input
+                    type="radio"
+                    name="report-scope"
+                    value="finalists"
+                    checked={scope === "finalists"}
+                    disabled={finalistIds.size === 0}
+                    onChange={() => setScope("finalists")}
+                    data-testid="recruitment-report-scope-finalists"
+                  />
+                  <span>
+                    {t("reportWizardScopeFinalists", {
+                      count: String(finalistIds.size),
+                    })}
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 rounded-md border border-border bg-card p-2 text-sm">
+                  <input
+                    type="radio"
+                    name="report-scope"
+                    value="custom"
+                    checked={scope === "custom"}
+                    onChange={() => setScope("custom")}
+                    data-testid="recruitment-report-scope-custom"
+                  />
+                  <span>{t("reportWizardScopeCustom")}</span>
+                </label>
+              </div>
+
+              {scope === "custom" && (
+                <div
+                  className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border p-2"
+                  data-testid="recruitment-report-custom-list"
+                >
+                  {activeCandidates.length === 0 && (
+                    <p className="p-1 text-sm text-muted-foreground">
+                      {t("reportWizardNoCandidates")}
+                    </p>
+                  )}
+                  {activeCandidates.map((c) => (
+                    <label
+                      key={c.id}
+                      className="flex items-center gap-2 p-1 text-sm"
+                    >
+                      <Checkbox
+                        checked={customIds.includes(c.id)}
+                        onCheckedChange={() => toggleCustomCandidate(c.id)}
+                        data-testid={`recruitment-report-custom-candidate-${c.id}`}
+                      />
+                      <span>{c.candidate_name}</span>
+                      {c.stage?.name && (
+                        <span className="text-xs text-muted-foreground">
+                          {c.stage.name}
+                        </span>
+                      )}
+                    </label>
+                  ))}
+                </div>
               )}
             </div>
 
             <div className="space-y-2">
-              <Label>{t("reportTemplateSectionsLabel")}</Label>
+              <Label>{t("reportWizardSheetsLabel")}</Label>
               <div
-                className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+                className="space-y-2"
                 data-testid="recruitment-report-sections"
               >
-                {REPORT_SECTION_CODES.map((code) => {
+                {REPORT_SECTION_CODES.map((code, idx) => {
                   const checked = sections.includes(code);
                   return (
                     <label
@@ -229,7 +398,9 @@ export function ReportWizardDialog({
                         onCheckedChange={() => toggleSection(code)}
                         data-testid={`recruitment-report-section-${code}`}
                       />
-                      <span>{reportSectionLabel(t, code)}</span>
+                      <span>
+                        {idx + 1}. {reportSectionLabel(t, code)}
+                      </span>
                     </label>
                   );
                 })}
@@ -239,7 +410,7 @@ export function ReportWizardDialog({
             <div className="space-y-2">
               <Label>{t("reportWizardAudienceLabel")}</Label>
               <div
-                className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+                className="space-y-2"
                 data-testid="recruitment-report-audience"
               >
                 <label className="flex items-start gap-2 rounded-md border border-border bg-card p-2 text-sm">
@@ -280,9 +451,11 @@ export function ReportWizardDialog({
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <Badge
-                variant={latest.status === "completed" ? "default" : "destructive"}
+                variant={
+                  latest.status === "completed" ? "default" : "destructive"
+                }
               >
-                {latest.status}
+                {reportStatusLabel(t, latest.status)}
               </Badge>
               <span className="text-sm text-muted-foreground">
                 {latest.completed_at
@@ -296,11 +469,7 @@ export function ReportWizardDialog({
               <Button
                 data-testid="recruitment-report-btn-download"
                 render={
-                  <a
-                    href={latest.download_url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
+                  <a href={latest.download_url} target="_blank" rel="noreferrer">
                     <FileSpreadsheet className="size-4" />{" "}
                     {t("reportDownloadXlsx")}
                   </a>
@@ -324,17 +493,16 @@ export function ReportWizardDialog({
         <DialogFooter>
           {step === "configure" && (
             <>
-              <Button
-                variant="outline"
-                onClick={() => handleOpenChange(false)}
-              >
+              <Button variant="outline" onClick={() => handleOpenChange(false)}>
                 {tc("cancel")}
               </Button>
               <Button
                 onClick={handleGenerate}
+                disabled={selectedCandidateIds.length === 0}
                 data-testid="recruitment-report-btn-submit"
               >
                 {t("vacancyCompetencesGenerate")}
+                <EECreditCostBadge action={REPORT_ACTION} />
               </Button>
             </>
           )}

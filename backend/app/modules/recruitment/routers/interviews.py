@@ -33,6 +33,7 @@ from app.modules.recruitment.schemas import (
     InitUploadResponse,
     InterviewArchiveRequest,
     InterviewCreate,
+    InterviewerOption,
     InterviewRead,
     InterviewSegmentRead,
     InterviewSegmentUpdate,
@@ -49,6 +50,18 @@ router = APIRouter(tags=["recruitment"])
 
 
 # ── Interviews / Consent / Upload (R3a) ───────────────────────────
+
+
+@router.get(
+    "/recruitment/interviewers",
+    response_model=list[InterviewerOption],
+)
+async def list_interviewers(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "recruiter")),
+):
+    """HRP-386: tenant users offered in the Interviewer(s) multi-select."""
+    return await service.list_interviewer_options(db, current_user.tenant_id)
 
 
 @router.post(
@@ -468,9 +481,7 @@ async def enqueue_transcribe(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter")),
 ):
-    return await service.enqueue_transcribe(
-        db, current_user.tenant_id, interview_id
-    )
+    return await service.enqueue_transcribe(db, current_user.tenant_id, interview_id)
 
 
 @router.post(
@@ -576,9 +587,7 @@ async def enqueue_ai_analysis(
     return AIAnalysisEnqueueResponse(
         task_id=res.get("task_id"),
         run_id=None,
-        status="queued"
-        if res.get("status") != "completed"
-        else "completed",
+        status="queued" if res.get("status") != "completed" else "completed",
         mode="full",
     )
 
@@ -631,8 +640,7 @@ async def list_ai_analyses(
     # history, legacy rows without a hash, empty list) — the
     # serializer would discard the result anyway.
     needs_hash = any(
-        r.mode == "resume_only" and r.resume_snapshot_hash is not None
-        for r in rows
+        r.mode == "resume_only" and r.resume_snapshot_hash is not None for r in rows
     )
     current_hash = (
         await resume_analysis_service.current_resume_hash_for_cv(
@@ -642,8 +650,7 @@ async def list_ai_analyses(
         else None
     )
     return [
-        resume_analysis_service.serialize_run_for_read(r, current_hash)
-        for r in rows
+        resume_analysis_service.serialize_run_for_read(r, current_hash) for r in rows
     ]
 
 
