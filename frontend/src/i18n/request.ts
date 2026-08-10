@@ -14,14 +14,18 @@ import { getRequestConfig } from "next-intl/server";
 import { cookies, headers } from "next/headers";
 
 import { FALLBACK_LOCALE } from "@/lib/locale";
+import { EE_CATALOGS } from "@/lib/locale-ee";
 import { NEXT_LOCALE_COOKIE, resolveRequestLocale } from "./config";
 
 // Static catalog map: an unknown locale is a plain map miss (falls back
 // to English) instead of a module-resolution crash that would 500 every
 // request. Keep in sync with CATALOG_LOCALES in src/lib/locale.ts.
+// Enterprise-only catalogs merge in from locale-ee.ts (empty stub in
+// community builds, where their catalog files do not exist).
 const CATALOGS: Record<string, () => Promise<{ default: unknown }>> = {
   en: () => import("../../messages/en.json"),
   de: () => import("../../messages/de.json"),
+  ...EE_CATALOGS,
 };
 
 export default getRequestConfig(async () => {

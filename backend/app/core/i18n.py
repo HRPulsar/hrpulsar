@@ -37,7 +37,16 @@ def _load_catalog(locale: str) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    # Enterprise-only catalogs (e.g. ru on white-label installs) ship in
+    # ee/i18n/ so their Cyrillic content never reaches the public repo.
+    # Lazy soft-import (open-core mechanism 3): no ee package → {} → the
+    # per-key English fallback in translate() takes over.
+    try:
+        from ee.i18n_catalogs import load_catalog as ee_load_catalog
+    except ImportError:
         return {}
+    return ee_load_catalog(locale) or {}
 
 
 def _lookup(catalog: dict, dotted_key: str) -> str | None:

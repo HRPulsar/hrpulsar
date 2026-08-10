@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale } from "next-intl/server";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Inter } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
 import { RuntimeEnvScript } from "@/components/runtime-env-script";
@@ -17,6 +17,17 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+// Cyrillic fallback for enterprise locales (ru): Geist ships no Cyrillic
+// glyphs. Subset-only face with a Cyrillic unicode-range — browsers fetch
+// it lazily, only when Cyrillic text actually renders, so Latin-only
+// deployments pay nothing beyond the @font-face declaration (hence no
+// preload). Wired after Geist in --font-sans/--font-heading (globals.css).
+const interCyrillic = Inter({
+  variable: "--font-cyrillic-sans",
+  subsets: ["cyrillic"],
+  preload: false,
 });
 
 // generateMetadata instead of a static export so a white-label brand
@@ -92,7 +103,7 @@ export default async function RootLayout({
   return (
     <html
       lang={locale}
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${interCyrillic.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <head>

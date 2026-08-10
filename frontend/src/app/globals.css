@@ -7,9 +7,12 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  /* --font-cyrillic-sans: Cyrillic-subset fallback (see src/app/layout.tsx) —
+     Geist has no Cyrillic glyphs, the browser only downloads this face when
+     Cyrillic text renders. */
+  --font-sans: var(--font-geist-sans), var(--font-cyrillic-sans);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-geist-sans);
+  --font-heading: var(--font-geist-sans), var(--font-cyrillic-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

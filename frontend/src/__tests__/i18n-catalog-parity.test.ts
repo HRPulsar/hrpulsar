@@ -1,8 +1,8 @@
-// HRP-491: permanent guard for the message catalogs. en.json and de.json
-// must carry the same key set (a one-sided key renders raw on the other
-// locale), every message must be valid ICU, and the ICU argument + rich-tag
-// sets must match per key — a dropped/renamed {arg} or an extra <tag> in one
-// locale throws at render time.
+// HRP-491: permanent guard for the message catalogs. Every shipped catalog
+// must carry the same key set as en.json (a one-sided key renders raw on the
+// other locale), every message must be valid ICU, and the ICU argument +
+// rich-tag sets must match per key — a dropped/renamed {arg} or an extra
+// <tag> in one locale throws at render time.
 //
 // HRP-482: arguments are extracted with the real ICU parser
 // (@formatjs/icu-messageformat-parser — the same grammar next-intl renders
@@ -10,16 +10,23 @@
 // first word of a one-word plural branch for an argument name, so a correct
 // German translation could not pass.
 //
+// Catalogs are discovered from frontend/messages/*.json instead of being
+// hard-coded: enterprise-only locales (ru) exist in the monorepo but not in
+// the public repo, and this file is synced to both — the guard covers
+// whatever set of catalogs actually ships. Plural-branch sets are locale
+// specific by design (ru needs one/few/many/other where en has one/other);
+// the signature compares argument names and tags, not branches.
+//
 // Version note: the direct devDependency (^3.5.15) currently resolves to
 // the same node_modules entry as next-intl's transitive copy (via
 // intl-messageformat), so "same grammar" holds literally. If a future
 // next-intl bump splits the two across a major, re-align the pin.
+import { readdirSync, readFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
+
 import { parse, TYPE } from "@formatjs/icu-messageformat-parser";
 import type { MessageFormatElement } from "@formatjs/icu-messageformat-parser";
 import { describe, expect, it } from "vitest";
-
-import deMessages from "../../messages/de.json";
-import enMessages from "../../messages/en.json";
 
 type Tree = { [key: string]: string | Tree };
 
@@ -79,23 +86,41 @@ function icuSignature(value: string): string {
   return `${[...args].sort().join(",")}|${[...tags].sort().join(",")}`;
 }
 
-describe("i18n catalog parity (en/de)", () => {
-  const en = new Map(flatEntries(enMessages as unknown as Tree));
-  const de = new Map(flatEntries(deMessages as unknown as Tree));
+const MESSAGES_DIR = resolve(__dirname, "../../messages");
 
-  it("keeps the same key set in both catalogs", () => {
-    const onlyEn = [...en.keys()].filter((k) => !de.has(k));
-    const onlyDe = [...de.keys()].filter((k) => !en.has(k));
+const catalogs = new Map<string, Map<string, string>>(
+  readdirSync(MESSAGES_DIR)
+    .filter((file) => file.endsWith(".json"))
+    .sort()
+    .map((file) => [
+      basename(file, ".json"),
+      new Map(
+        flatEntries(
+          JSON.parse(readFileSync(resolve(MESSAGES_DIR, file), "utf8")) as Tree,
+        ),
+      ),
+    ]),
+);
+
+const en = catalogs.get("en");
+if (!en) throw new Error("frontend/messages/en.json is missing");
+const others = [...catalogs].filter(([locale]) => locale !== "en");
+
+describe(`i18n catalog parity (${[...catalogs.keys()].join("/")})`, () => {
+  it("ships more than just the base catalog", () => {
+    expect(others.length).toBeGreaterThan(0);
+  });
+
+  it.each(others)("keeps the same key set in en and %s", (_locale, catalog) => {
+    const onlyEn = [...en.keys()].filter((k) => !catalog.has(k));
+    const onlyOther = [...catalog.keys()].filter((k) => !en.has(k));
     expect(onlyEn).toEqual([]);
-    expect(onlyDe).toEqual([]);
+    expect(onlyOther).toEqual([]);
   });
 
   it("parses every message as valid ICU", () => {
     const invalid: string[] = [];
-    for (const [locale, catalog] of [
-      ["en", en],
-      ["de", de],
-    ] as const) {
+    for (const [locale, catalog] of catalogs) {
       for (const [key, value] of catalog) {
         try {
           parse(value);
@@ -107,23 +132,26 @@ describe("i18n catalog parity (en/de)", () => {
     expect(invalid).toEqual([]);
   });
 
-  it("keeps ICU argument and rich-tag sets identical per key", () => {
-    const mismatches: string[] = [];
-    for (const [key, enValue] of en) {
-      const deValue = de.get(key);
-      if (deValue === undefined) continue; // covered by the parity test
-      let enSig: string;
-      let deSig: string;
-      try {
-        enSig = icuSignature(enValue);
-        deSig = icuSignature(deValue);
-      } catch {
-        continue; // covered by the valid-ICU test
+  it.each(others)(
+    "keeps ICU argument and rich-tag sets identical per key in %s",
+    (_locale, catalog) => {
+      const mismatches: string[] = [];
+      for (const [key, enValue] of en) {
+        const otherValue = catalog.get(key);
+        if (otherValue === undefined) continue; // covered by the parity test
+        let enSig: string;
+        let otherSig: string;
+        try {
+          enSig = icuSignature(enValue);
+          otherSig = icuSignature(otherValue);
+        } catch {
+          continue; // covered by the valid-ICU test
+        }
+        if (enSig !== otherSig) {
+          mismatches.push(`${key}: en[${enSig}] other[${otherSig}]`);
+        }
       }
-      if (enSig !== deSig) {
-        mismatches.push(`${key}: en[${enSig}] de[${deSig}]`);
-      }
-    }
-    expect(mismatches).toEqual([]);
-  });
+      expect(mismatches).toEqual([]);
+    },
+  );
 });

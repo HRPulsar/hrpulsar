@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ContentLanguage = Literal["en", "de"]
+ContentLanguage = Literal["en", "de", "ru"]
 EffortLevel = Literal["fast", "balanced", "thorough", "custom"]
 LLMProvider = Literal["anthropic", "openai", "gemini"]
 

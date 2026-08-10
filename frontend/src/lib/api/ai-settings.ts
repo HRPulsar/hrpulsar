@@ -1,13 +1,21 @@
 import { api } from "../api";
+import { EE_CONTENT_LANGUAGES } from "../locale-ee";
 
-export type ContentLanguage = "en" | "de";
+export type ContentLanguage = "en" | "de" | "ru";
 /** Languages the AI may generate content in. Adding one: widen the
  * ContentLanguage union here and the backend Literal in
  * ai_settings/schemas.py (no DB migration — HRP-480 dropped the CHECK).
  * Deliberately NOT tied to AVAILABLE_LOCALES: the content language is
  * orthogonal to the interface locale, so an en-only UI deployment may
- * still generate AI content in German. */
-export const CONTENT_LANGUAGES: ContentLanguage[] = ["en", "de"];
+ * still generate AI content in German. Enterprise-only languages (ru)
+ * join the select options via locale-ee.ts — the union and the backend
+ * Literal accept them in every edition, community just never offers
+ * them in the UI. */
+export const CONTENT_LANGUAGES: ContentLanguage[] = [
+  "en",
+  "de",
+  ...(EE_CONTENT_LANGUAGES as readonly ContentLanguage[]),
+];
 export type EffortLevel = "fast" | "balanced" | "thorough" | "custom";
 export type LLMProvider = "anthropic" | "openai" | "gemini";
 

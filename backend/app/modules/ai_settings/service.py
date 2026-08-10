@@ -418,7 +418,7 @@ async def get_effective_credit_multiplier_async(
 # ---------------------------------------------------------------------------
 
 
-_LANGUAGE_NAMES = {"en": "English", "de": "German"}
+_LANGUAGE_NAMES = {"en": "English", "de": "German", "ru": "Russian"}
 
 
 def build_language_directive(row: TenantAISettings) -> str:

@@ -13,6 +13,8 @@
  * module only guards against the envs being absent (stock en-only build).
  */
 
+import { EE_CATALOG_LOCALES, EE_LOCALE_LABELS } from "./locale-ee";
+
 export const FALLBACK_LOCALE = "en";
 
 /** Locales with a shipped messages catalog (frontend/messages/<code>.json).
@@ -20,14 +22,21 @@ export const FALLBACK_LOCALE = "en";
  * locale without a catalog would crash SSR message loading (see
  * src/i18n/request.ts). Adding a language: create the catalog file, list
  * the code here (+ LOCALE_LABELS) and register it in the CATALOGS map of
- * src/i18n/request.ts. */
-export const CATALOG_LOCALES: readonly string[] = ["en", "de"];
+ * src/i18n/request.ts. Enterprise-only locales register through
+ * locale-ee.ts instead (community stub is empty, so they are dropped by
+ * the getAvailableLocales() filter in community builds). */
+export const CATALOG_LOCALES: readonly string[] = [
+  "en",
+  "de",
+  ...EE_CATALOG_LOCALES,
+];
 
 /** Native-name labels for language selects and the switcher.
  * Unknown codes fall through to the raw code via localeLabel(). */
 export const LOCALE_LABELS: Record<string, string> = {
   en: "English",
   de: "Deutsch",
+  ...EE_LOCALE_LABELS,
 };
 
 type LocaleEnvKey =
