@@ -94,9 +94,7 @@ def _format_user_name(user) -> str | None:
     return f"{user.first_name} {user.last_name}".strip() or None
 
 
-async def _resolve_reviewer_user_id(
-    db: AsyncSession, p: PDP
-) -> uuid.UUID | None:
+async def _resolve_reviewer_user_id(db: AsyncSession, p: PDP) -> uuid.UUID | None:
     """Reviewer user id = explicit reviewer if set, else the employee's
     division manager (as a ``users.id``). Used both to render the reviewer
     name and to gate the under-review item-toggle permission (HRP-130) —
@@ -188,9 +186,7 @@ def _as_uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:
     return uuid.UUID(str(value))
 
 
-async def _build_items_snapshot(
-    db: AsyncSession, pdp_id: uuid.UUID
-) -> list[dict]:
+async def _build_items_snapshot(db: AsyncSession, pdp_id: uuid.UUID) -> list[dict]:
     """HRP-24: serialize items+materials at the moment a PDP enters review.
 
     Stored as JSONB on ``pdps.on_review_items_snapshot``. Only structural data
@@ -238,9 +234,7 @@ async def _build_items_snapshot(
     return snapshot
 
 
-async def _items_from_snapshot(
-    db: AsyncSession, snapshot: list[dict]
-) -> list[dict]:
+async def _items_from_snapshot(db: AsyncSession, snapshot: list[dict]) -> list[dict]:
     """HRP-24: rehydrate the JSON snapshot into the same shape live items use."""
     items: list[dict] = []
     for sit in snapshot:
@@ -425,8 +419,7 @@ async def _attach_default_materials(
         materials = [
             m
             for m in materials
-            if level_sort_by_id.get(m.skill_level_id, 0)
-            <= up_to_skill_level_sort_index
+            if level_sort_by_id.get(m.skill_level_id, 0) <= up_to_skill_level_sort_index
         ]
     for sort_index, mat in enumerate(materials):
         db.add(
@@ -796,9 +789,7 @@ async def change_pdp_status(
     # button in that case; this guard catches privileged callers that hit
     # the API directly.
     if p.status == "review" and new_status == "returned":
-        items_result = await db.execute(
-            select(PDPItem).where(PDPItem.pdp_id == pdp_id)
-        )
+        items_result = await db.execute(select(PDPItem).where(PDPItem.pdp_id == pdp_id))
         items = list(items_result.scalars().all())
         if items and all(it.is_passed for it in items):
             raise AppError(
@@ -902,10 +893,12 @@ async def change_pdp_status(
         notifier = _notify_pdp_returned
     elif new_status == "done":
         notifier = _notify_pdp_done
-    elif (
-        new_status == "cancelled"
-        and previous_status in {"sent", "in_progress", "review", "returned"}
-    ):
+    elif new_status == "cancelled" and previous_status in {
+        "sent",
+        "in_progress",
+        "review",
+        "returned",
+    }:
         # HRP-244: silent on draft → cancelled (the employee never saw the plan).
         notifier = _notify_pdp_cancelled
 
@@ -1009,9 +1002,7 @@ async def _notify_pdp_review_submitted(
             template_code="pdp.review_submitted",
         )
     except Exception:
-        logger.exception(
-            "PDP review-submitted notification failed for pdp_id=%s", p.id
-        )
+        logger.exception("PDP review-submitted notification failed for pdp_id=%s", p.id)
 
 
 async def _notify_pdp_returned(
@@ -1043,9 +1034,7 @@ async def _notify_pdp_returned(
             template_code="pdp.returned",
         )
     except Exception:
-        logger.exception(
-            "PDP returned notification failed for pdp_id=%s", p.id
-        )
+        logger.exception("PDP returned notification failed for pdp_id=%s", p.id)
 
 
 async def _notify_pdp_done(
@@ -1058,19 +1047,21 @@ async def _notify_pdp_done(
             render_pdp_done_to_employee_email,
             render_pdp_done_to_reviewer_email,
         )
-        from app.core.i18n import resolve_locale, translate
+        from app.core.i18n import resolve_locale
         from app.modules.auth.models import User
 
         owner = _pdp_owner_user(p)
-        owner_display = _employee_display_name(owner) if owner else None
+        # HRP-584: _format_user_name returns None for a missing owner AND
+        # for a blank first/last name — both route the templates to their
+        # nameless copy instead of leaking the login email as a name.
+        owner_display = _format_user_name(owner)
         if owner and owner.email:
-            # i18n F4: two recipients, two independent locales. The
-            # fallback also covers an owner with an empty display name.
+            # i18n F4: two recipients, two independent locales.
             owner_locale = resolve_locale(
                 user_language=owner.language, tenant_default=tenant_default
             )
             subject, body = render_pdp_done_to_employee_email(
-                owner_display or translate("email.fallback.employee", owner_locale),
+                owner_display,
                 pdp_title=p.title,
                 locale=owner_locale,
             )
@@ -1092,14 +1083,14 @@ async def _notify_pdp_done(
         if not reviewer or not reviewer.email:
             return
         # HRP-244 review fix: when the owner record is missing (User row
-        # deactivated / deleted) the reviewer still gets a notice using a
-        # generic display name so the lifecycle event is not silently lost.
-        # i18n F7: that generic name follows the reviewer's locale.
+        # deactivated / deleted) the reviewer still gets a notice so the
+        # lifecycle event is not silently lost; HRP-584 — the template
+        # renders its nameless copy variant in that case.
         reviewer_locale = resolve_locale(
             user_language=reviewer.language, tenant_default=tenant_default
         )
         subject, body = render_pdp_done_to_reviewer_email(
-            owner_display or translate("email.fallback.employee", reviewer_locale),
+            owner_display,
             pdp_title=p.title,
             locale=reviewer_locale,
         )
@@ -1124,19 +1115,20 @@ async def _notify_pdp_cancelled(
             render_pdp_cancelled_to_employee_email,
             render_pdp_cancelled_to_reviewer_email,
         )
-        from app.core.i18n import resolve_locale, translate
+        from app.core.i18n import resolve_locale
         from app.modules.auth.models import User
 
         owner = _pdp_owner_user(p)
-        owner_display = _employee_display_name(owner) if owner else None
+        # HRP-584: missing owner or blank name -> nameless copy (see
+        # _notify_pdp_done).
+        owner_display = _format_user_name(owner)
         if owner and owner.email:
-            # i18n F4: two recipients, two independent locales. The
-            # fallback also covers an owner with an empty display name.
+            # i18n F4: two recipients, two independent locales.
             owner_locale = resolve_locale(
                 user_language=owner.language, tenant_default=tenant_default
             )
             subject, body = render_pdp_cancelled_to_employee_email(
-                owner_display or translate("email.fallback.employee", owner_locale),
+                owner_display,
                 pdp_title=p.title,
                 locale=owner_locale,
             )
@@ -1156,12 +1148,12 @@ async def _notify_pdp_cancelled(
         reviewer = await db.get(User, reviewer_user_id)
         if not reviewer or not reviewer.email:
             return
-        # i18n F7: the missing-owner fallback follows the reviewer's locale.
+        # HRP-584: a missing owner renders the nameless copy variant.
         reviewer_locale = resolve_locale(
             user_language=reviewer.language, tenant_default=tenant_default
         )
         subject, body = render_pdp_cancelled_to_reviewer_email(
-            owner_display or translate("email.fallback.employee", reviewer_locale),
+            owner_display,
             pdp_title=p.title,
             locale=reviewer_locale,
         )
@@ -1173,9 +1165,7 @@ async def _notify_pdp_cancelled(
             template_code="pdp.cancelled.reviewer",
         )
     except Exception:
-        logger.exception(
-            "PDP cancelled notification failed for pdp_id=%s", p.id
-        )
+        logger.exception("PDP cancelled notification failed for pdp_id=%s", p.id)
 
 
 # --- Items ---
@@ -1433,9 +1423,7 @@ async def mark_item_passed(
     # manager fallback) must also be allowed to toggle items in ``review``.
     # Mirror the same resolution the UI uses to render the reviewer name.
     reviewer_user_id = await _resolve_reviewer_user_id(db, p)
-    is_pdp_reviewer = (
-        reviewer_user_id is not None and reviewer_user_id == user_id
-    )
+    is_pdp_reviewer = reviewer_user_id is not None and reviewer_user_id == user_id
 
     if p.status in PDP_OWNER_PASS_STATUSES:
         if not is_owner:

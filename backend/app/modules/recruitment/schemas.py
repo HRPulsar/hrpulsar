@@ -1244,6 +1244,10 @@ class VacancyAnalytics(BaseModel):
     vacancy_id: uuid.UUID
     funnel: list[FunnelStageStat]
     win_loss: dict[str, int]
+    # HRP-425: names of the funnel's terminal stages, so the Hired /
+    # Rejected tiles can be labelled with the vacancy's own vocabulary.
+    positive_stage_names: list[str] = []
+    negative_stage_names: list[str] = []
     total_candidates: int
 
 
@@ -1325,6 +1329,10 @@ class QuestionRead2(BaseModel):
     goal: QuestionGoal
     priority: QuestionPriority
     competence_id: uuid.UUID | None = None
+    # HRP-504: resolved from the vacancy profile by the vacancy-level
+    # listing so the Questions tab does not have to reconcile slug ids
+    # against uuid5 keys in the browser. Per-candidate reads leave it None.
+    competence_name: str | None = None
     resume_anchor_jsonb: dict | None = None
     expected_answer_indicators: list[str] = Field(default_factory=list)
     follow_ups: list[str] = Field(default_factory=list)
@@ -1361,6 +1369,29 @@ class QuestionSetRead(BaseModel):
     questions: list[QuestionRead2] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
+
+
+class VacancyCompetenceOption(BaseModel):
+    """One entry of the vacancy's Competences & indicators block, keyed by
+    the same normalized id questions carry (HRP-504)."""
+
+    id: uuid.UUID
+    name: str
+
+
+class VacancyQuestionsCandidate(BaseModel):
+    candidate_id: uuid.UUID
+    candidate_vacancy_id: uuid.UUID
+    candidate_name: str
+    question_set: QuestionSetRead | None = None
+
+
+class VacancyQuestionsRead(BaseModel):
+    """Payload behind the vacancy Questions tab (HRP-504)."""
+
+    vacancy_id: uuid.UUID
+    competences: list[VacancyCompetenceOption] = Field(default_factory=list)
+    candidates: list[VacancyQuestionsCandidate] = Field(default_factory=list)
 
 
 class GenerateQuestionSetRequest(BaseModel):

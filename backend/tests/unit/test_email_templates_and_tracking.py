@@ -157,8 +157,36 @@ class TestEmailTemplates:
             entity_type="assessment", entity_title="Q2 360", deadline="2026-06-30"
         )
         assert "Q2 360" in subject
-        assert "ASSESSMENT" in html
+        # HRP-584: the entity kind renders as localized copy, not the raw code.
+        assert 'The assessment "' in html
+        assert "ASSESSMENT" not in html
         assert "2026-06-30" in html
+
+    def test_deadline_reminder_email_localizes_known_types(self):
+        _, pdp_html = render_deadline_reminder_email("pdp", "Plan", "2026-06-30")
+        assert 'The development plan "' in pdp_html
+        _, exam_html = render_deadline_reminder_email("EXAM", "Final", "2026-06-30")
+        assert 'The exam "' in exam_html
+
+    def test_deadline_reminder_email_type_label_follows_locale(self):
+        # HRP-584: the label must be resolved in the recipient's locale,
+        # not the deployment default (ru is pinned in tests/unit/ee/).
+        _, html = render_deadline_reminder_email(
+            "pdp", "Plan", "30.06.2026", locale="de"
+        )
+        assert "den Entwicklungsplan" in html
+        assert "development plan" not in html
+
+    def test_deadline_reminder_email_unknown_type_falls_back_to_code(self):
+        _, html = render_deadline_reminder_email("quest", "Side Quest", "2026-06-30")
+        assert "QUEST" in html
+
+    def test_deadline_reminder_email_escapes_entity_title(self):
+        _, html = render_deadline_reminder_email(
+            "exam", '</strong><a href="http://evil">x</a>', "2026-06-30"
+        )
+        assert '<a href="http://evil">' not in html
+        assert "&lt;a href=&#34;http://evil&#34;&gt;" in html
 
     def test_external_review_email(self):
         subject, html = render_external_review_email(

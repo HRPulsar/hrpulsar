@@ -322,6 +322,17 @@ export function InterviewUploadZone({
         if (err instanceof ApiError && err.status === 409) {
           onConsentMissing?.();
           toast.error(t("interviewUploadConsentNotSigned"));
+        } else if (err instanceof ApiError && err.status === 402) {
+          // HRP-547: the balance is checked and held before the transfer
+          // starts, so this fires with the file still on disk. Say that
+          // outright — "failed to start upload" reads like a glitch worth
+          // retrying, and a retry cannot help here.
+          toast.error(t("interviewUploadInsufficientCredits"));
+        } else if (err instanceof ApiError && err.status === 429) {
+          // A demo workspace out of quota has no admin to top it up, so it
+          // gets the sandbox wording the rest of the demo surfaces use
+          // rather than "ask your administrator" (HRP-252).
+          toast.error(err.message || t("interviewUploadInsufficientCredits"));
         } else {
           toast.error(
             err instanceof Error

@@ -4,6 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ApiError, api } from "@/lib/api";
+import { getDefaultSalaryCurrency } from "@/lib/currency";
+import {
+  parseSalaryInput,
+  validateSalaryRange,
+} from "@/lib/vacancy-salary";
 import type { Vacancy } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -138,11 +143,13 @@ function overviewFormToPatch(
   if (current.employment_type !== initial.employment_type) {
     patch.employment_type = current.employment_type || null;
   }
-  const salaryMin = current.salary_min ? Number(current.salary_min) : null;
-  const initialMin = initial.salary_min ? Number(initial.salary_min) : null;
+  // HRP-440: shared with the Create / Edit form so a blank or malformed
+  // number resolves to NULL identically on both surfaces.
+  const salaryMin = parseSalaryInput(current.salary_min);
+  const initialMin = parseSalaryInput(initial.salary_min);
   if (salaryMin !== initialMin) patch.salary_min = salaryMin;
-  const salaryMax = current.salary_max ? Number(current.salary_max) : null;
-  const initialMax = initial.salary_max ? Number(initial.salary_max) : null;
+  const salaryMax = parseSalaryInput(current.salary_max);
+  const initialMax = parseSalaryInput(initial.salary_max);
   if (salaryMax !== initialMax) patch.salary_max = salaryMax;
   if (current.salary_currency !== initial.salary_currency) {
     patch.salary_currency = current.salary_currency || null;
@@ -313,6 +320,12 @@ export function VacancyOverviewSection({
 
   async function handleSave() {
     if (!isDirty) return;
+    // HRP-440: same guard as the Create / Edit form.
+    const salaryError = validateSalaryRange(form);
+    if (salaryError) {
+      toast.error(t(salaryError));
+      return;
+    }
     setSaving(true);
     try {
       const payload = overviewFormToPatch(initial, form);
@@ -764,7 +777,8 @@ function OverviewEditGrid({
               className="w-20"
               value={form.salary_currency}
               onChange={(e) => setField("salary_currency", e.target.value)}
-              placeholder="USD"
+              // HRP-439: hint the installation's currency, not a literal.
+              placeholder={getDefaultSalaryCurrency()}
               disabled={disabled}
             />
           </div>

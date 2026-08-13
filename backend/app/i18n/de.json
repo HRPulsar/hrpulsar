@@ -84,7 +84,10 @@
       "body": "Für {type_label} \"<strong>{entity_title}</strong>\" gilt die Frist <strong>{deadline}</strong>. Bitte schließen Sie die Aufgabe rechtzeitig ab.",
       "button": "{brand_name} öffnen",
       "heading": "Frist läuft bald ab",
-      "subject": "Frist läuft bald ab: {entity_title}"
+      "subject": "Frist läuft bald ab: {entity_title}",
+      "type_assessment": "die Bewertung",
+      "type_exam": "die Prüfung",
+      "type_pdp": "den Entwicklungsplan"
     },
     "exam_assigned": {
       "body": "Ihnen wurde die Prüfung \"<strong>{exam_title}</strong>\" zugewiesen.{deadline_line}",
@@ -108,8 +111,7 @@
       "subject": "Bewertungsanfrage: {assessment_title}"
     },
     "fallback": {
-      "unnamed": "(unbenannt)",
-      "employee": "(Mitarbeiter unbekannt)"
+      "unnamed": "(unbenannt)"
     },
     "footer_automated": "Dies ist eine automatisch generierte Nachricht von {brand_link}.",
     "footer_no_reply": "Bitte antworten Sie nicht auf diese E-Mail.",
@@ -160,7 +162,9 @@
       "heading": "Entwicklungsplan abgebrochen: {title}",
       "heading_untitled": "Entwicklungsplan abgebrochen",
       "intro": "Der Entwicklungsplan \"<strong>{title}</strong>\" für <strong>{employee_name}</strong> wurde abgebrochen.",
+      "intro_noname": "Ihr Entwicklungsplan \"<strong>{title}</strong>\" wurde abgebrochen.",
       "intro_untitled": "Der Entwicklungsplan für <strong>{employee_name}</strong> wurde abgebrochen.",
+      "intro_untitled_noname": "Ihr Entwicklungsplan wurde abgebrochen.",
       "subject": "Ihr Entwicklungsplan wurde abgebrochen: {title}",
       "subject_untitled": "Ihr Entwicklungsplan wurde abgebrochen"
     },
@@ -169,7 +173,9 @@
       "heading": "Plan Ihres Mitarbeiters abgebrochen: {title}",
       "heading_untitled": "Plan Ihres Mitarbeiters abgebrochen",
       "intro": "Der Entwicklungsplan für <strong>{employee_name}</strong> (\"<strong>{title}</strong>\") wurde abgebrochen.",
+      "intro_noname": "Der Entwicklungsplan \"<strong>{title}</strong>\" wurde abgebrochen.",
       "intro_untitled": "Der Entwicklungsplan für <strong>{employee_name}</strong> wurde abgebrochen.",
+      "intro_untitled_noname": "Der Entwicklungsplan Ihres Mitarbeiters wurde abgebrochen.",
       "subject": "Entwicklungsplan Ihres Mitarbeiters abgebrochen: {title}",
       "subject_untitled": "Entwicklungsplan Ihres Mitarbeiters abgebrochen"
     },
@@ -178,7 +184,9 @@
       "heading": "Entwicklungsplan abgeschlossen: {title}",
       "heading_untitled": "Entwicklungsplan abgeschlossen",
       "intro": "Herzlichen Glückwunsch, <strong>{employee_name}</strong> — Ihr Entwicklungsplan \"<strong>{title}</strong>\" ist jetzt als abgeschlossen markiert.",
+      "intro_noname": "Herzlichen Glückwunsch — Ihr Entwicklungsplan \"<strong>{title}</strong>\" ist jetzt als abgeschlossen markiert.",
       "intro_untitled": "Herzlichen Glückwunsch, <strong>{employee_name}</strong> — Ihr Entwicklungsplan ist jetzt als abgeschlossen markiert.",
+      "intro_untitled_noname": "Herzlichen Glückwunsch — Ihr Entwicklungsplan ist jetzt als abgeschlossen markiert.",
       "subject": "Ihr Entwicklungsplan ist abgeschlossen: {title}",
       "subject_untitled": "Ihr Entwicklungsplan ist abgeschlossen"
     },
@@ -187,7 +195,9 @@
       "heading": "Plan Ihres Mitarbeiters abgeschlossen: {title}",
       "heading_untitled": "Plan Ihres Mitarbeiters abgeschlossen",
       "intro": "<strong>{employee_name}</strong> hat den Entwicklungsplan \"<strong>{title}</strong>\" abgeschlossen.",
+      "intro_noname": "Der Entwicklungsplan \"<strong>{title}</strong>\" wurde abgeschlossen.",
       "intro_untitled": "<strong>{employee_name}</strong> hat den eigenen Entwicklungsplan abgeschlossen.",
+      "intro_untitled_noname": "Der Entwicklungsplan Ihres Mitarbeiters wurde abgeschlossen.",
       "subject": "Entwicklungsplan Ihres Mitarbeiters abgeschlossen: {title}",
       "subject_untitled": "Entwicklungsplan Ihres Mitarbeiters abgeschlossen"
     },
@@ -560,7 +570,7 @@
     "grade_competence_link_not_found": "Verknüpfung nicht gefunden",
     "grade_ids_not_in_position": "grade_ids müssen zur ausgewählten Position gehören.",
     "grade_in_use_by_positions": "Der Grade wird von {count} Position(en) verwendet. Weisen Sie diese zuerst neu zu.",
-    "hiring_manager_invalid": "Der Hiring Manager muss ein aktiver Admin-Benutzer dieses Unternehmens sein.",
+    "hiring_manager_invalid": "Der Hiring Manager muss ein aktiver Benutzer dieses Unternehmens sein.",
     "import_job_not_found": "Import-Job nicht gefunden",
     "indicator_in_use": "Der Indikator wird von einer Bewertung oder einem PDP verwendet",
     "indicator_not_found": "Indikator nicht gefunden",
@@ -613,15 +623,19 @@
     "invite_has_no_round": "Der Einladung ist keine Runde zugeordnet",
     "invite_not_found": "Einladung nicht gefunden",
     "invite_not_found_or_expired": "Einladung nicht gefunden oder abgelaufen",
+    "invite_resend_cooldown": "Diese Einladung wurde gerade erst erneut gesendet. Bitte warten Sie einige Minuten, bevor Sie sie erneut senden.",
     "invite_resend_terminal_status": "Diese Einladung kann nicht erneut gesendet werden",
+    "invite_resend_throttle_unavailable": "Die Einladung kann derzeit nicht erneut gesendet werden. Bitte versuchen Sie es gleich noch einmal.",
     "invite_token_candidate_vacancy_mismatch": "Token passt nicht zur Kandidat-Stelle-Zuordnung",
     "invited_evaluator_playback_disabled": "Die Wiedergabe für eingeladene Bewerter ist für diesen Mandanten deaktiviert",
     "kind_audio_requires_audio_mime": "kind=audio erfordert einen Audio-MIME-Typ",
     "kind_transcript_requires_transcript_mime": "kind=text_transcript erfordert einen PDF- oder Klartext-MIME-Typ",
     "kind_video_requires_video_mime": "kind=video erfordert einen Video-MIME-Typ",
+    "llm_base_url_https_required": "Die benutzerdefinierte Endpoint-URL muss bei Cloud-Installationen HTTPS verwenden",
     "llm_base_url_not_public": "Die benutzerdefinierte Endpoint-URL muss bei Cloud-Installationen eine öffentliche Adresse sein",
     "llm_generation_failed": "LLM-Generierung fehlgeschlagen: {error}",
     "llm_model_not_allowed": "Modell \"{model}\" ist nicht zugelassen",
+    "llm_model_provider_unresolved": "Modell '{model}' lässt sich keinem Anbieter zuordnen — geben Sie es im Modellkatalog frei oder richten Sie einen Anbieter dafür ein.",
     "llm_provider_model_mismatch": "Das Modell {model} gehört nicht zum Anbieter {provider}.",
     "llm_provider_not_found": "LLM-Anbieter nicht gefunden",
     "logo_empty_file": "Leere Datei",
@@ -696,6 +710,7 @@
     "platform_include_demo_and_demo_only_exclusive": "include_demo und demo_only schließen sich gegenseitig aus",
     "platform_lock_origin_groups_only": "Das Sperren gilt nur für Origin-Gruppen",
     "platform_model_catalog_edit_requires_approved": "Geben Sie das Modell zuerst frei, danach können Sie es bearbeiten",
+    "platform_model_catalog_no_inheritable_multiplier": "Für dieses Modell gibt es keinen konfigurierten Preis als Rückfallebene — setzen Sie einen Multiplikator, statt ihn zu löschen, oder bepreisen Sie seine Familie in credits.yaml",
     "platform_model_catalog_entry_not_found": "Katalogeintrag nicht gefunden",
     "platform_model_catalog_reject_approved": "Freigegebene Modelle werden deaktiviert, nicht abgelehnt",
     "platform_model_catalog_seed_multiplier_yaml": "Kuratierte Modelle werden in credits.yaml bepreist — ändern Sie den Multiplikator dort",
@@ -710,6 +725,7 @@
     "position_title_exists": "Eine Position mit diesem Titel existiert bereits",
     "pre_interview_round_exists": "Eine pre_interview-Runde existiert bereits",
     "pre_interview_single_evaluator": "Die pre_interview-Runde erlaubt nur einen Bewerter",
+    "pre_interview_slot_taken_external": "Diese Bewertung ist bereits einer anderen Person zugewiesen. Sie müssen nichts ausfüllen und können die Seite schließen.",
     "profile_ai_invalid_payload": "Die KI hat eine unerwartete Antwort zurückgegeben (kein JSON-Objekt).",
     "profile_awaiting_review": "Für diese Stelle wartet ein generiertes Profil auf Überprüfung — übernehmen oder verwerfen Sie es zuerst.",
     "profile_generation_failed": "KI-Profilgenerierung fehlgeschlagen: {error}",

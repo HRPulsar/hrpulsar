@@ -5,6 +5,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.core.currency import installation_currency
+
 
 class GradeOptionRead(BaseModel):
     id: uuid.UUID
@@ -36,7 +38,11 @@ class GradeSpecializationCreate(BaseModel):
     requirements: str | None = None
     salary_min: int | None = Field(default=None, ge=0)
     salary_max: int | None = Field(default=None, ge=0)
-    salary_currency: str = Field(default="RUB", min_length=3, max_length=3)
+    # HRP-439: no hardcoded currency — the installation's own (USD in
+    # community, EUR/RUB on white-label sites via BILLING_CURRENCY).
+    salary_currency: str = Field(
+        default_factory=installation_currency, min_length=3, max_length=3
+    )
     sort_index: int = 0
     passing_score: int | None = Field(default=75, ge=0, le=100)
     competence_links: list[GradeCompetenceLinkCreate] = []
@@ -61,7 +67,7 @@ class GradeSpecializationRead(BaseModel):
     requirements: str | None = None
     salary_min: int | None = None
     salary_max: int | None = None
-    salary_currency: str = "RUB"
+    salary_currency: str = Field(default_factory=installation_currency)
     sort_index: int
     passing_score: int | None = None
     tenant_id: uuid.UUID

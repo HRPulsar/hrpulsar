@@ -102,6 +102,22 @@ class TestListSpecializations:
         assert data["headcount_total"] == 5
         assert data["assigned_count"] == 0
 
+    async def test_list_reports_is_active(self, db, tenant):
+        """HRP-294: the Company -> Specializations table renders a Status
+        column straight from this payload, so the flag has to be in the
+        list response and has to follow a deactivation."""
+        from app.modules.dictionary.schemas import DictionaryItemUpdate
+
+        spec = await _make_spec(db, tenant.id, "Statused")
+        items = await service.list_specializations(db, tenant.id)
+        assert next(s for s in items if s["title"] == "Statused")["is_active"] is True
+
+        await dict_service.update_item(
+            db, tenant.id, spec["id"], DictionaryItemUpdate(is_active=False)
+        )
+        items = await service.list_specializations(db, tenant.id)
+        assert next(s for s in items if s["title"] == "Statused")["is_active"] is False
+
     async def test_tenant_isolation(self, db, tenant):
         from app.modules.company.models import Tenant
 

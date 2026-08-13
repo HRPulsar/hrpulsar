@@ -10,7 +10,8 @@ export type ContentLanguage = "en" | "de" | "ru";
  * still generate AI content in German. Enterprise-only languages (ru)
  * join the select options via locale-ee.ts — the union and the backend
  * Literal accept them in every edition, community just never offers
- * them in the UI. */
+ * them in the UI. Enterprise builds offer these extras unconditionally
+ * on every deployment — deliberate (HRP-564), not an oversight. */
 export const CONTENT_LANGUAGES: ContentLanguage[] = [
   "en",
   "de",

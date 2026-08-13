@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
+import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 import { RequireRole } from "@/components/require-role";
 import { useIsSaas } from "@/hooks/use-is-saas";
+import { invalidateCostConfirmationCache } from "@/hooks/use-cost-confirmation";
 import { api } from "@/lib/api";
 import {
   aiSettingsApi,
@@ -20,6 +22,7 @@ import {
 } from "@/lib/api/ai-settings";
 import { localeLabel } from "@/lib/locale";
 import {
+  brokenKeyProviders,
   buildPatchDiff,
   isFormValid,
   roundUpTenth,
@@ -91,6 +94,11 @@ function AISettingsPageContent() {
   const [resetting, setResetting] = useState(false);
   const [providerFilter, setProviderFilter] = useState<string>("anthropic");
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  // HRP-543: providers whose stored BYOK key no longer decrypts. They are
+  // tracked separately because such a provider is often `configured:false`
+  // (nothing to fall back to) and would otherwise vanish from the page
+  // without ever telling the operator why generation stopped working.
+  const [brokenKeys, setBrokenKeys] = useState<ProviderStatus[]>([]);
 
   useEffect(() => {
     // RequireRole above guarantees an admin, so no in-effect role check.
@@ -105,7 +113,10 @@ function AISettingsPageContent() {
         setSettings(s);
         setPresets(p);
         setModels(m);
-        if (provs) setProviders(provs.filter((x) => x.configured));
+        if (provs) {
+          setProviders(provs.filter((x) => x.configured));
+          setBrokenKeys(brokenKeyProviders(provs));
+        }
         setForm(settingsToForm(s));
         setProviderFilter(s.effective_provider);
         if (Array.isArray(costs)) {
@@ -215,6 +226,10 @@ function AISettingsPageContent() {
       setSettings(updated);
       setForm(settingsToForm(updated));
       setProviderFilter(updated.effective_provider);
+      // HRP-509 / review #3: the model drives the credit multiplier, so
+      // every quoted price just changed. Without this the confirm dialog
+      // keeps showing the old workspace's numbers until a full reload.
+      invalidateCostConfirmationCache();
       toast.success(t("aiSaved"));
     } catch (err) {
       toast.error(
@@ -237,6 +252,7 @@ function AISettingsPageContent() {
       setSettings(updated);
       setForm(settingsToForm(updated));
       setProviderFilter(updated.effective_provider);
+      invalidateCostConfirmationCache();
       toast.success(t("aiResetDone"));
     } catch (err) {
       toast.error(
@@ -388,6 +404,24 @@ function AISettingsPageContent() {
               <p className="text-xs text-muted-foreground">
                 {t("aiProviderHint")}
               </p>
+              {brokenKeys.length > 0 && (
+                <div
+                  data-testid="settings-ai-provider-key-warning"
+                  className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2"
+                >
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-500" />
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-medium">
+                      {t("aiProviderKeyBroken", {
+                        providers: brokenKeys.map((p) => p.label).join(", "),
+                      })}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {t("aiProviderKeyBrokenHint")}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">

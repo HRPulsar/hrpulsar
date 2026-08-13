@@ -234,6 +234,8 @@ class TestAssessmentMatrixBasic:
 
         # AI scored 3/5 on the first two competences and explicitly skipped
         # the next one. Denominator must therefore be max_score * (4 - 1) = 15.
+        # HRP-507: AIAssessment.score is stored on the canonical 0..1 scale
+        # (HRP-274) and rebased onto the tenant scale on read, so 0.6 → 3.
         interview = Interview(
             tenant_id=tenant.id,
             candidate_vacancy_id=uuid.UUID(str(cv["id"])),
@@ -245,8 +247,8 @@ class TestAssessmentMatrixBasic:
         await db.refresh(interview)
 
         for slug, score, status in [
-            ("python-skills", 3.0, "ready"),
-            ("communication", 3.0, "ready"),
+            ("python-skills", 0.6, "ready"),
+            ("communication", 0.6, "ready"),
             ("system-design", None, "not_covered"),
         ]:
             db.add(
@@ -301,7 +303,8 @@ class TestAssessmentMatrixBasic:
                 tenant_id=tenant.id,
                 interview_id=interview.id,
                 competence_id=python_id,
-                score=3.0,
+                # 0.6 raw → 3 on the tenant 0..5 scale (HRP-507).
+                score=0.6,
                 status="ready",
                 citations=[],
             )
@@ -352,8 +355,9 @@ class TestAssessmentMatrixBasic:
         # Denominator must collapse to max_score * scored = 5 * 2 = 10.
         # Numerator = 4 + 4 = 8. ai_percent = 80%.
         for slug, score, ai_status in [
-            ("python-skills", 4.0, "assessed"),
-            ("communication", 4.0, "assessed"),
+            # 0.8 raw → 4 on the tenant 0..5 scale (HRP-507).
+            ("python-skills", 0.8, "assessed"),
+            ("communication", 0.8, "assessed"),
             ("system-design", None, "insufficient"),
             ("leadership", None, "not_covered"),
         ]:
@@ -414,9 +418,10 @@ class TestAssessmentMatrixBasic:
         # been 5 * 4 = 20 with numerator 3+3+3 = 9 → 45%. The fix drops
         # ``failed`` out of the denominator: 5 * 3 = 15 → 60%.
         for slug, score, ai_status in [
-            ("python-skills", 3.0, "ready"),
-            ("communication", 3.0, "ready"),
-            ("system-design", 3.0, "ready"),
+            # 0.6 raw → 3 on the tenant 0..5 scale (HRP-507).
+            ("python-skills", 0.6, "ready"),
+            ("communication", 0.6, "ready"),
+            ("system-design", 0.6, "ready"),
             ("leadership", None, "failed"),
         ]:
             db.add(
@@ -471,7 +476,9 @@ class TestAssessmentMatrixBasic:
                 tenant_id=tenant.id,
                 interview_id=interview.id,
                 competence_id=python_id,
-                score=3.0,
+                # 0.6 raw → 3 on the tenant 0..5 scale (HRP-507). The
+                # drill-down rebases exactly like the cell it explains.
+                score=0.6,
                 status="ready",
                 citations=[{"text": "I built async services"}],
                 reasoning="confident on async",
@@ -562,7 +569,11 @@ class TestMatrixCandidateIdentity:
 class TestAssessmentMatrixRounds:
     async def _two_rounds(self, db: AsyncSession, tenant, user, matrix_scale):
         """One candidate with two interviews scoring the same competence
-        3.0 (first round) then 5.0 (second)."""
+        3.0 (first round) then 5.0 (second).
+
+        Stored raw on the canonical 0..1 scale (HRP-507) — 0.6 and 1.0 —
+        and read back rebased onto the tenant's 0..5 scale.
+        """
         from datetime import datetime, timedelta, timezone
 
         ctx = await _vacancy_with_competences(
@@ -572,7 +583,7 @@ class TestAssessmentMatrixRounds:
         python_id = service.normalize_competence_id("python-skills")
         base = datetime(2026, 5, 1, tzinfo=timezone.utc)
 
-        for offset_days, score in ((0, 3.0), (7, 5.0)):
+        for offset_days, score in ((0, 0.6), (7, 1.0)):
             interview = Interview(
                 tenant_id=tenant.id,
                 candidate_vacancy_id=cv_id,

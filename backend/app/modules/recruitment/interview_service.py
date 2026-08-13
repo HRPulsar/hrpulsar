@@ -901,6 +901,45 @@ def _interview_storage_key(tenant_id: uuid.UUID, interview_id: uuid.UUID) -> str
     return f"{tenant_id}/interviews/{interview_id}/upload"
 
 
+def _upload_cost_action(kind: str) -> str:
+    """The action whose price a finished upload of ``kind`` is charged at.
+
+    A pdf/txt transcript costs the same as pasting the text by hand
+    (HRP-312 REDO), so holding the media price for one would refuse a
+    tenant that can comfortably afford what it is actually doing. Pinned to
+    the charge by ``test_billing_hrp547_upload_reserve``.
+    """
+    return (
+        "recruitment.update_transcript"
+        if kind == "text_transcript"
+        else "recruitment.upload_interview"
+    )
+
+
+async def _has_active_upload_session(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview_id: uuid.UUID,
+) -> bool:
+    """Is any upload still running against this interview?
+
+    The credit hold covers the interview, so retiring one session must not
+    disarm a transfer that is still in flight (HRP-547 review). Call after
+    flushing the status change of the session being retired.
+    """
+    return (
+        await db.execute(
+            select(UploadSession.id)
+            .where(
+                UploadSession.tenant_id == tenant_id,
+                UploadSession.interview_id == interview_id,
+                UploadSession.status == "active",
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+
+
 async def init_interview_upload(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -929,10 +968,41 @@ async def init_interview_upload(
     )
 
     # HRP-312: the upload is charged on completion, so a failed transfer
-    # costs nothing. Check the balance up-front anyway — a tenant that
-    # cannot afford the upload is stopped with a 402 before any S3
-    # multipart session is opened. No-op in community builds.
-    await billing_hooks.precheck_action(db, tenant_id, "recruitment.upload_interview")
+    # costs nothing. HRP-547: an up-front balance check was not enough —
+    # it forgot immediately, so anything the tenant did during a transfer
+    # that can take minutes could spend the credits the upload was counting
+    # on, and the 402 arrived only after 500 MB had moved. The reserve is
+    # that check plus a hold for the life of the session: it raises the
+    # same 402/429 here, before any S3 multipart is opened, and keeps the
+    # amount off-limits to every other action until the upload finishes,
+    # is aborted, or expires. No-op in community builds.
+    #
+    # Nothing is committed yet: the hold lands in the same transaction as
+    # the upload session below, so a start that fails leaves none behind.
+    #
+    # The amount is the one this upload will actually be charged: a pasted
+    # pdf/txt transcript is priced as a transcript, not as a recording, and
+    # holding the media price for it would refuse a demo tenant that can
+    # comfortably afford what it is doing (review fix).
+    #
+    # Two steps: a lock-free precheck up front keeps the 402/429 before any
+    # S3 multipart is opened, while the reserve itself — which takes the
+    # per-tenant advisory lock — runs after the S3/Redis calls, right next
+    # to the session insert and commit. Holding that lock across a
+    # synchronous boto3 init would serialise every other upload init of the
+    # tenant behind S3 latency (review fix). ``reserved_entity`` excludes
+    # this interview's own hold so a retried init is not turned away by it;
+    # the reserve re-checks the increment strictly under the lock.
+    upload_cost = await billing_hooks.resolve_cost(
+        db, tenant_id, _upload_cost_action(data.kind)
+    )
+    await billing_hooks.precheck_action(
+        db,
+        tenant_id,
+        "recruitment.upload_interview",
+        amount_override=upload_cost,
+        reserved_entity=("interview", interview_id),
+    )
 
     key = _interview_storage_key(tenant_id, interview_id)
     upload_id = init_multipart_upload(key, data.mime_type)
@@ -946,6 +1016,17 @@ async def init_interview_upload(
     # S3 503 would burn a slot for an upload that never happened.
     if is_demo:
         await _enforce_demo_upload_quota(tenant_id)
+
+    await billing_hooks.reserve_action(
+        db,
+        tenant_id,
+        user_id,
+        "recruitment.upload_interview",
+        entity_type="interview",
+        entity_id=interview_id,
+        ttl=UPLOAD_SESSION_TTL,
+        amount_override=upload_cost,
+    )
 
     part_size = DEFAULT_PART_SIZE
     total_parts = max(1, (data.size_bytes + part_size - 1) // part_size)
@@ -1268,6 +1349,12 @@ async def complete_interview_upload(
     if session:
         session.status = "completed"
 
+    # HRP-547: the hold is NOT released here. The charge for this upload
+    # lands after this function returns, and releasing before it would
+    # commit the earmark away while the credits are still needed — the
+    # billing wrapper settles the hold in the same transaction as the
+    # deduction instead (ee/billing.py, RESERVED_ENTITIES).
+
     # Probe duration so per-minute transcribe billing has an accurate
     # amount when the recruiter later clicks "Transcribe".
     if kind in {"audio", "video"}:
@@ -1387,6 +1474,24 @@ async def abort_interview_upload(
         session.status = "aborted"
     if interview.status == "uploading":
         interview.status = "upload_failed"
+    # HRP-547: the upload is off — give the credits back to the balance.
+    # This is the path a cancelled or failed transfer takes (the client
+    # aborts in its error handler), so it is the one that has to free the
+    # hold promptly rather than waiting for the TTL. Only when nothing else
+    # is uploading to this interview, though: the hold covers the interview,
+    # and aborting a stale session must not disarm a live one (review fix).
+    #
+    # Only after retiring a session that really was active, too: an abort
+    # naming a finished session (a client race with complete) must not
+    # release the hold the pending charge is about to settle — between the
+    # service committing ``completed`` and the billing wrapper consuming,
+    # the hold is the only thing keeping those credits earmarked (review
+    # fix). A hold with no session at all is the cleanup sweep's job.
+    await db.flush()
+    if session and not await _has_active_upload_session(db, tenant_id, interview_id):
+        await billing_hooks.release_action(
+            db, tenant_id, entity_type="interview", entity_id=interview_id
+        )
     await db.commit()
     return {"status": "aborted"}
 
@@ -1732,14 +1837,40 @@ async def cleanup_orphan_upload_sessions(
     )
 
     aborted = 0
+    swept: set[tuple[uuid.UUID, uuid.UUID]] = set()
     for session in rows:
         try:
             abort_multipart_upload(session.s3_key, session.s3_upload_id)
         except Exception:
             logger.exception("Failed to abort orphan upload session %s", session.id)
         session.status = "expired"
+        swept.add((session.tenant_id, session.interview_id))
         aborted += 1
+
     if aborted:
+        # HRP-547: tidy the credit hold of a client that vanished — but
+        # only where nothing is uploading to that interview any more. A
+        # resumable session can outlive an earlier abandoned one, and
+        # sweeping the old one used to take the live one's hold with it
+        # (review fix). Flush first so the statuses just set are visible
+        # to the check.
+        await db.flush()
+        for tenant_id, interview_id in swept:
+            if await _has_active_upload_session(db, tenant_id, interview_id):
+                continue
+            await billing_hooks.release_action(
+                db,
+                tenant_id,
+                entity_type="interview",
+                entity_id=interview_id,
+            )
+
+    # Retire holds whose own TTL has passed. Reads already ignore them, so
+    # no balance moves — this keeps dead rows from accumulating under the
+    # partial unique index.
+    expired_holds = await billing_hooks.release_expired_actions(db)
+
+    if aborted or expired_holds:
         await db.commit()
     return aborted
 

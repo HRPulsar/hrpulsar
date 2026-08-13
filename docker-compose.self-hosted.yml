@@ -87,6 +87,13 @@ services:
       # AVAILABLE_LOCALES / DEFAULT_LOCALE pair in .env.
       - NEXT_PUBLIC_AVAILABLE_LOCALES=${NEXT_PUBLIC_AVAILABLE_LOCALES:-}
       - NEXT_PUBLIC_DEFAULT_LOCALE=${NEXT_PUBLIC_DEFAULT_LOCALE:-}
+      # HRP-439: installation currency for HR money fields (salary
+      # ranges, compensations) and money formatting. The backend reads
+      # BILLING_CURRENCY from .env directly; the frontend only sees what
+      # is listed here, so without this pair the forms would prefill USD
+      # and write it back to a EUR/RUB installation.
+      - NEXT_PUBLIC_BILLING_CURRENCY=${NEXT_PUBLIC_BILLING_CURRENCY:-}
+      - NEXT_PUBLIC_BILLING_LOCALE=${NEXT_PUBLIC_BILLING_LOCALE:-}
     depends_on:
       backend:
         condition: service_healthy

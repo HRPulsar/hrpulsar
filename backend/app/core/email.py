@@ -8,8 +8,9 @@ import smtplib
 import uuid
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from urllib.parse import urlsplit
 
-from app.config import settings
+from app.config import email_address_domain, settings
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,34 @@ def _send_via_resend(to: str, subject: str, html_body: str) -> tuple[bool, str |
         return False, None
 
 
+def _message_id_domain() -> str:
+    """Domain stamped into generated SMTP Message-IDs (HRP-568).
+
+    The EMAIL_FROM address domain first (the message id should carry the
+    sending identity), then the public frontend host — the pre-HRP-568
+    hardcode reduced to :func:`frontend_url`'s own last-resort default.
+    The result is IDNA-encoded so the header stays a valid ASCII msg-id
+    even for internationalized sender domains.
+    """
+    domain = email_address_domain(settings.email_from)
+    if not domain:
+        from app.core.email_templates import frontend_url
+
+        base = frontend_url()
+        if "://" not in base:
+            # Schemeless value: urlsplit would read the host as the
+            # scheme and report no hostname (same guard as the S3
+            # validator in config.py).
+            base = f"//{base}"
+        domain = (urlsplit(base).hostname or "").lower()
+    if domain:
+        try:
+            return domain.encode("idna").decode("ascii")
+        except UnicodeError:
+            pass
+    return "localhost"
+
+
 def _send_via_smtp(to: str, subject: str, html_body: str) -> tuple[bool, str | None]:
     try:
         msg = MIMEMultipart("alternative")
@@ -123,7 +152,7 @@ def _send_via_smtp(to: str, subject: str, html_body: str) -> tuple[bool, str | N
         msg["From"] = settings.email_from
         msg["To"] = to
         # Generate a message ID for tracking
-        message_id = f"{uuid.uuid4().hex}@hrpulsar.com"
+        message_id = f"{uuid.uuid4().hex}@{_message_id_domain()}"
         msg["Message-ID"] = f"<{message_id}>"
         msg.attach(MIMEText(html_body, "html"))
 

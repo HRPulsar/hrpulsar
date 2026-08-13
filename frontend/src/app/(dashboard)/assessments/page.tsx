@@ -368,9 +368,12 @@ export default function AssessmentsPage() {
           parts.push(t("bulkSkipTerminal", { count: reasons.terminal }));
         if (reasons.same_or_lower_status)
           parts.push(
+            // HRP-512: no .toLowerCase() — casing belongs to the
+            // translation. German nouns lose their capital letter and
+            // locales with no case distinction gain nothing.
             t("bulkSkipSameStatus", {
               count: reasons.same_or_lower_status,
-              status: assessmentStatusLabel(t, bulkNewStatus).toLowerCase(),
+              status: assessmentStatusLabel(t, bulkNewStatus),
             }),
           );
         if (reasons.already_cancelled)

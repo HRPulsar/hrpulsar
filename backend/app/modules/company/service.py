@@ -4,6 +4,7 @@ import ipaddress
 import logging
 import socket
 import uuid
+from collections.abc import Sequence
 from io import BytesIO
 from urllib.parse import urljoin, urlparse
 
@@ -366,6 +367,49 @@ async def get_division_tree(
             roots.append(node)
 
     return roots
+
+
+async def get_division_subtree_ids(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    root_ids: Sequence[uuid.UUID],
+) -> list[uuid.UUID]:
+    """HRP-58: expand division ids to themselves plus every descendant.
+
+    Divisions nest without a depth limit, so anything that reports on a
+    division ("how many people hold this specialization here?") has to walk
+    the whole subtree — otherwise a parent whose staff sit in child
+    departments reports zero. Ids that do not belong to ``tenant_id`` are
+    dropped rather than raising: this is a read-side widening helper, and
+    the caller's own tenant filter stays authoritative.
+
+    The walk keeps a ``visited`` set so a corrupted parent chain (a cycle)
+    degrades to a finite result instead of hanging the request.
+    """
+    roots = list(dict.fromkeys(root_ids))
+    if not roots:
+        return []
+
+    result = await db.execute(select(Division).where(Division.tenant_id == tenant_id))
+    divisions = result.scalars().all()
+    known = {d.id for d in divisions}
+
+    children_map: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for d in divisions:
+        if d.parent_id:
+            children_map.setdefault(d.parent_id, []).append(d.id)
+
+    subtree: list[uuid.UUID] = []
+    visited: set[uuid.UUID] = set()
+    queue = [r for r in roots if r in known]
+    while queue:
+        current = queue.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
+        subtree.append(current)
+        queue.extend(children_map.get(current, []))
+    return subtree
 
 
 async def update_division(

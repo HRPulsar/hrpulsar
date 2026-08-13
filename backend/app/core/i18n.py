@@ -116,18 +116,61 @@ def validation_key_for_message(message: str) -> str | None:
     return _validation_message_keys().get(message)
 
 
+LOCALE_HEADER = "X-Locale"
+
+
+def _locale_from_access_token(request: Request) -> str | None:
+    """Advisory ``lang`` claim of the bearer access token, or None.
+
+    Signature-verified but never an authorization input: the worst a
+    forged value could buy is an error message in another language, and
+    a bad signature drops it anyway. Costs one HMAC verification and no
+    DB round-trip, which is what makes it usable in an error handler.
+    """
+    header = request.headers.get("authorization") or ""
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    import jwt
+
+    from app.core.security import decode_token
+
+    try:
+        payload = decode_token(token.strip())
+    except jwt.PyJWTError:
+        # Expired/forged/malformed — locale is not worth an error here.
+        return None
+    claim = payload.get("lang")
+    return normalize_locale(claim) if isinstance(claim, str) else None
+
+
 def resolve_locale_from_request(request: Request) -> str:
     """DB-free resolution for exception handlers and middleware.
 
-    NEXT_LOCALE cookie → Accept-Language → deployment default. The
-    cookie is kept in sync with the account-level preference by the
-    frontend (proxy first-visit write + AuthProvider locale-sync), so
-    on product traffic it already reflects User.language /
-    Tenant.default_locale without a DB round-trip.
+    X-Locale header → NEXT_LOCALE cookie → access-token ``lang`` claim →
+    Accept-Language → deployment default.
+
+    The cookie is kept in sync with the account-level preference by the
+    frontend (proxy first-visit write + AuthProvider locale-sync), so on
+    same-origin product traffic it already reflects User.language /
+    Tenant.default_locale without a DB round-trip. It is not sent at all
+    when NEXT_PUBLIC_API_URL puts the API on another origin, and never
+    exists for non-browser clients — hence the two additions (HRP-513):
+    the frontend states its effective locale in X-Locale, and any bearer
+    token carries the account locale it was minted with. Both rank above
+    Accept-Language, which describes the browser rather than the account,
+    and below nothing that is fresher: X-Locale and the cookie follow a
+    language switch immediately, the claim only at the next login.
     """
+    from_header = normalize_locale(request.headers.get(LOCALE_HEADER))
+    if from_header:
+        return from_header
     from_cookie = normalize_locale(request.cookies.get("NEXT_LOCALE"))
     if from_cookie:
         return from_cookie
+    from_token = _locale_from_access_token(request)
+    if from_token:
+        return from_token
     return resolve_locale(accept_language=request.headers.get("accept-language"))
 
 

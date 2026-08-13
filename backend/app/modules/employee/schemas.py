@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.currency import installation_currency
+
 
 def _ensure_past(value: date | None, field: str) -> date | None:
     """HRP-219/HRP-220: enforce dates referenced as "in the past" (latest
@@ -413,7 +415,10 @@ class EmployeeCompetenceOverview(BaseModel):
 class CompensationCreate(BaseModel):
     type: str = Field(max_length=50, pattern="^(salary|bonus|allowance)$")
     amount: int = Field(gt=0)
-    currency: str = Field(default="USD", max_length=3, min_length=3)
+    # HRP-439: installation currency, not a hardcoded literal.
+    currency: str = Field(
+        default_factory=installation_currency, max_length=3, min_length=3
+    )
     effective_date: date
     end_date: date | None = None
     notes: str | None = None

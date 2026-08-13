@@ -5,6 +5,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.core.currency import installation_currency
+
 
 class SpecializationGradeAttrs(BaseModel):
     """Spec×Grade attributes editable from the Specialization page."""
@@ -13,7 +15,10 @@ class SpecializationGradeAttrs(BaseModel):
     requirements: str | None = None
     salary_min: int | None = Field(default=None, ge=0)
     salary_max: int | None = Field(default=None, ge=0)
-    salary_currency: str = Field(default="RUB", min_length=3, max_length=3)
+    # HRP-439: installation currency, not a hardcoded literal.
+    salary_currency: str = Field(
+        default_factory=installation_currency, min_length=3, max_length=3
+    )
     passing_score: int | None = Field(default=None, ge=0, le=100)
 
 
@@ -27,7 +32,7 @@ class SpecializationGradeRead(BaseModel):
     requirements: str | None = None
     salary_min: int | None = None
     salary_max: int | None = None
-    salary_currency: str = "RUB"
+    salary_currency: str = Field(default_factory=installation_currency)
     passing_score: int | None = None
     sort_index: int = 0
     matrix_status: str = "empty"  # 'empty' | 'configured'

@@ -1,6 +1,7 @@
 import type { Viewport } from "next";
 
 import { AppVersion } from "@/components/app-version";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { getAuthBgColor, getAuthBgUrl } from "@/lib/brand";
 
 export const viewport: Viewport = {
@@ -71,6 +72,17 @@ export default function AuthLayout({
           />
         </>
       ) : null}
+      {/* HRP-516: the only locale control on the signed-out surface —
+          without it /login, /register and /accept-invite are stuck on
+          whatever Accept-Language says. Light-on-dark to match the
+          auth background. */}
+      <div className="absolute right-4 top-4 z-20">
+        <LanguageSwitcher
+          testIdPrefix="auth"
+          persistToAccount={false}
+          triggerClassName="text-white/70 hover:bg-white/10 hover:text-white"
+        />
+      </div>
       <div className="relative z-10">{children}</div>
       <div className="absolute bottom-4 left-0 right-0 text-center">
         <AppVersion className="text-[11px] text-white/20" />

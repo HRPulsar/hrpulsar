@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { fetchAllPages } from "@/lib/api/paginate";
 import { flattenTree } from "@/lib/utils";
 import { formatDate } from "@/lib/date-format";
 import type {
@@ -50,12 +51,16 @@ import {
   EMPTY_FILTERS,
   activeFilterCount,
   applyDivisionFilters,
+  collectDivisionSubtreeIds,
   deriveGradeOptions,
   derivePositionOptions,
   deriveSpecializationOptions,
+  deriveSpecializationTiles,
   hasActiveDivisionFilters,
+  reconcileDivisionFilters,
   type DivisionEmployeeFilters,
 } from "@/lib/division-employee-filters";
+import { Checkbox } from "@/components/ui/checkbox";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ArrowLeft, Pencil, Users, X } from "lucide-react";
 import { toast } from "sonner";
@@ -113,6 +118,13 @@ export default function DivisionDetailPage() {
   // the Employees block (header button + empty-state CTA).
   const [addEmployeeOpen, setAddEmployeeOpen] = useState(false);
   const [allPositions, setAllPositions] = useState<Position[]>([]);
+  // HRP-58 REDO: divisions nest without a depth limit and the people who
+  // hold a specialization usually sit in the leaf departments. Counting
+  // only the division's own rows made every parent — and any level whose
+  // specializations are mapped further up — report "Specializations (0)".
+  // The page now loads the whole subtree and lets the operator narrow it
+  // back down to the division itself.
+  const [includeSubDivisions, setIncludeSubDivisions] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -123,7 +135,21 @@ export default function DivisionDetailPage() {
         await Promise.allSettled([
           api.get<Division>(`/divisions/${id}`),
           api.get<SpecializationDivision[]>(`/divisions/${id}/specializations`),
-          api.get<EmployeeListResponse>(`/employees?division_id=${id}&limit=500`),
+          // HRP-58: `include_sub_divisions` widens the filter to the
+          // division subtree server-side, so nested departments are in
+          // the payload once and the scope toggle stays a client-side
+          // narrowing (no refetch, no second round-trip).
+          //
+          // Drained page by page rather than a single capped request:
+          // every counter on this page is computed from this array, and
+          // a silently truncated one undercounts the plates and can show
+          // an empty table for a division that has people.
+          fetchAllPages<Employee>((skip, limit) =>
+            api.get<EmployeeListResponse>(
+              `/employees?division_id=${id}&include_sub_divisions=true` +
+                `&skip=${skip}&limit=${limit}`,
+            ),
+          ),
           api.get<Division[]>("/divisions"),
           api.get<EmployeeListResponse>("/employees?limit=500"),
           api.get<PositionListResponse>("/positions?lifecycle_status=active"),
@@ -144,29 +170,44 @@ export default function DivisionDetailPage() {
     load();
   }, [load]);
 
-  const employeeCountBySpec = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const e of employees) {
-      if (!e.specialization_id) continue;
-      map.set(e.specialization_id, (map.get(e.specialization_id) ?? 0) + 1);
-    }
-    return map;
-  }, [employees]);
+  // HRP-58 REDO: the subtree ids only gate the scope control — the
+  // employee payload itself is already scoped by the API.
+  const subtreeIds = useMemo(
+    () => collectDivisionSubtreeIds(allDivisions, id),
+    [allDivisions, id],
+  );
+  const hasSubDivisions = subtreeIds.length > 1;
+
+  // Every block on this page reads the same scoped set, so the tiles, the
+  // dropdown options, the counters and the table can never disagree —
+  // the desync QA reported on the third nesting level.
+  const scopedEmployees = useMemo(
+    () =>
+      includeSubDivisions
+        ? employees
+        : employees.filter((e) => e.division_id === id),
+    [employees, includeSubDivisions, id],
+  );
+
+  const specializationTiles = useMemo(
+    () => deriveSpecializationTiles(specializations, scopedEmployees),
+    [specializations, scopedEmployees],
+  );
 
   const filteredEmployees = useMemo(
-    () => applyDivisionFilters(employees, filters),
-    [employees, filters],
+    () => applyDivisionFilters(scopedEmployees, filters),
+    [scopedEmployees, filters],
   );
 
   // HRP-58: dropdown options are derived from the actual division
   // employees so the picker never offers a value that yields zero rows.
   const positionOptions = useMemo(
-    () => derivePositionOptions(employees),
-    [employees],
+    () => derivePositionOptions(scopedEmployees),
+    [scopedEmployees],
   );
   const gradeOptions = useMemo(
-    () => deriveGradeOptions(employees),
-    [employees],
+    () => deriveGradeOptions(scopedEmployees),
+    [scopedEmployees],
   );
   // HRP-58 REDO: union of the division's mapped specializations (what the
   // tiles render, zero-employee ones included) and the specializations the
@@ -175,9 +216,22 @@ export default function DivisionDetailPage() {
   // the catalogue would make those rows unreachable by this filter, and
   // taking only the employees would leave a tile with no matching option.
   const specializationOptions = useMemo(
-    () => deriveSpecializationOptions(specializations, employees),
-    [specializations, employees],
+    () => deriveSpecializationOptions(specializations, scopedEmployees),
+    [specializations, scopedEmployees],
   );
+  // HRP-58: narrowing the scope shrinks the option lists, so a value
+  // picked under the wider one would linger as a dangling id — "Unknown"
+  // on the chip and an empty table. Clear whatever is no longer offered.
+  useEffect(() => {
+    setFilters((prev) =>
+      reconcileDivisionFilters(prev, {
+        specializations: specializationOptions,
+        positions: positionOptions,
+        grades: gradeOptions,
+      }),
+    );
+  }, [specializationOptions, positionOptions, gradeOptions]);
+
   const flatDivisions = useMemo(() => flattenTree(allDivisions), [allDivisions]);
 
   if (loading) {
@@ -202,9 +256,12 @@ export default function DivisionDetailPage() {
     );
   }
 
+  // HRP-58 REDO: resolve from the union (catalogue + employee-held), not
+  // from the mapping catalogue alone — otherwise filtering on a
+  // specialization that nobody mapped to this division shows "Unknown".
   const filterSpecTitle = filterSpecId
-    ? specializations.find((s) => s.specialization_id === filterSpecId)
-        ?.specialization_title ?? tc("unknown")
+    ? specializationOptions.find((o) => o.id === filterSpecId)?.title ??
+      tc("unknown")
     : null;
 
   function openEditDialog() {
@@ -359,8 +416,14 @@ export default function DivisionDetailPage() {
               </p>
             </div>
             <div>
-              <p className="text-muted-foreground">{t("employees")}</p>
-              <p className="font-medium">{employees.length}</p>
+              <p className="text-muted-foreground">
+                {hasSubDivisions && includeSubDivisions
+                  ? t("employeesWithSubDivisions")
+                  : t("employees")}
+              </p>
+              <p className="font-medium" data-testid="division-detail-headcount">
+                {scopedEmployees.length}
+              </p>
             </div>
             <div>
               <p className="text-muted-foreground">{t("created")}</p>
@@ -374,41 +437,40 @@ export default function DivisionDetailPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
-            {t("specializationsWithCount", { count: specializations.length })}
+            {t("specializationsWithCount", {
+              count: specializationTiles.length,
+            })}
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {specializations.length === 0 ? (
+          {specializationTiles.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
               {t("divisionNoSpecializations")}
             </p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {specializations.map((spec) => {
-                const count = employeeCountBySpec.get(spec.specialization_id) ?? 0;
-                const active = filterSpecId === spec.specialization_id;
+              {specializationTiles.map((tile) => {
+                const active = filterSpecId === tile.specializationId;
                 return (
                   <button
                     type="button"
-                    key={spec.id}
-                    data-testid={`division-spec-${spec.specialization_id}-filter`}
+                    key={tile.specializationId}
+                    data-testid={`division-spec-${tile.specializationId}-filter`}
                     aria-pressed={active}
                     onClick={() =>
                       setFilters((prev) => ({
                         ...prev,
-                        specializationId: active ? null : spec.specialization_id,
+                        specializationId: active ? null : tile.specializationId,
                       }))
                     }
                     className={`flex items-center justify-between rounded-lg border p-3 text-left transition-colors hover:bg-accent ${
                       active ? "border-primary bg-accent" : ""
                     }`}
                   >
-                    <span className="text-sm font-medium">
-                      {spec.specialization_title || tc("unknown")}
-                    </span>
+                    <span className="text-sm font-medium">{tile.title}</span>
                     <Badge variant="secondary" className="gap-1">
                       <Users className="h-3 w-3" />
-                      {count}
+                      {tile.count}
                     </Badge>
                   </button>
                 );
@@ -433,7 +495,7 @@ export default function DivisionDetailPage() {
                 {hasActiveDivisionFilters(filters)
                   ? t("employeesVisibleOfTotal", {
                       visible: filteredEmployees.length,
-                      total: employees.length,
+                      total: scopedEmployees.length,
                     })
                   : t("employeesVisible", {
                       visible: filteredEmployees.length,
@@ -441,6 +503,21 @@ export default function DivisionDetailPage() {
               </span>
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2">
+              {/* HRP-58 REDO: scope switch. Nested departments are in the
+                  payload already, so this narrows client-side and every
+                  block above and below follows it in the same render. It
+                  only appears when the division actually has children. */}
+              {hasSubDivisions ? (
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Checkbox
+                    checked={includeSubDivisions}
+                    onCheckedChange={() => setIncludeSubDivisions((v) => !v)}
+                    data-testid="division-employees-include-sub"
+                    aria-label={t("includeSubDivisions")}
+                  />
+                  {t("includeSubDivisions")}
+                </label>
+              ) : null}
               {/* HRP-58: Position filter — dropdown, options derived from
                   the loaded employees so the picker never offers a value
                   that yields zero rows. The explicit children inside

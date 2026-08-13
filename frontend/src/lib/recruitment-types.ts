@@ -359,6 +359,58 @@ export function aiAnalysisStageLabel(
   return key ? t(key) : stage;
 }
 
+// HRP-550: the verdict → i18n key relation is owned here so every surface
+// that shows a verdict resolves the same wording. It used to live inside
+// `ai-verdict-badge` alone (HRP-493), which is why the AI Insights pill and
+// the run history still printed the raw wire code with the underscores
+// swapped for spaces.
+export const AI_VERDICT_LABEL_KEYS: Record<AiVerdict, string> = {
+  pending: "verdictPending",
+  recommended: "verdictRecommended",
+  needs_check: "verdictNeedsCheck",
+  not_recommended: "verdictNotRecommended",
+};
+
+/**
+ * Translated verdict label.
+ *
+ * A verdict outside the union can only come from a backend that grew a new
+ * code, so the fallback de-slugs it rather than printing the wire form —
+ * "escalated_to_lead" reads better than the raw token while the catalogs
+ * catch up.
+ */
+export function aiVerdictLabel(
+  t: (key: string) => string,
+  verdict: string,
+): string {
+  const key = AI_VERDICT_LABEL_KEYS[verdict as AiVerdict];
+  return key ? t(key) : verdict.replaceAll("_", " ");
+}
+
+// HRP-550: mirrors the backend Literal on ``recommendation_for_next_step``
+// (``prompts_interview.py``) — keep the four codes in sync.
+export type AiNextStep =
+  | "schedule_interview"
+  | "second_interview"
+  | "final_decision"
+  | "reject";
+
+export const AI_NEXT_STEP_LABEL_KEYS: Record<AiNextStep, string> = {
+  schedule_interview: "aiInsightsNextStepScheduleInterview",
+  second_interview: "aiInsightsNextStepSecondInterview",
+  final_decision: "aiInsightsNextStepFinalDecision",
+  reject: "aiInsightsNextStepReject",
+};
+
+/** Translated next-step recommendation with a raw-code fallback. */
+export function aiNextStepLabel(
+  t: (key: string) => string,
+  step: string,
+): string {
+  const key = AI_NEXT_STEP_LABEL_KEYS[step as AiNextStep];
+  return key ? t(key) : step;
+}
+
 // HRP-271: verbatim resume quote anchored to a parsed-resume section.
 // Mirrors backend ``ResumeExcerptRead`` (schemas.py) — keep the section
 // union and field names in sync.

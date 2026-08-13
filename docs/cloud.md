@@ -37,6 +37,7 @@ Pay only for what you use. Every organization starts with a free tier — no cre
 - **Bonus credits** — additional credits granted by support for special cases
 - **Deduction order** — free credits are used first, then bonus, then purchased
 - **No surprises** — cost confirmation before expensive operations
+- **Long uploads reserve their credits** — starting an interview upload sets its cost aside for the length of the transfer, so a large recording cannot run out of balance halfway and fail at the end. The reservation is released the moment the upload finishes, is cancelled, or times out, and the balance page shows what is currently reserved
 - **Top up from the dashboard** — request a credit pack right from Settings → Billing. Depending on the region we issue an invoice for bank transfer (credits land as soon as payment clears) or take you to online checkout
 - **Local currency and invoicing** — regional and dedicated deployments price packs in the local currency and invoice from a local legal entity
 
@@ -65,6 +66,7 @@ Centralized management tools for overseeing all organizations on the platform.
 
 - Dashboard with platform-wide metrics — total tenants, users, employees, credit usage
 - Organization lifecycle management — create, configure, deactivate
+- Signup moderation queue — review and approve or decline new account registrations right in the admin panel; approval provisions the workspace and emails a one-time login link
 - Credit allocation and bonus grants with audit trail
 - Support access — securely log in as an organization admin for debugging
 - AI model curation — newly released provider models are discovered automatically every day and reviewed by the platform team before they become selectable, so pricing is always explicit and predictable

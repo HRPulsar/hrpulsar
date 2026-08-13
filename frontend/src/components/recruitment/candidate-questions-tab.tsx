@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { api } from "@/lib/api";
+import { api, taskErrorKey } from "@/lib/api";
 import type {
   CandidateQuestion,
   CompetenceItem,
@@ -205,8 +205,12 @@ export function CandidateQuestionsTab({
       await loadQuestions();
       toast.success(t("candidateQuestionsToastGenerated"));
     } catch (err) {
-      const message =
-        err && typeof err === "object" && "message" in err
+      // HRP-512: a task failure with no worker message carries a stable
+      // code instead of English text — render it from the catalog.
+      const taskKey = taskErrorKey(err);
+      const message = taskKey
+        ? tc(taskKey)
+        : err && typeof err === "object" && "message" in err
           ? String((err as { message: unknown }).message)
           : t("candidateQuestionsGenerateFailed");
       toast.error(message);

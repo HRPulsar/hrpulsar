@@ -47,9 +47,7 @@ from app.modules.signup.schemas import SignupRequestCreate
 logger = logging.getLogger(__name__)
 
 
-_TURNSTILE_VERIFY_URL = (
-    "https://challenges.cloudflare.com/turnstile/v0/siteverify"
-)
+_TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
 _turnstile_bypass_warned = False
 
@@ -128,9 +126,7 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.exception(
-            "signup rate-limit: redis unavailable, refusing request"
-        )
+        logger.exception("signup rate-limit: redis unavailable, refusing request")
         raise AppError(
             "signup_temporarily_unavailable",
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -141,9 +137,7 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
                 await client.aclose()  # type: ignore[attr-defined]
 
 
-async def _find_by_email(
-    db: AsyncSession, email: str
-) -> SignupRequest | None:
+async def _find_by_email(db: AsyncSession, email: str) -> SignupRequest | None:
     """Case-insensitive lookup. Mirrors the DB unique index."""
     result = await db.execute(
         select(SignupRequest).where(func.lower(SignupRequest.email) == email.lower())
@@ -158,9 +152,14 @@ async def create_signup_request(
     remote_ip: str | None,
     source: str = "landing",
     demo_tenant_id_snapshot: uuid.UUID | None = None,
-    accept_language: str | None = None,
+    request_locale: str | None = None,
 ) -> SignupRequest:
     """Create a fresh SignupRequest and email a verification link.
+
+    ``request_locale`` is the visitor's resolved interface locale
+    (X-Locale / NEXT_LOCALE / Accept-Language, HRP-513): the landing form
+    carries a language switcher, so the browser header alone would send
+    the verification email in the wrong language.
 
     Idempotency: a repeat submit for a still-pending row re-issues a
     verify email but does not reset the timestamps. A submit for an
@@ -187,7 +186,7 @@ async def create_signup_request(
         # created_at + id. ``status`` stays whatever it was — a click
         # on the old link must still flip a pending_email_verify row
         # to pending_moderation; a click on the new link is harmless.
-        await _send_signup_verify_email(existing, accept_language=accept_language)
+        await _send_signup_verify_email(existing, request_locale=request_locale)
         if existing.status == "pending_moderation":
             # The visitor came back and re-submitted the form while their
             # request is still sitting in the moderation queue — the
@@ -210,12 +209,12 @@ async def create_signup_request(
     await db.commit()
     await db.refresh(row)
 
-    await _send_signup_verify_email(row, accept_language=accept_language)
+    await _send_signup_verify_email(row, request_locale=request_locale)
     return row
 
 
 async def _send_signup_verify_email(
-    row: SignupRequest, *, accept_language: str | None = None
+    row: SignupRequest, *, request_locale: str | None = None
 ) -> None:
     """Best-effort send of the verify-email link. Never raises.
 
@@ -231,12 +230,10 @@ async def _send_signup_verify_email(
         send_signup_verify_email(
             row.email,
             token,
-            locale=resolve_locale(accept_language=accept_language),
+            locale=resolve_locale(accept_language=request_locale),
         )
     except Exception:
-        logger.exception(
-            "signup: failed to send verify email for request %s", row.id
-        )
+        logger.exception("signup: failed to send verify email for request %s", row.id)
 
 
 async def verify_signup_request(
@@ -383,15 +380,12 @@ async def _maybe_publish_moderation_reminder(row: SignupRequest) -> None:
     client = None
     try:
         client = aioredis.from_url(settings.redis_url, decode_responses=True)
-        first = await client.set(
-            f"signup:remind:{row.id}", "1", nx=True, ex=3600
-        )
+        first = await client.set(f"signup:remind:{row.id}", "1", nx=True, ex=3600)
         if not first:
             return
     except Exception:  # noqa: BLE001
         logger.warning(
-            "signup: reminder throttle unavailable — skipping reminder "
-            "for %s",
+            "signup: reminder throttle unavailable — skipping reminder for %s",
             row.id,
             exc_info=True,
         )
@@ -423,30 +417,56 @@ def _slugify(name: str) -> str:
     return slug[:255] or "tenant"
 
 
-async def approve_signup(
-    db: AsyncSession,
-    signup_request_id: uuid.UUID,
-    *,
-    moderator_slack_user_id: str,
-) -> tuple[SignupRequest, str, dict[str, Any]]:
-    """Approve a pending_moderation row, provision Tenant + User + role.
+async def _get_pending_for_moderation(
+    db: AsyncSession, signup_request_id: uuid.UUID
+) -> SignupRequest:
+    """Load a signup row for a moderation decision, locked FOR UPDATE.
 
-    Returns ``(row, magic_login_token, tenant_user_payload)``. The
-    caller (Slack Bolt handler) is responsible for emailing the magic
-    link and updating the Slack moderation card via ``chat.update``.
-    Re-approval of a finalised row raises 409 — moderators see an
-    ephemeral "already processed" reply instead.
+    Moderation now has two channels — the Slack buttons and the
+    platform-admin UI (HRP-457) — so two moderators can genuinely race
+    on the same row. FOR UPDATE + populate_existing (memory
+    ``feedback_sqlalchemy_race_fix``) serialises them: the loser blocks
+    until the winner commits, then observes the final status and gets
+    the 409 instead of double-provisioning a tenant / double-emailing.
     """
-    from app.modules.auth.models import Role, User, user_roles
-    from app.modules.company.models import Tenant
-
-    row = await db.get(SignupRequest, signup_request_id)
+    row = (
+        await db.execute(
+            select(SignupRequest)
+            .where(SignupRequest.id == signup_request_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if row is None:
         raise AppError("signup_request_not_found", status.HTTP_404_NOT_FOUND)
     if row.status != "pending_moderation":
         raise AppError(
             "signup_request_not_awaiting_moderation", status.HTTP_409_CONFLICT
         )
+    return row
+
+
+async def approve_signup(
+    db: AsyncSession,
+    signup_request_id: uuid.UUID,
+    *,
+    moderator_slack_user_id: str | None = None,
+    moderator_user_id: uuid.UUID | None = None,
+) -> tuple[SignupRequest, str, dict[str, Any]]:
+    """Approve a pending_moderation row, provision Tenant + User + role.
+
+    Returns ``(row, magic_login_token, tenant_user_payload)``. The
+    caller (Slack Bolt handler or the platform-admin endpoint, HRP-457)
+    is responsible for emailing the magic link and updating the Slack
+    moderation card. Re-approval of a finalised row raises 409 —
+    moderators see an "already processed" reply instead. Exactly one of
+    the moderator identities is expected: the Slack path passes the
+    Slack user id, the admin path the platform admin's user id.
+    """
+    from app.modules.auth.models import Role, User, user_roles
+    from app.modules.company.models import Tenant
+
+    row = await _get_pending_for_moderation(db, signup_request_id)
 
     # ── Tenant ----------------------------------------------------------
     # The slug uniqueness check is best-effort — two concurrent approves
@@ -476,14 +496,11 @@ async def approve_signup(
         except IntegrityError as exc:
             last_error = exc
             await db.rollback()
-            # After rollback the row.status change is gone too — re-load
-            # the row in the same session so the loop's outer commit
-            # ladders the same SignupRequest instance.
-            row = await db.get(SignupRequest, signup_request_id)
-            if row is None or row.status != "pending_moderation":
-                raise AppError(
-                    "signup_request_not_awaiting_moderation", status.HTTP_409_CONFLICT
-                ) from exc
+            # The rollback released the FOR UPDATE lock and discarded the
+            # transaction — re-acquire the locked row so the next attempt
+            # keeps the same race protection (a concurrent moderator may
+            # have finalised the row in the gap, which raises the 409).
+            row = await _get_pending_for_moderation(db, signup_request_id)
     if tenant is None:
         raise AppError(
             "signup_tenant_slug_unavailable", status.HTTP_409_CONFLICT
@@ -501,8 +518,7 @@ async def approve_signup(
             await seed_default_recruitment_stages(db, tenant.id)
     except Exception:
         logger.exception(
-            "signup-approve: failed to seed default recruitment stages "
-            "for tenant %s",
+            "signup-approve: failed to seed default recruitment stages for tenant %s",
             tenant.id,
         )
 
@@ -522,9 +538,7 @@ async def approve_signup(
 
     admin_role = (
         await db.execute(
-            select(Role).where(
-                Role.code == "admin", Role.is_system.is_(True)
-            )
+            select(Role).where(Role.code == "admin", Role.is_system.is_(True))
         )
     ).scalar_one_or_none()
     if admin_role is not None:
@@ -537,6 +551,7 @@ async def approve_signup(
     row.status = "approved"
     row.moderated_at = now
     row.moderated_by_slack_user_id = moderator_slack_user_id
+    row.moderated_by_user_id = moderator_user_id
 
     await db.commit()
     await db.refresh(row)
@@ -558,7 +573,8 @@ async def reject_signup(
     db: AsyncSession,
     signup_request_id: uuid.UUID,
     *,
-    moderator_slack_user_id: str,
+    moderator_slack_user_id: str | None = None,
+    moderator_user_id: uuid.UUID | None = None,
     reason: str | None = None,
 ) -> SignupRequest:
     """Reject a pending_moderation row.
@@ -568,19 +584,14 @@ async def reject_signup(
     re-submitted via the landing form (the next /signup-request POST
     for the same address returns 409).
     """
-    row = await db.get(SignupRequest, signup_request_id)
-    if row is None:
-        raise AppError("signup_request_not_found", status.HTTP_404_NOT_FOUND)
-    if row.status != "pending_moderation":
-        raise AppError(
-            "signup_request_not_awaiting_moderation", status.HTTP_409_CONFLICT
-        )
+    row = await _get_pending_for_moderation(db, signup_request_id)
 
     reason_clean = (reason or "").strip() or None
 
     row.status = "rejected"
     row.moderated_at = datetime.now(timezone.utc)
     row.moderated_by_slack_user_id = moderator_slack_user_id
+    row.moderated_by_user_id = moderator_user_id
     row.reject_reason = reason_clean
 
     await db.commit()
@@ -590,6 +601,9 @@ async def reject_signup(
     # i18n F4: Slack moderation has no HTTP request behind it and the
     # rejected visitor never got a tenant, so the deployment default is
     # the only signal (the moderator's own locale is irrelevant here).
+    # HRP-513 keeps this as accepted debt: fixing it means persisting the
+    # Accept-Language locale resolved in _send_signup_verify_email on a
+    # nullable signup_requests column, which needs a migration.
     try:
         from app.core.email import send_signup_rejected_email
 

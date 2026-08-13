@@ -94,7 +94,8 @@ Hierarchical organizational units: departments, teams, offices.
 - Unlimited nesting depth with an expand/collapse tree view
 - A manager and a deputy manager per division; the division manager becomes the default assessment reviewer for its employees
 - List visibility follows the same scope everywhere: admins see the whole workspace, managers see their subtree, employees see their own records
-- The division page shows specializations with employee counts per plate, plus an employee list with combinable filters by specialization, position, and grade
+- The division page shows specializations with employee counts per plate, plus an employee list with combinable filters by specialization, position, and grade. Plates cover both the specializations mapped to the division and the ones its people actually hold
+- Divisions with children report on their whole subtree by default — plates, filters and the employee list include nested departments, and an "Include sub-divisions" switch narrows everything back to the division itself
 - An "Add employee" dialog attaches existing employees or creates new ones without leaving the page, with a confirmation step when someone is pulled from another division
 
 ### Positions
@@ -111,8 +112,8 @@ Structured job positions linked to grades, specializations, and divisions.
 
 Each specialization is a full profile, not just a dictionary entry.
 
-- List view with grade count, position count, and headcount; detail page with Grades and Positions tabs
-- Per grade: description, requirements, and a salary range
+- List view with grade count, position count, headcount, and an Active/Inactive status matching the dictionary; detail page with Grades and Positions tabs
+- Per grade: description, requirements, and a salary range in the installation currency (`BILLING_CURRENCY`, USD by default)
 - The competence matrix editor is a competence-by-grade table with per-cell skill levels, a heat-map tint by level, indicator tooltips, and warnings on competences that lack indicators or materials
 - Matrix consistency is guaranteed: a higher grade never requires a lower level than the grade below it, both in the editor and on the server
 - A matrix can be generated with AI from a structured brief (responsibilities, tasks, KPIs, requirements) plus uploaded files (PDF, DOCX, XLSX, RTF, TXT). The result opens in a review screen where every suggestion can be edited or dropped before saving
@@ -159,8 +160,8 @@ Reference data shared across the platform: specializations, grades, skill levels
 ### Vacancies
 
 - Structured vacancy fields: position, specializations, grades, division, salary, KPIs, requirements, responsibilities, conditions
-- Selects cascade from the company library — position constrains specializations, specializations constrain grades — and the competence profile prefills from the matching grade matrix
-- Every vacancy has a hiring manager, defaulting to the creator
+- Selects cascade from the company library — position constrains specializations, specializations constrain grades — and both the competence profile and the salary range prefill from the matching grade matrix
+- Every vacancy has a hiring manager, defaulting to the creator; any active member of the company can be named, whatever role they hold
 - Lifecycle: edit, archive with a 90-day retention window, restore, or permanently delete a draft without candidates
 - Parallel edits are protected: a stale save is rejected instead of silently overwriting someone else's change
 - Per-vacancy attachments (documents, spreadsheets, presentations, images; 25 MB each, up to 10) feed context into AI generation
@@ -186,6 +187,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Every question shows its goal, priority, and the profile competence it probes, so coverage gaps are visible at a glance
 - Sets evolve across rounds: covered topics are marked (by hand or from the transcript) so the next round skips answered ground, and blind spots from prior analyses become probes
 - Only the first set is written from the resume alone. A new set is created for a specific assessment round — an existing one or the next interview, opened from the dialog — and built on a completed interview, so a round can never end up with two sets or none. The generation reads the earlier transcripts, AI analyses, and unanswered blind spots, and goes deeper where the evidence was thin rather than repeating what was already answered
+- The vacancy's Questions tab collects every candidate's latest set in one place, filtered by candidate and by any combination of the vacancy's competences
 - PDF export in compact, full, and card layouts
 
 ### Manager Assessments
@@ -196,9 +198,9 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Round lifecycle from the tab menu: complete, reopen, archive, restore. Completing freezes the round — sheets turn read-only and the external links stop working. An archived round keeps every score but drops out of the candidate's average and is marked as excluded; it accepts no further writes either, from the hiring team or from an external evaluator whose link is still open
 - Indicator-level and competence-level scoring with autosave and a completion marker. Scoring a competence's indicators derives its overall score; setting the overall by hand instead clears the indicator answers, so the two never contradict each other
 - The round header carries the round's average score — the mean across every evaluator and competence, alongside its position on the scale's weights — and shows an em dash until the first score lands. While you are still scoring the round yourself, it counts only the sheets you may already read, so the header cannot hand you a colleague's number before you submit
-- Each competence shows its own cross-evaluator average, highlighted with a warning and a breakdown tooltip when evaluators differ by the scale's divergence threshold or more. External evaluators count toward these averages once they submit
+- Each competence shows its own cross-evaluator average, highlighted with a warning and a breakdown tooltip when evaluators differ by the scale's divergence threshold or more. External evaluators count toward these averages once they submit; a sheet whose invitation is revoked or declined stops counting
 - External evaluators join through secure token links with expiry, no account needed. The public evaluation page shows the resume and question list next to the scoring sheet and keeps the platform itself closed off. PDF resumes render inline; Word and text resumes are shown as an extracted preview, and the file is only downloaded when the evaluator asks for it
-- Recruiters track invite status (pending, opened, in progress, submitted, expired) and act on each invitation from its own menu — resend the same link, revoke it, or read the submitted evaluation in a read-only panel
+- Recruiters track invite status (pending, opened, in progress, submitted, expired) and act on each invitation from its own menu — resend the same link, revoke it, or read the submitted evaluation in a read-only panel. Resending the same invitation is throttled for a few minutes, so a repeated click cannot flood an evaluator's inbox
 - The vacancy's Assessments tab expands into a full-screen canvas: a candidates-by-competences matrix with manager and AI scores side by side, view and round switches, divergence-only and no-score filters, a cell-details footer, per-candidate totals, and XLSX/CSV export
 
 ### Interviews & AI Analysis
@@ -218,6 +220,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Progress renders stage by stage with a cancel option; resume citations click through to the matching resume section
 - The platform flags an analysis that no longer matches its inputs — a re-parsed resume, edited vacancy competences, a run past 30 days, or an interview transcript the analysis never saw — and offers the re-run that fixes it. A stale baseline also closes the discounted upgrade, so a full analysis is never built on findings that have moved
 - The candidates table reports what the model can see (resume, resume + interview) and whether an analysis is running right now, both derived from the data rather than from the last run
+- Where a manager's scores and the AI's disagree by the workspace threshold, the candidates table counts those competences and names them on hover — including the ones scored in an assessment round or judged by a resume-only analysis — and opens the canvas filtered to exactly those cells
 - Everyone the analysis concerns gets an email when it finishes or fails, naming the candidate and linking straight to the result
 - Bulk analyze queues a resume-only run for every candidate that has a parsed resume but no verdict yet
 - Hiring managers see reframed process findings rather than raw red flags; access is role-aware throughout
@@ -506,7 +509,8 @@ Programmatic access for integrations and automation.
 
 - API key authentication, generated per workspace in settings
 - All endpoints live under `/v1/` with a rate limit of 60 requests per minute per key and validated pagination
-- Read endpoints for employees, assessments, divisions, specializations, and grades
+- Read endpoints for employees, assessments, divisions, specializations, grades, and reference dictionaries
+- Reference dictionaries are read by type — an unknown type is rejected with a `400` that lists the accepted types, so a typo in an integration fails loudly instead of returning an empty page
 - Batch operations create or update up to 100 resources per call — employees, divisions, specializations, grades, assessments, and exams — with per-item error reporting and partial success
 - An OpenAPI specification at `/v1/openapi.json` works with any API client or code generator
 

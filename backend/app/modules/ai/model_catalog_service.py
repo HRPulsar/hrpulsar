@@ -208,6 +208,42 @@ async def get_entry(
     return (await db.execute(query)).scalars().first()
 
 
+def _provider_query(model_id: str) -> Any:
+    return (
+        select(ModelCatalogEntry.provider)
+        .where(
+            ModelCatalogEntry.model_id == model_id,
+            # A pending or rejected row is not something to dispatch to:
+            # moderation has not vouched for it, and a rejected id must not
+            # come back through the routing door (review fix).
+            ModelCatalogEntry.status == "approved",
+        )
+        .order_by(ModelCatalogEntry.provider)
+        .limit(1)
+    )
+
+
+async def provider_for_model(db: AsyncSession, model_id: str) -> str | None:
+    """Which provider the catalog says serves this model id, or None.
+
+    Dispatch classifies models by name prefix; this answers for the ids no
+    prefix owns (HRP-502). A discovered row records the provider whose API
+    listed the model, so the catalog knows what a static prefix table
+    cannot — a new OpenAI family, say, whose name starts with neither
+    ``gpt`` nor ``o1``.
+
+    Provider-blind on purpose: the caller reaches here only because it
+    could not classify the id itself. Ordering keeps the answer stable for
+    an id two providers both serve (a proxied ``gpt-4o``).
+    """
+    return (await db.execute(_provider_query(model_id))).scalars().first()
+
+
+def provider_for_model_sync(db: Session, model_id: str) -> str | None:
+    """Sync twin of :func:`provider_for_model` for Celery workers."""
+    return db.execute(_provider_query(model_id)).scalars().first()
+
+
 async def is_model_allowed(db: AsyncSession, model_id: str) -> bool:
     """Approved+enabled catalog membership (union partner of the in-memory
     registry check in ``ai_settings.service.update``).
@@ -328,19 +364,134 @@ def resolve_dispatch_model_sync(db: Session, model: str | None) -> str | None:
     return substitute.model_id
 
 
+def _config_multiplier(provider: str, model_id: str) -> float | None:
+    """Price declared for this model (or its family) in the config.
+
+    Reads the curated snapshot — credits.yaml as registered at boot — not
+    the live whitelist, because the live one is mutated by moderation
+    upserts in a single worker and would make the same row bill differently
+    per worker (review #7).
+
+    Matching is family-wide in both directions: a curated id can itself be
+    dated (``claude-haiku-4-5-20251001`` is priced in credits.yaml while
+    its dateless form is not), so comparing only exact and dateless ids
+    missed the price and fell through to a silent 1.0 (review #1).
+    """
+    from app.modules.ai_settings import service as ai_settings_service
+
+    family = normalize_model_id(model_id, provider)
+    fallback: float | None = None
+    for entry in ai_settings_service.curated_models():
+        if entry.get("provider") != provider:
+            continue
+        if entry["model"] == model_id:
+            return float(entry["credit_multiplier"])
+        # Same family, different snapshot date — keep looking for an exact
+        # id match, but remember the first family hit.
+        if fallback is None and normalize_model_id(entry["model"], provider) == family:
+            fallback = float(entry["credit_multiplier"])
+    return fallback
+
+
+def _family_multiplier_from_rows(
+    row: ModelCatalogEntry, rows: list[ModelCatalogEntry]
+) -> float | None:
+    """A moderated value from another row of the same family, if any.
+
+    The donor is picked by ``_family_rank``, not first-match: ``rows``
+    comes from an unordered SELECT, and with two moderated siblings a
+    first-match walk would bill the same action a different multiplier
+    depending on which row Postgres happened to yield first (review fix).
+    """
+    family = normalize_model_id(row.model_id, row.provider)
+    candidates = [
+        other
+        for other in rows
+        if other.model_id != row.model_id
+        and other.provider == row.provider
+        and other.credit_multiplier is not None
+        and normalize_model_id(other.model_id, other.provider) == family
+    ]
+    if not candidates:
+        return None
+    donor = max(candidates, key=_family_rank).credit_multiplier
+    return float(donor) if donor is not None else None
+
+
+def _inherited_multiplier(
+    row: ModelCatalogEntry, family_rows: list[ModelCatalogEntry] | None = None
+) -> float | None:
+    """Price a row inherits when it carries no moderated value of its own.
+
+    HRP-544: NULL means "inherit the configured default", not "unpriced".
+    Precedence: the configured (credits.yaml) price, then a moderated value
+    on a sibling row of the same family. Config first because credits.yaml
+    is the canonical price for curated families — the same rule the seed-row
+    guard states — and because it resolves in-process, keeping the billing
+    hot path free of an extra query for the common case (every curated seed
+    row carries NULL). Both sources are identical in every worker, and
+    resolution happens on every read, so a later credits.yaml edit reaches
+    already-discovered snapshots instead of stopping at a number frozen at
+    discovery time.
+    """
+    configured = _config_multiplier(row.provider, row.model_id)
+    if configured is not None:
+        return configured
+    if family_rows:
+        return _family_multiplier_from_rows(row, family_rows)
+    return None
+
+
+async def _family_rows(
+    db: AsyncSession, row: ModelCatalogEntry
+) -> list[ModelCatalogEntry]:
+    """Catalog rows of the same provider that could price ``row``.
+
+    Narrowed in SQL by provider, then filtered by family in Python —
+    the dateless form is a regex strip, not something Postgres can index.
+    """
+    result = await db.execute(
+        select(ModelCatalogEntry).where(ModelCatalogEntry.provider == row.provider)
+    )
+    return list(result.scalars().all())
+
+
+async def inheritable_multiplier(
+    db: AsyncSession, row: ModelCatalogEntry
+) -> float | None:
+    """What ``row`` would bill at if its own moderated value were cleared.
+
+    The platform-admin PATCH uses this to refuse a reset that would strand
+    the row at a silent 1.0 (review #2).
+    """
+    return _inherited_multiplier(row, await _family_rows(db, row))
+
+
 async def stored_multiplier(db: AsyncSession, model_id: str) -> float | None:
-    """The catalog row's moderated multiplier, or None.
+    """The catalog row's effective multiplier, or None.
 
     Billing fallback for multi-worker deployments: an approval upserts the
     in-memory registry only in the worker that served it — the other
     workers read the moderated value from the DB row until their registries
     are replayed on restart. Deliberately ignores ``enabled``/``status`` —
     a tenant pinned to a later-disabled model keeps billing at the
-    moderated price, never at a silent 1.0."""
+    moderated price, never at a silent 1.0.
+
+    A row without a moderated value inherits its family price
+    (``_inherited_multiplier``) rather than reporting "no price" (HRP-544).
+    """
     row = await get_entry(db, model_id)
     if row is None:
         return None
-    return row.credit_multiplier
+    if row.credit_multiplier is not None:
+        return row.credit_multiplier
+    # Config first, and only pay for the family query when it comes up
+    # empty: this runs on every credit resolution, and curated rows (the
+    # common case) are priced in credits.yaml.
+    configured = _config_multiplier(row.provider, row.model_id)
+    if configured is not None:
+        return configured
+    return _family_multiplier_from_rows(row, await _family_rows(db, row))
 
 
 async def upsert_discovered(
@@ -355,7 +506,6 @@ async def upsert_discovered(
     approved family has no resolvable price is treated as a new model —
     auto-approving it would bill at a silent 1.0.
     """
-    from app.modules.ai_settings import service as ai_settings_service
 
     result = await db.execute(
         select(ModelCatalogEntry).where(ModelCatalogEntry.provider == provider)
@@ -365,15 +515,12 @@ async def upsert_discovered(
     rejected_by_normalized = _pick_family_rows(list(by_id.values()), "rejected")
 
     def _effective_family_multiplier(family: ModelCatalogEntry) -> float | None:
-        """Moderated row value, else the registry price keyed on the family
-        id (curated seed rows carry NULL — their price lives in
-        credits.yaml under the dateless id)."""
+        """Moderated row value, else the configured price of that family
+        (curated seed rows carry NULL — their price lives in credits.yaml,
+        under a dateless id for most families and a dated one for others)."""
         if family.credit_multiplier is not None:
             return family.credit_multiplier
-        registry_entry = ai_settings_service._model_lookup(family.model_id)
-        if registry_entry is not None:
-            return float(registry_entry["credit_multiplier"])
-        return None
+        return _config_multiplier(family.provider, family.model_id)
 
     now = datetime.now(timezone.utc)
     stats = {"seen": 0, "new_versions": 0, "new_models": 0, "rejected": 0}
@@ -393,8 +540,13 @@ async def upsert_discovered(
             _effective_family_multiplier(family) if family is not None else None
         )
         if family is not None and (multiplier is not None or not billing_active()):
-            # Re-dated snapshot of an approved model: inherit the family,
-            # multiplier included, so the snapshot bills at the family price.
+            # Re-dated snapshot of an approved model: inherit the family.
+            # HRP-544: only a *moderated* family value is copied onto the
+            # snapshot. A family priced by credits.yaml leaves the column
+            # NULL and the snapshot inherits that price live
+            # (`_inherited_multiplier`), so later YAML edits reach it —
+            # freezing the number here made the config unreachable and
+            # unresettable (the update schema rejects 0/NULL).
             entry = ModelCatalogEntry(
                 provider=provider,
                 model_id=model_id,
@@ -402,7 +554,7 @@ async def upsert_discovered(
                 tier=family.tier,
                 status="approved",
                 enabled=family.enabled,
-                credit_multiplier=multiplier,
+                credit_multiplier=family.credit_multiplier,
                 source="discovered",
                 first_seen=now,
                 last_seen=now,
@@ -494,8 +646,11 @@ def to_read_dicts(rows: list[ModelCatalogEntry]) -> list[dict[str, Any]]:
         label = row.label
         if registry_entry is not None:
             label = registry_entry.get("label") or label
-            if multiplier is None:
-                multiplier = float(registry_entry["credit_multiplier"])
+        if multiplier is None:
+            # HRP-544: same inheritance the billing path uses — a sibling
+            # row's moderated value, then the configured price — so the
+            # picker quotes what consume_credits charges.
+            multiplier = _inherited_multiplier(row, rows)
         if multiplier is None:
             if billing_active():
                 logger.warning(

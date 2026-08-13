@@ -57,7 +57,10 @@ def _slugify(name: str) -> str:
 def _make_tokens(user: User) -> dict[str, str]:
     return {
         "access_token": create_access_token(
-            str(user.id), str(user.tenant_id), user.token_version
+            str(user.id),
+            str(user.tenant_id),
+            user.token_version,
+            language=user.language,
         ),
         "refresh_token": create_refresh_token(
             str(user.id), str(user.tenant_id), user.token_version
@@ -186,8 +189,17 @@ def _send_verification_or_log(email: str, user_id: str, *, locale: str = "en") -
 
 
 async def register(
-    db: AsyncSession, data: RegisterRequest, *, accept_language: str | None = None
+    db: AsyncSession, data: RegisterRequest, *, request_locale: str | None = None
 ) -> dict[str, Any]:
+    """Create the tenant + first user and send the verification email.
+
+    ``request_locale`` is the caller's interface locale as resolved by
+    :func:`app.core.i18n.resolve_locale_from_request` — X-Locale header,
+    NEXT_LOCALE cookie, token claim, then Accept-Language (HRP-513). It
+    ranks below the account/tenant preference and above nothing: a
+    signed-out visitor who switched the language of the form must get the
+    email in that language, not in whatever their browser advertises.
+    """
     # Check email uniqueness (global, since tenant doesn't exist yet)
     existing = await db.execute(select(User).where(User.email == data.email))
     if existing.scalar_one_or_none():
@@ -276,7 +288,7 @@ async def register(
             locale=resolve_locale(
                 user_language=user.language,
                 tenant_default=tenant.default_locale,
-                accept_language=accept_language,
+                accept_language=request_locale,
             ),
         )
 
@@ -328,7 +340,8 @@ async def dev_auto_register(
     if system_role:
         extra_role = await db.execute(
             select(Role).where(
-                Role.code == system_role, Role.is_system == True  # noqa: E712
+                Role.code == system_role,
+                Role.is_system == True,  # noqa: E712
             )
         )
         role = extra_role.scalar_one_or_none()
@@ -392,9 +405,17 @@ async def verify_email(db: AsyncSession, token: str) -> dict[str, Any]:
 
 
 async def resend_verification(
-    db: AsyncSession, email: str, *, accept_language: str | None = None
+    db: AsyncSession, email: str, *, request_locale: str | None = None
 ) -> None:
-    """Resend verification email. Always returns success to prevent email enumeration."""
+    """Resend verification email. Always returns success to prevent email enumeration.
+
+    ``request_locale`` is the caller's interface locale as resolved by
+    :func:`app.core.i18n.resolve_locale_from_request` — X-Locale header,
+    NEXT_LOCALE cookie, token claim, then Accept-Language (HRP-513). It
+    ranks below the account/tenant preference and above nothing: a
+    signed-out visitor who switched the language of the form must get the
+    email in that language, not in whatever their browser advertises.
+    """
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 
@@ -406,7 +427,7 @@ async def resend_verification(
         locale = resolve_locale(
             user_language=user.language,
             tenant_default=tenant.default_locale if tenant else None,
-            accept_language=accept_language,
+            accept_language=request_locale,
         )
         _send_verification_or_log(email, str(user.id), locale=locale)
 
@@ -821,7 +842,7 @@ async def change_password(
 
 
 async def request_password_reset(
-    db: AsyncSession, email: str, *, accept_language: str | None = None
+    db: AsyncSession, email: str, *, request_locale: str | None = None
 ) -> tuple[str, str] | None:
     """Generate a password reset token.
 
@@ -830,6 +851,9 @@ async def request_password_reset(
     endpoint answers identically for unknown addresses, so any extra work
     keyed on "was the email found" belongs behind this same guard
     (i18n F4). Returns ``None`` if the email is not registered.
+
+    ``request_locale`` (HRP-513) is the requester's resolved interface
+    locale, used only when the account itself states no preference.
     """
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
@@ -843,7 +867,7 @@ async def request_password_reset(
     locale = resolve_locale(
         user_language=user.language,
         tenant_default=tenant.default_locale if tenant else None,
-        accept_language=accept_language,
+        accept_language=request_locale,
     )
     return create_reset_token(str(user.id)), locale
 

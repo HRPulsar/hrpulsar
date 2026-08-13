@@ -35,6 +35,7 @@ from app.modules.recruitment.common import (
     _get_vacancy,
     _publish_event,
     _stage_to_read_dict,
+    candidate_display_name,
 )
 from app.modules.recruitment.models import (
     Candidate,
@@ -491,11 +492,12 @@ async def change_candidate_status(
 
 def _cv_to_read(cv: CandidateVacancy) -> dict:
     """Convert CandidateVacancy ORM to API response dict."""
-    candidate = cv.candidate
-    person = candidate.person if candidate else None
-    candidate_name = None
-    if person:
-        candidate_name = f"{person.first_name} {person.last_name}"
+    # HRP-504: the name used to come from the linked HR Person only, but
+    # ``Candidate.person_id`` is optional (HRP-181 REDO) — every candidate
+    # added from a resume or by hand has none, so this returned NULL and
+    # callers printed the raw UUID. ``full_name`` is the denormalised
+    # source of truth, same as the enriched listing uses.
+    candidate_name = candidate_display_name(cv.candidate) if cv.candidate else None
 
     return {
         "id": cv.id,

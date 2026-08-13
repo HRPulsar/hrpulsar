@@ -3,7 +3,7 @@ import {
   registerUser,
   setAuthTokens,
   createInvitation,
-  MULTI_LOCALE_E2E,
+  skipUnlessMultiLocaleStand,
 } from "./helpers";
 
 test.describe("Profile settings", () => {
@@ -39,9 +39,10 @@ test.describe("Profile settings", () => {
     page,
   }) => {
     // F7 (HRP-481): CI runs multi-locale (AVAILABLE_LOCALES=de,en); on a
-    // single-locale stack the select is hidden, so the check is gated.
-    test.skip(!MULTI_LOCALE_E2E, "requires AVAILABLE_LOCALES=de,en");
+    // single-locale stack the select is hidden, so the check is gated —
+    // on what the stand actually serves (HRP-511 e), not on env alone.
     await page.goto("/settings/profile");
+    await skipUnlessMultiLocaleStand(page);
     await expect(
       page.getByTestId("settings-profile-select-language"),
     ).toBeVisible({ timeout: 10000 });
@@ -50,8 +51,8 @@ test.describe("Profile settings", () => {
   test("language switcher flips the interface to German and back", async ({
     page,
   }) => {
-    test.skip(!MULTI_LOCALE_E2E, "requires AVAILABLE_LOCALES=de,en");
     await page.goto("/settings/profile");
+    await skipUnlessMultiLocaleStand(page);
     const trigger = page.getByTestId("header-btn-language");
     await expect(trigger).toBeVisible({ timeout: 10000 });
     // The trigger's aria-label is t(common.changeLanguage) — it re-renders

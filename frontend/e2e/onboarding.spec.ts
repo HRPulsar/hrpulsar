@@ -1,5 +1,9 @@
 import { test, expect } from "@playwright/test";
-import { registerUser, setAuthTokens, MULTI_LOCALE_E2E } from "./helpers";
+import {
+  registerUser,
+  setAuthTokens,
+  standAvailableLocales,
+} from "./helpers";
 
 test.describe("Onboarding wizard", () => {
   let accessToken: string;
@@ -52,8 +56,10 @@ test.describe("Onboarding wizard", () => {
     ).toBeVisible({ timeout: 10000 });
     // F7 (HRP-481): CI runs multi-locale (AVAILABLE_LOCALES=de,en), so
     // the interface-language select is present on the language step; on a
-    // single-locale stack it is hidden by design, so the check is gated.
-    if (MULTI_LOCALE_E2E) {
+    // single-locale stack it is hidden by design. Gated on what the stand
+    // actually serves (HRP-511 e) — the env flag alone lied when the
+    // frontend was started without NEXT_PUBLIC_AVAILABLE_LOCALES.
+    if ((await standAvailableLocales(page)).length > 1) {
       await expect(
         page.getByTestId("onboarding-select-ui-language"),
       ).toBeVisible({ timeout: 10000 });

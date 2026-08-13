@@ -12,21 +12,22 @@ import {
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { BADGE_COLOR } from "@/lib/badge-tones";
-import { aiVerdictCellState } from "@/lib/recruitment-types";
+import { aiVerdictCellState, aiVerdictLabel } from "@/lib/recruitment-types";
 import type { AiReadiness, AiVerdict } from "@/lib/recruitment-types";
 
 interface VerdictConfig {
-  /** Key in the `recruitment` i18n namespace. */
-  labelKey: string;
   icon: typeof CheckCircle2;
   chipClass: string;
 }
 
+// HRP-550: the wording moved to ``AI_VERDICT_LABEL_KEYS`` so the AI Insights
+// pill and the run history read the same labels off one map; this config now
+// owns only what is specific to the table badge.
 const VERDICT_CONFIG: Record<AiVerdict, VerdictConfig> = {
-  pending: { labelKey: "verdictPending", icon: CircleHelp, chipClass: BADGE_COLOR.neutral },
-  recommended: { labelKey: "verdictRecommended", icon: CheckCircle2, chipClass: BADGE_COLOR.emerald },
-  needs_check: { labelKey: "verdictNeedsCheck", icon: AlertTriangle, chipClass: BADGE_COLOR.amber },
-  not_recommended: { labelKey: "verdictNotRecommended", icon: XCircle, chipClass: BADGE_COLOR.rose },
+  pending: { icon: CircleHelp, chipClass: BADGE_COLOR.neutral },
+  recommended: { icon: CheckCircle2, chipClass: BADGE_COLOR.emerald },
+  needs_check: { icon: AlertTriangle, chipClass: BADGE_COLOR.amber },
+  not_recommended: { icon: XCircle, chipClass: BADGE_COLOR.rose },
 };
 
 const READINESS_TEXT_KEYS: Record<AiReadiness, string> = {
@@ -68,7 +69,7 @@ export function AiVerdictBadge({
   const t = useTranslations("recruitment");
   const cfg = VERDICT_CONFIG[verdict];
   const Icon = cfg.icon;
-  const label = t(cfg.labelKey);
+  const label = aiVerdictLabel(t, verdict);
   const hasDetails = verdict !== "pending" &&
     (summary || keyStrength || keyRisk || riskMitigation);
 

@@ -39,6 +39,8 @@ import uuid
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from datetime import timedelta
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -48,8 +50,14 @@ async def precheck_action(
     action: str,
     *,
     amount_override: float | None = None,
+    reserved_entity: tuple[str, uuid.UUID] | None = None,
 ) -> None:
-    """No-op precheck. Overridden by `ee.billing.register_billing()` in SaaS."""
+    """No-op precheck. Overridden by `ee.billing.register_billing()` in SaaS.
+
+    ``reserved_entity`` names the work whose soft reserve this charge is
+    settling, so the check does not count the hold that was taken for it
+    (HRP-547).
+    """
     return None
 
 
@@ -63,6 +71,59 @@ async def consume_action(
 ) -> None:
     """No-op consume. Overridden by `ee.billing.register_billing()` in SaaS."""
     return None
+
+
+async def reserve_action(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    action: str,
+    *,
+    entity_type: str,
+    entity_id: uuid.UUID,
+    ttl: timedelta,
+    amount_override: float | None = None,
+) -> None:
+    """No-op soft reserve. Overridden by `ee.billing.register_billing()`.
+
+    HRP-547: work that takes minutes to finish and is charged at the end
+    (a 500 MB interview upload) earmarks its cost when it starts, so the
+    tenant is turned away before the transfer rather than after it, and
+    the credits it is counting on cannot be spent elsewhere meanwhile.
+
+    Raises the same 402/429 as `precheck_action` when the tenant cannot
+    afford the action, so callers keep one failure mode. The hold joins
+    the caller's transaction — a start that rolls back leaves none.
+    """
+    return None
+
+
+async def release_action(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    entity_type: str,
+    entity_id: uuid.UUID,
+    action: str | None = None,
+) -> int:
+    """No-op release. Overridden by `ee.billing.register_billing()` in SaaS.
+
+    Idempotent: every exit path of the reserved work (abort, cleanup) may
+    call it without knowing which one got there first. ``action`` narrows
+    the release to one kind of hold; without it every hold on the entity
+    goes, which is what abandoning the whole thing means.
+    """
+    return 0
+
+
+async def release_expired_actions(db: AsyncSession) -> int:
+    """No-op expired-hold sweep. Overridden in SaaS.
+
+    Reads already ignore an expired hold, so this frees no balance — it
+    stops dead rows from accumulating. Called from the same janitor that
+    sweeps the work the holds were taken for.
+    """
+    return 0
 
 
 async def resolve_cost(

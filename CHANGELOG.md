@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.18.0] - 2026-08-13
+
+### Added
+- Company → Specializations: a Status column (Active/Inactive) as the last column before the actions menu, matching the Dictionaries reference table (HRP-294)
+- Language switcher on the signed-out pages — sign-in, registration, invitation acceptance and the external evaluator forms; invitation links now open in the language the email was written in (HRP-516)
+- AI settings: a provider whose stored key can no longer be decrypted is flagged on the page with a prompt to re-issue it, instead of silently disappearing from the list (HRP-543)
+
+### Changed
+- Create & Edit Vacancy: the hiring manager can now be any active member of the company, not only admin-tier users; people whose employee record says they have left are not offered (HRP-441)
+- Resending an external evaluator invitation is now throttled per invitation, so repeated clicks cannot flood the evaluator's inbox (HRP-545)
+
+### Security
+- Custom AI endpoint URLs (`base_url`) set by tenant admins on cloud deployments are now validated against internal address ranges on save and re-validated with connection IP pinning on every call; redirects are disabled and an operator allowlist (`AI_BASE_URL_ALLOWED_HOSTS`) covers vetted gateways. Self-hosted installs are unaffected — private endpoints (Ollama/vLLM) keep working (HRP-505)
+
+### Fixed
+- Deadline reminder emails name the entity kind in the reader's language instead of a raw ASSESSMENT/PDP/EXAM code (HRP-584)
+- PDP completion and cancellation emails use dedicated nameless wording when the plan owner has no usable display name, and employee names and entity titles are HTML-escaped across notification email bodies (PDP, reminders, assessments, exams, certificates) (HRP-584)
+- Database-driven notification emails are now rendered in the branded layout (logo, accent color, localized footer) instead of going out as bare HTML fragments; SMTP Message-IDs derive their domain from `EMAIL_FROM` instead of a hardcoded stock domain, and a branded install that leaves `EMAIL_FROM`/`FRONTEND_URL` at defaults gets a startup warning (HRP-568)
+- Round averages, per-competence breakdowns and the candidate's manager score now exclude sheets belonging to revoked or declined external invitations (defence in depth; such invitations are currently only producible through the API directly) (HRP-383)
+- External evaluators who arrive at a pre-interview round someone else already holds now get an explanation written for them instead of an internal rule about evaluator slots (HRP-383)
+- AI Insights: the verdict chip, the run history and the next-step recommendation are translated instead of showing raw codes, and the invitation toast counts invitations in the reader's language (HRP-550)
+- Manager assessments: switching to a vacancy without assessment rounds no longer leaves the previous vacancy's scoring sheet on screen (HRP-550)
+- Augment indicators (AI) now follows the workspace content language, keeps the competence's own type and the skill levels its existing indicators sit on, and no longer loses suggested indicators whose skill level came back spelled differently (HRP-541)
+- Public API: `GET /v1/dictionaries/{item_type}` now rejects an unknown type with 400 and the list of accepted types, instead of answering 200 with an empty page (HRP-382)
+- Database-driven notification emails now render the installation's `BRAND_NAME` (the seeded invite template carried a hardcoded product name on branded installs) (HRP-515)
+- Salary and compensation currency now defaults to the installation currency (`BILLING_CURRENCY`, USD out of the box) instead of a hardcoded RUB on grades and USD on compensations; the employee currency picker leads with it (HRP-439)
+- Division page: the Specializations block no longer shows "(0)" on nested divisions — plates now cover the specializations the division's people actually hold, count the whole division subtree, and an "Include sub-divisions" switch narrows plates, filters and the employee list back to the division itself (HRP-58)
+- A translation missing from a locale now renders the English text instead of the raw key name (HRP-511)
+- Verification, password-reset and signup emails now follow the language chosen on the form itself, not just the browser's language setting; invitation and external-review links open the page in the language the email was written in (HRP-513, HRP-516)
+- Error messages from the API now follow the interface language on deployments where the API runs on a separate origin (self-hosted, local dev) and for non-browser clients — the frontend states its locale on every call and access tokens carry the account locale (HRP-513)
+- Background task failures and timeouts are now shown in the interface language instead of English, assessment status names keep their translated casing in bulk-status notices, and salary benchmarks use the site currency instead of a hardcoded dollar sign (HRP-512)
+- Interview analysis served from cache wrote no assessments at all — cached competence ids were validated against the competence dictionary although they are derived from the vacancy profile, so the compact matrix stayed empty on demo tenants (HRP-275)
+- Interview page: Analyze shows what it costs, warns when the balance cannot cover it, reports "analysis ready" when the result comes from cache, and a demo workspace out of quota now gets the credit banner instead of a silent success toast (HRP-275)
+- Demo seed: cloned demo tenants open on a finished AI evaluation with citations — the seeded interviews now carry the assessment rows the matrix reads (HRP-250)
+- A model whose provider cannot be determined from its name is now resolved through the model catalog, and refused outright when that fails, instead of being sent to whichever provider the installation defaults to (HRP-502)
+- Vacancy → Questions: the tab now shows each candidate's latest question set instead of nothing, names candidates in the filter instead of printing their ids, and offers every vacancy competence in a multi-select filter (HRP-504)
+- Create & Edit Vacancy: the Salary range fields are back on both forms, prefilled from the salary band of the chosen specialization and grade, and an inverted range is rejected before saving on every vacancy surface (HRP-440)
+- Vacancy analytics: Hired, Rejected and In progress now count candidates by the funnel's terminal stages instead of a status field no flow updates, and the two terminal tiles carry the funnel's own stage names; closing a vacancy as hired moves that candidate to the hired stage (HRP-425)
+- Candidate page: the right-hand blocks now follow the sourcing timeline — Parsed resume, Vacancy applications, AI Insights, Interview questions, Interviews, Manager assessments (HRP-424)
+- Manager assessments: the autosave indicator no longer sits above the scoring sheet, so saving a score stops nudging the layout (HRP-370)
+- Vacancy candidates table: the DIVERGENCE column now counts manager scores from assessment rounds and AI scores from resume-only analyses, compares them on the same scale, explains itself in a hover tooltip and opens Canvas filtered to the divergent cells (HRP-507)
+
 ## [1.17.1] - 2026-08-10
 
 ## [1.17.0] - 2026-08-09

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.client_ip import client_ip
 from app.core.errors import AppError
+from app.core.i18n import resolve_locale_from_request
 from app.core.security import decode_token
 from app.database import get_db
 from app.modules.auth import service
@@ -147,7 +148,7 @@ async def register(
     request: Request, data: RegisterRequest, db: AsyncSession = Depends(get_db)
 ):
     return await service.register(
-        db, data, accept_language=request.headers.get("accept-language")
+        db, data, request_locale=resolve_locale_from_request(request)
     )
 
 
@@ -164,7 +165,7 @@ async def resend_verification(
     db: AsyncSession = Depends(get_db),
 ):
     await service.resend_verification(
-        db, data.email, accept_language=request.headers.get("accept-language")
+        db, data.email, request_locale=resolve_locale_from_request(request)
     )
     return {
         "message": "If this email exists and is unverified, a verification link has been sent"
@@ -290,7 +291,7 @@ async def forgot_password(
     db: AsyncSession = Depends(get_db),
 ):
     issued = await service.request_password_reset(
-        db, data.email, accept_language=request.headers.get("accept-language")
+        db, data.email, request_locale=resolve_locale_from_request(request)
     )
     # Always return success to prevent email enumeration
     if issued:

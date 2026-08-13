@@ -11,6 +11,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.currency import installation_currency
 from app.models import BaseModel, TenantMixin
 
 
@@ -49,8 +50,17 @@ class GradeSpecialization(BaseModel, TenantMixin):
     requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
     salary_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
     salary_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # HRP-439: the ORM default follows the installation (BILLING_CURRENCY),
+    # so a chain created without an explicit currency lands in the site's
+    # own money. ``server_default`` is the DDL literal from the original
+    # migration and stays until a migration rewrites it — every insert
+    # goes through the ORM or a schema, both of which supply a value, so
+    # the DB-level default never actually fires.
     salary_currency: Mapped[str] = mapped_column(
-        String(3), nullable=False, default="RUB", server_default="RUB"
+        String(3),
+        nullable=False,
+        default=installation_currency,
+        server_default="RUB",
     )
     sort_index: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     passing_score: Mapped[int | None] = mapped_column(

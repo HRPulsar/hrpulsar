@@ -27,7 +27,9 @@ import {
 } from "@/hooks/use-generation-session";
 import { useCeleryHealth } from "@/hooks/use-celery-health";
 import { useDisableAutoTranslate } from "@/hooks/use-disable-auto-translate";
+import { useCostConfirmation } from "@/hooks/use-cost-confirmation";
 import { useWebSocketState } from "@/lib/ws";
+import { regenerateActionForSession } from "@/lib/billing-actions";
 import type { SessionScope } from "@/lib/api/competence-generation";
 import { GeneratedTree } from "./GeneratedTree";
 import { IndicatorsList } from "./IndicatorsList";
@@ -167,6 +169,12 @@ export function GenerationDrawer({
   }
 
   const scope = session?.scope ?? "whole_base";
+  // HRP-509: "Try again" re-runs the session and re-charges the action the
+  // session was priced with — the start price for an initial generation,
+  // the refine price for a refined one. Quote that, not an assumed start.
+  const regenerateCost = useCostConfirmation(
+    regenerateActionForSession(session) ?? "",
+  );
   const targetId = session?.target_id ?? null;
   const targetTitle = targetId
     ? (targetTitleResolver?.(targetId) ?? null)
@@ -402,7 +410,11 @@ export function GenerationDrawer({
                   }
                 }}
               >
-                {tc("tryAgain")}
+                {/* HRP-509: regenerating re-charges the parent session's
+                    action — a full LLM round, not a free retry. Say so. */}
+                {regenerateCost.cost !== null && regenerateCost.cost > 0
+                  ? t("regenerateWithCost", { count: regenerateCost.cost })
+                  : tc("tryAgain")}
               </Button>
               <Button
                 data-testid="compgen-footer-btn-clear"

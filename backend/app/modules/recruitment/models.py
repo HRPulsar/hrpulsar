@@ -947,6 +947,16 @@ class InterviewAnalysisCache(BaseModel, TenantMixin):
         ),
     )
 
+    # HRP-540: TenantMixin indexes `tenant_id` by default, but HRP-275
+    # deliberately dropped that index here — the UQ btree below leads with
+    # `tenant_id` and already serves every lookup. Override the mixin so
+    # the model states what the database actually has.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
     # 64-char lowercase hex sha256 digest. No standalone index: the
     # (tenant_id, cache_key) UQ btree above covers every lookup.
     cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1098,6 +1108,19 @@ class AIAnalysisRun(BaseModel, TenantMixin):
 
 class AssessmentInvite(BaseModel, TenantMixin):
     __tablename__ = "assessment_invites"
+    __table_args__ = (
+        # HRP-540: the model said `index=True` (plain, non-unique) while the
+        # hrp186 migration built a UNIQUE partial index. The database is
+        # right — an invite token must not be reusable — so the model is
+        # brought up to it here. Left as it was, the next autogenerate would
+        # have emitted DDL dropping the uniqueness of a security token.
+        Index(
+            "ix_assessment_invites_token_hash",
+            "token_hash",
+            unique=True,
+            postgresql_where=text("token_hash IS NOT NULL"),
+        ),
+    )
 
     candidate_vacancy_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -1109,9 +1132,7 @@ class AssessmentInvite(BaseModel, TenantMixin):
     # HRP-186: only the hash should live in the DB long-term; ``token`` stays
     # populated for the existing R3-era invite flow but new invites issued
     # through the manager-assessment path clear ``token`` after first use.
-    token_hash: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, index=True
-    )
+    token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     evaluator_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(

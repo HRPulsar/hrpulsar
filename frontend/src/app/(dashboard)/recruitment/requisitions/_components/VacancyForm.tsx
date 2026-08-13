@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,6 +15,14 @@ import {
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { HiringManagerSelect } from "@/components/recruitment/hiring-manager-select";
 import { api } from "@/lib/api";
+import {
+  deriveSalaryFromBands,
+  isSalaryEmpty,
+  parseSalaryInput,
+  sameSalary,
+  validateSalaryRange,
+} from "@/lib/vacancy-salary";
+import type { SalaryBand, SalaryFormValues } from "@/lib/vacancy-salary";
 
 // HRP-320: vacancy create form is anchored on the company library.
 //   Position (single, optional)  → constrains Specializations
@@ -35,6 +43,10 @@ export type VacancyFormValues = {
   hiring_manager_id: string | null;
   location: string;
   employment_type: string;
+  // HRP-440 — kept as strings while editing, like the Overview block.
+  salary_min: string;
+  salary_max: string;
+  salary_currency: string;
   description: string;
   tasks_main: string;
   tasks_additional: string;
@@ -54,6 +66,9 @@ export const emptyVacancyForm: VacancyFormValues = {
   hiring_manager_id: null,
   location: "",
   employment_type: "",
+  salary_min: "",
+  salary_max: "",
+  salary_currency: "",
   description: "",
   tasks_main: "",
   tasks_additional: "",
@@ -98,6 +113,14 @@ interface DivisionOption {
   name?: string;
 }
 
+// HRP-440: the salary band configured on the specialization page.
+interface SpecializationGradeRow {
+  grade_id: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+}
+
 export function VacancyForm({
   values,
   onChange,
@@ -114,6 +137,16 @@ export function VacancyForm({
   ) {
     onChange({ ...values, [field]: value });
   }
+
+  // The salary autofill below runs inside an async effect keyed on the
+  // library selection only; these refs keep it writing against the live
+  // form state instead of the values captured when the effect started.
+  const valuesRef = useRef(values);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    valuesRef.current = values;
+    onChangeRef.current = onChange;
+  });
 
   const [positions, setPositions] = useState<PositionOption[]>([]);
   const [divisions, setDivisions] = useState<DivisionOption[]>([]);
@@ -234,6 +267,67 @@ export function VacancyForm({
       grade_ids: nextIds.length === 0 ? [] : values.grade_ids,
     });
   }
+
+  // HRP-440 Task 2: a Specialization × Grade pair may carry a salary band
+  // on the specialization page. Picking such a pair prefills the range —
+  // but only while the recruiter has not typed their own numbers, so an
+  // autofill can never overwrite a deliberate override.
+  const autofilledSalary = useRef<SalaryFormValues | null>(null);
+  const specKey = values.specialization_ids.join(",");
+  const gradeKey = values.grade_ids.join(",");
+
+  useEffect(() => {
+    const specIds = specKey ? specKey.split(",") : [];
+    const gradeIds = new Set(gradeKey ? gradeKey.split(",") : []);
+    if (specIds.length === 0 || gradeIds.size === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const bands: SalaryBand[] = [];
+      for (const specId of specIds) {
+        try {
+          const rows = await api.get<SpecializationGradeRow[]>(
+            `/specializations/${specId}/grades`,
+          );
+          for (const row of rows) {
+            if (!gradeIds.has(row.grade_id)) continue;
+            bands.push({
+              salary_min: row.salary_min ?? null,
+              salary_max: row.salary_max ?? null,
+              salary_currency: row.salary_currency ?? null,
+            });
+          }
+        } catch {
+          // A specialization we cannot read simply contributes no band.
+        }
+      }
+      if (cancelled) return;
+      const derived = deriveSalaryFromBands(bands);
+      if (!derived) return;
+      const current = valuesRef.current;
+      const currentSalary = {
+        salary_min: current.salary_min,
+        salary_max: current.salary_max,
+        salary_currency: current.salary_currency,
+      };
+      const untouched =
+        isSalaryEmpty(currentSalary) ||
+        (autofilledSalary.current !== null &&
+          sameSalary(currentSalary, autofilledSalary.current));
+      if (!untouched) return;
+      autofilledSalary.current = derived;
+      onChangeRef.current({ ...current, ...derived });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [specKey, gradeKey]);
+
+  const salaryError = validateSalaryRange({
+    salary_min: values.salary_min,
+    salary_max: values.salary_max,
+    salary_currency: values.salary_currency,
+  });
 
   const specsDisabled = !values.position_id;
   const specsPlaceholder = specsDisabled
@@ -368,6 +462,49 @@ export function VacancyForm({
                 data-testid="recruitment-vacancy-select-grades"
               />
             </div>
+          </div>
+
+          {/* HRP-440: the same salary contract the Overview block edits. */}
+          <div className="space-y-2">
+            <Label htmlFor="salary_min">{t("vacancyFieldSalaryRange")}</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="salary_min"
+                type="number"
+                min={0}
+                data-testid="recruitment-vacancy-input-salary-min"
+                placeholder={t("vacancySalaryMinPlaceholder")}
+                value={values.salary_min}
+                disabled={disabled}
+                onChange={(e) => updateField("salary_min", e.target.value)}
+              />
+              <span className="text-muted-foreground">–</span>
+              <Input
+                type="number"
+                min={0}
+                data-testid="recruitment-vacancy-input-salary-max"
+                placeholder={t("vacancySalaryMaxPlaceholder")}
+                value={values.salary_max}
+                disabled={disabled}
+                onChange={(e) => updateField("salary_max", e.target.value)}
+              />
+              <Input
+                className="w-24"
+                data-testid="recruitment-vacancy-input-salary-currency"
+                placeholder={t("vacancySalaryCurrencyPlaceholder")}
+                value={values.salary_currency}
+                disabled={disabled}
+                onChange={(e) => updateField("salary_currency", e.target.value)}
+              />
+            </div>
+            {salaryError && (
+              <p
+                className="text-xs text-destructive"
+                data-testid="recruitment-vacancy-salary-error"
+              >
+                {t(salaryError)}
+              </p>
+            )}
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -552,6 +689,10 @@ export function vacancyFormToPayload(
     grade_ids: values.grade_ids,
     division_id: values.division_id,
     hiring_manager_id: values.hiring_manager_id,
+    // HRP-440
+    salary_min: parseSalaryInput(values.salary_min),
+    salary_max: parseSalaryInput(values.salary_max),
+    salary_currency: values.salary_currency.trim() || null,
   };
   // HRP-320 Task 2: forward Specializations × Grades so the backend can
   // seed Competences & indicators from the matching matrices. The new form
@@ -575,6 +716,8 @@ export function vacancyFormToPayload(
 export function vacancyToFormValues(
   vacancy: Record<string, unknown>,
 ): VacancyFormValues {
+  const numberText = (value: unknown) =>
+    typeof value === "number" ? String(value) : "";
   const taskText = (key: string) => {
     const value = vacancy[key];
     if (
@@ -607,6 +750,9 @@ export function vacancyToFormValues(
       (vacancy.hiring_manager_id as string | undefined) ?? null,
     location: (vacancy.location as string | undefined) ?? "",
     employment_type: (vacancy.employment_type as string | undefined) ?? "",
+    salary_min: numberText(vacancy.salary_min),
+    salary_max: numberText(vacancy.salary_max),
+    salary_currency: (vacancy.salary_currency as string | undefined) ?? "",
     description: (vacancy.description as string | undefined) ?? "",
     tasks_main: taskText("tasks_main"),
     tasks_additional: taskText("tasks_additional"),

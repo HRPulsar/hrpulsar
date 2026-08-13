@@ -407,7 +407,8 @@ class TestNotificationService:
         call_args = mock_enq.call_args
         assert call_args[0][0] == user.email
         assert call_args[0][1] == "Hello Alice"
-        assert call_args[0][2] == "<p>Dear Alice, welcome!</p>"
+        # HRP-568: the fragment is delivered inside the branded layout.
+        assert "<p>Dear Alice, welcome!</p>" in call_args[0][2]
 
         from app.modules.notification.models import Notification
         from sqlalchemy import select

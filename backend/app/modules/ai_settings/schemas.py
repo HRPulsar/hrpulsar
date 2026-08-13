@@ -4,6 +4,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# "ru" is accepted in every edition on purpose (HRP-564): enterprise
+# builds offer it as an AI content language; community UIs never list
+# it (locale-ee stub), but stored values must stay valid everywhere.
 ContentLanguage = Literal["en", "de", "ru"]
 EffortLevel = Literal["fast", "balanced", "thorough", "custom"]
 LLMProvider = Literal["anthropic", "openai", "gemini"]

@@ -308,7 +308,13 @@ export function ManagerAssessmentSection({
         if (deepLink && rows.some((r) => r.id === deepLink)) {
           pendingDeepLinkRound.current = null;
           selectRound(deepLink);
-        } else if (rows.length && !rows.some((r) => r.id === current)) {
+        } else if (rows.length === 0) {
+          // HRP-550: a vacancy with no rounds left the previous vacancy's
+          // round selected, so its sheet stayed on screen — and every
+          // autosave from it PATCHed into the round the recruiter had just
+          // navigated away from. Dropping the selection clears the form.
+          selectRound(null);
+        } else if (!rows.some((r) => r.id === current)) {
           // HRP-376: an archived round is read-only, so default to the
           // last live one and only fall back to an archived tab when the
           // candidate has nothing else.
@@ -317,7 +323,12 @@ export function ManagerAssessmentSection({
           selectRound(fallback.id);
         }
       } catch {
+        // The failure path needs the same reset as the empty one: keeping
+        // the previous vacancy's round selected leaves its sheet on screen
+        // and points every autosave at a round on the vacancy the recruiter
+        // has already left (HRP-550 review).
         setRounds([]);
+        selectRound(null);
       } finally {
         setLoadingRounds(false);
       }
@@ -327,6 +338,9 @@ export function ManagerAssessmentSection({
 
   useEffect(() => {
     if (!activeCvId) return;
+    // HRP-550: the submission drawer belongs to an invite on the vacancy
+    // being left behind — it must not survive the switch either.
+    setViewingInvite(null);
     void loadRounds(activeCvId);
   }, [activeCvId, loadRounds]);
 
@@ -445,7 +459,13 @@ export function ManagerAssessmentSection({
   // sheet fetch there would overwrite scores still sitting in the 1.5s
   // autosave debounce. The invite list reads straight off `activeRound`.
   useEffect(() => {
-    if (!activeRoundId) return;
+    if (!activeRoundId) {
+      // HRP-550: no round means no sheet. Returning early left the last
+      // round's form (and its aggregate) rendered under the new vacancy.
+      setSheet(null);
+      setAggregate(null);
+      return;
+    }
     void ensureSheet(activeRoundId);
     // Competence ids are stable across rounds, so a leftover aggregate would
     // render the previous round's averages against this round's sheet for a
@@ -836,25 +856,12 @@ export function ManagerAssessmentSection({
               )}
             </div>
 
-            {/* Autosave indicator */}
-            <div
-              aria-live="polite"
-              className="text-xs text-muted-foreground"
-              data-testid="assessment-autosave-status"
-            >
-              {savingState === "saving"
-                ? t("managerAssessmentSaving")
-                : savingState === "saved"
-                  ? t("managerAssessmentSaved")
-                  : null}
-            </div>
-
             {/* Evaluators on this round (HRP-373) */}
             <div
               className="flex flex-wrap items-center justify-between gap-2"
               data-testid="assessment-round-evaluators"
             >
-              <div>
+              <div className="flex min-h-6 items-center gap-2">
                 {!sheet && !roundClosed && (
                   <AddSelfAsEvaluator
                     roundId={activeRoundId}
@@ -864,6 +871,21 @@ export function ManagerAssessmentSection({
                     }}
                   />
                 )}
+                {/* HRP-370: the autosave indicator used to be a block of its
+                    own right above the scores, so every save nudged the whole
+                    sheet down and back. It now rides in the empty left slot of
+                    the evaluators row, which already has a settled height. */}
+                <span
+                  aria-live="polite"
+                  className="text-xs text-muted-foreground"
+                  data-testid="assessment-autosave-status"
+                >
+                  {savingState === "saving"
+                    ? t("managerAssessmentSaving")
+                    : savingState === "saved"
+                      ? t("managerAssessmentSaved")
+                      : null}
+                </span>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 {(activeRound?.evaluators ?? []).map((ev) => (

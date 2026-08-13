@@ -285,8 +285,20 @@ async def list_employees(
     unassigned_only: bool = False,
     with_alerts: bool = False,
     q: str | None = None,
+    include_sub_divisions: bool = False,
 ) -> tuple[list[dict], int]:
     division_ids = _coerce_filter_list(division_id)
+    # HRP-58: opt-in widening of the division filter to the whole subtree.
+    # A division page that reports per-specialization headcount has to see
+    # the people sitting in child departments too, otherwise every parent
+    # division reports zero. Local import keeps the module graph acyclic
+    # (company.service already imports employee.models).
+    if division_ids and include_sub_divisions:
+        from app.modules.company.service import get_division_subtree_ids
+
+        division_ids = await get_division_subtree_ids(db, tenant_id, division_ids)
+        if not division_ids:
+            return [], 0
     status_list = _coerce_filter_list(status_filter)
     position_ids = _coerce_filter_list(position_id)
     specialization_ids = _coerce_filter_list(specialization_id)

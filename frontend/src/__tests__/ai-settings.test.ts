@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  brokenKeyProviders,
   buildPatchDiff,
   isFormValid,
   roundUpTenth,
   settingsToForm,
   type AISettingsFormState,
 } from "@/lib/ai-settings-form";
-import type { AISettings } from "@/lib/api/ai-settings";
+import type { AISettings, ProviderStatus } from "@/lib/api/ai-settings";
 
 const baseSettings: AISettings = {
   id: "00000000-0000-0000-0000-000000000001",
@@ -113,5 +114,47 @@ describe("roundUpTenth", () => {
     expect(roundUpTenth(30)).toBe(30);
     expect(roundUpTenth(30.01)).toBe(30.1);
     expect(roundUpTenth(75)).toBe(75);
+  });
+});
+
+describe("brokenKeyProviders (HRP-543)", () => {
+  const provider = (
+    over: Partial<ProviderStatus> & { provider: string },
+  ): ProviderStatus => ({
+    label: over.provider,
+    configured: true,
+    source: "byok",
+    supports_local: false,
+    key_status: null,
+    ...over,
+  });
+
+  it("selects providers whose stored key no longer decrypts", () => {
+    const rows = [
+      provider({ provider: "anthropic", key_status: "ok" }),
+      provider({ provider: "openai", key_status: "decrypt_failed" }),
+      provider({ provider: "gemini", key_status: null }),
+    ];
+    expect(brokenKeyProviders(rows).map((p) => p.provider)).toEqual(["openai"]);
+  });
+
+  it("keeps a broken provider that is no longer configured", () => {
+    // No platform key to fall back on: the page used to filter this row
+    // out entirely, so the operator never learned why generation broke.
+    const rows = [
+      provider({
+        provider: "openai",
+        configured: false,
+        source: null,
+        key_status: "decrypt_failed",
+      }),
+    ];
+    expect(brokenKeyProviders(rows)).toHaveLength(1);
+  });
+
+  it("returns nothing when every key is healthy", () => {
+    expect(
+      brokenKeyProviders([provider({ provider: "anthropic", key_status: "ok" })]),
+    ).toEqual([]);
   });
 });

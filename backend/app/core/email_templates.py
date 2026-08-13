@@ -53,6 +53,24 @@ def frontend_url() -> str:
     return origins[0] if origins else "https://hrpulsar.com"
 
 
+def public_link(path: str, locale: str) -> str:
+    """Public (signed-out) deep link carrying the recipient's locale.
+
+    HRP-516: the recipient of an invitation never signs in, so the page
+    would otherwise pick its language from their browser — a German
+    company's external evaluator on an English-locale laptop got a German
+    email and an English form. ``lang`` makes the page open in the
+    language the email was written in; the switcher on the page can still
+    override it.
+
+    ``path`` may already carry a query (``/accept-invite?token=…``), so
+    the separator is chosen rather than hardcoded — a second ``?`` would
+    produce a link that no router can parse.
+    """
+    separator = "&" if "?" in path else "?"
+    return f"{frontend_url()}{path}{separator}lang={locale}"
+
+
 _env = Environment(loader=BaseLoader(), autoescape=True)
 
 
@@ -122,6 +140,12 @@ def _logo_html(base_url: str) -> str:
     )
 
 
+# Compiled once: the layout is a constant, and HRP-568 put _render on the
+# per-recipient notification fan-out path where a per-call from_string()
+# recompile (~80x the render cost) would be pure waste.
+_base_template = _env.from_string(BASE_TEMPLATE)
+
+
 def _render(subject: str, content_html: str, *, locale: str = "en") -> str:
     """Render content into the base email layout."""
     base_url = frontend_url()
@@ -129,8 +153,7 @@ def _render(subject: str, content_html: str, *, locale: str = "en") -> str:
         f'<a href="{base_url}" style="color: {settings.brand_accent_color}; '
         f'text-decoration: none;">{_brand_name_html()}</a>'
     )
-    tpl = _env.from_string(BASE_TEMPLATE)
-    return tpl.render(
+    return _base_template.render(
         subject=subject,
         content=content_html,
         lang=locale,
@@ -310,7 +333,7 @@ def render_invitation_email(
     name: str, token: str, expire_days: int = 7, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Return (subject, html_body) for user invitation."""
-    accept_url = f"{frontend_url()}/accept-invite?token={token}"
+    accept_url = public_link(f"/accept-invite?token={token}", locale)
     subject = translate(
         "email.invitation.subject", locale, brand_name=settings.brand_name
     )
@@ -331,7 +354,7 @@ def render_invitation_reminder_email(
     name: str, token: str, expire_days: int = 7, *, locale: str = "en"
 ) -> tuple[str, str]:
     """Return (subject, html_body) for invitation reminder."""
-    accept_url = f"{frontend_url()}/accept-invite?token={token}"
+    accept_url = public_link(f"/accept-invite?token={token}", locale)
     subject = translate(
         "email.invitation_reminder.subject", locale, brand_name=settings.brand_name
     )
@@ -385,7 +408,7 @@ def render_assessment_assigned_email(
             translate(
                 "email.assessment_assigned.intro",
                 locale,
-                assessment_title=assessment_title,
+                assessment_title=escape(assessment_title),
                 deadline_line=deadline_line,
             )
         )
@@ -418,7 +441,7 @@ def render_assessment_completed_email(
             translate(
                 "email.assessment_completed.body",
                 locale,
-                assessment_title=assessment_title,
+                assessment_title=escape(assessment_title),
             )
         )
         + f'<div style="margin: 24px 0;">{button}</div>'
@@ -461,7 +484,7 @@ def render_assessment_self_evaluate_email(
             translate(
                 "email.assessment_self_evaluate.intro",
                 locale,
-                assessment_title=assessment_title,
+                assessment_title=escape(assessment_title),
                 deadline_line=deadline_line,
             )
         )
@@ -490,7 +513,7 @@ def render_assessment_manager_evaluate_email(
         translate(
             "email.assessment_manager_evaluate.who",
             locale,
-            employee_name=employee_name,
+            employee_name=escape(employee_name),
         )
         if employee_name
         else ""
@@ -517,7 +540,7 @@ def render_assessment_manager_evaluate_email(
             translate(
                 "email.assessment_manager_evaluate.intro",
                 locale,
-                assessment_title=assessment_title,
+                assessment_title=escape(assessment_title),
                 who=who,
                 deadline_line=deadline_line,
             )
@@ -546,7 +569,7 @@ def render_assessment_manager_completed_email(
         translate(
             "email.assessment_manager_completed.who",
             locale,
-            employee_name=employee_name,
+            employee_name=escape(employee_name),
         )
         if employee_name
         else ""
@@ -566,7 +589,7 @@ def render_assessment_manager_completed_email(
             translate(
                 "email.assessment_manager_completed.body",
                 locale,
-                assessment_title=assessment_title,
+                assessment_title=escape(assessment_title),
                 who=who,
             )
         )
@@ -597,7 +620,7 @@ def render_assessment_self_cancelled_email(
             translate(
                 "email.assessment_self_cancelled.body",
                 locale,
-                assessment_title=assessment_title,
+                assessment_title=escape(assessment_title),
             )
         )
         + f'<div style="margin: 24px 0;">{button}</div>'
@@ -617,7 +640,7 @@ def render_assessment_manager_cancelled_email(
         translate(
             "email.assessment_manager_cancelled.who",
             locale,
-            employee_name=employee_name,
+            employee_name=escape(employee_name),
         )
         if employee_name
         else ""
@@ -637,7 +660,7 @@ def render_assessment_manager_cancelled_email(
             translate(
                 "email.assessment_manager_cancelled.body",
                 locale,
-                assessment_title=assessment_title,
+                assessment_title=escape(assessment_title),
                 who=who,
             )
         )
@@ -662,7 +685,9 @@ def render_assessment_peer_cancelled_email(
     """
     who = (
         translate(
-            "email.assessment_peer_cancelled.who", locale, employee_name=employee_name
+            "email.assessment_peer_cancelled.who",
+            locale,
+            employee_name=escape(employee_name),
         )
         if employee_name
         else ""
@@ -682,7 +707,7 @@ def render_assessment_peer_cancelled_email(
             translate(
                 "email.assessment_peer_cancelled.body",
                 locale,
-                assessment_title=assessment_title,
+                assessment_title=escape(assessment_title),
                 who=who,
             )
         )
@@ -717,7 +742,7 @@ def render_pdp_sent_email(
             "email.pdp_sent.intro",
             locale,
             title=escape(title),
-            employee_name=employee_name,
+            employee_name=escape(employee_name),
             deadline_line=deadline_line,
         )
     else:
@@ -726,7 +751,7 @@ def render_pdp_sent_email(
         intro = translate(
             "email.pdp_sent.intro_untitled",
             locale,
-            employee_name=employee_name,
+            employee_name=escape(employee_name),
             deadline_line=deadline_line,
         )
     button = _button(
@@ -755,13 +780,15 @@ def render_pdp_returned_email(
             "email.pdp_returned.intro",
             locale,
             title=escape(title),
-            employee_name=employee_name,
+            employee_name=escape(employee_name),
         )
     else:
         subject = translate("email.pdp_returned.subject_untitled", locale)
         heading_html = translate("email.pdp_returned.heading_untitled", locale)
         intro = translate(
-            "email.pdp_returned.intro_untitled", locale, employee_name=employee_name
+            "email.pdp_returned.intro_untitled",
+            locale,
+            employee_name=escape(employee_name),
         )
     button = _button(
         frontend_url() + "/development", translate("email.pdp_returned.button", locale)
@@ -789,7 +816,7 @@ def render_pdp_review_submitted_email(
             "email.pdp_review_submitted.intro",
             locale,
             title=escape(title),
-            employee_name=employee_name,
+            employee_name=escape(employee_name),
         )
     else:
         subject = translate("email.pdp_review_submitted.subject_untitled", locale)
@@ -797,7 +824,7 @@ def render_pdp_review_submitted_email(
         intro = translate(
             "email.pdp_review_submitted.intro_untitled",
             locale,
-            employee_name=employee_name,
+            employee_name=escape(employee_name),
         )
     button = _button(
         frontend_url() + "/development",
@@ -813,28 +840,44 @@ def render_pdp_review_submitted_email(
 
 
 def render_pdp_done_to_employee_email(
-    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
+    employee_name: str | None, pdp_title: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
-    """Employee notification: their development plan has been completed."""
+    """Employee notification: their development plan has been completed.
+
+    HRP-584: ``employee_name=None`` picks the ``_noname`` copy instead of
+    substituting a generic "The employee" placeholder into the greeting.
+    """
     title = (pdp_title or "").strip()
     if title:
         subject = translate("email.pdp_done_to_employee.subject", locale, title=title)
         heading_html = translate(
             "email.pdp_done_to_employee.heading", locale, title=escape(title)
         )
-        intro = translate(
-            "email.pdp_done_to_employee.intro",
-            locale,
-            title=escape(title),
-            employee_name=employee_name,
+        intro = (
+            translate(
+                "email.pdp_done_to_employee.intro",
+                locale,
+                title=escape(title),
+                employee_name=escape(employee_name),
+            )
+            if employee_name
+            else translate(
+                "email.pdp_done_to_employee.intro_noname",
+                locale,
+                title=escape(title),
+            )
         )
     else:
         subject = translate("email.pdp_done_to_employee.subject_untitled", locale)
         heading_html = translate("email.pdp_done_to_employee.heading_untitled", locale)
-        intro = translate(
-            "email.pdp_done_to_employee.intro_untitled",
-            locale,
-            employee_name=employee_name,
+        intro = (
+            translate(
+                "email.pdp_done_to_employee.intro_untitled",
+                locale,
+                employee_name=escape(employee_name),
+            )
+            if employee_name
+            else translate("email.pdp_done_to_employee.intro_untitled_noname", locale)
         )
     button = _button(
         frontend_url() + "/development",
@@ -849,28 +892,44 @@ def render_pdp_done_to_employee_email(
 
 
 def render_pdp_done_to_reviewer_email(
-    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
+    employee_name: str | None, pdp_title: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
-    """Reviewer notification: their employee's plan has been completed."""
+    """Reviewer notification: their employee's plan has been completed.
+
+    HRP-584: ``employee_name=None`` (owner record gone, HRP-244) picks the
+    ``_noname`` copy instead of a generic placeholder name.
+    """
     title = (pdp_title or "").strip()
     if title:
         subject = translate("email.pdp_done_to_reviewer.subject", locale, title=title)
         heading_html = translate(
             "email.pdp_done_to_reviewer.heading", locale, title=escape(title)
         )
-        intro = translate(
-            "email.pdp_done_to_reviewer.intro",
-            locale,
-            title=escape(title),
-            employee_name=employee_name,
+        intro = (
+            translate(
+                "email.pdp_done_to_reviewer.intro",
+                locale,
+                title=escape(title),
+                employee_name=escape(employee_name),
+            )
+            if employee_name
+            else translate(
+                "email.pdp_done_to_reviewer.intro_noname",
+                locale,
+                title=escape(title),
+            )
         )
     else:
         subject = translate("email.pdp_done_to_reviewer.subject_untitled", locale)
         heading_html = translate("email.pdp_done_to_reviewer.heading_untitled", locale)
-        intro = translate(
-            "email.pdp_done_to_reviewer.intro_untitled",
-            locale,
-            employee_name=employee_name,
+        intro = (
+            translate(
+                "email.pdp_done_to_reviewer.intro_untitled",
+                locale,
+                employee_name=escape(employee_name),
+            )
+            if employee_name
+            else translate("email.pdp_done_to_reviewer.intro_untitled_noname", locale)
         )
     button = _button(
         frontend_url() + "/development",
@@ -885,9 +944,13 @@ def render_pdp_done_to_reviewer_email(
 
 
 def render_pdp_cancelled_to_employee_email(
-    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
+    employee_name: str | None, pdp_title: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
-    """Employee notification: their development plan has been cancelled."""
+    """Employee notification: their development plan has been cancelled.
+
+    HRP-584: ``employee_name=None`` picks the ``_noname`` copy instead of
+    substituting a generic placeholder name.
+    """
     title = (pdp_title or "").strip()
     if title:
         subject = translate(
@@ -896,21 +959,35 @@ def render_pdp_cancelled_to_employee_email(
         heading_html = translate(
             "email.pdp_cancelled_to_employee.heading", locale, title=escape(title)
         )
-        intro = translate(
-            "email.pdp_cancelled_to_employee.intro",
-            locale,
-            title=escape(title),
-            employee_name=employee_name,
+        intro = (
+            translate(
+                "email.pdp_cancelled_to_employee.intro",
+                locale,
+                title=escape(title),
+                employee_name=escape(employee_name),
+            )
+            if employee_name
+            else translate(
+                "email.pdp_cancelled_to_employee.intro_noname",
+                locale,
+                title=escape(title),
+            )
         )
     else:
         subject = translate("email.pdp_cancelled_to_employee.subject_untitled", locale)
         heading_html = translate(
             "email.pdp_cancelled_to_employee.heading_untitled", locale
         )
-        intro = translate(
-            "email.pdp_cancelled_to_employee.intro_untitled",
-            locale,
-            employee_name=employee_name,
+        intro = (
+            translate(
+                "email.pdp_cancelled_to_employee.intro_untitled",
+                locale,
+                employee_name=escape(employee_name),
+            )
+            if employee_name
+            else translate(
+                "email.pdp_cancelled_to_employee.intro_untitled_noname", locale
+            )
         )
     button = _button(
         frontend_url() + "/development",
@@ -925,9 +1002,13 @@ def render_pdp_cancelled_to_employee_email(
 
 
 def render_pdp_cancelled_to_reviewer_email(
-    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
+    employee_name: str | None, pdp_title: str | None = None, *, locale: str = "en"
 ) -> tuple[str, str]:
-    """Reviewer notification: their employee's plan has been cancelled."""
+    """Reviewer notification: their employee's plan has been cancelled.
+
+    HRP-584: ``employee_name=None`` (owner record gone, HRP-244) picks the
+    ``_noname`` copy instead of a generic placeholder name.
+    """
     title = (pdp_title or "").strip()
     if title:
         subject = translate(
@@ -936,21 +1017,35 @@ def render_pdp_cancelled_to_reviewer_email(
         heading_html = translate(
             "email.pdp_cancelled_to_reviewer.heading", locale, title=escape(title)
         )
-        intro = translate(
-            "email.pdp_cancelled_to_reviewer.intro",
-            locale,
-            title=escape(title),
-            employee_name=employee_name,
+        intro = (
+            translate(
+                "email.pdp_cancelled_to_reviewer.intro",
+                locale,
+                title=escape(title),
+                employee_name=escape(employee_name),
+            )
+            if employee_name
+            else translate(
+                "email.pdp_cancelled_to_reviewer.intro_noname",
+                locale,
+                title=escape(title),
+            )
         )
     else:
         subject = translate("email.pdp_cancelled_to_reviewer.subject_untitled", locale)
         heading_html = translate(
             "email.pdp_cancelled_to_reviewer.heading_untitled", locale
         )
-        intro = translate(
-            "email.pdp_cancelled_to_reviewer.intro_untitled",
-            locale,
-            employee_name=employee_name,
+        intro = (
+            translate(
+                "email.pdp_cancelled_to_reviewer.intro_untitled",
+                locale,
+                employee_name=escape(employee_name),
+            )
+            if employee_name
+            else translate(
+                "email.pdp_cancelled_to_reviewer.intro_untitled_noname", locale
+            )
         )
     button = _button(
         frontend_url() + "/development",
@@ -988,7 +1083,7 @@ def render_exam_assigned_email(
             translate(
                 "email.exam_assigned.body",
                 locale,
-                exam_title=exam_title,
+                exam_title=escape(exam_title),
                 deadline_line=deadline_line,
             )
         )
@@ -1008,7 +1103,7 @@ def render_exam_results_email(
     content = (
         _heading(translate("email.exam_results.heading", locale))
         + _paragraph(
-            translate("email.exam_results.body", locale, exam_title=exam_title)
+            translate("email.exam_results.body", locale, exam_title=escape(exam_title))
         )
         + f'<div style="margin: 0 0 16px 0; padding: 16px; background: {BG_COLOR}; border-radius: 6px; text-align: center;">'
         + f'<span style="font-size: 24px; font-weight: 700; color: {TEXT_COLOR};">{score}</span>'
@@ -1046,8 +1141,8 @@ def render_certificate_expiry_email(
             translate(
                 "email.certificate_expiry.intro",
                 locale,
-                course_title=course_title,
-                employee_name=employee_name,
+                course_title=escape(course_title),
+                employee_name=escape(employee_name),
                 expiry_date=expiry_date,
                 days_left=days_left,
             )
@@ -1066,11 +1161,24 @@ def render_certificate_expiry_email(
 def render_deadline_reminder_email(
     entity_type: str, entity_title: str, deadline: str, *, locale: str = "en"
 ) -> tuple[str, str]:
-    """Return (subject, html_body) for deadline reminder."""
+    """Return (subject, html_body) for deadline reminder.
+
+    HRP-584: known entity kinds get a localized label. Keys stay literal
+    so the translate-key catalog guard sees them; an unknown kind degrades
+    to the raw upper-cased code so the value stays visible.
+    """
     subject = translate(
         "email.deadline_reminder.subject", locale, entity_title=entity_title
     )
-    type_label = entity_type.upper()
+    kind = entity_type.lower()
+    if kind == "assessment":
+        type_label = translate("email.deadline_reminder.type_assessment", locale)
+    elif kind == "pdp":
+        type_label = translate("email.deadline_reminder.type_pdp", locale)
+    elif kind == "exam":
+        type_label = translate("email.deadline_reminder.type_exam", locale)
+    else:
+        type_label = entity_type.upper()
     button = _button(
         frontend_url(),
         translate(
@@ -1084,7 +1192,7 @@ def render_deadline_reminder_email(
                 "email.deadline_reminder.body",
                 locale,
                 type_label=type_label,
-                entity_title=entity_title,
+                entity_title=escape(entity_title),
                 deadline=deadline,
             )
         )
@@ -1106,7 +1214,7 @@ def render_external_review_email(
     locale: str = "en",
 ) -> tuple[str, str]:
     """Return (subject, html_body) for external reviewer invitation."""
-    review_url = f"{frontend_url()}/review/{token}"
+    review_url = public_link(f"/review/{token}", locale)
     subject = translate(
         "email.external_review.subject", locale, assessment_title=assessment_title
     )
@@ -1151,7 +1259,7 @@ def render_recruitment_invite_email(
     locale: str = "en",
 ) -> tuple[str, str]:
     """Return (subject, html_body) for an external evaluator's recruiting invite."""
-    invite_url = f"{frontend_url()}/recruitment/invite/{token}"
+    invite_url = public_link(f"/recruitment/invite/{token}", locale)
     subject = _sanitize_subject(
         translate(
             "email.recruitment_invite.subject", locale, candidate_name=candidate_name
@@ -1211,7 +1319,7 @@ def render_manager_assessment_invite_email(
     button targets the ``/public/assessments/{token}`` page and the body
     carries the recruiter's optional personal message.
     """
-    invite_url = f"{frontend_url()}/public/assessments/{token}"
+    invite_url = public_link(f"/public/assessments/{token}", locale)
     subject = _sanitize_subject(
         translate(
             "email.manager_assessment_invite.subject",
@@ -1293,7 +1401,7 @@ def render_recruitment_consent_email(
 ) -> tuple[str, str]:
     """Return (subject, html_body) for a candidate consent magic-link email."""
 
-    consent_url = f"{frontend_url()}/recruitment/consent/{token}"
+    consent_url = public_link(f"/recruitment/consent/{token}", locale)
     subject = _sanitize_subject(translate("email.recruitment_consent.subject", locale))
     summary = (template_body or "").strip()
     if len(summary) > 600:

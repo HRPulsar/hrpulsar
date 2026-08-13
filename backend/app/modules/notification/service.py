@@ -1,11 +1,13 @@
 import logging
 import uuid
 from datetime import datetime, timezone
+from functools import lru_cache
 
 from jinja2 import Template
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.email import enqueue_email
 from app.modules.notification.models import (
     EmailLog,
@@ -45,6 +47,63 @@ async def resolve_recipient_locale(db: AsyncSession, user_id: uuid.UUID) -> str:
         user_language=user.language if user else None,
         tenant_default=tenant.default_locale if tenant else None,
     )
+
+
+@lru_cache(maxsize=256)
+def _compiled(source: str) -> Template:
+    """Compiled Jinja template keyed by its source string.
+
+    NotificationTemplate rows change only via alembic (there is no
+    update API), so a process-lifetime cache cannot serve stale content
+    — and the dispatch loops render the same template once per
+    recipient, where compiling dominates rendering ~46x.
+    """
+    return Template(source)
+
+
+@lru_cache(maxsize=256)
+def _compiled_html(source: str) -> Template:
+    """Body variant of :func:`_compiled` with autoescape (HRP-568).
+
+    Seeded markup in the template source stays literal; every
+    interpolated context value — recipient names, vacancy and
+    assessment titles, error strings — is HTML-escaped, so free-text
+    user data cannot inject live markup into the branded email.
+    """
+    return Template(source, autoescape=True)
+
+
+def render_db_template(
+    template: NotificationTemplate, context: dict
+) -> tuple[str, str]:
+    """Render a DB template's subject and body with the standard context.
+
+    Injects ``brand_name`` from the installation settings (HRP-515) so
+    seeded templates can reference ``{{ brand_name }}`` instead of a
+    hardcoded product name — branded instances render their own brand.
+    Mirrors the email-layer escaping split (HRP-393,
+    ``app/core/email_templates.py``): the HTML body escapes every
+    interpolated value via autoescape (brand, names, titles — HRP-568
+    closes the injection the old verbatim interpolation allowed), the
+    plain-text subject renders raw. A caller-provided ``brand_name``
+    wins in both (escaped in the body like any other value). The
+    caller's dict is not mutated: persisted notification contexts stay
+    free of the injected key.
+
+    The rendered body is wrapped into the shared branded email layout
+    (HRP-568) — logo header, accent color, localized footer — so
+    DB-template emails match the ``render_*`` family instead of going
+    out as bare HTML fragments. The footer locale is the template row's
+    locale (the language the email itself is written in). In-app
+    notifications are unaffected: they persist and render ``context``,
+    never this body.
+    """
+    from app.core.email_templates import _render
+
+    values = {"brand_name": settings.brand_name, **context}
+    subject = _compiled(template.subject_template).render(values)
+    body = _compiled_html(template.body_template).render(values)
+    return subject, _render(subject, body, locale=template.locale or "en")
 
 
 async def get_template_for_locale(
@@ -118,8 +177,7 @@ async def send_notification(
     if not template:
         return
 
-    subject = Template(template.subject_template).render(**context)
-    body = Template(template.body_template).render(**context)
+    subject, body = render_db_template(template, context)
 
     # Check in-app preference
     in_app_enabled = await _is_channel_enabled(db, recipient_id, event_type, "in_app")

@@ -35,11 +35,16 @@ from typing import Any
 from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
 from app.modules.ai.llm_client import generate_json
 from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
-from app.modules.recruitment.common import _publish_event, normalize_competence_id
+from app.modules.recruitment.common import (
+    _get_vacancy,
+    _publish_event,
+    normalize_competence_id,
+)
 from app.modules.recruitment.models import (
     AIAssessment,
     Candidate,
@@ -162,6 +167,124 @@ async def list_question_sets(
         .all()
     )
     return [_set_to_dict(qs) for qs in sets]
+
+
+async def list_vacancy_question_sets(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    vacancy_id: uuid.UUID,
+) -> dict:
+    """Everything the vacancy Questions tab needs, in one payload.
+
+    HRP-504: the tab used to fan out one request per candidate against
+    the legacy ``candidate_questions`` table — which the candidate page
+    stopped writing when HRP-205 introduced question sets — and built its
+    filters from props, so the candidate dropdown fell back to raw UUIDs
+    and the competence dropdown compared profile slugs against uuid5
+    keys and matched nothing.
+
+    This returns, per candidate, the latest live question set (that is
+    what "latest set" means on the tab), each question carrying its
+    resolved competence name, plus the vacancy's full competence list so
+    the filter can offer every competence — including ones no question
+    touched yet.
+    """
+    from app.modules.recruitment.common import candidate_display_name
+
+    await _get_vacancy(db, tenant_id, vacancy_id)
+
+    cvs = (
+        (
+            await db.execute(
+                select(CandidateVacancy)
+                .options(selectinload(CandidateVacancy.candidate))
+                .where(
+                    CandidateVacancy.vacancy_id == vacancy_id,
+                    CandidateVacancy.tenant_id == tenant_id,
+                )
+                .order_by(CandidateVacancy.added_at.desc())
+            )
+        )
+        .scalars()
+        .unique()
+        .all()
+    )
+
+    competences: list[dict] = []
+    competence_names: dict[str, str] = {}
+    profile = (
+        await db.execute(
+            select(VacancyProfile).where(
+                VacancyProfile.vacancy_id == vacancy_id,
+                VacancyProfile.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    for comp in (profile.profile_data or {}).get("competences", []) if profile else []:
+        if not isinstance(comp, dict):
+            continue
+        name = comp.get("name") or comp.get("id") or ""
+        # Profiles written before HRP-348 still key competences by slug;
+        # questions always store the uuid5 of that slug, so fold both onto
+        # the same key here rather than in the browser.
+        comp_uuid = normalize_competence_id(comp.get("id") or name)
+        if comp_uuid is None:
+            continue
+        key = str(comp_uuid)
+        if key in competence_names:
+            continue
+        competence_names[key] = name
+        competences.append({"id": comp_uuid, "name": name})
+
+    sets_by_cv: dict[uuid.UUID, QuestionSet] = {}
+    if cvs:
+        rows = (
+            (
+                await db.execute(
+                    select(QuestionSet)
+                    .where(
+                        QuestionSet.tenant_id == tenant_id,
+                        QuestionSet.candidate_vacancy_id.in_([cv.id for cv in cvs]),
+                        QuestionSet.archived_at.is_(None),
+                    )
+                    # Sets generated inside one transaction share a
+                    # created_at to the microsecond, so the id breaks the
+                    # tie — otherwise "the latest set" was whichever row
+                    # the scan happened to return first.
+                    .order_by(QuestionSet.created_at.desc(), QuestionSet.id.desc())
+                )
+            )
+            .scalars()
+            .unique()
+            .all()
+        )
+        for qs in rows:
+            sets_by_cv.setdefault(qs.candidate_vacancy_id, qs)
+
+    candidates: list[dict] = []
+    for cv in cvs:
+        latest = sets_by_cv.get(cv.id)
+        question_set = _set_to_dict(latest) if latest is not None else None
+        if question_set is not None:
+            for question in question_set["questions"]:
+                comp_id = question.get("competence_id")
+                question["competence_name"] = (
+                    competence_names.get(str(comp_id)) if comp_id else None
+                )
+        candidates.append(
+            {
+                "candidate_id": cv.candidate_id,
+                "candidate_vacancy_id": cv.id,
+                "candidate_name": candidate_display_name(cv.candidate, fallback=""),
+                "question_set": question_set,
+            }
+        )
+
+    return {
+        "vacancy_id": vacancy_id,
+        "competences": competences,
+        "candidates": candidates,
+    }
 
 
 async def get_question_set(

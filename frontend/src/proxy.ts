@@ -171,6 +171,38 @@ function withLocaleCookie<T extends NextResponse>(
   return response;
 }
 
+/**
+ * Consume `?lang=` from a link we built ourselves (HRP-516).
+ *
+ * Invitation emails append the recipient's locale so the form opens in
+ * the language the email was written in. It is a one-shot instruction,
+ * not a standing preference: applying it on every navigation beat the
+ * user's own later choice — switch the page to English, press F5 on the
+ * same emailed link, and German came back.
+ *
+ * So the parameter is consumed: write the cookie, then redirect to the
+ * same URL without it (other query params survive — /accept-invite keeps
+ * its token). What stays in the address bar carries no locale, so a
+ * reload re-uses the cookie, which the switcher owns.
+ *
+ * Redirect stays 307 + Cache-Control: no-store via safeRedirect — a
+ * cached 301/308 here would pin the locale in the browser forever
+ * (incident 2026-04-30).
+ */
+function consumeLocaleParam(request: NextRequest): NextResponse | null {
+  const fromLink = normalizeLocale(request.nextUrl.searchParams.get("lang"));
+  if (!fromLink) return null; // absent, or a locale this build cannot serve
+  const target = new URL(request.url);
+  target.searchParams.delete("lang");
+  const response = safeRedirect(target);
+  response.cookies.set(NEXT_LOCALE_COOKIE, fromLink, {
+    path: "/",
+    maxAge: LOCALE_COOKIE_MAX_AGE,
+    sameSite: "lax",
+  });
+  return response;
+}
+
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const host =
@@ -206,6 +238,11 @@ export function proxy(request: NextRequest) {
   if (isRscRequest) {
     return NextResponse.next();
   }
+
+  // Runs before any routing branch so every surface behaves the same, and
+  // after the RSC guard so a client-side navigation is never bounced.
+  const localeParamRedirect = consumeLocaleParam(request);
+  if (localeParamRedirect) return localeParamRedirect;
 
   const proto = getProtocol(host);
 
@@ -251,9 +288,11 @@ export function proxy(request: NextRequest) {
   // evaluator invite, demo handoff, etc.)
   if (isPublicCompanyPath(pathname) || isTokenPublicPath(pathname)) {
     if (isPublicAssessmentPath(pathname)) {
-      // Hardened CSP path — left untouched (locale cookie is not needed
-      // for the token-gated public assessment shell).
-      return publicAssessmentResponse(request);
+      // Hardened CSP path. HRP-516 gave this shell a language switcher and
+      // its invitation link carries ?lang=, so it now needs the locale
+      // cookie like every other public surface — a Set-Cookie does not
+      // touch the CSP hardening above.
+      return withLocaleCookie(request, publicAssessmentResponse(request));
     }
     return withLocaleCookie(request, NextResponse.next());
   }

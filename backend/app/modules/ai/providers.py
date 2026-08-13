@@ -20,9 +20,11 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from fastapi import status
 from sqlalchemy import select
 
 from app.config import settings
+from app.core.errors import AppError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -274,8 +276,91 @@ def _pick_target(rows: list[Any], model: str | None) -> GenerationTarget | None:
     return None
 
 
-def _fallback_target(model: str | None) -> GenerationTarget:
-    return GenerationTarget(provider=classify_model(model) or default_provider())
+def _accepts_unknown_models(provider: str) -> bool:
+    """True when the provider serves arbitrary model names.
+
+    Only local OpenAI-compatible servers do — their ids are whatever the
+    operator loaded, so a name no prefix owns is normal there.
+    """
+    spec = PROVIDERS.get(provider)
+    return bool(spec and spec.supports_local)
+
+
+def _fallback_target(
+    model: str | None, catalog_provider: str | None = None
+) -> GenerationTarget:
+    """Dispatch target when no tenant config row matched.
+
+    HRP-502: an id no prefix owns used to be handed to whatever
+    ``LLM_PROVIDER`` happens to be — Anthropic on the stock install — so a
+    mistyped or newly-named OpenAI model went out on the platform's
+    Anthropic key and came back as a provider-side 404 nobody could act on.
+
+    Resolution order: the prefix table, then the catalog (a discovered row
+    records which provider's API listed the id), then the platform default.
+    The default still takes an unclassifiable name — an installation
+    running ``LLM_PROVIDER=openai`` with a key set has always served new
+    OpenAI families whose prefix this table does not know yet, and refusing
+    those would break working setups (review fix). It is logged, because
+    the same fallback is what carried mistyped ids to the wrong vendor.
+
+    The refusal is kept for the one case where dispatch cannot work at all:
+    a default provider with no credentials to call it with. Better a clear
+    422 than a provider-side auth error.
+
+    ``model=None`` is not an error: the caller pinned no model and the
+    platform default supplies both the provider and the model.
+    """
+    provider = classify_model(model) or resolve_provider_name(catalog_provider)
+    if provider is not None:
+        return GenerationTarget(provider=provider)
+
+    default = default_provider()
+    if not model or _accepts_unknown_models(default):
+        return GenerationTarget(provider=default)
+
+    if global_key(default) is None:
+        logger.warning(
+            "generation: model %s matches no provider and the default (%s) has "
+            "no key — refusing to dispatch",
+            model,
+            default,
+        )
+        raise AppError(
+            "llm_model_provider_unresolved",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            model=model,
+        )
+
+    logger.warning(
+        "generation: model %s matches no provider and is not in the catalog — "
+        "dispatching to the platform default (%s); check the id if it 404s",
+        model,
+        default,
+    )
+    return GenerationTarget(provider=default)
+
+
+async def _catalog_provider(db: AsyncSession, model: str | None) -> str | None:
+    """Provider the model catalog records for ``model``.
+
+    Skipped unless the prefix table came up empty — this is a fallback,
+    and generation must not pay for a query it will not use.
+    """
+    if not model or classify_model(model) is not None:
+        return None
+    from app.modules.ai import model_catalog_service
+
+    return await model_catalog_service.provider_for_model(db, model)
+
+
+def _catalog_provider_sync(db: Session, model: str | None) -> str | None:
+    """Sync twin of :func:`_catalog_provider`."""
+    if not model or classify_model(model) is not None:
+        return None
+    from app.modules.ai import model_catalog_service
+
+    return model_catalog_service.provider_for_model_sync(db, model)
 
 
 def _rows_query(tenant_id: uuid.UUID) -> Any:
@@ -297,7 +382,10 @@ async def resolve_generation_target(
     """BYOK/local-aware dispatch target (async request path)."""
     result = await db.execute(_rows_query(tenant_id))
     rows = list(result.scalars().all())
-    return _pick_target(rows, model) or _fallback_target(model)
+    picked = _pick_target(rows, model)
+    if picked is not None:
+        return picked
+    return _fallback_target(model, await _catalog_provider(db, model))
 
 
 def resolve_generation_target_sync(
@@ -306,7 +394,10 @@ def resolve_generation_target_sync(
     """Sync twin of :func:`resolve_generation_target` for Celery workers
     that hold a synchronous Session (recruitment analysis tasks)."""
     rows = list(db.execute(_rows_query(tenant_id)).scalars().all())
-    return _pick_target(rows, model) or _fallback_target(model)
+    picked = _pick_target(rows, model)
+    if picked is not None:
+        return picked
+    return _fallback_target(model, _catalog_provider_sync(db, model))
 
 
 async def configured_providers(

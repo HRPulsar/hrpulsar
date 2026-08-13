@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { useIsSaas } from "@/hooks/use-is-saas";
+import { api } from "@/lib/api";
 import { API_BASE } from "@/lib/api-base";
 import type { CreditBalance } from "@/lib/types";
 
@@ -18,32 +19,107 @@ interface CostCategory {
 }
 
 let costsCache: Record<string, number> | null = null;
+let costsCachedAt = 0;
 let costsFetchPromise: Promise<Record<string, number>> | null = null;
+// Bumped by invalidateCostConfirmationCache() so a fetch that was already in
+// flight when the invalidation happened cannot write its pre-change prices
+// back into the cache with a fresh timestamp (review fix).
+let costsCacheGeneration = 0;
 let balanceCache: CreditBalance | null = null;
 let balanceFetchPromise: Promise<CreditBalance | null> | null = null;
 
-async function fetchCosts(): Promise<Record<string, number>> {
-  if (costsCache) return costsCache;
+/**
+ * How long a quoted price list may be reused.
+ *
+ * Effective prices depend on the workspace's model, so they change when an
+ * admin switches models or a platform admin reprices one. Explicit
+ * invalidation covers the flows we own (see `invalidateCostConfirmationCache`
+ * callers); this TTL is the backstop for the ones we don't — another admin's
+ * change, or a tab left open for a day (review #3).
+ */
+const COSTS_TTL_MS = 5 * 60 * 1000;
+
+function costsCacheIsFresh(): boolean {
+  return costsCache !== null && Date.now() - costsCachedAt < COSTS_TTL_MS;
+}
+
+function flattenCosts(categories: CostCategory[]): Record<string, number> {
+  const map: Record<string, number> = {};
+  for (const cat of categories) {
+    for (const act of cat.actions ?? []) {
+      map[act.action] = act.cost;
+    }
+  }
+  return map;
+}
+
+/**
+ * Price list for the signed-in workspace.
+ *
+ * HRP-509: `/billing/costs` is the public, tenant-agnostic base list —
+ * LLM actions are charged `base x model multiplier`, so quoting it made a
+ * workspace on a heavier model see 200 and pay 340. `/billing/costs/effective`
+ * returns the numbers the charge path computes. Falls back to the public
+ * list when the effective endpoint is unavailable (no token yet, community
+ * build) so the badge degrades instead of disappearing.
+ */
+export async function fetchCosts(): Promise<Record<string, number>> {
+  if (costsCacheIsFresh()) return costsCache as Record<string, number>;
   if (costsFetchPromise) return costsFetchPromise;
 
-  costsFetchPromise = fetch(`${API_BASE}/billing/costs`)
-    .then((res) => (res.ok ? res.json() : Promise.reject(new Error("costs"))))
-    .then((categories: CostCategory[]) => {
-      const map: Record<string, number> = {};
-      for (const cat of categories) {
-        for (const act of cat.actions) {
-          map[act.action] = act.cost;
-        }
-      }
-      costsCache = map;
-      return map;
-    })
-    .catch(() => {
-      costsFetchPromise = null;
-      return {};
-    });
+  const token =
+    typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
 
-  return costsFetchPromise;
+  const pending = (async (): Promise<Record<string, number>> => {
+    const generation = costsCacheGeneration;
+    let categories: CostCategory[] | null = null;
+    if (token) {
+      // Through the api client, not a raw fetch: an expired access token
+      // must go through the 401-refresh pipeline rather than silently
+      // degrade to the tenant-agnostic base list — quoting the base price
+      // while charging the multiplied one is the exact HRP-509 defect
+      // this endpoint exists to fix (review fix). A 404 (community build)
+      // or any other failure falls through to the public list.
+      try {
+        const effective = await api.get<CostCategory[]>(
+          "/billing/costs/effective",
+        );
+        // An empty list is not a price list — fall back rather than
+        // caching "everything is free" for the TTL (review fix).
+        if (Array.isArray(effective) && effective.length > 0) {
+          categories = effective;
+        }
+      } catch {
+        categories = null;
+      }
+    }
+    if (categories === null) {
+      try {
+        const res = await fetch(`${API_BASE}/billing/costs`);
+        const base = res.ok ? ((await res.json()) as CostCategory[]) : null;
+        categories = Array.isArray(base) ? base : null;
+      } catch {
+        categories = null;
+      }
+    }
+    if (categories === null) return {};
+    const map = flattenCosts(categories);
+    if (generation === costsCacheGeneration) {
+      costsCache = map;
+      costsCachedAt = Date.now();
+    }
+    return map;
+  })();
+
+  // Deduplicates concurrent callers, then clears itself: a promise left in
+  // place would be returned forever and the TTL below could never trigger
+  // a re-fetch.
+  costsFetchPromise = pending;
+  void pending.finally(() => {
+    if (costsFetchPromise === pending) costsFetchPromise = null;
+  });
+
+  return pending;
 }
 
 /**
@@ -81,9 +157,19 @@ async function fetchThreshold(): Promise<number> {
   return typeof t === "number" ? t : 0;
 }
 
+/**
+ * Drop the cached price list and balance.
+ *
+ * Call after anything that can change what an action costs this
+ * workspace — saving AI settings (model / effort level) or a platform-admin
+ * repricing — otherwise the dialog keeps quoting the old multiplier until a
+ * full reload (review #3).
+ */
 export function invalidateCostConfirmationCache() {
   costsCache = null;
+  costsCachedAt = 0;
   costsFetchPromise = null;
+  costsCacheGeneration += 1;
   balanceCache = null;
   balanceFetchPromise = null;
 }
@@ -248,7 +334,9 @@ export function useCreditGate(actionKey: string): CreditGate {
     }
     Promise.all([fetchCosts(), fetchCreditBalance()]).then(([costs, bal]) => {
       setCost(costs[actionKey] ?? null);
-      setBalance(bal?.total ?? null);
+      // HRP-547: what can actually be spent, not the headline total —
+      // credits held by an upload in flight are not available here.
+      setBalance(bal?.available ?? bal?.total ?? null);
     });
   }, [actionKey, isSaas]);
 
@@ -258,7 +346,9 @@ export function useCreditGate(actionKey: string): CreditGate {
     Promise.all([fetchCosts(), fetchCreditBalance()]).then(([costs, bal]) => {
       if (cancelled) return;
       setCost(costs[actionKey] ?? null);
-      setBalance(bal?.total ?? null);
+      // HRP-547: what can actually be spent, not the headline total —
+      // credits held by an upload in flight are not available here.
+      setBalance(bal?.available ?? bal?.total ?? null);
     });
     return () => {
       cancelled = true;

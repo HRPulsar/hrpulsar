@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { api } from "@/lib/api";
+import { api, taskErrorKey } from "@/lib/api";
 import type {
   Position,
   PositionLifecycleStatus,
@@ -231,7 +231,16 @@ export default function PositionsPage() {
       toast.success(t("toastAiPositionsGenerated"));
       await loadPositions();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("toastAiGenerateFailed"));
+      // HRP-512: a task failure with no worker message carries a stable
+      // code instead of English text — render it from the catalog.
+      const taskKey = taskErrorKey(err);
+      toast.error(
+        taskKey
+          ? tc(taskKey)
+          : err instanceof Error
+            ? err.message
+            : t("toastAiGenerateFailed"),
+      );
     } finally {
       setGenerating(false);
     }

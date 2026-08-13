@@ -221,7 +221,10 @@ export function DemoBanner() {
 
   const remaining = formatRemaining(expiresAt);
   const expired = remaining === EXPIRED;
-  const creditsLeft = credits ? credits.total : null;
+  // HRP-547: quote what can actually be spent — credits held by an upload
+  // in flight are subtracted from `available`, and the gate reads the same
+  // field, so the banner must not promise a number the next action refuses.
+  const creditsLeft = credits ? (credits.available ?? credits.total) : null;
   // tick is consumed only to trigger a re-render so formatRemaining recomputes.
   void tick;
 

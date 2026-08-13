@@ -113,6 +113,130 @@ export function deriveSpecializationOptions(
   );
 }
 
+/** A node of the division tree as returned by `GET /divisions`. */
+export interface DivisionTreeNode {
+  id: string;
+  children?: DivisionTreeNode[] | null;
+}
+
+/**
+ * HRP-58: ids of `rootId` and every division nested under it, at any
+ * depth. Returns `[rootId]` when the root is a leaf, and `[]` when the
+ * root is not in the tree (still loading / out of the caller's scope).
+ *
+ * The page uses this only to decide whether the "include sub-divisions"
+ * control is meaningful — the actual widening happens server-side via
+ * `include_sub_divisions`, so a partially loaded tree can never silently
+ * truncate the employee list.
+ */
+export function collectDivisionSubtreeIds(
+  tree: DivisionTreeNode[],
+  rootId: string,
+): string[] {
+  const found = findDivisionNode(tree, rootId);
+  if (!found) return [];
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const queue: DivisionTreeNode[] = [found];
+  while (queue.length > 0) {
+    const node = queue.shift() as DivisionTreeNode;
+    if (seen.has(node.id)) continue;
+    seen.add(node.id);
+    ids.push(node.id);
+    for (const child of node.children ?? []) queue.push(child);
+  }
+  return ids;
+}
+
+function findDivisionNode(
+  tree: DivisionTreeNode[],
+  id: string,
+): DivisionTreeNode | null {
+  for (const node of tree) {
+    if (node.id === id) return node;
+    const hit = findDivisionNode(node.children ?? [], id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** One clickable specialization tile on the division page. */
+export interface DivisionSpecializationTile {
+  specializationId: string;
+  title: string;
+  count: number;
+}
+
+/**
+ * HRP-58 REDO: the tiles of the Specializations block.
+ *
+ * They used to render the division's mapped specializations only, which
+ * is why a nested division showed "Specializations (0)": mappings are
+ * usually curated on the upper levels, while an employee's specialization
+ * follows their *position* and needs no mapping at all. The Employees
+ * filter already unioned both sources — the tiles did not, so the two
+ * blocks disagreed on the same page.
+ *
+ * Tiles are now the same union the filter uses, with the headcount of the
+ * employees passed in (the caller decides whether that set covers nested
+ * divisions). A mapped specialization with nobody in it keeps its tile
+ * with a zero count — that is real information about the org chart, not
+ * an empty block.
+ */
+export function deriveSpecializationTiles(
+  specializations: DivisionSpecializationForFilter[],
+  employees: DivisionEmployeeForFilter[],
+): DivisionSpecializationTile[] {
+  const counts = new Map<string, number>();
+  for (const e of employees) {
+    if (!e.specialization_id) continue;
+    counts.set(e.specialization_id, (counts.get(e.specialization_id) ?? 0) + 1);
+  }
+  return deriveSpecializationOptions(specializations, employees).map((opt) => ({
+    specializationId: opt.id,
+    title: opt.title,
+    count: counts.get(opt.id) ?? 0,
+  }));
+}
+
+/**
+ * HRP-58 review fix: drop filter values that the current scope no longer
+ * offers.
+ *
+ * Turning "Include sub-divisions" off shrinks the employee set, and with
+ * it the option lists. A value picked under the wider scope would survive
+ * as a dangling id: the chip renders "Unknown", the select falls back to
+ * its placeholder, and the table is empty for no visible reason. Anything
+ * that is no longer selectable is cleared.
+ *
+ * Returns the SAME object when nothing changed — the caller feeds this
+ * straight into `setFilters`, and a fresh object every render would
+ * re-trigger the effect that calls it.
+ */
+export function reconcileDivisionFilters(
+  filters: DivisionEmployeeFilters,
+  options: {
+    specializations: FilterDropdownOption[];
+    positions: FilterDropdownOption[];
+    grades: FilterDropdownOption[];
+  },
+): DivisionEmployeeFilters {
+  const keep = (id: string | null, opts: FilterDropdownOption[]) =>
+    id && opts.some((o) => o.id === id) ? id : null;
+
+  const next: DivisionEmployeeFilters = {
+    specializationId: keep(filters.specializationId, options.specializations),
+    positionId: keep(filters.positionId, options.positions),
+    gradeId: keep(filters.gradeId, options.grades),
+  };
+
+  const unchanged =
+    next.specializationId === filters.specializationId &&
+    next.positionId === filters.positionId &&
+    next.gradeId === filters.gradeId;
+  return unchanged ? filters : next;
+}
+
 /** Combined AND matcher — all active filters must match. */
 export function matchesDivisionFilters(
   employee: DivisionEmployeeForFilter,

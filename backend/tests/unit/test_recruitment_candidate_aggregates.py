@@ -94,6 +94,9 @@ class TestApplyMatrixAggregates:
             )
         # AI: 5 on python-skills (matches), 2 on communication
         # (|4-2|=2 >= tenant default 1.0 → divergent).
+        # HRP-507: AIAssessment.score is stored on the canonical 0..1 scale
+        # (HRP-274, clamp_unit_score at ingestion) and rebased onto the
+        # tenant scale on read — 1.0 → 5, 0.4 → 2 on this 0..5 scale.
         interview = Interview(
             tenant_id=tenant.id,
             candidate_vacancy_id=uuid.UUID(str(cv["id"])),
@@ -103,7 +106,7 @@ class TestApplyMatrixAggregates:
         db.add(interview)
         await db.commit()
         await db.refresh(interview)
-        for slug, score in [("python-skills", 5.0), ("communication", 2.0)]:
+        for slug, score in [("python-skills", 1.0), ("communication", 0.4)]:
             db.add(
                 AIAssessment(
                     tenant_id=tenant.id,
@@ -137,7 +140,8 @@ class TestApplyMatrixAggregates:
     ) -> None:
         vacancy, cvs = await _setup(db, tenant, user, candidates=1)
         cv = cvs[0]
-        # Manager 5 / AI 3 — gap of 2.0.
+        # Manager 5 / AI 3 — gap of 2.0. The AI side is stored raw (0.6 on
+        # the canonical 0..1 scale) and read back as 3 on this 0..5 scale.
         await service.record_human_assessment(
             db,
             tenant.id,
@@ -162,7 +166,7 @@ class TestApplyMatrixAggregates:
                 tenant_id=tenant.id,
                 interview_id=interview.id,
                 competence_id=service.normalize_competence_id("python-skills"),
-                score=3.0,
+                score=0.6,
                 status="assessed",
                 citations=[],
             )

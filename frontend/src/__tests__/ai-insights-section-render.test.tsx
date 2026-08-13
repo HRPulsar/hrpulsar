@@ -342,3 +342,38 @@ describe("AI Insights — top-up callout (HRP-489)", () => {
     expect(upgrade.textContent).toContain("20");
   });
 });
+
+describe("AI Insights — localized verdict and next step (HRP-550)", () => {
+  it("renders the verdict wording the AI VERDICT column uses, not the code", async () => {
+    runs.push(
+      mkRun({
+        verdict: "not_recommended",
+        recommendation_for_next_step: "schedule_interview",
+      }),
+    );
+    eligibility = mkEligibility();
+    await render(true);
+
+    const pill = byTestId("ai-analysis-verdict-pill")!;
+    expect(pill.getAttribute("data-verdict")).toBe("not_recommended");
+    expect(pill.textContent).toContain("Not recommended");
+    // The de-slugged wire code ("not recommended") is exactly what HRP-550
+    // replaced — assert the underscore-free raw form is gone too.
+    expect(pill.textContent).not.toContain("not_recommended");
+  });
+
+  it("translates the next-step recommendation", async () => {
+    runs.push(
+      mkRun({
+        verdict: "needs_check",
+        recommendation_for_next_step: "second_interview",
+      }),
+    );
+    eligibility = mkEligibility();
+    await render(true);
+
+    const nextStep = byTestId("ai-analysis-next-step")!;
+    expect(nextStep.getAttribute("data-next-step")).toBe("second_interview");
+    expect(nextStep.textContent).toBe("Second interview");
+  });
+});

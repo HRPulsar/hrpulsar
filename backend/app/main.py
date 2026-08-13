@@ -189,7 +189,15 @@ app.add_middleware(
     # full app surface (REST verbs + preflight; auth, JSON, optimistic-lock
     # If-Match, and the public-API key header).
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "If-Match", "X-API-Key"],
+    # X-Locale (HRP-513): the caller's effective interface locale, so error
+    # bodies are localized when the NEXT_LOCALE cookie cannot cross origins.
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "If-Match",
+        "X-API-Key",
+        "X-Locale",
+    ],
     # HRP-177: ETag is not on the CORS-safelisted response-header list, so
     # cross-origin browsers can't read it via fetch unless we expose it
     # explicitly. The vacancy edit page needs it to send If-Match on PATCH.

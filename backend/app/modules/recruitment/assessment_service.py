@@ -27,6 +27,7 @@ from app.modules.recruitment.common import (
     normalize_competence_id,
 )
 from app.modules.recruitment.models import (
+    AIAnalysisRun,
     AIAssessment,
     AssessmentInvite,
     Candidate,
@@ -45,6 +46,7 @@ from app.modules.recruitment.schemas import (
     QuestionCreate,
     QuestionUpdate,
 )
+from app.modules.recruitment.score_normalization import compute_normalized_ai_score
 from app.modules.storage.models import File
 
 logger = logging.getLogger(__name__)
@@ -690,8 +692,7 @@ async def list_assessment_history(
         filters.append(RecruitmentAuditLog.created_at <= until)
 
     query = (
-        select(RecruitmentAuditLog)
-        .where(*filters)
+        select(RecruitmentAuditLog).where(*filters)
         # ``id`` tiebreaker keeps two events written in the same
         # transaction in a stable order across reloads — without it the
         # Versions panel reorders rows depending on the SQL execution
@@ -1411,6 +1412,329 @@ def _percent(numerator: float, denominator: float) -> float | None:
     return round(numerator / denominator * 100, 1)
 
 
+def _evaluator_key(
+    evaluator_id: uuid.UUID | None,
+    invite_id: uuid.UUID | None,
+    label: str,
+) -> tuple[str, str]:
+    """Identity of one human opinion on one cell.
+
+    A manager can score the same competence both in the round sheet and
+    in the Canvas inline editor. Those are the same person changing their
+    mind, not two evaluators, so the two rows collapse onto one key and
+    the newest wins — otherwise the mean would sit between the old and
+    the corrected score.
+    """
+    if evaluator_id is not None:
+        return ("user", str(evaluator_id))
+    if invite_id is not None:
+        return ("invite", str(invite_id))
+    return ("name", label)
+
+
+def _round_score_to_tenant_scale(
+    score_value: float,
+    scale_snapshot: dict | None,
+    max_score: float,
+) -> float:
+    """Rebase a round-sheet level onto the tenant's ScaleConfig.
+
+    The two manager surfaces do not speak the same units. Canvas cells
+    (``HumanAssessment``) are entered against the tenant ``ScaleConfig``
+    — the scale the whole matrix renders, ``max_score`` — while a round
+    sheet stores a level of the vacancy's ``AssessmentScale``, which ships
+    as 1..4 by default. Mixing them made a manager's top mark (4) look
+    like a point of disagreement with the AI's top mark (raw 1.0 → 5.0)
+    on a default tenant, and capped manager % match at 80%.
+
+    The level → weight map frozen on the vacancy is the product's own
+    statement of where a level sits on its scale (it already backs
+    ``candidate_vacancies.manager_score_weight``), so the weight becomes
+    the fraction of ``max_score``. Without a snapshot there is nothing to
+    map with and the raw level is the best available answer.
+    """
+    from app.modules.recruitment.manager_assessment_service import _level_to_weight
+
+    if scale_snapshot is None or max_score <= 0:
+        return float(score_value)
+    weight = _level_to_weight(scale_snapshot, float(score_value))
+    if weight is None:
+        return float(score_value)
+    return round(weight / 100.0 * max_score, 2)
+
+
+async def _load_manager_cell_scores(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cv_ids: list[uuid.UUID],
+    *,
+    competence_id: uuid.UUID | None = None,
+    scale_snapshot: dict | None = None,
+    max_score: float = 0.0,
+) -> dict[uuid.UUID, dict[str, list[dict]]]:
+    """Per-competence manager scores, keyed ``cv_id -> comp_key -> entries``.
+
+    HRP-507: manager scores live in two tables. ``HumanAssessment`` is the
+    legacy/Canvas surface (inline cell editing, the old invite flow), and
+    it is the only one the matrix used to read — which is why DIVERGENCE
+    was always empty: the product flow (Manager assessments on the
+    candidate page, HRP-186) writes ``AssessmentCompetenceScore`` rows
+    hanging off a round's evaluation sheets, and those were invisible here.
+
+    Round scores are scoped exactly like ``candidate_vacancies.manager_score``
+    (``manager_assessment_service.recompute_manager_score``): the newest
+    completed round that has scores, else the newest round with any — so
+    the cells and the Manager column in the same table can never disagree
+    about which round they describe. Only "counted" sheets contribute
+    (internal evaluators, plus submitted external ones).
+    """
+
+    # Local imports: manager_assessment_service imports back into this
+    # module's neighbourhood, so keep the edge out of module import time.
+    from app.modules.recruitment.manager_assessment_models import (
+        AssessmentCompetenceScore,
+        AssessmentRound,
+        RecruitmentAssessment,
+    )
+    from app.modules.recruitment.manager_assessment_service import _COUNTABLE_SHEET
+
+    if not cv_ids:
+        return {}
+
+    legacy_query = select(HumanAssessment).where(
+        HumanAssessment.candidate_vacancy_id.in_(cv_ids),
+        HumanAssessment.tenant_id == tenant_id,
+    )
+    if competence_id is not None:
+        legacy_query = legacy_query.where(
+            HumanAssessment.competence_id == competence_id
+        )
+    legacy_rows = (await db.execute(legacy_query)).scalars().all()
+
+    rounds = (
+        (
+            await db.execute(
+                select(AssessmentRound)
+                .where(
+                    AssessmentRound.candidate_vacancy_id.in_(cv_ids),
+                    AssessmentRound.tenant_id == tenant_id,
+                    AssessmentRound.archived_at.is_(None),
+                )
+                .order_by(AssessmentRound.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    score_query = (
+        select(AssessmentCompetenceScore, RecruitmentAssessment, AssessmentRound)
+        .join(
+            RecruitmentAssessment,
+            RecruitmentAssessment.id == AssessmentCompetenceScore.assessment_id,
+        )
+        .join(AssessmentRound, AssessmentRound.id == RecruitmentAssessment.round_id)
+        .where(
+            AssessmentRound.candidate_vacancy_id.in_(cv_ids),
+            AssessmentRound.tenant_id == tenant_id,
+            AssessmentRound.archived_at.is_(None),
+            AssessmentCompetenceScore.score_value.is_not(None),
+            _COUNTABLE_SHEET,
+        )
+    )
+    if competence_id is not None:
+        score_query = score_query.where(
+            AssessmentCompetenceScore.competence_id == competence_id
+        )
+    score_rows = (await db.execute(score_query)).all() if rounds else []
+
+    # Which round each candidate's cells describe. This has to be the very
+    # same choice ``recompute_manager_score`` makes, or the cells and the
+    # Manager column beside them would describe different rounds: once any
+    # round is complete, only complete rounds are eligible — even when
+    # none of them carries a score and a later in-progress round does.
+    rounds_with_scores: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for _score, _sheet, rnd in score_rows:
+        rounds_with_scores.setdefault(rnd.candidate_vacancy_id, set()).add(rnd.id)
+    rounds_by_cv: dict[uuid.UUID, list] = {}
+    for rnd in rounds:
+        rounds_by_cv.setdefault(rnd.candidate_vacancy_id, []).append(rnd)
+    chosen_round: dict[uuid.UUID, uuid.UUID] = {}
+    for cv_id, cv_rounds in rounds_by_cv.items():
+        complete = [r for r in cv_rounds if r.status == "complete"]
+        pool = complete or cv_rounds
+        scored = rounds_with_scores.get(cv_id) or set()
+        # ``rounds`` is ordered oldest-first; the newest scored round of
+        # the eligible pool wins.
+        for rnd in reversed(pool):
+            if rnd.id in scored:
+                chosen_round[cv_id] = rnd.id
+                break
+
+    user_ids = {hs.evaluator_id for hs in legacy_rows if hs.evaluator_id}
+    user_ids |= {
+        sheet.evaluator_user_id
+        for _s, sheet, _r in score_rows
+        if sheet.evaluator_user_id
+    }
+    evaluator_names: dict[uuid.UUID, str] = {}
+    if user_ids:
+        user_rows = (
+            (await db.execute(select(User).where(User.id.in_(user_ids))))
+            .scalars()
+            .all()
+        )
+        for u in user_rows:
+            full = f"{u.first_name or ''} {u.last_name or ''}".strip()
+            evaluator_names[u.id] = full or u.email
+
+    # cv -> comp_key -> evaluator identity -> entry (newest wins)
+    staged: dict[uuid.UUID, dict[str, dict[tuple[str, str], dict]]] = {}
+
+    def _stage(cv_id: uuid.UUID, comp_key: str, entry: dict) -> None:
+        bucket = staged.setdefault(cv_id, {}).setdefault(comp_key, {})
+        key = _evaluator_key(
+            entry["evaluator_id"], entry["invite_id"], entry["evaluator_label"]
+        )
+        previous = bucket.get(key)
+        if previous is None or (entry["updated_at"] or _EPOCH) >= (
+            previous["updated_at"] or _EPOCH
+        ):
+            bucket[key] = entry
+
+    # Round sheets first, Canvas cells second: on an exact timestamp tie the
+    # Canvas edit wins, because that is the surface a recruiter opens to
+    # correct a cell they are looking at.
+    for score, sheet, rnd in score_rows:
+        if chosen_round.get(rnd.candidate_vacancy_id) != rnd.id:
+            continue
+        if sheet.evaluator_user_id is not None:
+            label = evaluator_names.get(sheet.evaluator_user_id) or "Evaluator"
+        else:
+            label = sheet.evaluator_display_name or "Invited evaluator"
+        _stage(
+            rnd.candidate_vacancy_id,
+            str(score.competence_id),
+            {
+                # Levels of the vacancy's AssessmentScale, rebased onto the
+                # scale everything else in the matrix speaks.
+                "score": _round_score_to_tenant_scale(
+                    score.score_value, scale_snapshot, max_score
+                ),
+                "evaluator_label": label,
+                "evaluator_id": sheet.evaluator_user_id,
+                "invite_id": sheet.evaluator_invite_id,
+                "comment": score.comment,
+                "updated_at": score.updated_at,
+                "version": sheet.version,
+            },
+        )
+
+    for hs in legacy_rows:
+        if hs.score is None:
+            continue
+        if hs.evaluator_id is not None:
+            label = evaluator_names.get(hs.evaluator_id) or "Evaluator"
+        else:
+            label = hs.evaluator_name or "Invited evaluator"
+        _stage(
+            hs.candidate_vacancy_id,
+            str(hs.competence_id),
+            {
+                "score": float(hs.score),
+                "evaluator_label": label,
+                "evaluator_id": hs.evaluator_id,
+                "invite_id": hs.invite_id,
+                "comment": hs.comment,
+                "updated_at": hs.updated_at,
+                "version": hs.version,
+            },
+        )
+
+    return {
+        cv_id: {
+            comp_key: sorted(
+                by_evaluator.values(),
+                key=lambda e: e["updated_at"] or _EPOCH,
+                reverse=True,
+            )
+            for comp_key, by_evaluator in per_comp.items()
+        }
+        for cv_id, per_comp in staged.items()
+    }
+
+
+async def _load_ai_run_cell_scores(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cv_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, dict[str, dict]]:
+    """Per-competence AI scores from the active analysis run.
+
+    HRP-507: ``AIAssessment`` rows only exist for interview-backed
+    analyses. A resume-only run (the pre-screening mode the ticket walks
+    through) writes its competence verdicts into
+    ``AIAnalysisRun.analysis_data["competence_assessments"]`` and nothing
+    else, so without this fallback the AI half of every cell is empty and
+    no divergence can ever be computed.
+    """
+
+    if not cv_ids:
+        return {}
+
+    runs = (
+        (
+            await db.execute(
+                select(AIAnalysisRun).where(
+                    AIAnalysisRun.candidate_vacancy_id.in_(cv_ids),
+                    AIAnalysisRun.tenant_id == tenant_id,
+                    AIAnalysisRun.status == "completed",
+                    AIAnalysisRun.archived_at.is_(None),
+                )
+                # A partial unique index already allows only one active
+                # completed run per candidate-vacancy, but ordering keeps
+                # the read deterministic if that invariant ever slips.
+                .order_by(AIAnalysisRun.created_at.desc(), AIAnalysisRun.id.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    index: dict[uuid.UUID, dict[str, dict]] = {}
+    for run in runs:
+        if run.candidate_vacancy_id in index:
+            continue
+        entries = (run.analysis_data or {}).get("competence_assessments") or []
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            # Unlike the interview path, the run payload keeps the raw
+            # model-supplied competence id, so it has to be normalised
+            # here to match the profile keys.
+            comp_uuid = normalize_competence_id(entry.get("competence_id") or "")
+            if comp_uuid is None:
+                continue
+            raw = entry.get("score")
+            reasoning = entry.get("reasoning")
+            index.setdefault(run.candidate_vacancy_id, {})[str(comp_uuid)] = {
+                # bool is an int subclass — an LLM answering the schema
+                # with true/false must not become a fabricated 1.0/0.0.
+                "score": (
+                    float(raw)
+                    if isinstance(raw, (int, float)) and not isinstance(raw, bool)
+                    else None
+                ),
+                "status": _normalize_ai_status(entry.get("status")),
+                "reasoning": reasoning if isinstance(reasoning, str) else None,
+                "updated_at": run.updated_at,
+                "interview_id": run.interview_id,
+            }
+    return index
+
+
 async def get_assessment_matrix(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1450,7 +1774,7 @@ async def get_assessment_matrix(
     # (which itself reads no service.py symbols).
     from app.modules.recruitment import settings_service
 
-    await _get_vacancy(db, tenant_id, vacancy_id)
+    vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
 
     profile_row = (
         await db.execute(
@@ -1516,17 +1840,14 @@ async def get_assessment_matrix(
 
     cv_ids = [cv.id for cv in cvs]
 
-    human_rows = (
-        (
-            await db.execute(
-                select(HumanAssessment).where(
-                    HumanAssessment.candidate_vacancy_id.in_(cv_ids),
-                    HumanAssessment.tenant_id == tenant_id,
-                )
-            )
-        )
-        .scalars()
-        .all()
+    # HRP-507: both manager surfaces (round sheets + legacy Canvas cells),
+    # normalised onto ``max_score`` so the two halves of a cell compare.
+    human_index = await _load_manager_cell_scores(
+        db,
+        tenant_id,
+        cv_ids,
+        scale_snapshot=vacancy.assessment_scale_snapshot,
+        max_score=max_score,
     )
 
     # Archived interviews are out of scope everywhere else the matrix
@@ -1568,44 +1889,6 @@ async def get_assessment_matrix(
             )
             .scalars()
             .all()
-        )
-
-    # Evaluator names — used by the footer-info popover when a recruiter
-    # clicks an individual cell.
-    user_ids = {hs.evaluator_id for hs in human_rows if hs.evaluator_id}
-    evaluator_names: dict[uuid.UUID, str] = {}
-    if user_ids:
-        user_rows = (
-            (await db.execute(select(User).where(User.id.in_(user_ids))))
-            .scalars()
-            .all()
-        )
-        for u in user_rows:
-            full = f"{u.first_name or ''} {u.last_name or ''}".strip()
-            evaluator_names[u.id] = full or u.email
-
-    # Index human assessments: cv_id -> comp_id (str) -> list of (score, evaluator_label, version, updated_at)
-    human_index: dict[uuid.UUID, dict[str, list[dict]]] = {}
-    for hs in human_rows:
-        if hs.score is None:
-            continue
-        comp_key = str(hs.competence_id)
-        bucket = human_index.setdefault(hs.candidate_vacancy_id, {}).setdefault(
-            comp_key, []
-        )
-        if hs.evaluator_id is not None:
-            label = evaluator_names.get(hs.evaluator_id) or "Evaluator"
-        else:
-            label = hs.evaluator_name or "Invited evaluator"
-        bucket.append(
-            {
-                "score": float(hs.score),
-                "evaluator_label": label,
-                "evaluator_id": str(hs.evaluator_id) if hs.evaluator_id else None,
-                "invite_id": str(hs.invite_id) if hs.invite_id else None,
-                "updated_at": hs.updated_at,
-                "version": hs.version,
-            }
         )
 
     # HRP-510 — interview rounds, ordered oldest-first per candidate. The
@@ -1698,6 +1981,23 @@ async def get_assessment_matrix(
                 entry["score"] = round(sum(values) / len(values), 2)
                 entry["status"] = "ready"
 
+    # HRP-507: candidates analysed without an interview (resume-only mode,
+    # or a full run whose per-interview rows were pruned) have no
+    # ``AIAssessment`` rows at all — their competence verdicts only live on
+    # the analysis run. Fall back per candidate so those cells stop being
+    # blank; a candidate with interview rows keeps the round-scoped data.
+    #
+    # An analysis run carries no round dimension, so this must not answer
+    # a request for one specific interview: under "Round N" a run-level
+    # score would read as if that round had produced it. Only the
+    # round-agnostic views (Latest / All combined) take the fallback.
+    if round_index is None:
+        run_index = await _load_ai_run_cell_scores(
+            db, tenant_id, [cv.id for cv in cvs if not ai_index.get(cv.id)]
+        )
+        for run_cv_id, run_cells in run_index.items():
+            ai_index.setdefault(run_cv_id, {}).update(run_cells)
+
     competences_payload: list[dict] = []
     competence_keys: list[str] = []
     for comp in profile_competences:
@@ -1747,8 +2047,19 @@ async def get_assessment_matrix(
             ai_status = "missing"
             if ai_entry is not None:
                 ai_status = ai_entry["status"]
-                if ai_entry["score"] is not None and ai_status == "ready":
-                    ai_score = ai_entry["score"]
+                # HRP-507: AI competence scores are stored on the canonical
+                # 0..1 scale (HRP-274), manager scores on the tenant scale.
+                # Comparing them raw made every populated cell look
+                # divergent and deflated the AI % match, so rebase the AI
+                # side the same way ``ai_score_normalized`` is rebased on
+                # the candidate row.
+                rebased = (
+                    compute_normalized_ai_score(ai_entry["score"], max_score)
+                    if ai_status == "ready"
+                    else None
+                )
+                if rebased is not None:
+                    ai_score = round(rebased, 2)
                     ai_score_sum += ai_score
                     ai_scored_count += 1
                 else:
@@ -1840,7 +2151,9 @@ async def get_assessment_matrix_cell_detail(
     the recruiter can tell why a top-up shifted a verdict.
     """
 
-    await _get_vacancy(db, tenant_id, vacancy_id)
+    from app.modules.recruitment import settings_service
+
+    vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
 
     cv = (
         await db.execute(
@@ -1858,53 +2171,34 @@ async def get_assessment_matrix_cell_detail(
     if cv is None:
         raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
 
-    human_rows = (
-        (
-            await db.execute(
-                select(HumanAssessment).where(
-                    HumanAssessment.candidate_vacancy_id == cv.id,
-                    HumanAssessment.competence_id == competence_id,
-                    HumanAssessment.tenant_id == tenant_id,
-                )
-            )
-        )
-        .scalars()
-        .all()
+    # The popover must speak the units of the cell it was opened from —
+    # both halves of it (review finding: the AI score arrived raw here
+    # while the cell showed it rebased).
+    active_scale = await settings_service.get_active_scale(db, tenant_id)
+    max_score: float = float(active_scale.max_value) if active_scale else 5.0
+
+    # HRP-507: same two manager surfaces the matrix reads, so the
+    # drill-down can never contradict the cell it was opened from.
+    manager_index = await _load_manager_cell_scores(
+        db,
+        tenant_id,
+        [cv.id],
+        competence_id=competence_id,
+        scale_snapshot=vacancy.assessment_scale_snapshot,
+        max_score=max_score,
     )
-
-    user_ids = {hs.evaluator_id for hs in human_rows if hs.evaluator_id}
-    evaluator_names: dict[uuid.UUID, str] = {}
-    if user_ids:
-        user_rows = (
-            (await db.execute(select(User).where(User.id.in_(user_ids))))
-            .scalars()
-            .all()
-        )
-        for u in user_rows:
-            full = f"{u.first_name or ''} {u.last_name or ''}".strip()
-            evaluator_names[u.id] = full or u.email
-
-    manager_entries: list[dict] = []
-    for hs in sorted(
-        human_rows,
-        key=lambda r: r.updated_at or r.created_at or _EPOCH,
-        reverse=True,
-    ):
-        if hs.evaluator_id is not None:
-            label = evaluator_names.get(hs.evaluator_id) or "Evaluator"
-        else:
-            label = hs.evaluator_name or "Invited evaluator"
-        manager_entries.append(
-            {
-                "evaluator_label": label,
-                "evaluator_id": hs.evaluator_id,
-                "invite_id": hs.invite_id,
-                "score": float(hs.score) if hs.score is not None else None,
-                "comment": hs.comment,
-                "updated_at": hs.updated_at,
-                "version": hs.version,
-            }
-        )
+    manager_entries: list[dict] = [
+        {
+            "evaluator_label": entry["evaluator_label"],
+            "evaluator_id": entry["evaluator_id"],
+            "invite_id": entry["invite_id"],
+            "score": entry["score"],
+            "comment": entry["comment"],
+            "updated_at": entry["updated_at"],
+            "version": entry["version"],
+        }
+        for entry in manager_index.get(cv.id, {}).get(str(competence_id), [])
+    ]
 
     interview_rows = (
         (
@@ -1950,7 +2244,9 @@ async def get_assessment_matrix_cell_detail(
     ai_history: list[dict] = []
     for idx, ai in enumerate(ai_sorted):
         entry = {
-            "score": float(ai.score) if ai.score is not None else None,
+            # Raw 0..1 on the row, tenant scale in the payload — exactly
+            # what the matrix cell does with the same number.
+            "score": compute_normalized_ai_score(ai.score, max_score),
             "status": _normalize_ai_status(ai.status),
             "reasoning": ai.reasoning,
             "citations": ai.citations or [],
@@ -1961,6 +2257,22 @@ async def get_assessment_matrix_cell_detail(
             latest_ai = entry
         else:
             ai_history.append(entry)
+
+    if latest_ai is None:
+        # Resume-only candidates have no AIAssessment rows at all; the
+        # cell falls back to the active analysis run, so the popover must
+        # too, or it claims "no AI opinion" next to a filled-in cell.
+        run_cells = await _load_ai_run_cell_scores(db, tenant_id, [cv.id])
+        run_entry = run_cells.get(cv.id, {}).get(str(competence_id))
+        if run_entry is not None:
+            latest_ai = {
+                "score": compute_normalized_ai_score(run_entry["score"], max_score),
+                "status": run_entry["status"],
+                "reasoning": run_entry.get("reasoning"),
+                "citations": [],
+                "interview_id": run_entry.get("interview_id"),
+                "updated_at": run_entry.get("updated_at"),
+            }
 
     return {
         "candidate_vacancy_id": cv.id,

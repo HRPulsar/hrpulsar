@@ -23,7 +23,16 @@ const eslintConfig = defineConfig([
     // guarded by review. Punctuation/glyph-only strings are allowed below.
     // Intentional English surfaces carry a targeted eslint-disable with a
     // reason (e.g. global-error.tsx renders outside NextIntlClientProvider).
-    files: ["src/app/**/*.tsx", "src/components/**/*.tsx"],
+    // HRP-512: src/lib, src/hooks and src/context render JSX too
+    // (turnstile gate, ws provider, ee hooks) — they were outside the
+    // original scope and drifted back into English literals.
+    files: [
+      "src/app/**/*.tsx",
+      "src/components/**/*.tsx",
+      "src/lib/**/*.tsx",
+      "src/hooks/**/*.tsx",
+      "src/context/**/*.tsx",
+    ],
     rules: {
       "react/jsx-no-literals": [
         "error",
@@ -47,7 +56,6 @@ const eslintConfig = defineConfig([
             ".",
             ",",
             "#",
-            "$",
             "…",
             "...",
             "✓",

@@ -41,6 +41,11 @@ export interface SessionParams {
    * list views and the AI-generate page can show "Generating matrix for
    * position 'X'" without hitting the positions endpoint. */
   position_title?: string | null;
+  /** HRP-509: the action this session was priced with, pinned by the
+   * backend when the session was created. A re-run re-charges exactly this
+   * action, so the UI must quote it rather than assume the start price —
+   * a session created by Refine bills at the refine price. Read-only. */
+  billing_action?: string | null;
 }
 
 export interface GeneratedIndicator {

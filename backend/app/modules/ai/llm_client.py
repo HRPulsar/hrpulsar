@@ -19,6 +19,8 @@ from google import genai
 from pydantic import BaseModel
 
 from app.config import settings
+from app.core import url_guard
+from app.core.errors import AppError
 from app.modules.ai import model_registry, providers
 
 if TYPE_CHECKING:
@@ -78,6 +80,10 @@ _EVICTED_CLIENT_GRACE_S = 1800.0
 _pending_closes: set[asyncio.Task[None]] = set()
 
 
+# The cache key omits deployment mode, the operator allowlist and the
+# proxy env — all read once, when the client is built (HRP-505). Those are
+# process-immutable in production, so a cached client never needs to
+# re-evaluate the guard; tests that monkeypatch them must clear the cache.
 def _cache_key(
     provider: str, api_key: str | None, base_url: str | None
 ) -> tuple[str, str, str]:
@@ -161,11 +167,30 @@ def _get_openai(
         effective_key = api_key or (
             "not-needed" if base_url else settings.openai_api_key
         )
+        # HRP-505 request-time SSRF layer: on saas a tenant-supplied
+        # base_url gets a client that re-validates DNS and pins the public
+        # IP on every request, with redirects disabled (the record may
+        # have changed since save-time validation). None → SDK default
+        # (onprem, platform endpoint, operator allowlist).
+        http_client: httpx.AsyncClient | None = None
+        if base_url is not None:
+            http_client = url_guard.tenant_endpoint_http_client(
+                base_url,
+                error_code="llm_base_url_not_public",
+                timeout=httpx.Timeout(600.0, connect=30.0),
+            )
+        # A guarded client rejects a blocked endpoint deterministically —
+        # the SDK's default 3 retries would only re-resolve and re-reject
+        # it (4 DNS lookups, ~3 s) while burying the guard's AppError under
+        # an opaque APIConnectionError. One attempt; transient upstream
+        # retries on a tenant endpoint are the caller's concern (HRP-505).
+        max_retries = 0 if http_client is not None else 3
         client = openai.AsyncOpenAI(
             api_key=effective_key,
             base_url=base_url,
-            max_retries=3,
+            max_retries=max_retries,
             timeout=httpx.Timeout(600.0, connect=30.0),
+            http_client=http_client,
         )
         _cache_put(key, client)
     return client
@@ -417,7 +442,16 @@ async def _generate_openai(
     else:
         kwargs["temperature"] = temperature
         kwargs["max_tokens"] = max_tokens
-    response = await client.chat.completions.create(**kwargs)
+    try:
+        response = await client.chat.completions.create(**kwargs)
+    except openai.APIConnectionError as exc:
+        # The request-time SSRF guard raises AppError from inside the
+        # transport; the SDK wraps any send-time exception as a connection
+        # error. Surface the guard's code so the tenant sees why the call
+        # was refused instead of an opaque "Connection error" (HRP-505).
+        if isinstance(exc.__cause__, AppError):
+            raise exc.__cause__ from exc
+        raise
     choice = response.choices[0]
     if choice.finish_reason == "length":
         raise LLMOutputTruncatedError(model, max_tokens)

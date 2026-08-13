@@ -13,6 +13,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.currency import installation_currency
 from app.models import BaseModel, TenantMixin
 
 
@@ -286,7 +287,12 @@ class Compensation(BaseModel, TenantMixin):
     amount: Mapped[int] = mapped_column(
         BigInteger, nullable=False
     )  # stored in minor units (cents)
-    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    # HRP-439: follows the installation (BILLING_CURRENCY) instead of a
+    # literal, so compensations on a EUR/RUB site default to that site's
+    # money like the salary ranges on the grade chain do.
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, default=installation_currency
+    )
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

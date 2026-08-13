@@ -7,7 +7,9 @@ from unittest.mock import patch
 import pytest
 from app.config import settings
 from app.core.crypto import encrypt_secret
+from app.core.errors import AppError
 from app.modules.ai import providers
+from app.modules.ai.models import ModelCatalogEntry
 from app.modules.recruitment.models import LLMProviderConfig
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -439,6 +441,121 @@ class TestResolveGenerationTarget:
         fallback = providers._fallback_target("claude-sonnet-5")
         assert fallback.provider == "anthropic"
         assert fallback.source == "global"
+
+
+# ---------------------------------------------------------------------------
+# HRP-502: a model no prefix owns must not ride the platform default
+# ---------------------------------------------------------------------------
+
+
+class TestUnclassifiableModelDispatch:
+    """Both resolvers funnel through ``_fallback_target``, so the routing
+    decision is asserted there; the async path additionally proves the
+    catalog lookup is wired in."""
+
+    async def test_unknown_model_is_refused_when_the_default_has_no_key(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        """Nothing can serve it — a clear 422 beats a provider auth error."""
+        with (
+            patch.object(settings, "llm_provider", "anthropic"),
+            patch.object(settings, "anthropic_api_key", ""),
+            pytest.raises(AppError) as exc,
+        ):
+            await providers.resolve_generation_target(db, tenant.id, "mystery-9000")
+        assert exc.value.status_code == 422
+        assert exc.value.code == "llm_model_provider_unresolved"
+
+    async def test_a_configured_default_still_takes_an_unknown_name(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        """Review fix: an install on OpenAI with a key has always served
+        new OpenAI families whose prefix this table does not know yet —
+        refusing those would break a working setup."""
+        with (
+            patch.object(settings, "llm_provider", "openai"),
+            patch.object(settings, "openai_api_key", "sk-global"),
+        ):
+            target = await providers.resolve_generation_target(
+                db, tenant.id, "chatgpt-brand-new"
+            )
+        assert target.provider == "openai"
+        assert target.source == "global"
+
+    def test_the_silent_celery_path_keeps_working(self) -> None:
+        """ai/tasks.py resolves with no model pinned and no session of its
+        own — that path must never raise."""
+        with (
+            patch.object(settings, "llm_provider", "anthropic"),
+            patch.object(settings, "anthropic_api_key", ""),
+        ):
+            assert providers._fallback_target(None).provider == "anthropic"
+
+    async def test_catalog_resolves_a_model_no_prefix_owns(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # A newly named OpenAI family the prefix table has never heard of:
+        # the discovery sweep recorded whose API listed it.
+        db.add(
+            ModelCatalogEntry(
+                provider="openai",
+                model_id="chatgpt-next",
+                label="ChatGPT Next",
+                status="approved",
+                enabled=True,
+                source="discovered",
+            )
+        )
+        await db.commit()
+
+        with patch.object(settings, "llm_provider", "anthropic"):
+            target = await providers.resolve_generation_target(
+                db, tenant.id, "chatgpt-next"
+            )
+        assert target.provider == "openai"
+        assert target.source == "global"
+
+    async def test_prefix_still_wins_without_touching_the_catalog(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # A classifiable id must not pay for a catalog query.
+        from app.modules.ai import model_catalog_service
+
+        with patch.object(
+            model_catalog_service,
+            "provider_for_model",
+            side_effect=AssertionError("catalog queried for a classifiable model"),
+        ):
+            target = await providers.resolve_generation_target(
+                db, tenant.id, "gemini-2.5-pro"
+            )
+        assert target.provider == "gemini"
+
+    async def test_no_model_requested_still_uses_the_platform_default(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # The recruitment pipeline pins no model — that is not an error.
+        with patch.object(settings, "llm_provider", "anthropic"):
+            target = await providers.resolve_generation_target(db, tenant.id, None)
+        assert target.provider == "anthropic"
+
+    def test_a_local_default_may_serve_arbitrary_names(self) -> None:
+        # Self-hosted installs name their models freely; refusing there
+        # would break the very setup that has no prefix to match.
+        with patch.object(settings, "llm_provider", "openai_compatible"):
+            target = providers._fallback_target("qwen2.5-72b")
+        assert target.provider == "openai_compatible"
+
+    def test_catalog_answer_is_honoured_by_the_shared_fallback(self) -> None:
+        with patch.object(settings, "llm_provider", "anthropic"):
+            target = providers._fallback_target("mystery-9000", "gemini")
+        assert target.provider == "gemini"
+
+    def test_catalog_answer_is_canonicalized(self) -> None:
+        # Catalog rows may carry a legacy provider name.
+        with patch.object(settings, "llm_provider", "anthropic"):
+            target = providers._fallback_target("mystery-9000", "claude")
+        assert target.provider == "anthropic"
 
 
 # ---------------------------------------------------------------------------

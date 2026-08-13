@@ -16,6 +16,7 @@ import { cookies, headers } from "next/headers";
 import { FALLBACK_LOCALE } from "@/lib/locale";
 import { EE_CATALOGS } from "@/lib/locale-ee";
 import { NEXT_LOCALE_COOKIE, resolveRequestLocale } from "./config";
+import { mergeCatalogs, type Messages } from "./merge";
 
 // Static catalog map: an unknown locale is a plain map miss (falls back
 // to English) instead of a module-resolution crash that would 500 every
@@ -28,16 +29,37 @@ const CATALOGS: Record<string, () => Promise<{ default: unknown }>> = {
   ...EE_CATALOGS,
 };
 
+// The merged catalog is identical for every request in a locale — the
+// inputs are static imports — so it is built once instead of deep-copying
+// ~4300 keys on each SSR pass of a non-en locale. Bounded by the number
+// of shipped catalogs; nothing invalidates it because nothing can change
+// it without a new process.
+const mergedCatalogs = new Map<string, Messages>();
+
+async function catalogFor(locale: string): Promise<Messages> {
+  const cached = mergedCatalogs.get(locale);
+  if (cached) return cached;
+  const fallback = (await CATALOGS[FALLBACK_LOCALE]()).default as Messages;
+  // HRP-511 (g): lay the locale over English so a key missing from it
+  // renders the English string instead of the raw dotted key — the
+  // promise in ADDING_A_LANGUAGE.md. Merging here (rather than via
+  // getMessageFallback) costs no client bundle and covers the client
+  // tree too, since these are the messages the provider serializes.
+  const messages =
+    locale === FALLBACK_LOCALE
+      ? fallback
+      : mergeCatalogs(fallback, (await CATALOGS[locale]()).default as Messages);
+  mergedCatalogs.set(locale, messages);
+  return messages;
+}
+
 export default getRequestConfig(async () => {
   const cookieStore = await cookies();
   const requestHeaders = await headers();
-  const locale = resolveRequestLocale(
+  const requested = resolveRequestLocale(
     cookieStore.get(NEXT_LOCALE_COOKIE)?.value,
     requestHeaders.get("accept-language"),
   );
-  const loadCatalog = CATALOGS[locale] ?? CATALOGS[FALLBACK_LOCALE];
-  return {
-    locale: CATALOGS[locale] ? locale : FALLBACK_LOCALE,
-    messages: (await loadCatalog()).default as Record<string, unknown>,
-  };
+  const locale = CATALOGS[requested] ? requested : FALLBACK_LOCALE;
+  return { locale, messages: await catalogFor(locale) };
 });

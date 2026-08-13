@@ -136,7 +136,10 @@ class TestSendNotificationLocale:
 
         assert len(sent_emails) == 1
         assert sent_emails[0]["subject"] == "Hallo Max"
-        assert sent_emails[0]["body"] == "Text für Max"
+        # HRP-568: the fragment is delivered inside the branded layout,
+        # whose lang/footer follow the de template row.
+        assert "Text für Max" in sent_emails[0]["body"]
+        assert '<html lang="de">' in sent_emails[0]["body"]
 
     async def test_missing_de_row_falls_back_to_en(
         self, db: AsyncSession, tenant, user, sent_emails, locales_de_en
@@ -203,3 +206,64 @@ class TestRenderLocaleMechanism:
         _, html_en = render_verification_email("tok")
         assert "E-Mail bestätigen" in html_de
         assert "E-Mail bestätigen" not in html_en
+
+
+class TestPublicLinkLocale:
+    """HRP-516: invitation links to signed-out pages carry the recipient's
+    locale, so the form opens in the language the email was written in
+    instead of whatever the recipient's browser asks for."""
+
+    @pytest.mark.parametrize("locale", ["en", "de"])
+    def test_public_link_picks_the_right_separator(self, locales_de_en, locale):
+        """A path that already has a query must not get a second ``?`` —
+        /accept-invite carries the token there."""
+        from app.core.email_templates import public_link
+
+        assert public_link("/review/tok", locale).endswith(f"/review/tok?lang={locale}")
+        assert public_link("/accept-invite?token=tok", locale).endswith(
+            f"/accept-invite?token=tok&lang={locale}"
+        )
+
+    @pytest.mark.parametrize("locale", ["en", "de"])
+    def test_token_page_links_carry_lang(self, locales_de_en, locale):
+        """Invitation and external-review links open the same language the
+        email was written in (HRP-516)."""
+        from app.core.email_templates import (
+            render_external_review_email,
+            render_invitation_email,
+            render_invitation_reminder_email,
+        )
+
+        for html in (
+            render_invitation_email("Ada", "tok", locale=locale)[1],
+            render_invitation_reminder_email("Ada", "tok", locale=locale)[1],
+        ):
+            assert f"/accept-invite?token=tok&lang={locale}" in html
+            assert "?token=tok?" not in html
+
+        review = render_external_review_email("tok", "Review", locale=locale)[1]
+        assert f"/review/tok?lang={locale}" in review
+
+    @pytest.mark.parametrize("locale", ["en", "de"])
+    def test_every_public_invitation_link_carries_lang(self, locales_de_en, locale):
+        from app.core.email_templates import (
+            render_manager_assessment_invite_email,
+            render_recruitment_consent_email,
+            render_recruitment_invite_email,
+        )
+
+        rendered = [
+            render_recruitment_invite_email("tok", "Ada", locale=locale)[1],
+            render_manager_assessment_invite_email("tok", "Ada", locale=locale)[1],
+            render_recruitment_consent_email("tok", "Ada", "body", locale=locale)[1],
+        ]
+        for path, html in zip(
+            [
+                "/recruitment/invite/tok",
+                "/public/assessments/tok",
+                "/recruitment/consent/tok",
+            ],
+            rendered,
+            strict=True,
+        ):
+            assert f"{path}?lang={locale}" in html

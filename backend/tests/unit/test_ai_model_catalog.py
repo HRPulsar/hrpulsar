@@ -23,10 +23,38 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 def _registry_guard():
-    """Restore the in-memory whitelist mutated by upsert_allowed_model."""
-    snapshot = ai_settings_service.list_allowed_models()
+    """Restore the model registry mutated by moderation upserts.
+
+    Snapshots the *curated* list (the config as registered at boot) so the
+    restore also resets `curated_models()` — billing inheritance reads that
+    one, and a test that leaves a runtime entry promoted to curated would
+    silently price the next test's rows.
+    """
+    snapshot = ai_settings_service.curated_models()
     yield
     ai_settings_service.register_models(snapshot)
+
+
+def _price_in_config(model_id: str, multiplier: float, provider: str = "anthropic"):
+    """Declare a model price the way credits.yaml does at boot.
+
+    Not `upsert_allowed_model`: that mutates the live whitelist of one
+    worker only, and billing inheritance deliberately ignores it (review
+    #7). Tests that mean "this family is priced in the config" must go
+    through the curated registration.
+    """
+    others = [e for e in ai_settings_service.curated_models() if e["model"] != model_id]
+    ai_settings_service.register_models(
+        others
+        + [
+            {
+                "provider": provider,
+                "model": model_id,
+                "label": model_id,
+                "credit_multiplier": multiplier,
+            }
+        ]
+    )
 
 
 class TestNormalization:
@@ -104,22 +132,19 @@ class TestDiscoveryClassification:
         self, db: AsyncSession, _registry_guard
     ) -> None:
         # A curated-style family: catalog row carries NULL, the price lives
-        # in the in-memory registry under the dateless id. The snapshot must
-        # materialize the effective multiplier — otherwise it would bill 1.0.
+        # in the config under the family id. The snapshot must resolve to
+        # that price — otherwise it would bill 1.0.
+        #
+        # HRP-544: the price is inherited, not frozen into the row. Copying
+        # the config value at discovery time made later credits.yaml edits
+        # unreachable (and unresettable — the update schema rejects NULL).
         base_id = f"claude-family-{uuid.uuid4().hex[:6]}"
         await model_catalog_service.seed_from_registry(db)
         with patch.object(settings, "deployment_mode", "onprem"):
             await model_catalog_service.upsert_discovered(
                 db, "anthropic", [{"model_id": base_id, "label": base_id}]
             )
-        ai_settings_service.upsert_allowed_model(
-            {
-                "provider": "anthropic",
-                "model": base_id,
-                "label": base_id,
-                "credit_multiplier": 2.2,
-            }
-        )
+        _price_in_config(base_id, 2.2)
         snap_id = f"{base_id}-20260901"
         with patch.object(settings, "deployment_mode", "saas"):
             stats = await model_catalog_service.upsert_discovered(
@@ -131,7 +156,94 @@ class TestDiscoveryClassification:
         assert snapshot.status == "approved"
         assert snapshot.tier == rows[base_id].tier
         assert snapshot.source == "discovered"
-        assert snapshot.credit_multiplier == pytest.approx(2.2)
+        # The column stays NULL ("inherit"), and every read path — billing
+        # and the picker projection — resolves it to the family price.
+        assert snapshot.credit_multiplier is None
+        assert await model_catalog_service.stored_multiplier(
+            db, snap_id
+        ) == pytest.approx(2.2)
+        quoted = {
+            e["model"]: e["credit_multiplier"]
+            for e in model_catalog_service.to_read_dicts([snapshot])
+        }
+        assert quoted[snap_id] == pytest.approx(2.2)
+
+    async def test_snapshot_of_a_dated_curated_family_keeps_its_price(
+        self, db: AsyncSession, _registry_guard
+    ) -> None:
+        """Review #1 — a curated id can itself be dated.
+
+        `claude-haiku-4-5-20251001` is priced in credits.yaml at 0.4 while
+        its dateless form appears nowhere. Discovery approves a re-dated
+        snapshot of it (the family lookup finds the price), but resolving
+        the snapshot by exact id and by dateless id both missed — so the
+        row billed at a silent 1.0 while the picker showed 0.4.
+        """
+        curated = "claude-haiku-4-5-20251001"
+        snapshot = "claude-haiku-4-5-20260315"
+        await model_catalog_service.seed_from_registry(db)
+        with patch.object(settings, "deployment_mode", "saas"):
+            stats = await model_catalog_service.upsert_discovered(
+                db, "anthropic", [{"model_id": snapshot, "label": "snap"}]
+            )
+
+        curated_price = next(
+            e["credit_multiplier"]
+            for e in ai_settings_service.curated_models()
+            if e["model"] == curated
+        )
+        assert stats["new_versions"] == 1, "snapshot should inherit the family"
+        assert await model_catalog_service.stored_multiplier(
+            db, snapshot
+        ) == pytest.approx(curated_price)
+
+    async def test_null_resolution_ignores_runtime_registry_entries(
+        self, db: AsyncSession, _registry_guard
+    ) -> None:
+        """Review #7 — inheritance must not depend on which worker ran the
+        moderation upsert, so it reads the curated config, not the live
+        whitelist that `upsert_allowed_model` mutates in one process."""
+        base_id = f"claude-detatched-{uuid.uuid4().hex[:6]}"
+        await model_catalog_service.seed_from_registry(db)
+        with patch.object(settings, "deployment_mode", "onprem"):
+            await model_catalog_service.upsert_discovered(
+                db, "anthropic", [{"model_id": base_id, "label": base_id}]
+            )
+        # A runtime-only registry entry: present in this worker, absent in
+        # its siblings. It must not become a billing price.
+        ai_settings_service.upsert_allowed_model(
+            {
+                "provider": "anthropic",
+                "model": base_id,
+                "label": base_id,
+                "credit_multiplier": 2.2,
+            }
+        )
+        assert await model_catalog_service.stored_multiplier(db, base_id) is None
+
+    async def test_registry_reprice_reaches_an_existing_snapshot(
+        self, db: AsyncSession, _registry_guard
+    ) -> None:
+        """HRP-544: editing the config price moves an already-discovered
+        snapshot, instead of stopping at the value frozen at discovery."""
+        base_id = f"claude-family-{uuid.uuid4().hex[:6]}"
+        await model_catalog_service.seed_from_registry(db)
+        with patch.object(settings, "deployment_mode", "onprem"):
+            await model_catalog_service.upsert_discovered(
+                db, "anthropic", [{"model_id": base_id, "label": base_id}]
+            )
+        _price_in_config(base_id, 2.2)
+        snap_id = f"{base_id}-20260901"
+        with patch.object(settings, "deployment_mode", "saas"):
+            await model_catalog_service.upsert_discovered(
+                db, "anthropic", [{"model_id": snap_id, "label": "snap"}]
+            )
+
+        # Reprice the family in the config.
+        _price_in_config(base_id, 3.4)
+        assert await model_catalog_service.stored_multiplier(
+            db, snap_id
+        ) == pytest.approx(3.4)
 
     async def test_snapshot_of_unpriced_family_is_pending_under_saas(
         self, db: AsyncSession

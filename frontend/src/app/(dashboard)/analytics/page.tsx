@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { API_BASE } from "@/lib/api-base";
+// HRP-512: salary benchmarks are money — the currency comes from the
+// site profile (NEXT_PUBLIC_BILLING_CURRENCY), never a hardcoded "$".
+import { formatMoney, getBillingCurrency } from "@/lib/currency";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -192,7 +195,7 @@ export default function AnalyticsPage() {
                           <TableRow key={row.grade_id}>
                             <TableCell className="font-medium">{row.grade_title}</TableCell>
                             <TableCell className="text-right">
-                              ${(row.avg_salary / 100).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              {formatMoney(row.avg_salary / 100, getBillingCurrency(), locale)}
                             </TableCell>
                             <TableCell className="text-right text-muted-foreground">{row.count}</TableCell>
                           </TableRow>
@@ -223,7 +226,7 @@ export default function AnalyticsPage() {
                           <TableRow key={row.specialization_id}>
                             <TableCell className="font-medium">{row.specialization_title}</TableCell>
                             <TableCell className="text-right">
-                              ${(row.avg_salary / 100).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              {formatMoney(row.avg_salary / 100, getBillingCurrency(), locale)}
                             </TableCell>
                             <TableCell className="text-right text-muted-foreground">{row.count}</TableCell>
                           </TableRow>

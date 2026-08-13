@@ -17,9 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.core import rbac_hooks
 from app.core.errors import AppError
-from app.modules.auth.models import Role, User, user_roles
+from app.modules.auth.models import User
 from app.modules.company.models import Division
 from app.modules.position.models import Position
 from app.modules.recruitment.common import (
@@ -271,19 +270,36 @@ async def _set_vacancy_spec_grade_links(
             )
 
 
-def _admin_tier_users_query(tenant_id: uuid.UUID):
-    """HRP-360: active admin-tier users of the tenant — the single SQL
-    definition of hiring-manager eligibility, shared by the picker and
-    the validators (``rbac_hooks.admin_equivalent_codes`` — EE adds
-    ``platform_admin`` on top of the community ``admin``)."""
+def _eligible_hiring_manager_query(tenant_id: uuid.UUID):
+    """Active users of the tenant — the single SQL definition of
+    hiring-manager eligibility, shared by the picker and the validators.
+
+    HRP-441: eligibility used to be the admin tier (HRP-360), which left
+    the actual hiring managers — heads of department, team leads, anyone
+    holding the ``hiring_manager``/``hr``/``recruiter`` role — out of the
+    picker. Any active member of the tenant can now own a vacancy. The
+    role still governs what they may *do*; it no longer governs whether
+    a recruiter may name them on the requisition.
+
+    Somebody who has left is filtered out through their Employee card.
+    The card cannot be *required*, though: it is only created when an
+    invitation named a division or a position, and the self-registered
+    owner of the workspace never gets one — requiring it would drop the
+    very users who were the only eligible managers before HRP-441 and
+    would 422 every edit of the vacancies they already own.
+    """
+    from app.modules.employee.models import Employee
+
+    terminated_staff = select(Employee.user_id).where(
+        Employee.tenant_id == tenant_id,
+        Employee.status != "active",
+    )
     return (
         select(User.id, User.first_name, User.last_name, User.email)
-        .join(user_roles, user_roles.c.user_id == User.id)
-        .join(Role, Role.id == user_roles.c.role_id)
         .where(
             User.tenant_id == tenant_id,
             User.is_active.is_(True),
-            Role.code.in_(rbac_hooks.admin_equivalent_codes()),
+            User.id.not_in(terminated_staff),
         )
         .distinct()
     )
@@ -294,7 +310,7 @@ async def _is_hiring_manager_eligible(
 ) -> bool:
     row = (
         await db.execute(
-            _admin_tier_users_query(tenant_id).where(User.id == user_id).limit(1)
+            _eligible_hiring_manager_query(tenant_id).where(User.id == user_id).limit(1)
         )
     ).first()
     return row is not None
@@ -303,8 +319,8 @@ async def _is_hiring_manager_eligible(
 async def _validate_hiring_manager(
     db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
-    """HRP-360: reject a hiring manager who is not an active admin-tier
-    user of this tenant."""
+    """Reject a hiring manager who is not an active user of this tenant
+    (HRP-360, widened past the admin tier in HRP-441)."""
     if not await _is_hiring_manager_eligible(db, tenant_id, user_id):
         raise AppError(
             "hiring_manager_invalid",
@@ -315,9 +331,11 @@ async def _validate_hiring_manager(
 async def list_hiring_manager_options(
     db: AsyncSession, tenant_id: uuid.UUID
 ) -> list[dict]:
-    """Active admin-tier users eligible as vacancy hiring manager (HRP-360)."""
+    """Active tenant users eligible as vacancy hiring manager (HRP-441)."""
     rows = await db.execute(
-        _admin_tier_users_query(tenant_id).order_by(User.first_name, User.last_name)
+        _eligible_hiring_manager_query(tenant_id).order_by(
+            User.first_name, User.last_name
+        )
     )
     return [
         {
@@ -356,10 +374,9 @@ async def create_vacancy(
         if isinstance(val, str):
             payload[col] = uuid.UUID(val)
 
-    # HRP-360: default the hiring manager to the creating user — but only
-    # when the creator is admin-tier (a recruiter-created vacancy must not
-    # carry a hiring manager the picker can never show). Explicit values
-    # are validated uniformly, including self-assignment.
+    # HRP-360: default the hiring manager to the creating user, as long as
+    # the picker can show them (HRP-441: any active tenant member). Explicit
+    # values are validated uniformly, including self-assignment.
     if payload.get("hiring_manager_id") is None:
         if await _is_hiring_manager_eligible(db, tenant_id, user_id):
             payload["hiring_manager_id"] = user_id
@@ -1315,7 +1332,9 @@ async def close_vacancy(
 
     Set status='closed', closed_at=now(), close_resolution, close_reason.
     If resolution='hired' and hired_candidate_id provided, set that
-    candidate_vacancy status to 'hired'.
+    candidate_vacancy status to 'hired' and move it onto the funnel's
+    terminal-positive stage (HRP-425 — the analytics tiles count stages,
+    so closing a vacancy has to leave the funnel telling the same story).
     """
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
 
@@ -1335,6 +1354,27 @@ async def close_vacancy(
         cv = result.scalar_one_or_none()
         if cv:
             cv.status = "hired"
+            stages = await _get_applicable_stages(db, tenant_id, vacancy_id)
+            hired_stage = next(
+                (s for s in stages if s.stage_type == "terminal_positive"), None
+            )
+            if hired_stage is not None and cv.stage_id != hired_stage.id:
+                history = list(cv.status_history or [])
+                history.append(
+                    {
+                        "from_stage_id": str(cv.stage_id) if cv.stage_id else None,
+                        "to_stage_id": str(hired_stage.id),
+                        "changed_at": datetime.now(timezone.utc).isoformat(),
+                        "comment": "vacancy closed as hired",
+                    }
+                )
+                cv.stage_id = hired_stage.id
+                cv.status_history = history
+            # The row's ETag is W/"{version}". Closing the vacancy edits
+            # the link (status, and usually the stage), so the version has
+            # to move or a request holding the pre-close ETag would pass
+            # its If-Match check and quietly overwrite the Hired stage.
+            cv.version = (cv.version or 1) + 1
 
     await db.commit()
     # See update_vacancy comment — refresh both ``updated_at`` (server

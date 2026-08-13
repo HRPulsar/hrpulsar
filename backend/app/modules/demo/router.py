@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.client_ip import client_ip
 from app.core.errors import AppError
+from app.core.i18n import resolve_locale_from_request
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
@@ -115,7 +116,7 @@ async def save_demo_access(
         remote_ip=_client_ip(request),
         source="demo",
         demo_tenant_id_snapshot=current_user.tenant_id,
-        accept_language=request.headers.get("accept-language"),
+        request_locale=resolve_locale_from_request(request),
     )
     return DemoSaveAccessResponse(
         signup_request_id=row.id,

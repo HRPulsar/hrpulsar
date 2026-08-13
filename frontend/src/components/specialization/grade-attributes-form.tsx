@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { getDefaultSalaryCurrency } from "@/lib/currency";
 import type { SpecializationGrade } from "@/lib/api/specializations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,8 +28,10 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
   const [salaryMax, setSalaryMax] = useState(
     grade.salary_max == null ? "" : String(grade.salary_max),
   );
+  // HRP-439: a grade with no currency yet falls back to the installation's
+  // own, not to a literal that is wrong everywhere but one site.
   const [salaryCurrency, setSalaryCurrency] = useState(
-    grade.salary_currency || "RUB",
+    grade.salary_currency || getDefaultSalaryCurrency(),
   );
   const [saving, setSaving] = useState(false);
 

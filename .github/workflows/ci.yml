@@ -64,6 +64,19 @@ jobs:
           REDIS_URL: redis://localhost:6379
           JWT_SECRET: test-secret
 
+      # HRP-540: the suite above builds its schema with
+      # Base.metadata.create_all, so it cannot see a model that drifted away
+      # from its migrations. This step replays `alembic upgrade heads` into a
+      # scratch database and diffs it against the models. It is marked
+      # `migrations` and excluded from the default run to keep the unit
+      # suite fast.
+      - name: Schema drift guard (models vs migrations)
+        run: cd backend && pytest tests/unit/test_schema_drift.py -m migrations -v --tb=short
+        env:
+          DATABASE_URL: postgresql+asyncpg://hrpulsar:hrpulsar@localhost:5432/hrpulsar_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret
+
   frontend:
     runs-on: ubuntu-latest
     steps:

@@ -1,6 +1,15 @@
-import { Page } from "@playwright/test";
+import { expect, test, Page } from "@playwright/test";
 
-export const API_BASE = "http://localhost:8100/api";
+/**
+ * Backend API root.
+ *
+ * Defaults to the standard local/CI stack. `E2E_API_BASE` overrides it so a
+ * git worktree can be driven on its own ports (scripts/new-worktree.sh gives
+ * every branch a deterministic offset) without two branches racing for 8100
+ * — and, worse, one branch's specs silently writing into the other's database.
+ */
+export const API_BASE =
+  process.env.E2E_API_BASE ?? "http://localhost:8100/api";
 
 // ---------------------------------------------------------------------------
 // Unique generators
@@ -28,6 +37,48 @@ export const SAAS_E2E = process.env.DEPLOYMENT_MODE === "saas";
  * against a single-locale stack skips them instead of failing. */
 export const MULTI_LOCALE_E2E =
   (process.env.AVAILABLE_LOCALES ?? "").split(",").filter(Boolean).length > 1;
+
+/**
+ * Locales the stand under test actually serves, read from the runtime env
+ * script (window.__ENV__) rather than the Playwright process env.
+ *
+ * Call after a page has loaded — __ENV__ is injected by the app layout.
+ */
+export async function standAvailableLocales(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const env = (window as unknown as {
+      __ENV__?: Record<string, string | undefined>;
+    }).__ENV__;
+    return (env?.NEXT_PUBLIC_AVAILABLE_LOCALES ?? "")
+      .split(",")
+      .map((code) => code.trim())
+      .filter(Boolean);
+  });
+}
+
+/**
+ * Gate a locale-dependent assertion on the stand, not on hearsay
+ * (HRP-511 e).
+ *
+ * MULTI_LOCALE_E2E only describes the Playwright process. If the frontend
+ * was started without NEXT_PUBLIC_AVAILABLE_LOCALES, the flag said
+ * "multi-locale" while the switcher was not rendered at all — the specs
+ * then failed with a mystery timeout, or (in the mirror case) skipped and
+ * reported green while covering nothing. The two must agree; disagreement
+ * is a misconfigured stand and is reported as such.
+ */
+export async function skipUnlessMultiLocaleStand(page: Page): Promise<void> {
+  const locales = await standAvailableLocales(page);
+  const standIsMultiLocale = locales.length > 1;
+  expect(
+    standIsMultiLocale,
+    `stand serves [${locales.join(",")}] but the Playwright process has ` +
+      `AVAILABLE_LOCALES=${process.env.AVAILABLE_LOCALES ?? "<unset>"} — ` +
+      "set the same locale list on backend, frontend and Playwright " +
+      "(HRP-481 multi-locale contract)",
+  ).toBe(MULTI_LOCALE_E2E);
+  test.skip(!standIsMultiLocale, "requires AVAILABLE_LOCALES=de,en");
+}
 
 // ---------------------------------------------------------------------------
 // Auth helpers

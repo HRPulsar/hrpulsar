@@ -41,6 +41,7 @@ from app.modules.recruitment.schemas import (
     QuestionsPDFExportRequest,
     QuestionUpdate,
     QuestionUpdate2,
+    VacancyQuestionsRead,
 )
 
 router = APIRouter(tags=["recruitment"])
@@ -486,6 +487,30 @@ async def list_candidate_question_sets(
 ):
     return await question_service.list_question_sets(
         db, current_user.tenant_id, candidate_id, vacancy_id=vacancy_id
+    )
+
+
+@router.get(
+    # The aggregator router carries no prefix — every sibling spells out
+    # ``/recruitment`` itself. Dropping it here published the route at
+    # /api/vacancies/... while the frontend called /api/recruitment/...
+    "/recruitment/vacancies/{vacancy_id}/question-sets",
+    response_model=VacancyQuestionsRead,
+)
+async def list_vacancy_question_sets(
+    vacancy_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    # Same gate as the enriched candidates listing: this payload is the
+    # vacancy's whole roster (names + the questions prepared for them),
+    # so it must not be enumerable by any authenticated employee.
+    current_user: User = Depends(
+        require_role("admin", "recruiter", "hrd", "hr", "hiring_manager")
+    ),
+):
+    """HRP-504: every candidate's latest question set for this vacancy,
+    plus the vacancy competences, for the Questions tab filters."""
+    return await question_service.list_vacancy_question_sets(
+        db, current_user.tenant_id, vacancy_id
     )
 
 

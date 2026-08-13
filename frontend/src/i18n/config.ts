@@ -4,7 +4,13 @@
  * Cookie-based next-intl setup without URL prefixes (see
  * docs/plans/I18N_PLAN.md): the effective locale of a request is
  *
- *   NEXT_LOCALE cookie > Accept-Language > deployment default
+ *   ?lang= > NEXT_LOCALE cookie > Accept-Language > deployment default
+ *
+ * (`?lang=` is the locale an invitation email put in its link. The proxy
+ * consumes it once — writes the cookie, then redirects to the same URL
+ * without it — so it cannot outrank a switch the user makes afterwards.
+ * Full table, both sides of the wire: docs/guides/ADDING_A_LANGUAGE.md,
+ * "Locale sources and their priority".)
  *
  * Auth is a Bearer token (no session cookie), so SSR cannot see
  * User.language / Tenant.default_locale — those levels of the chain are
@@ -85,6 +91,27 @@ export function setLocaleCookie(locale: string): void {
 export function clearLocaleCookie(): void {
   if (typeof document === "undefined") return;
   document.cookie = `${NEXT_LOCALE_COOKIE}=; path=/; max-age=0; SameSite=Lax`;
+}
+
+/** Header name the backend reads for the caller's effective locale. */
+export const LOCALE_HEADER = "X-Locale";
+
+/**
+ * Locale header for API calls (HRP-513), or `{}` when there is nothing
+ * to state.
+ *
+ * The NEXT_LOCALE cookie never reaches the backend when
+ * NEXT_PUBLIC_API_URL points at another origin (fetch defaults to
+ * `same-origin` credentials), so a de user got English error bodies on
+ * self-hosted and dev setups. Stating the locale explicitly is
+ * origin-independent, and unlike Accept-Language it describes the
+ * account's choice rather than the browser's.
+ *
+ * Mirrors resolve_locale_from_request in backend/app/core/i18n.py.
+ */
+export function localeRequestHeaders(): Record<string, string> {
+  const locale = normalizeLocale(readLocaleCookie());
+  return locale ? { [LOCALE_HEADER]: locale } : {};
 }
 
 export function readLocaleCookie(): string | undefined {

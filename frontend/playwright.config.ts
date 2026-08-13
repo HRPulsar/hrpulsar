@@ -1,5 +1,15 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// A worktree runs its own stack on offset ports (E2E_BASE_URL / E2E_API_BASE
+// in e2e/helpers.ts). Setting the override also means a stack is already up,
+// so the webServer block below must not spawn a second one on 3100.
+const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:3100";
+// Either override means a stack is already up. Reacting to E2E_API_BASE too
+// matters: with only that one set, spawning the default frontend would point
+// the main worktree's UI at this branch's backend.
+const EXTERNAL_STACK =
+  !!process.env.CI || !!process.env.E2E_BASE_URL || !!process.env.E2E_API_BASE;
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
@@ -8,7 +18,7 @@ export default defineConfig({
   workers: 1,
   reporter: "html",
   use: {
-    baseURL: "http://localhost:3100",
+    baseURL: BASE_URL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },
@@ -18,7 +28,7 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: process.env.CI
+  webServer: EXTERNAL_STACK
     ? undefined
     : [
         {

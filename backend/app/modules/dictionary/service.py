@@ -35,11 +35,19 @@ def _item_to_dict(item: DictionaryItem, is_active: bool | None = None) -> dict:
     }
 
 
-def _validate_type(item_type: str) -> None:
+def validate_item_type(item_type: str) -> None:
+    """Reject an item_type outside ``VALID_TYPES`` with a 400.
+
+    HRP-382: the public API validates through this same guard, so a typo in
+    an integration's item_type fails loudly instead of returning an empty
+    page. ``valid_types`` rides along machine-readable — the human-readable
+    ``valid`` string in the message is localised and must not be parsed.
+    """
     if item_type not in VALID_TYPES:
         raise AppError(
             "invalid_dictionary_type",
             status.HTTP_400_BAD_REQUEST,
+            detail_extra={"valid_types": sorted(VALID_TYPES)},
             item_type=item_type,
             valid=", ".join(sorted(VALID_TYPES)),
         )
@@ -105,7 +113,7 @@ async def origin_active_overrides(
 async def list_items(
     db: AsyncSession, tenant_id: uuid.UUID, item_type: str
 ) -> list[dict]:
-    _validate_type(item_type)
+    validate_item_type(item_type)
     result = await db.execute(
         select(DictionaryItem, DictionaryItemTenantOverride.is_active.label("override"))
         .outerjoin(
@@ -145,7 +153,7 @@ async def create_item(
     item_type: str,
     data: DictionaryItemCreate,
 ) -> dict:
-    _validate_type(item_type)
+    validate_item_type(item_type)
 
     # Check uniqueness within type + tenant
     existing = await db.execute(

@@ -14,7 +14,8 @@ from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
 from app.modules.company.models import Division
 from app.modules.dictionary.models import DictionaryItem
-from app.modules.dictionary.service import effective_is_active_expr
+from app.modules.dictionary.schemas import VALID_TYPES
+from app.modules.dictionary.service import effective_is_active_expr, validate_item_type
 from app.modules.employee.models import Employee
 from app.modules.public_api import service
 from app.modules.public_api.schemas import (
@@ -262,7 +263,38 @@ async def public_list_grades(
     }
 
 
-@router.get("/v1/dictionaries/{item_type}")
+@router.get(
+    "/v1/dictionaries/{item_type}",
+    summary="List dictionary items of one type",
+    description=(
+        "Returns the tenant's dictionary items for `item_type`.\n\n"
+        "Valid `item_type` values: "
+        + ", ".join(f"`{t}`" for t in sorted(VALID_TYPES))
+        + ".\n\nAn unknown `item_type` is rejected with `400` and an "
+        "`invalid_dictionary_type` error whose `detail.valid_types` lists "
+        "the accepted values."
+    ),
+    responses={
+        400: {
+            "description": "Unknown item_type.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "code": "invalid_dictionary_type",
+                            "message": (
+                                "Invalid dictionary type: speciality. Valid: "
+                                + ", ".join(sorted(VALID_TYPES))
+                            ),
+                            "valid_types": sorted(VALID_TYPES),
+                        },
+                        "code": "invalid_dictionary_type",
+                    }
+                }
+            },
+        }
+    },
+)
 @limiter.limit(settings.public_api_rate_limit)
 async def public_list_dictionaries(
     request: Request,
@@ -272,6 +304,9 @@ async def public_list_dictionaries(
     api_key=Depends(_get_tenant_from_api_key),
     db: AsyncSession = Depends(get_db),
 ):
+    # HRP-382: without this an integration with a typo in item_type got a
+    # 200 and an empty page, indistinguishable from "the tenant has none".
+    validate_item_type(item_type)
     rows, total = await _dictionary_items_page(
         db, api_key.tenant_id, item_type, skip, limit
     )

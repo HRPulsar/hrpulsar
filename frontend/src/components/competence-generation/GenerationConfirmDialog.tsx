@@ -17,16 +17,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { UsedDataTooltip } from "./UsedDataTooltip";
 import { WholeBaseContextPicker } from "./WholeBaseContextPicker";
 import { useCostConfirmation } from "@/hooks/use-cost-confirmation";
+import { startActionForScope } from "@/lib/billing-actions";
 import type { SessionScope } from "@/lib/api/competence-generation";
-
-const ACTION_KEY_BY_SCOPE: Record<SessionScope, string> = {
-  whole_base: "ai.generate_competences",
-  group: "ai.generate_competences",
-  competence_indicators: "ai.generate_indicators",
-  // specialization_matrix has its own dialog (`SpecializationAIGeneratePage`)
-  // and never reaches this confirm dialog; keep an entry to satisfy the type.
-  specialization_matrix: "ai_specialization_matrix.start",
-};
 
 export interface GenerationConfirmSubmit {
   with_indicators: boolean;
@@ -74,7 +66,7 @@ export function GenerationConfirmDialog({
   // tree renders them as locked.
   const [augmentExisting, setAugmentExisting] = useState(false);
   const [refinement, setRefinement] = useState("");
-  const cost = useCostConfirmation(ACTION_KEY_BY_SCOPE[scope]);
+  const cost = useCostConfirmation(startActionForScope(scope));
 
   // For competence_indicators scope the indicators flag is always true.
   const indicatorsFlagApplies = scope !== "competence_indicators";

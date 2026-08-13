@@ -18,6 +18,7 @@ try:  # noqa: SIM105
     from ee.models import (  # noqa: F401
         AuditLog,
         BlogPost,
+        CreditReservation,
         CreditTransaction,
         QuizCompletionEvent,
         TenantCredits,

@@ -34,6 +34,8 @@ import {
   AI_ANALYSIS_PRICING,
   AI_ANALYSIS_STAGES,
   aiAnalysisStageLabel,
+  aiNextStepLabel,
+  aiVerdictLabel,
   analysisStalenessKind,
   extractResumeExcerpts,
 } from "@/lib/recruitment-types";
@@ -683,8 +685,13 @@ function ActiveRunCard({
         {run.recommendation_for_next_step && (
           <div className="sm:col-span-2">
             <dt className="font-medium">{t("aiInsightsNextStep")}</dt>
-            <dd className="text-muted-foreground capitalize">
-              {run.recommendation_for_next_step.replaceAll("_", " ")}
+            {/* HRP-550: the four wire codes are translated, not de-slugged. */}
+            <dd
+              className="text-muted-foreground"
+              data-testid="ai-analysis-next-step"
+              data-next-step={run.recommendation_for_next_step}
+            >
+              {aiNextStepLabel(t, run.recommendation_for_next_step)}
             </dd>
           </div>
         )}
@@ -962,21 +969,26 @@ function VerdictPill({
   verdict: string;
   score: number | null;
 }) {
+  const t = useTranslations("recruitment");
   const map: Record<string, string> = {
     recommended: BADGE_COLOR.emerald,
     needs_check: BADGE_COLOR.amber,
     not_recommended: BADGE_COLOR.rose,
     pending: BADGE_COLOR.neutral,
   };
-  const label = verdict.replaceAll("_", " ");
+  // HRP-550: same wording as the AI VERDICT column (HRP-493) — the two
+  // surfaces used to disagree because this one printed the wire code.
+  const label = aiVerdictLabel(t, verdict);
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
         map[verdict] ?? map.pending,
       )}
+      data-testid="ai-analysis-verdict-pill"
+      data-verdict={verdict}
     >
-      <span className="capitalize">{label}</span>
+      <span>{label}</span>
       {score !== null && (
         <span className="tabular-nums opacity-70">
           {Math.round(score * 100)}%
@@ -1168,7 +1180,10 @@ function HistoryDialog({
             >
               <div className="flex items-center gap-2">
                 <ModeBadge mode={r.mode} />
-                <span className="font-medium">{r.verdict ?? "—"}</span>
+                {/* HRP-550: history showed the raw verdict code. */}
+                <span className="font-medium">
+                  {r.verdict ? aiVerdictLabel(t, r.verdict) : "—"}
+                </span>
                 {r.archived_at && (
                   <span className="text-[10px] uppercase tracking-wide opacity-70">
                     {t("aiInsightsArchived")}

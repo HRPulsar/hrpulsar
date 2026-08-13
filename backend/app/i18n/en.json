@@ -84,7 +84,10 @@
       "body": "The {type_label} \"<strong>{entity_title}</strong>\" has a deadline of <strong>{deadline}</strong>. Please make sure to complete it on time.",
       "button": "Open {brand_name}",
       "heading": "Deadline approaching",
-      "subject": "Deadline approaching: {entity_title}"
+      "subject": "Deadline approaching: {entity_title}",
+      "type_assessment": "assessment",
+      "type_exam": "exam",
+      "type_pdp": "development plan"
     },
     "exam_assigned": {
       "body": "You have been assigned the exam \"<strong>{exam_title}</strong>\".{deadline_line}",
@@ -108,8 +111,7 @@
       "subject": "Review request: {assessment_title}"
     },
     "fallback": {
-      "unnamed": "(unnamed)",
-      "employee": "The employee"
+      "unnamed": "(unnamed)"
     },
     "footer_automated": "This is an automated message from {brand_link}.",
     "footer_no_reply": "Please do not reply to this email.",
@@ -160,7 +162,9 @@
       "heading": "Development plan cancelled: {title}",
       "heading_untitled": "Development plan cancelled",
       "intro": "The development plan \"<strong>{title}</strong>\" assigned to <strong>{employee_name}</strong> has been cancelled.",
+      "intro_noname": "Your development plan \"<strong>{title}</strong>\" has been cancelled.",
       "intro_untitled": "The development plan for <strong>{employee_name}</strong> has been cancelled.",
+      "intro_untitled_noname": "Your development plan has been cancelled.",
       "subject": "Your development plan cancelled: {title}",
       "subject_untitled": "Your development plan cancelled"
     },
@@ -169,7 +173,9 @@
       "heading": "Employee's plan cancelled: {title}",
       "heading_untitled": "Employee's plan cancelled",
       "intro": "The development plan for <strong>{employee_name}</strong> (\"<strong>{title}</strong>\") has been cancelled.",
+      "intro_noname": "The development plan \"<strong>{title}</strong>\" has been cancelled.",
       "intro_untitled": "The development plan for <strong>{employee_name}</strong> has been cancelled.",
+      "intro_untitled_noname": "Your employee's development plan has been cancelled.",
       "subject": "Your employee's development plan cancelled: {title}",
       "subject_untitled": "Your employee's development plan cancelled"
     },
@@ -178,7 +184,9 @@
       "heading": "Development plan completed: {title}",
       "heading_untitled": "Development plan completed",
       "intro": "Congratulations, <strong>{employee_name}</strong> — your development plan \"<strong>{title}</strong>\" is now marked as completed.",
+      "intro_noname": "Congratulations — your development plan \"<strong>{title}</strong>\" is now marked as completed.",
       "intro_untitled": "Congratulations, <strong>{employee_name}</strong> — your development plan is now marked as completed.",
+      "intro_untitled_noname": "Congratulations — your development plan is now marked as completed.",
       "subject": "Your development plan completed: {title}",
       "subject_untitled": "Your development plan completed"
     },
@@ -187,7 +195,9 @@
       "heading": "Employee's plan completed: {title}",
       "heading_untitled": "Employee's plan completed",
       "intro": "<strong>{employee_name}</strong> has completed the development plan \"<strong>{title}</strong>\".",
+      "intro_noname": "The development plan \"<strong>{title}</strong>\" has been completed.",
       "intro_untitled": "<strong>{employee_name}</strong> has completed their development plan.",
+      "intro_untitled_noname": "Your employee's development plan has been completed.",
       "subject": "Your employee's development plan completed: {title}",
       "subject_untitled": "Your employee's development plan completed"
     },
@@ -560,7 +570,7 @@
     "grade_competence_link_not_found": "Link not found",
     "grade_ids_not_in_position": "grade_ids must belong to the selected position.",
     "grade_in_use_by_positions": "Grade is used by {count} position(s). Reassign them first.",
-    "hiring_manager_invalid": "Hiring manager must be an active admin user of this company.",
+    "hiring_manager_invalid": "Hiring manager must be an active user of this company.",
     "import_job_not_found": "Import job not found",
     "indicator_in_use": "The indicator is referenced by an assessment or PDP",
     "indicator_not_found": "Indicator not found",
@@ -613,15 +623,19 @@
     "invite_has_no_round": "Invite has no associated round",
     "invite_not_found": "Invite not found",
     "invite_not_found_or_expired": "Invite not found or expired",
+    "invite_resend_cooldown": "This invitation was just re-sent. Please wait a few minutes before sending it again.",
     "invite_resend_terminal_status": "This invitation can no longer be re-sent",
+    "invite_resend_throttle_unavailable": "Cannot re-send the invitation right now. Please try again in a moment.",
     "invite_token_candidate_vacancy_mismatch": "Token does not match candidate-vacancy",
     "invited_evaluator_playback_disabled": "Invited-evaluator playback is disabled for this tenant",
     "kind_audio_requires_audio_mime": "kind=audio requires an audio MIME type",
     "kind_transcript_requires_transcript_mime": "kind=text_transcript requires a PDF or plain-text MIME type",
     "kind_video_requires_video_mime": "kind=video requires a video MIME type",
+    "llm_base_url_https_required": "Custom endpoint URL must use HTTPS on cloud deployments",
     "llm_base_url_not_public": "Custom endpoint URL must be a public address on cloud deployments",
     "llm_generation_failed": "LLM generation failed: {error}",
     "llm_model_not_allowed": "Model '{model}' is not in the allowed list",
+    "llm_model_provider_unresolved": "Model '{model}' cannot be matched to a provider — approve it in the model catalog or configure a provider for it.",
     "llm_provider_model_mismatch": "The model {model} does not belong to provider {provider}.",
     "llm_provider_not_found": "LLM provider not found",
     "logo_empty_file": "Empty file",
@@ -696,6 +710,7 @@
     "platform_include_demo_and_demo_only_exclusive": "include_demo and demo_only are mutually exclusive",
     "platform_lock_origin_groups_only": "Lock applies only to origin groups",
     "platform_model_catalog_edit_requires_approved": "Approve the model first, then edit it",
+    "platform_model_catalog_no_inheritable_multiplier": "This model has no configured price to fall back on — set a multiplier instead of clearing it, or price its family in credits.yaml",
     "platform_model_catalog_entry_not_found": "Catalog entry not found",
     "platform_model_catalog_reject_approved": "Approved models are disabled, not rejected",
     "platform_model_catalog_seed_multiplier_yaml": "Curated models are priced in credits.yaml — change the multiplier there",
@@ -710,6 +725,7 @@
     "position_title_exists": "Position with this title already exists",
     "pre_interview_round_exists": "pre_interview round already exists",
     "pre_interview_single_evaluator": "pre_interview round allows a single evaluator",
+    "pre_interview_slot_taken_external": "Someone else is already assigned to this evaluation, so there is nothing for you to fill in. You can close this page.",
     "profile_ai_invalid_payload": "AI returned an unexpected payload (not a JSON object).",
     "profile_awaiting_review": "A generated profile is awaiting review for this vacancy — apply or discard it first.",
     "profile_generation_failed": "AI profile generation failed: {error}",

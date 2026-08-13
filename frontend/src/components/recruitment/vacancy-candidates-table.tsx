@@ -23,6 +23,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ApiError, api } from "@/lib/api";
 import { formatDate } from "@/lib/date-format";
 import { cn } from "@/lib/utils";
@@ -1005,39 +1010,63 @@ function DivergenceBadge({ row, vacancyId }: DivergenceBadgeProps) {
       </span>
     );
   }
-  const tooltipLines = (row.divergence_top ?? []).map((c) => {
+  // HRP-507: the preview is capped server-side at 5 competences; anything
+  // beyond that is summarised by the trailing "and N more" line.
+  const preview = row.divergence_top ?? [];
+  const lines = preview.map((c) => {
     const m = c.manager_score === null ? "—" : c.manager_score.toFixed(1);
     const ai = c.ai_score === null ? "—" : c.ai_score.toFixed(1);
-    return t("candidatesTableDivergenceLine", {
-      name: c.competence_name,
-      manager: m,
-      ai,
-    });
+    return {
+      key: c.competence_id,
+      text: t("candidatesTableDivergenceLine", {
+        name: c.competence_name,
+        manager: m,
+        ai,
+      }),
+    };
   });
-  const tooltipText =
-    tooltipLines.length === 0
-      ? t("candidatesTableDivergentCount", { count })
-      : tooltipLines.join("\n") +
-        (count > tooltipLines.length
-          ? `\n${t("candidatesTableDivergenceMore", {
-              count: count - tooltipLines.length,
-            })}`
-          : "");
-  // Canvas page does not consume ?focus / ?filter yet — wiring those
-  // params is its own ticket. For now the badge opens the plain Canvas
-  // route and leaves the user to scroll to the cell themselves.
+  const remaining = count - lines.length;
   return (
-    <Link
-      href={`/recruitment/requisitions/${vacancyId}/canvas`}
-      title={tooltipText}
-      data-testid={`vacancy-candidates-row-${row.id}-divergence-badge`}
-      aria-label={t("candidatesTableDivergenceAria", { count })}
-    >
-      <Badge className="border-amber-400 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-200">
-        <AlertTriangle className="mr-1 size-3" />
-        {count}
-      </Badge>
-    </Link>
+    <Tooltip>
+      <TooltipTrigger
+        render={<span className="inline-flex" />}
+        data-testid={`vacancy-candidates-row-${row.id}-divergence-trigger`}
+      >
+        <Link
+          href={`/recruitment/requisitions/${vacancyId}/canvas?filter=divergences`}
+          data-testid={`vacancy-candidates-row-${row.id}-divergence-badge`}
+          aria-label={t("candidatesTableDivergenceAria", { count })}
+        >
+          <Badge className="border-amber-400 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-200">
+            <AlertTriangle className="mr-1 size-3" />
+            {count}
+          </Badge>
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent
+        className="max-w-xs"
+        data-testid={`vacancy-candidates-row-${row.id}-divergence-tooltip`}
+      >
+        <p className="font-medium">
+          {t("candidatesTableDivergentCount", { count })}
+        </p>
+        {lines.length > 0 && (
+          <ul className="mt-1 space-y-0.5">
+            {lines.map((line) => (
+              <li key={line.key}>• {line.text}</li>
+            ))}
+          </ul>
+        )}
+        {remaining > 0 && (
+          <p className="mt-0.5">
+            {t("candidatesTableDivergenceMore", { count: remaining })}
+          </p>
+        )}
+        <p className="mt-1.5 opacity-80">
+          {t("candidatesTableDivergenceCanvasHint")}
+        </p>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

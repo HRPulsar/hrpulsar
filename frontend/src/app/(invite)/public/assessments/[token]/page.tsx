@@ -100,6 +100,10 @@ type Phase =
   | "expired"
   | "revoked"
   | "invalid"
+  // HRP-383: the pre_interview slot was claimed by someone else before
+  // this evaluator opened their link. Not an invalid link — the token is
+  // fine, there is simply nothing left to fill in.
+  | "slotTaken"
   | "consent"
   | "form";
 
@@ -187,6 +191,12 @@ export default function PublicAssessmentPage() {
         if (m.includes("revoked")) setPhase("revoked");
         else if (m.includes("expired")) setPhase("expired");
         else setPhase("invalid");
+      } else if (e.status === 409) {
+        // HRP-383: the round already has its single evaluator. Falling
+        // through to "invalid" told the evaluator their link was broken,
+        // which sent them back to the recruiter over a non-problem. The
+        // copy is ours, not the backend's message, so it stays localized.
+        setPhase("slotTaken");
       } else {
         setPhase("invalid");
       }
@@ -521,6 +531,15 @@ export default function PublicAssessmentPage() {
         title={t("revokedTitle")}
         testid="public-error-revoked-token-page"
         body={t("revokedBody")}
+      />
+    );
+  }
+  if (phase === "slotTaken") {
+    return (
+      <ErrorPage
+        title={t("slotTakenTitle")}
+        testid="public-error-slot-taken-page"
+        body={t("slotTakenBody")}
       />
     );
   }

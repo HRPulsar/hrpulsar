@@ -214,9 +214,22 @@ def _run_with_async_session(
 # ---------------------------------------------------------------------------
 
 
-def _normalise_tree(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bool]]:
-    """Walk the tree, attach `temp_id` everywhere, build default selection."""
+def _normalise_tree(
+    payload: dict[str, Any],
+    skill_levels: list[str] | None = None,
+    grade_titles: list[str] | None = None,
+) -> tuple[dict[str, Any], dict[str, bool]]:
+    """Walk the tree, attach `temp_id` everywhere, build default selection.
+
+    HRP-541: tree scopes resolve ``skill_level`` at apply time through the
+    same ``_resolve_skill_level`` + silent ``continue`` as the indicators
+    scope, so they lose nodes the same way. Snap every level — and every
+    ``grade_levels`` entry on a matrix payload — back to the titles the
+    prompt actually offered.
+    """
     selection: dict[str, bool] = {}
+    levels = skill_levels or []
+    grades = grade_titles or []
 
     def visit_group(group: dict[str, Any]) -> None:
         gid = uuid.uuid4().hex
@@ -228,24 +241,81 @@ def _normalise_tree(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
             cid = uuid.uuid4().hex
             comp["temp_id"] = cid
             selection[cid] = True
-            for ind in comp.get("indicators", []) or []:
+            indicators = comp.get("indicators", []) or []
+            for ind in indicators:
                 iid = uuid.uuid4().hex
                 ind["temp_id"] = iid
                 selection[iid] = True
+            _snap_indicator_nodes(indicators, levels)
+            grade_levels = comp.get("grade_levels")
+            if isinstance(grade_levels, dict):
+                # Keys are grade titles, values are skill-level titles —
+                # two different vocabularies, snapped against their own.
+                comp["grade_levels"] = {
+                    _snap_skill_level(str(grade), grades): _snap_skill_level(
+                        str(level), levels
+                    )
+                    for grade, level in grade_levels.items()
+                }
 
     for group in payload.get("groups", []) or []:
         visit_group(group)
     return payload, selection
 
 
+def _snap_skill_level(value: str, offered: list[str]) -> str:
+    """Snap a model-echoed skill level back to the exact offered title.
+
+    HRP-541: ``skill_level`` is a join key. ``_resolve_skill_level`` looks
+    the row up by ``i18n_key`` or ``title ILIKE`` — so case alone is
+    survivable, but padding or stray whitespace is not, and
+    ``_apply_indicators_only`` skips an unresolved level with a bare
+    ``continue``: the indicator disappears with no error anywhere. Snapping
+    against the very list the prompt offered keeps the stored payload
+    resolvable, and makes the result modal show the tenant's own spelling
+    rather than the model's.
+
+    An unrecognised value is returned untouched: it may still match by
+    ``i18n_key`` at apply time, and guessing would be worse than passing
+    it through.
+    """
+    candidate = value.strip()
+    if not candidate:
+        return value
+    for level in offered:
+        if level == candidate:
+            return level
+    folded = candidate.casefold()
+    for level in offered:
+        if level.casefold() == folded:
+            return level
+    # No match: hand back the trimmed value rather than the raw one. The
+    # apply-time lookup is `title ILIKE`, which stray whitespace defeats,
+    # so trimming is strictly better than passing the padding through.
+    return candidate
+
+
+def _snap_indicator_nodes(
+    nodes: list[dict[str, Any]], offered: list[str]
+) -> None:
+    for node in nodes:
+        level = node.get("skill_level")
+        if isinstance(level, str):
+            node["skill_level"] = _snap_skill_level(level, offered)
+
+
 def _normalise_indicators(
     payload: dict[str, Any],
+    skill_levels: list[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, bool]]:
     selection: dict[str, bool] = {}
-    for ind in payload.get("indicators", []) or []:
+    offered = skill_levels or []
+    indicators = payload.get("indicators", []) or []
+    for ind in indicators:
         iid = uuid.uuid4().hex
         ind["temp_id"] = iid
         selection[iid] = True
+    _snap_indicator_nodes(indicators, offered)
     return payload, selection
 
 
@@ -851,6 +921,14 @@ class _BuiltPrompt:
     system: str
     user_prompt: str
     schema_cls: type[BaseModel]
+    # HRP-541: the exact skill-level titles offered to the model. The
+    # apply step resolves ``skill_level`` back to a real row by title, so
+    # the worker snaps the model's echo to one of these before persisting
+    # — otherwise stray whitespace silently drops the node at apply time.
+    skill_levels: list[str] | None = None
+    # Matrix scope only: grade titles behind ``grade_levels`` keys, which
+    # apply resolves through a separate lookup.
+    grade_titles: list[str] | None = None
 
 
 @dataclass
@@ -859,6 +937,27 @@ class _PromptFailure:
 
     error_code: str
     message: str
+
+
+async def _fetch_skill_level_titles(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> list[str]:
+    """Active skill-level titles visible to the tenant (origin + custom).
+
+    HRP-541: every scope needs these to snap the model's echoed levels back
+    to something ``_resolve_skill_level`` can find at apply time.
+    """
+    from app.modules.competence.models import SkillLevel
+
+    result = await db.execute(
+        select(SkillLevel.title)
+        .where(
+            SkillLevel.is_active.is_(True),
+            (SkillLevel.tenant_id == tenant_id) | SkillLevel.tenant_id.is_(None),
+        )
+        .order_by(SkillLevel.sort_index)
+    )
+    return [title for (title,) in result.all()]
 
 
 async def _build_prompt_whole_base(ctx: _SessionContext) -> _BuiltPrompt:
@@ -890,7 +989,12 @@ async def _build_prompt_whole_base(ctx: _SessionContext) -> _BuiltPrompt:
         with_indicators=ctx.with_indicators,
         refinement=ctx.refinement,
     )
-    return _BuiltPrompt(system, user_prompt, GeneratedTreeSchema)
+    return _BuiltPrompt(
+        system,
+        user_prompt,
+        GeneratedTreeSchema,
+        skill_levels=await _fetch_skill_level_titles(ctx.db, ctx.tenant_id),
+    )
 
 
 async def _build_prompt_specialization_matrix(
@@ -1057,7 +1161,13 @@ async def _build_prompt_specialization_matrix(
         divisions=matrix_divisions_payload or None,
         existing_competences=existing_competences_payload or None,
     )
-    return _BuiltPrompt(system, user_prompt, GeneratedMatrixSchema)
+    return _BuiltPrompt(
+        system,
+        user_prompt,
+        GeneratedMatrixSchema,
+        skill_levels=levels,
+        grade_titles=grade_titles,
+    )
 
 
 async def _build_prompt_group(
@@ -1144,7 +1254,12 @@ async def _build_prompt_group(
         ancestors=ancestors_titles or None,
         descendants=descendants_payload or None,
     )
-    return _BuiltPrompt(system, user_prompt, GeneratedTreeSchema)
+    return _BuiltPrompt(
+        system,
+        user_prompt,
+        GeneratedTreeSchema,
+        skill_levels=await _fetch_skill_level_titles(ctx.db, ctx.tenant_id),
+    )
 
 
 async def _build_prompt_competence_indicators(
@@ -1159,6 +1274,7 @@ async def _build_prompt_competence_indicators(
         CompetenceGroup,
         SkillLevel,
     )
+    from app.modules.dictionary.models import DictionaryItem
 
     db = ctx.db
     sess = ctx.sess
@@ -1249,13 +1365,30 @@ async def _build_prompt_competence_indicators(
         ]
     )
 
+    # HRP-541: the competence's real type, not a hardcoded "hard_skill" —
+    # soft-skill competences were described to the model as hard skills.
+    competence_type = "hard_skill"
+    if comp.competence_type_id is not None:
+        type_q = await db.execute(
+            select(DictionaryItem.title).where(
+                DictionaryItem.id == comp.competence_type_id
+            )
+        )
+        competence_type = type_q.scalar_one_or_none() or "hard_skill"
+
     system, user_prompt = prompts.build_indicators_prompt(
         competence_title=comp.title,
-        competence_type="hard_skill",
+        competence_type=competence_type,
         skill_levels=levels,
         parents=parents,
+        # HRP-541: ship the resolved skill level of each existing
+        # indicator. Blanking it hid which levels are already covered, so
+        # augment runs re-suggested indicators for full levels — and it
+        # stripped the one place a tenant's own level titles reached the
+        # prompt.
         existing_indicators=[
-            {"title": i["title"], "skill_level": ""} for i in existing
+            {"title": i["title"], "skill_level": i.get("skill_level") or ""}
+            for i in existing
         ],
         refinement=ctx.refinement,
         specialization_context=spec_context,
@@ -1265,7 +1398,9 @@ async def _build_prompt_competence_indicators(
         company=company,
         sibling_competences=sibling_titles or None,
     )
-    return _BuiltPrompt(system, user_prompt, GeneratedIndicatorsSchema)
+    return _BuiltPrompt(
+        system, user_prompt, GeneratedIndicatorsSchema, skill_levels=levels
+    )
 
 
 async def _build_scope_prompt(
@@ -1286,13 +1421,21 @@ async def _build_scope_prompt(
 
 
 def _normalise_payload(
-    ctx: _SessionContext, model_instance: BaseModel
+    ctx: _SessionContext,
+    model_instance: BaseModel,
+    built: _BuiltPrompt | None = None,
 ) -> tuple[dict[str, Any], dict[str, bool]]:
     """Attach temp_ids + default selection to the parsed LLM payload."""
     payload_dict = model_instance.model_dump()
     if ctx.sess.scope == "competence_indicators":
-        return _normalise_indicators(payload_dict)
-    payload_dict, selection = _normalise_tree(payload_dict)
+        return _normalise_indicators(
+            payload_dict, built.skill_levels if built else None
+        )
+    payload_dict, selection = _normalise_tree(
+        payload_dict,
+        built.skill_levels if built else None,
+        built.grade_titles if built else None,
+    )
     # HRP-155: in group-scope augment mode (source_tree included)
     # annotate matched existing nodes with ``snapshot_id`` so the
     # tree renders them as locked and the apply step reuses the
@@ -1545,15 +1688,24 @@ async def _execute_session_body(
         )
         # HRP-480: generated content follows the tenant's content_language;
         # the prompt templates themselves stay English.
-        system = "\n\n".join(
-            [
-                built.system,
-                ai_settings_service.build_language_directive(tenant_settings),
-            ]
+        language_directive = ai_settings_service.build_language_directive(
+            tenant_settings
         )
+        system = "\n\n".join([built.system, language_directive])
+        # HRP-541: repeat the directive at the end of the user turn. The
+        # system prompt is not the last thing the model reads —
+        # ``llm_client.generate_json`` appends the JSON Schema after it,
+        # and the schema (plus the English few-shot examples) is all
+        # English, which out-argued a directive buried thousands of tokens
+        # earlier. Indicators felt this hardest: their whole input payload
+        # is English too, so the model mirrored the input language and the
+        # content_language setting looked like it did nothing. Restating it
+        # last also restates the verbatim carve-out that keeps machine-
+        # readable values (skill-level titles) untranslated.
+        user_prompt = f"{built.user_prompt}\n\n{language_directive}"
         try:
             model_instance, _ = await _generate_with_retries(
-                user_prompt=built.user_prompt,
+                user_prompt=user_prompt,
                 system=system,
                 schema=built.schema_cls,
                 tenant_settings=tenant_settings,
@@ -1601,7 +1753,7 @@ async def _execute_session_body(
             return {"status": "cancelled", "session_id": str(sess.id)}
 
         # --- Normalise & persist ------------------------------------
-        payload_dict, selection = _normalise_payload(ctx, model_instance)
+        payload_dict, selection = _normalise_payload(ctx, model_instance, built)
         # HRP-71 phase 4: synthetic streaming. Totals are known after parse;
         # we replay them as a sequence of progress events so the UI can
         # animate the checklist while we finish the DB commit.

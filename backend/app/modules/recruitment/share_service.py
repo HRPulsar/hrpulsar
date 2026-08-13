@@ -121,8 +121,7 @@ async def create_share(
         tenant_id=tenant_id,
         report_id=report_id,
         token=token,
-        expires_at=datetime.now(timezone.utc)
-        + timedelta(days=expires_in_days),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=expires_in_days),
         recipients=list(recipients),
         message=message,
         created_by=user_id,
@@ -133,9 +132,7 @@ async def create_share(
     await db.refresh(share)
 
     vacancy = (
-        await db.execute(
-            select(Vacancy).where(Vacancy.id == report.vacancy_id)
-        )
+        await db.execute(select(Vacancy).where(Vacancy.id == report.vacancy_id))
     ).scalar_one_or_none()
     vacancy_title = vacancy.title if vacancy else None
 
@@ -173,13 +170,22 @@ async def create_share(
             locale,
             shared_by_name=f"{settings.brand_name} Recruiting",
         )
-        body = translate(
-            "email.report_share.body",
-            locale,
-            vacancy_line=vacancy_line,
-            share_url=_share_url(token),
-            expires_at=share.expires_at.isoformat(),
-            message_block=message_block,
+        from app.core.email_templates import _render
+
+        # HRP-568: the last sender that shipped a bare i18n fragment —
+        # deliver it inside the shared branded layout like every other
+        # outbound email.
+        body = _render(
+            subject,
+            translate(
+                "email.report_share.body",
+                locale,
+                vacancy_line=vacancy_line,
+                share_url=_share_url(token),
+                expires_at=share.expires_at.isoformat(),
+                message_block=message_block,
+            ),
+            locale=locale,
         )
         for email in recipients:
             try:
@@ -218,15 +224,19 @@ async def list_shares(
 ) -> list[dict]:
     await _get_report(db, tenant_id, report_id)
     rows = (
-        await db.execute(
-            select(RecruitmentReportShare)
-            .where(
-                RecruitmentReportShare.tenant_id == tenant_id,
-                RecruitmentReportShare.report_id == report_id,
+        (
+            await db.execute(
+                select(RecruitmentReportShare)
+                .where(
+                    RecruitmentReportShare.tenant_id == tenant_id,
+                    RecruitmentReportShare.report_id == report_id,
+                )
+                .order_by(RecruitmentReportShare.created_at.desc())
             )
-            .order_by(RecruitmentReportShare.created_at.desc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [_share_to_read(r) for r in rows]
 
 
@@ -267,9 +277,7 @@ async def open_share(db: AsyncSession, token: str) -> dict:
     """Public endpoint helper. Increments open counter and returns view."""
     share = (
         await db.execute(
-            select(RecruitmentReportShare).where(
-                RecruitmentReportShare.token == token
-            )
+            select(RecruitmentReportShare).where(RecruitmentReportShare.token == token)
         )
     ).scalar_one_or_none()
     if share is None:
@@ -281,18 +289,14 @@ async def open_share(db: AsyncSession, token: str) -> dict:
 
     report = (
         await db.execute(
-            select(ConsolidatedReport).where(
-                ConsolidatedReport.id == share.report_id
-            )
+            select(ConsolidatedReport).where(ConsolidatedReport.id == share.report_id)
         )
     ).scalar_one_or_none()
     if report is None or report.status != "completed" or not report.file_id:
         raise AppError("share_report_unavailable", status.HTTP_404_NOT_FOUND)
 
     vacancy = (
-        await db.execute(
-            select(Vacancy).where(Vacancy.id == report.vacancy_id)
-        )
+        await db.execute(select(Vacancy).where(Vacancy.id == report.vacancy_id))
     ).scalar_one_or_none()
 
     download_url: str | None = None

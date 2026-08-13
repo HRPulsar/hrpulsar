@@ -11,7 +11,7 @@
 // unauthenticated/public-token pages that must not trigger the
 // auto-logout pipeline.
 import { API_BASE } from "../api-base";
-import { clearLocaleCookie } from "@/i18n/config";
+import { clearLocaleCookie, localeRequestHeaders } from "@/i18n/config";
 
 export { API_BASE };
 
@@ -29,7 +29,46 @@ export class ApiError extends Error {
   }
 }
 
+/** Background-task failure with a stable code, mirroring UploadError
+ * (HRP-512): the transport layer has no translator, so it carries a code
+ * and keeps technical English in `message` for logs, and the toast
+ * boundary renders `common.<code>`. Only raised when the worker gave us
+ * no error text of its own — a real backend message is more useful than
+ * a generic one and is surfaced verbatim. */
+export class TaskError extends ApiError {
+  constructor(
+    public readonly code: "backgroundTaskFailed" | "backgroundTaskTimedOut",
+    status: number,
+    message: string,
+  ) {
+    super(status, message);
+    this.name = "TaskError";
+  }
+}
+
+/** Catalog key (within the `common` namespace) for a background-task
+ * failure, or null when `err` is not one. Keeps the `instanceof` +
+ * code-to-key knowledge in one place instead of at every toast. */
+export function taskErrorKey(err: unknown): string | null {
+  return err instanceof TaskError ? err.code : null;
+}
+
 let refreshPromise: Promise<boolean> | null = null;
+
+// HRP-275: a workspace that runs out of credits gets 402
+// `credits_limit_reached`; a demo sandbox gets 429
+// `credits_demo_quota_exhausted` instead (different semantics, no top-up
+// path). Both must reach the global credit banner — matching on the 429
+// status alone would swallow ordinary rate limits, so the demo case is
+// keyed on the error code.
+const DEMO_QUOTA_CODE = "credits_demo_quota_exhausted";
+
+function isCreditLimitResponse(status: number, body: unknown): boolean {
+  if (status === 402) return true;
+  if (status !== 429) return false;
+  const code = (body as { code?: unknown } | null)?.code;
+  return code === DEMO_QUOTA_CODE;
+}
 
 // FastAPI returns 422 validation errors as detail: [{loc, msg, type, ...}].
 // Custom HTTPException(detail=...) may pass a string, dict, or list. Render
@@ -75,7 +114,10 @@ async function tryRefreshToken(): Promise<boolean> {
   try {
     const res = await fetch(`${API_BASE}/auth/refresh`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...localeRequestHeaders(),
+      },
       body: JSON.stringify({ refresh_token: refreshToken }),
     });
     if (!res.ok) return false;
@@ -111,6 +153,9 @@ async function request<T>(
   const isFormData = options.body instanceof FormData;
   const headers: Record<string, string> = {
     ...(isFormData ? {} : { "Content-Type": "application/json" }),
+    // HRP-513: state the interface locale so error bodies come back
+    // localized even when the NEXT_LOCALE cookie cannot cross origins.
+    ...localeRequestHeaders(),
     ...((options.headers as Record<string, string>) || {}),
   };
 
@@ -145,7 +190,7 @@ async function request<T>(
     const message = formatApiError(body.detail) || res.statusText;
 
     // Credit limit — show user-friendly message via global event
-    if (res.status === 402 && typeof window !== "undefined") {
+    if (isCreditLimitResponse(res.status, body) && typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("hrpulsar:credit-limit", { detail: message }),
       );
@@ -173,6 +218,9 @@ async function requestWithMeta<T>(
   const isFormData = options.body instanceof FormData;
   const headers: Record<string, string> = {
     ...(isFormData ? {} : { "Content-Type": "application/json" }),
+    // HRP-513: state the interface locale so error bodies come back
+    // localized even when the NEXT_LOCALE cookie cannot cross origins.
+    ...localeRequestHeaders(),
     ...((options.headers as Record<string, string>) || {}),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -197,7 +245,7 @@ async function requestWithMeta<T>(
     }
     const body = await res.json().catch(() => ({ detail: res.statusText }));
     const message = formatApiError(body.detail) || res.statusText;
-    if (res.status === 402 && typeof window !== "undefined") {
+    if (isCreditLimitResponse(res.status, body) && typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("hrpulsar:credit-limit", { detail: message }),
       );
@@ -269,7 +317,17 @@ async function waitForTask<T>(
       if (status === "SUCCESS") {
         finish(() => resolve(result as T));
       } else if (status === "FAILURE") {
-        finish(() => reject(new ApiError(500, error || "Background task failed")));
+        finish(() =>
+          reject(
+            error
+              ? new ApiError(500, error)
+              : new TaskError(
+                  "backgroundTaskFailed",
+                  500,
+                  "Background task failed",
+                ),
+          ),
+        );
       }
     };
 
@@ -300,7 +358,15 @@ async function waitForTask<T>(
     }, intervalMs);
 
     const deadlineTimer = setTimeout(() => {
-      finish(() => reject(new ApiError(504, "Background task timed out")));
+      finish(() =>
+        reject(
+          new TaskError(
+            "backgroundTaskTimedOut",
+            504,
+            "Background task timed out",
+          ),
+        ),
+      );
     }, timeoutMs);
   });
 }
@@ -313,6 +379,7 @@ async function requestBlob(
   const token =
     typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
   const headers: Record<string, string> = {
+    ...localeRequestHeaders(),
     ...((options.headers as Record<string, string>) || {}),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;

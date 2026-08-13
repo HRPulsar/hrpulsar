@@ -18,6 +18,7 @@ Token security for invited evaluators lives in
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import secrets
@@ -26,10 +27,12 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import status
-from sqlalchemy import and_, case, delete, or_, select
+import redis.asyncio as aioredis
+from fastapi import HTTPException, status
+from sqlalchemy import and_, case, delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.errors import AppError
 from app.modules.recruitment import audit_service
 from app.modules.recruitment.common import candidate_display_name
@@ -61,15 +64,39 @@ from app.modules.recruitment.models import (
 log = logging.getLogger(__name__)
 
 
+#: HRP-383: invite states that drop their sheet out of every aggregate.
+#:
+#: Deliberately the same pair that frees the pre_interview slot in
+#: :func:`_assert_pre_interview_slot_free` — the two rules have to agree.
+#: Once a revoked evaluator's scores stop holding the slot, an internal
+#: user can claim it, and if those scores still counted the round would
+#: silently aggregate two evaluators. ``expired`` and ``submitted`` are
+#: absent on purpose: neither withdraws the evaluation, and a submitted
+#: external assessment must keep counting.
+_UNCOUNTED_INVITE_STATUSES = ("revoked", "declined")
+
 #: HRP-374: which evaluation sheets feed an aggregate.
 #:
 #: An internal evaluator's own sheet counts while still a draft — it is the
 #: recruiter's live work and the round header has to move as they score.
 #: An invited (external) evaluator's sheet only counts once they submitted:
 #: a half-filled external draft must not drag the candidate's average.
-_COUNTABLE_SHEET = or_(
-    RecruitmentAssessment.evaluator_type == "user",
-    RecruitmentAssessment.status == "submitted",
+#:
+#: HRP-383: and only while the invitation behind it still stands. The
+#: NOT EXISTS is correlated rather than a join so this stays a drop-in
+#: predicate for callers that never mention ``AssessmentInvite``; a sheet
+#: with no invite (every internal one) matches nothing and is unaffected.
+_COUNTABLE_SHEET = and_(
+    or_(
+        RecruitmentAssessment.evaluator_type == "user",
+        RecruitmentAssessment.status == "submitted",
+    ),
+    ~exists(
+        select(AssessmentInvite.id).where(
+            AssessmentInvite.id == RecruitmentAssessment.evaluator_invite_id,
+            AssessmentInvite.status.in_(_UNCOUNTED_INVITE_STATUSES),
+        )
+    ),
 )
 
 
@@ -766,8 +793,10 @@ async def _assert_pre_interview_slot_free(
             or_(
                 # Another internal evaluator's sheet (NULL user never matches).
                 RecruitmentAssessment.evaluator_user_id.is_not(None),
-                # A live invited evaluator's sheet.
-                AssessmentInvite.status.notin_(("revoked", "declined")),
+                # A live invited evaluator's sheet. Same tuple the
+                # aggregates exclude — the slot rule and the counting rule
+                # must not be able to drift apart (HRP-383).
+                AssessmentInvite.status.notin_(_UNCOUNTED_INVITE_STATUSES),
             ),
         )
     )
@@ -791,6 +820,16 @@ async def _assert_pre_interview_slot_free(
     other_sheet = await db.execute(sheet_q)
 
     if other_evaluator.first() is not None or other_sheet.first() is not None:
+        # HRP-383: an invited evaluator meets this on the public consent
+        # page, where "pre_interview round allows a single evaluator"
+        # describes an internal data-model rule they can neither see nor
+        # act on. Same 409, copy written for the person reading it. Two
+        # literal raises rather than one computed code, so the i18n scan
+        # can still verify both catalog keys exist.
+        if evaluator_invite_id is not None:
+            raise AppError(
+                "pre_interview_slot_taken_external", status.HTTP_409_CONFLICT
+            )
         raise AppError("pre_interview_single_evaluator", status.HTTP_409_CONFLICT)
 
 
@@ -1836,6 +1875,31 @@ async def revoke_invite(
     inv.status = "revoked"
     await db.commit()
     await db.refresh(inv)
+    # HRP-383: revoking an evaluator who had already submitted drops their
+    # scores out of the round, so the denormalized manager_score the
+    # vacancy's Candidates block reads has to be rebuilt — otherwise the
+    # stored number keeps quoting an evaluation that no longer counts.
+    # (Declining needs no such call: public_decline refuses a submitted
+    # invite, and an unsubmitted external draft never counted.)
+    #
+    # The revoke itself is already committed and is the thing the caller
+    # asked for; a failed recompute must not undo it. Log loudly instead —
+    # a silently stale manager_score is invisible otherwise.
+    try:
+        await recompute_manager_score(db, tenant_id, inv.candidate_vacancy_id)
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "recruitment: manager_score recompute failed after revoking "
+            "invite %s — stored score may be stale for cv %s",
+            inv.id,
+            inv.candidate_vacancy_id,
+        )
+        # A failure mid-statement leaves the AsyncSession needing a
+        # rollback; without one the audit write below raises
+        # PendingRollbackError and turns the already-committed revoke
+        # into a 500 (review fix).
+        with contextlib.suppress(Exception):
+            await db.rollback()
     await audit_service.record_event(
         db,
         tenant_id=tenant_id,
@@ -1856,6 +1920,73 @@ RESENDABLE_INVITE_STATUSES = ("pending",)
 #: link that answers 410 the moment it is followed — and the email would
 #: claim it "expires in 1 day" on top of that.
 TERMINAL_INVITE_STATUSES = ("submitted", "declined", "revoked", "expired")
+
+#: HRP-545: how long one invitation stays un-resendable after a resend.
+#: Resending is free (``BILLING_EXEMPT``) and needs no evaluator consent,
+#: so without a throttle any authorized manager could mail-bomb an
+#: external address the product itself put in the To: field. Five minutes
+#: is far below the rate a human retries a bounced delivery and far above
+#: the rate that makes an inbox unusable.
+INVITE_RESEND_COOLDOWN_SECONDS = 300
+
+
+async def _claim_resend_slot(invite_id: uuid.UUID) -> None:
+    """Per-invite resend throttle backed by an atomic Redis ``SET NX EX``.
+
+    The claim is atomic — two concurrent resends can't both win, because
+    ``SET NX`` picks a single owner without a read-then-write race — and
+    it is taken *before* the send, not after: an attacker must not be
+    able to buy extra sends by making the delivery fail.
+
+    Behaviour when Redis is unreachable depends on the deployment:
+
+    * SaaS — fail **closed** (503), like ``signup._enforce_rate_limit``.
+      Redis is part of the platform there, and a multi-tenant mail
+      reputation is not worth risking on a flaky dependency.
+    * Community / self-hosted — fail **open** with a warning. Redis is
+      genuinely optional in those builds: ``core.email.enqueue_email``
+      falls back to sending inline when the broker is unreachable, so a
+      hard refusal here would break resend on installations where it
+      works today, to guard an inbox the operator owns anyway.
+    """
+    client = None
+    try:
+        client = aioredis.from_url(settings.redis_url, decode_responses=True)
+        key = f"recruitment:invite-resend:{invite_id}"
+        claimed = await client.set(key, "1", nx=True, ex=INVITE_RESEND_COOLDOWN_SECONDS)
+        if not claimed:
+            # Exact remaining seconds go in the header, not the message:
+            # a localized "try again in N seconds" would need plural rules
+            # in every catalog to stay grammatical.
+            ttl = await client.ttl(key)
+            retry_after = ttl if ttl and ttl > 0 else INVITE_RESEND_COOLDOWN_SECONDS
+            raise AppError(
+                "invite_resend_cooldown",
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                headers={"Retry-After": str(retry_after)},
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if settings.deployment_mode == "saas":
+            log.exception(
+                "recruitment: resend throttle unavailable, refusing resend of %s",
+                invite_id,
+            )
+            raise AppError(
+                "invite_resend_throttle_unavailable",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
+        log.warning(
+            "recruitment: resend throttle unavailable, sending %s without "
+            "cooldown (no Redis on this deployment)",
+            invite_id,
+            exc_info=True,
+        )
+    finally:
+        if client is not None:
+            with contextlib.suppress(Exception):
+                await client.aclose()  # type: ignore[attr-defined]
 
 
 async def resend_invite(
@@ -1885,6 +2016,11 @@ async def resend_invite(
         raise AppError("invite_resend_terminal_status", status.HTTP_409_CONFLICT)
     if inv.token is None:
         raise AppError("invite_not_found", status.HTTP_404_NOT_FOUND)
+
+    # HRP-545: throttled only once the invite is known to be resendable —
+    # a dead invite keeps answering the informative 409 instead of
+    # burning the cooldown slot on an email that was never going to go.
+    await _claim_resend_slot(inv.id)
 
     cv = await _load_cv(db, tenant_id, inv.candidate_vacancy_id)
     candidate = await db.get(Candidate, cv.candidate_id)

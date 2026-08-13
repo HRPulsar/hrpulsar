@@ -75,6 +75,18 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
     );
   }
 
+  // HRP-425: a vacancy names its own terminal stages, so the tiles carry
+  // those names ("Hired" / "Rejected" only stand in when the funnel has no
+  // terminal stage of that kind).
+  const hiredLabel =
+    data.positive_stage_names.length > 0
+      ? data.positive_stage_names.join(", ")
+      : t("analyticsTabHired");
+  const rejectedLabel =
+    data.negative_stage_names.length > 0
+      ? data.negative_stage_names.join(", ")
+      : t("analyticsTabRejected");
+
   return (
     <div className="space-y-6" data-testid="recruitment-vacancy-analytics">
       <div className="grid gap-4 sm:grid-cols-4">
@@ -84,23 +96,38 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
               {t("analyticsTabTotalCandidates")}
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-2xl font-semibold">{data.total_candidates}</CardContent>
+          <CardContent
+            className="text-2xl font-semibold"
+            data-testid="recruitment-vacancy-analytics-total"
+          >
+            {data.total_candidates}
+          </CardContent>
         </Card>
         <Card>
           <CardHeader>
             <CardTitle className="text-sm text-muted-foreground">
-              {t("analyticsTabHired")}
+              {hiredLabel}
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-2xl font-semibold text-green-700">{data.win_loss.hired}</CardContent>
+          <CardContent
+            className="text-2xl font-semibold text-green-700"
+            data-testid="recruitment-vacancy-analytics-hired"
+          >
+            {data.win_loss.hired}
+          </CardContent>
         </Card>
         <Card>
           <CardHeader>
             <CardTitle className="text-sm text-muted-foreground">
-              {t("analyticsTabRejected")}
+              {rejectedLabel}
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-2xl font-semibold text-red-700">{data.win_loss.rejected}</CardContent>
+          <CardContent
+            className="text-2xl font-semibold text-red-700"
+            data-testid="recruitment-vacancy-analytics-rejected"
+          >
+            {data.win_loss.rejected}
+          </CardContent>
         </Card>
         <Card>
           <CardHeader>
@@ -108,7 +135,12 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
               {t("analyticsTabInProgress")}
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-2xl font-semibold">{data.win_loss.in_progress}</CardContent>
+          <CardContent
+            className="text-2xl font-semibold"
+            data-testid="recruitment-vacancy-analytics-in-progress"
+          >
+            {data.win_loss.in_progress}
+          </CardContent>
         </Card>
       </div>
 

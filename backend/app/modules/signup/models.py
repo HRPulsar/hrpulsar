@@ -65,8 +65,20 @@ class SignupRequest(BaseModel):
     moderated_by_slack_user_id: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )
+    # Set when moderation happened in the platform-admin UI (HRP-457);
+    # the Slack path fills moderated_by_slack_user_id instead. Plain UUID
+    # without an FK: the audit row must survive the admin account's
+    # deletion.
+    moderated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     reject_reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
     slack_message_ts: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Resolved channel *id* the moderation card was posted to (HRP-567).
+    # chat.update rejects #name references, so the ts alone is not enough
+    # for a later admin-UI decision to finalise the card. Inert in
+    # community builds, like slack_message_ts above.
+    slack_channel_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     demo_tenant_id_snapshot: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )

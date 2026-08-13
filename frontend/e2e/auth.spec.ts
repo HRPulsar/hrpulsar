@@ -1,5 +1,11 @@
 import { test, expect } from "@playwright/test";
-import { uniqueEmail, registerUser, loginViaUI, SAAS_E2E } from "./helpers";
+import {
+  uniqueEmail,
+  registerUser,
+  loginViaUI,
+  skipUnlessMultiLocaleStand,
+  SAAS_E2E,
+} from "./helpers";
 
 test.describe("Login", () => {
   test("login page renders correctly", async ({ page }) => {
@@ -139,5 +145,80 @@ test.describe("Forgot password", () => {
     });
     await page.getByTestId("forgot-link-login").click();
     await expect(page).toHaveURL(/\/login/, { timeout: 10000 });
+  });
+});
+
+// HRP-516: signed-out surfaces get their own locale control. Without it
+// /login, /register and /accept-invite were stuck on whatever
+// Accept-Language said, with nothing to change it.
+test.describe("Auth page language switcher", () => {
+  test("switches the signed-out interface and keeps the choice", async ({
+    page,
+  }) => {
+    await page.goto("/login");
+    await skipUnlessMultiLocaleStand(page);
+    const trigger = page.getByTestId("auth-btn-language");
+    await expect(trigger).toBeVisible({ timeout: 10000 });
+    // aria-label is t(common.changeLanguage): it re-renders in the chosen
+    // locale, so it proves the catalog actually took over.
+    await trigger.click();
+    await page.getByTestId("auth-menu-language-de").click();
+    await expect(trigger).toHaveAttribute("aria-label", "Sprache ändern", {
+      timeout: 10000,
+    });
+    // The choice is a cookie, so it survives navigation while signed out.
+    await page.goto("/register");
+    await expect(page.getByTestId("auth-btn-language")).toHaveAttribute(
+      "aria-label",
+      "Sprache ändern",
+      { timeout: 10000 },
+    );
+    await page.goto("/login");
+    await trigger.click();
+    await page.getByTestId("auth-menu-language-en").click();
+    await expect(trigger).toHaveAttribute("aria-label", "Change language", {
+      timeout: 10000,
+    });
+  });
+
+  test("an invitation link's ?lang= opens the page in that language", async ({
+    page,
+  }) => {
+    // The link the backend puts in invitation emails carries the
+    // recipient's locale; the proxy turns it into the NEXT_LOCALE cookie
+    // and strips the parameter.
+    await page.goto("/login?lang=de");
+    await skipUnlessMultiLocaleStand(page);
+    const trigger = page.getByTestId("auth-btn-language");
+    await expect(trigger).toHaveAttribute("aria-label", "Sprache ändern", {
+      timeout: 10000,
+    });
+    // Consumed, not sticky: the address bar must be clean afterwards.
+    await expect(page).toHaveURL(/\/login$/, { timeout: 10000 });
+  });
+
+  test("a language switch survives reloading the link that set it", async ({
+    page,
+  }) => {
+    // Regression: ?lang= used to re-apply on every navigation, so a user
+    // who arrived on a German link, switched to English and pressed F5
+    // was thrown back to German.
+    await page.goto("/login?lang=de");
+    await skipUnlessMultiLocaleStand(page);
+    const trigger = page.getByTestId("auth-btn-language");
+    await expect(trigger).toHaveAttribute("aria-label", "Sprache ändern", {
+      timeout: 10000,
+    });
+    await trigger.click();
+    await page.getByTestId("auth-menu-language-en").click();
+    await expect(trigger).toHaveAttribute("aria-label", "Change language", {
+      timeout: 10000,
+    });
+    await page.reload();
+    await expect(page.getByTestId("auth-btn-language")).toHaveAttribute(
+      "aria-label",
+      "Change language",
+      { timeout: 10000 },
+    );
   });
 });

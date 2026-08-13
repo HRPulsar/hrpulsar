@@ -1,5 +1,6 @@
 import warnings
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import bcrypt
 import jwt
@@ -21,11 +22,16 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
-def create_access_token(user_id: str, tenant_id: str, token_version: int = 0) -> str:
+def create_access_token(
+    user_id: str,
+    tenant_id: str,
+    token_version: int = 0,
+    language: str | None = None,
+) -> str:
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.access_token_expire_minutes
     )
-    payload = {
+    payload: dict[str, Any] = {
         "sub": user_id,
         "tenant_id": tenant_id,
         "type": "access",
@@ -34,6 +40,13 @@ def create_access_token(user_id: str, tenant_id: str, token_version: int = 0) ->
         "ver": token_version,
         "exp": expire,
     }
+    # i18n (HRP-513): the account's own locale, so error responses can be
+    # localized without a DB round-trip when no NEXT_LOCALE cookie reaches
+    # the backend (cross-origin API, non-browser clients). Advisory only —
+    # never an authorization input, and a fresher X-Locale header or cookie
+    # wins over it (the claim goes stale until the next login/refresh).
+    if language:
+        payload["lang"] = language
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 

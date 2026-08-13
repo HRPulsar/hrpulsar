@@ -286,15 +286,30 @@ export default function CandidateDetailPage() {
                 }
               />
             );
-            // HRP-205: default order is Resume → AI Insights → Interview
-            // questions. When the tenant flag is on, hiring managers get
-            // the questions first — the "20 minutes before the interview"
-            // path from the spec.
+            const applicationsSection = (
+              <VacancyApplicationsCard
+                key="vacancy-applications"
+                card={card}
+              />
+            );
+            // HRP-424: the blocks follow the sourcing timeline — resume in,
+            // application created, AI verdict, interview questions.
+            // HRP-205: when the tenant flag is on, hiring managers get the
+            // questions first — the "20 minutes before the interview" path.
             return questionsAboveResume && isHiringManager
-              ? [questionsSection, resumeSection, insightsSection]
-              : [resumeSection, insightsSection, questionsSection];
+              ? [
+                  questionsSection,
+                  resumeSection,
+                  applicationsSection,
+                  insightsSection,
+                ]
+              : [
+                  resumeSection,
+                  applicationsSection,
+                  insightsSection,
+                  questionsSection,
+                ];
           })()}
-          <VacancyApplicationsCard card={card} />
           <CandidateInterviewsSection
             candidateId={card.id}
             vacancyOptions={interviewVacancyOptions}

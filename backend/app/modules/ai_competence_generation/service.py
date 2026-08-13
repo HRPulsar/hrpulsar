@@ -2042,6 +2042,13 @@ async def _apply_competence(
             db, tenant_id, ind_node.get("skill_level", "")
         )
         if sl_id is None:
+            # HRP-541: this drop is otherwise invisible — the run reports
+            # success and the indicator simply never appears.
+            logger.warning(
+                "compgen: dropping indicator %r — skill_level %r unresolved",
+                ind_node.get("title"),
+                ind_node.get("skill_level"),
+            )
             continue
         ind = Indicator(
             title=_resolve_title(ind_node, edits),
@@ -2079,6 +2086,13 @@ async def _apply_indicators_only(
             db, tenant_id, ind_node.get("skill_level", "")
         )
         if sl_id is None:
+            # HRP-541: this drop is otherwise invisible — the run reports
+            # success and the indicator simply never appears.
+            logger.warning(
+                "compgen: dropping indicator %r — skill_level %r unresolved",
+                ind_node.get("title"),
+                ind_node.get("skill_level"),
+            )
             continue
         ind = Indicator(
             title=_resolve_title(ind_node, edits),
@@ -2215,6 +2229,12 @@ async def _apply_specialization_matrix(
                     db, tenant_id, ind_node.get("skill_level", "")
                 )
                 if sl_id is None:
+                    # HRP-541: silent otherwise — see _apply_competence.
+                    logger.warning(
+                        "compgen: dropping indicator %r — skill_level %r unresolved",
+                        ind_node.get("title"),
+                        ind_node.get("skill_level"),
+                    )
                     continue
                 ind = Indicator(
                     title=_resolve_title(ind_node, edits),
@@ -2235,6 +2255,13 @@ async def _apply_specialization_matrix(
                     continue
                 sl_id = await _resolve_skill_level(db, tenant_id, level_title)
                 if sl_id is None:
+                    # HRP-541: the matrix cell is dropped without a trace.
+                    logger.warning(
+                        "compgen: dropping grade link for grade %r — "
+                        "skill_level %r unresolved",
+                        grade_title,
+                        level_title,
+                    )
                     continue
                 link = GradeCompetenceLink(
                     grade_specialization_id=pair.id,

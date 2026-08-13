@@ -10,6 +10,7 @@ Covers the four pieces of the interface-locale chain:
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 
 import pytest
@@ -20,8 +21,10 @@ from app.core.i18n import (
     normalize_locale,
     parse_accept_language,
     resolve_locale,
+    resolve_locale_from_request,
     translate,
 )
+from app.core.security import create_access_token
 from fastapi import Request
 from httpx import AsyncClient
 
@@ -144,6 +147,105 @@ class TestResolveLocale:
     def test_stale_unsupported_values_fall_through(self, locales_de_en):
         # e.g. a locale later removed from the deployment
         assert resolve_locale(user_language="ru", tenant_default="fr") == "en"
+
+
+class TestResolveLocaleFromRequest:
+    """HRP-513: the request-scoped chain used by the error handlers.
+
+    X-Locale header > NEXT_LOCALE cookie > access-token ``lang`` claim >
+    Accept-Language > deployment default.
+    """
+
+    def _request(
+        self,
+        *,
+        locale_header: str | None = None,
+        cookie: str | None = None,
+        token: str | None = None,
+        accept_language: str | None = None,
+    ) -> Request:
+        headers: list[tuple[bytes, bytes]] = []
+        if locale_header is not None:
+            headers.append((b"x-locale", locale_header.encode()))
+        if cookie is not None:
+            headers.append((b"cookie", f"NEXT_LOCALE={cookie}".encode()))
+        if token is not None:
+            headers.append((b"authorization", f"Bearer {token}".encode()))
+        if accept_language is not None:
+            headers.append((b"accept-language", accept_language.encode()))
+        return Request(
+            {"type": "http", "method": "GET", "path": "/", "headers": headers}
+        )
+
+    def test_header_wins_over_everything(self, locales_de_en):
+        token = create_access_token("u", "t", 0, language="en")
+        request = self._request(
+            locale_header="de-DE",
+            cookie="en",
+            token=token,
+            accept_language="en",
+        )
+        assert resolve_locale_from_request(request) == "de"
+
+    def test_cookie_wins_over_token_claim(self, locales_de_en):
+        # A language switch writes the cookie immediately; the claim only
+        # catches up at the next login, so the cookie must rank higher.
+        token = create_access_token("u", "t", 0, language="en")
+        request = self._request(cookie="de", token=token, accept_language="en")
+        assert resolve_locale_from_request(request) == "de"
+
+    def test_token_claim_wins_over_accept_language(self, locales_de_en):
+        # The cross-origin case: no cookie is sent, the browser asks for
+        # English, but the account is German.
+        token = create_access_token("u", "t", 0, language="de")
+        request = self._request(token=token, accept_language="en-US,en;q=0.9")
+        assert resolve_locale_from_request(request) == "de"
+
+    def test_accept_language_when_nothing_else_is_stated(self, locales_de_en):
+        assert resolve_locale_from_request(self._request(accept_language="de")) == "de"
+
+    def test_deployment_default_last(self, locales_de_en):
+        assert resolve_locale_from_request(self._request()) == "en"
+
+    def test_unsupported_values_fall_through(self, locales_de_en):
+        token = create_access_token("u", "t", 0, language="de")
+        # A header for a locale this deployment does not ship must not
+        # shadow the account locale carried by the token.
+        request = self._request(
+            locale_header="fr", cookie="ru", token=token, accept_language="en"
+        )
+        assert resolve_locale_from_request(request) == "de"
+
+    def test_token_without_language_claim_is_ignored(self, locales_de_en):
+        token = create_access_token("u", "t", 0)
+        request = self._request(token=token, accept_language="de")
+        assert resolve_locale_from_request(request) == "de"
+
+    @pytest.mark.parametrize(
+        "authorization",
+        ["Bearer not-a-jwt", "Bearer ", "Basic abc", ""],
+    )
+    def test_unusable_authorization_never_raises(self, locales_de_en, authorization):
+        headers = [(b"authorization", authorization.encode())]
+        headers.append((b"accept-language", b"de"))
+        request = Request(
+            {"type": "http", "method": "GET", "path": "/", "headers": headers}
+        )
+        assert resolve_locale_from_request(request) == "de"
+
+    def test_forged_signature_is_dropped(self, locales_de_en):
+        import jwt
+
+        forged = jwt.encode({"lang": "de"}, "not-the-secret", algorithm="HS256")
+        request = self._request(token=forged, accept_language="en")
+        assert resolve_locale_from_request(request) == "en"
+
+    def test_access_token_carries_the_account_locale(self):
+        from app.core.security import decode_token
+
+        assert "lang" not in decode_token(create_access_token("u", "t", 0))
+        payload = decode_token(create_access_token("u", "t", 0, language="de"))
+        assert payload["lang"] == "de"
 
 
 # --- translate() catalog lookup (F3) ---
@@ -547,3 +649,145 @@ class TestValidationErrorHandler:
         )
         assert body["detail"][0]["msg"] == "Field required"
         assert body["detail"][1]["msg"] == "Value error, At least one field must be set"
+
+
+class TestSignedOutFunnelEmailLocale:
+    """HRP-513 follow-up: emails from signed-out funnels must follow the
+    locale the visitor actually chose.
+
+    These forms carry a language switcher (HRP-516), which writes the
+    NEXT_LOCALE cookie and makes the client send X-Locale — but the
+    endpoints only read Accept-Language, so switching the form to German
+    still produced an English email. They now go through
+    ``resolve_locale_from_request``, the same chain the error handlers
+    use. The account/tenant preference still outranks it.
+    """
+
+    @pytest.fixture
+    def captured(self, monkeypatch):
+        """Locale handed to each outbound email helper.
+
+        Pins an email provider so registration never takes the onprem
+        auto-verify shortcut (which skips the email entirely) — the CI
+        backend job runs onprem with no provider configured.
+        """
+        monkeypatch.setattr(settings, "smtp_host", "smtp.test")
+        seen: dict[str, str] = {}
+
+        def _capture(name: str):
+            def _fake(*_args, locale: str = "en", **_kwargs) -> bool:
+                seen[name] = locale
+                return True
+
+            return _fake
+
+        monkeypatch.setattr(
+            "app.modules.auth.service.send_verification_email", _capture("verify")
+        )
+        monkeypatch.setattr(
+            "app.core.email.send_password_reset_email", _capture("reset")
+        )
+        monkeypatch.setattr(
+            "app.core.email.send_signup_verify_email", _capture("signup")
+        )
+        return seen
+
+    @pytest.fixture
+    def open_signup(self, monkeypatch):
+        async def _noop(_remote_ip):
+            return None
+
+        async def _ok(_token, *, remote_ip=None):
+            return True
+
+        monkeypatch.setattr("app.modules.signup.service._enforce_rate_limit", _noop)
+        monkeypatch.setattr("app.modules.signup.service._verify_turnstile", _ok)
+
+    async def test_password_reset_follows_x_locale_over_accept_language(
+        self, client: AsyncClient, user, captured, locales_de_en
+    ):
+        resp = await client.post(
+            "/api/auth/forgot-password",
+            json={"email": user.email},
+            headers={"X-Locale": "de", "Accept-Language": "en-US,en;q=0.9"},
+        )
+        assert resp.status_code == 200
+        assert captured["reset"] == "de"
+
+    async def test_password_reset_follows_next_locale_cookie(
+        self, client: AsyncClient, user, captured, locales_de_en
+    ):
+        resp = await client.post(
+            "/api/auth/forgot-password",
+            json={"email": user.email},
+            headers={"Accept-Language": "en-US,en;q=0.9", "Cookie": "NEXT_LOCALE=de"},
+        )
+        assert resp.status_code == 200
+        assert captured["reset"] == "de"
+
+    async def test_password_reset_still_honours_accept_language_alone(
+        self, client: AsyncClient, user, captured, locales_de_en
+    ):
+        resp = await client.post(
+            "/api/auth/forgot-password",
+            json={"email": user.email},
+            headers={"Accept-Language": "de-DE,de;q=0.9"},
+        )
+        assert resp.status_code == 200
+        assert captured["reset"] == "de"
+
+    async def test_registration_verification_follows_x_locale(
+        self, client: AsyncClient, captured, locales_de_en
+    ):
+        email = f"reg-{uuid.uuid4().hex[:8]}@example.com"
+        resp = await client.post(
+            "/api/auth/register",
+            json={
+                "email": email,
+                "password": "Str0ng!Passw0rd",
+                "first_name": "Ada",
+                "last_name": "Lovelace",
+                "company_name": f"Acme {uuid.uuid4().hex[:6]}",
+            },
+            headers={"X-Locale": "de", "Accept-Language": "en-US,en;q=0.9"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert captured["verify"] == "de"
+
+    async def test_resend_verification_follows_x_locale(
+        self, client: AsyncClient, captured, locales_de_en
+    ):
+        email = f"resend-{uuid.uuid4().hex[:8]}@example.com"
+        created = await client.post(
+            "/api/auth/register",
+            json={
+                "email": email,
+                "password": "Str0ng!Passw0rd",
+                "first_name": "Ada",
+                "last_name": "Lovelace",
+                "company_name": f"Acme {uuid.uuid4().hex[:6]}",
+            },
+        )
+        assert created.status_code == 201, created.text
+        captured.clear()
+        resp = await client.post(
+            "/api/auth/resend-verification",
+            json={"email": email},
+            headers={"X-Locale": "de", "Accept-Language": "en-US,en;q=0.9"},
+        )
+        assert resp.status_code == 200
+        assert captured["verify"] == "de"
+
+    async def test_signup_request_verification_follows_x_locale(
+        self, client: AsyncClient, captured, open_signup, locales_de_en
+    ):
+        resp = await client.post(
+            "/api/signup-request",
+            json={
+                "email": f"lead-{uuid.uuid4().hex[:8]}@example.com",
+                "first_name": "Lead",
+            },
+            headers={"X-Locale": "de", "Accept-Language": "en-US,en;q=0.9"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert captured["signup"] == "de"

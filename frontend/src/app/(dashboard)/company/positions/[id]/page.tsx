@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
+import { getDefaultSalaryCurrency } from "@/lib/currency";
 import { usePermissions } from "@/hooks/use-permissions";
 import { inlineEditKeys, useInlineEdit } from "@/hooks/use-inline-edit";
 import { useTreeExpansion } from "@/hooks/use-tree-expansion";
@@ -310,7 +311,9 @@ function formatSalaryRange(
 ): string | null {
   if (min == null && max == null) return null;
   const fmt = (n: number) => n.toLocaleString(locale);
-  const cur = currency ?? "RUB";
+  // HRP-439: display fallback for a range saved before the currency was
+  // recorded — the installation's own, never a hardcoded literal.
+  const cur = currency ?? getDefaultSalaryCurrency();
   if (min != null && max != null) {
     return `${fmt(min)} – ${fmt(max)} ${cur}`;
   }

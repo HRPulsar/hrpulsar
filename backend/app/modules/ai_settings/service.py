@@ -93,10 +93,18 @@ def _default_allowed_models() -> list[dict[str, Any]]:
 
 _allowed_models: list[dict[str, Any]] = _default_allowed_models()
 
+# The config-declared whitelist (credits.yaml / community presets), frozen
+# at registration. `_allowed_models` is mutated at runtime by moderation
+# upserts in whichever worker served the request; this snapshot is not, so
+# it is identical in every worker for the life of the process. Catalog rows
+# with no moderated value inherit their price from here (HRP-544), which is
+# what keeps that inheritance the same across workers.
+_curated_models: list[dict[str, Any]] = list(_allowed_models)
+
 
 def register_models(models: list[dict[str, Any]]) -> None:
     """Replace the in-memory whitelist. Called by `ee.register_enterprise(app)`."""
-    global _allowed_models
+    global _allowed_models, _curated_models
     if not models:
         return
     _allowed_models = [
@@ -108,6 +116,17 @@ def register_models(models: list[dict[str, Any]]) -> None:
         }
         for entry in models
     ]
+    _curated_models = list(_allowed_models)
+
+
+def curated_models() -> list[dict[str, Any]]:
+    """The config-declared models, unaffected by runtime moderation upserts.
+
+    Read this — never `list_allowed_models()` — when a decision has to come
+    out the same way in every worker (billing inheritance for catalog rows
+    that carry no moderated value of their own).
+    """
+    return list(_curated_models)
 
 
 def upsert_allowed_model(entry: dict[str, Any]) -> None:
@@ -127,6 +146,26 @@ def upsert_allowed_model(entry: dict[str, Any]) -> None:
     _allowed_models = [
         e for e in _allowed_models if e["model"] != normalized["model"]
     ] + [normalized]
+
+
+def remove_allowed_model(model_id: str) -> bool:
+    """Drop a moderation-added whitelist entry. Returns True if removed.
+
+    HRP-544: clearing a catalog row's moderated multiplier also drops the
+    override this process pushed into the registry, so the picker in this
+    worker stops offering the stale price. Billing does not depend on it —
+    inheritance resolves from the DB and the curated config — but leaving a
+    cleared value in the whitelist would still be a lie. Curated
+    (credits.yaml) ids are never evicted.
+    """
+    global _allowed_models
+    if any(entry["model"] == model_id for entry in _curated_models):
+        return False
+    remaining = [e for e in _allowed_models if e["model"] != model_id]
+    if len(remaining) == len(_allowed_models):
+        return False
+    _allowed_models = remaining
+    return True
 
 
 def list_allowed_models() -> list[dict[str, Any]]:

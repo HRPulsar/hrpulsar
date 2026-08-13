@@ -1156,6 +1156,10 @@ export interface CreditBalance {
   paid_credits: number;
   bonus_credits: number;
   total: number;
+  // HRP-547: part of the total held for work in flight (an upload that
+  // started but has not finished), and what is left to spend elsewhere.
+  reserved: number;
+  available: number;
   billing_status: string;
   credits_reset_day: number;
   credit_warning_threshold: number;
@@ -1197,6 +1201,9 @@ export interface PurchaseCheckoutResult {
   currency?: string;
   legal_entity?: BillingLegalEntity | null;
   checkout_url?: string;
+  // True when the request landed on an invoice the operator was already
+  // pinged about (repeat click within the reuse window, HRP-502).
+  reused?: boolean;
 }
 
 export interface CreditTransaction {
@@ -1223,6 +1230,9 @@ export interface CreditCostAction {
   action: string;
   name: string;
   cost: number;
+  /** True when `cost` is a unit price (per minute / row / candidate / MB)
+   * and the charge is computed per call — never present it as the total. */
+  per_unit?: boolean;
 }
 
 export interface CreditCostCategory {
@@ -2214,6 +2224,9 @@ export interface VacancyAnalytics {
   vacancy_id: string;
   funnel: FunnelStageStat[];
   win_loss: { hired: number; rejected: number; withdrew: number; in_progress: number };
+  // HRP-425: names of the funnel's terminal stages, used as the tile labels.
+  positive_stage_names: string[];
+  negative_stage_names: string[];
   total_candidates: number;
 }
 

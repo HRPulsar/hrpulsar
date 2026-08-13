@@ -7,7 +7,8 @@ hit skips both the LLM call and the credit deduction — see
 ``enqueue_analyze_or_cached`` in ``interview_service.py``.
 
 Key shape: sha256(transcript || profile.id || profile.version ||
-vacancy.title || vacancy.language).
+vacancy.title || vacancy.language || candidate_vacancy.id ||
+latest_parsed_resume.id).
 
 Cache is tenant-scoped by design; demo sessions are short-lived
 single-tenant sandboxes and benefit primarily from the killswitch, not
@@ -17,6 +18,7 @@ cross-session cache hits.
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from typing import Any
 
@@ -25,12 +27,53 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from app.modules.recruitment.common import normalize_competence_id
 from app.modules.recruitment.models import (
     AIAssessment,
     Interview,
     InterviewAnalysisCache,
     VacancyProfile,
 )
+
+logger = logging.getLogger(__name__)
+
+
+async def _profile_competence_ids(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview: Interview,
+) -> set[uuid.UUID]:
+    """Competence ids of the interview's vacancy profile, in AIAssessment space.
+
+    ``AIAssessment.competence_id`` is not a Competence FK: both the real
+    analysis path and the compact matrix derive it from the vacancy
+    profile entry (``uuid5(COMPETENCE_NS, slug)``). This mirrors that
+    derivation so cached rows land on the same keys the matrix looks up.
+    """
+    if interview.candidate_vacancy_id is None:
+        return set()
+
+    from app.modules.recruitment.models import CandidateVacancy
+
+    cv = await db.get(CandidateVacancy, interview.candidate_vacancy_id)
+    if cv is None:
+        return set()
+
+    profile_data = (
+        await db.execute(
+            select(VacancyProfile.profile_data).where(
+                VacancyProfile.vacancy_id == cv.vacancy_id,
+                VacancyProfile.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    ids: set[uuid.UUID] = set()
+    for comp in (profile_data or {}).get("competences") or []:
+        comp_uuid = normalize_competence_id(comp.get("id") or comp.get("name") or "")
+        if comp_uuid is not None:
+            ids.add(comp_uuid)
+    return ids
 
 
 def compute_cache_key(
@@ -39,13 +82,23 @@ def compute_cache_key(
     profile_version: int | None,
     vacancy_title: str | None = None,
     vacancy_language: str | None = None,
+    candidate_vacancy_id: uuid.UUID | None = None,
+    resume_file_id: uuid.UUID | None = None,
 ) -> str:
-    """Stable hex digest for (transcript, profile, vacancy) tuple.
+    """Stable hex digest for (transcript, profile, vacancy, candidate) tuple.
 
     ``vacancy_title`` / ``vacancy_language`` are folded in because the
     analysis prompt embeds both — editing either changes the LLM output
     even when the profile row itself is untouched, so they must
     invalidate the cache.
+
+    ``candidate_vacancy_id`` / ``resume_file_id`` are folded in for the
+    same reason: the prompt embeds the candidate's name and the parsed
+    summary of their latest resume. Without them two candidates on one
+    vacancy with the same transcript text (a template transcript, the
+    same person re-applying) collide on one key and one candidate is
+    served the other's verdict — and a re-analyze after a new resume is
+    parsed keeps returning the pre-resume analysis forever (review fix).
     """
     hasher = hashlib.sha256()
     hasher.update(transcript.encode("utf-8"))
@@ -57,6 +110,10 @@ def compute_cache_key(
     hasher.update((vacancy_title or "").encode("utf-8"))
     hasher.update(b"\x00")
     hasher.update((vacancy_language or "").encode("utf-8"))
+    hasher.update(b"\x00")
+    hasher.update(str(candidate_vacancy_id or "").encode("utf-8"))
+    hasher.update(b"\x00")
+    hasher.update(str(resume_file_id or "").encode("utf-8"))
     return hasher.hexdigest()
 
 
@@ -89,11 +146,18 @@ async def apply_cached_analysis(
     snapshot rather than a stale ``If-Match`` match.
 
     HRP-276 / L4: every ``competence_id`` in the cached payload is
-    re-validated against the tenant's own Competence rows before
-    insertion. Cached entries written under a different tenant (or
-    against a competence that has since been deleted) are skipped
-    silently rather than FK-violating or — worse — pointing assessments
-    at another tenant's row.
+    re-validated before insertion, so entries written under a different
+    tenant (or against a competence that has since been deleted) are
+    skipped silently rather than pointing assessments at another
+    tenant's row.
+
+    HRP-275: the accepted set is the vacancy profile's competence
+    namespace — ``uuid5(COMPETENCE_NS, slug)`` — because that is what
+    ``analyze_interview_task`` writes and what the compact matrix reads
+    back. Tenant Competence row ids stay accepted for payloads keyed on
+    the competence dictionary. Validating against the dictionary alone
+    dropped *every* profile-derived assessment (the demo cache-hit flow
+    wrote a completed analysis with an empty matrix).
     """
     interview.analysis_data = cached.analysis_data
     interview.analysis_status = "completed"
@@ -112,9 +176,11 @@ async def apply_cached_analysis(
 
     valid_competence_ids: set[uuid.UUID] = set()
     if raw_competence_ids:
+        valid_competence_ids = await _profile_competence_ids(db, tenant_id, interview)
+
         from app.modules.competence.models import Competence
 
-        valid_competence_ids = set(
+        valid_competence_ids |= set(
             (
                 await db.execute(
                     select(Competence.id).where(
@@ -122,8 +188,19 @@ async def apply_cached_analysis(
                         Competence.id.in_(raw_competence_ids),
                     )
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
+        dropped = raw_competence_ids - valid_competence_ids
+        if dropped:
+            logger.warning(
+                "cached analysis: %d of %d competence ids are outside the "
+                "vacancy profile and the tenant dictionary (interview %s)",
+                len(dropped),
+                len(raw_competence_ids),
+                interview.id,
+            )
 
     await db.execute(
         delete(AIAssessment).where(
@@ -161,7 +238,9 @@ async def _load_vacancy_cache_inputs(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     interview: Interview,
-) -> tuple[uuid.UUID | None, int | None, str | None, str | None] | None:
+) -> (
+    tuple[uuid.UUID | None, int | None, str | None, str | None, uuid.UUID | None] | None
+):
     """Async load: (profile_id, profile_version, vacancy_title, vacancy_language).
 
     Returns ``None`` when the interview has no candidate_vacancy link,
@@ -171,7 +250,7 @@ async def _load_vacancy_cache_inputs(
     """
     if interview.candidate_vacancy_id is None:
         return None
-    from app.modules.recruitment.models import CandidateVacancy, Vacancy
+    from app.modules.recruitment.models import CandidateFile, CandidateVacancy, Vacancy
 
     cv = await db.get(CandidateVacancy, interview.candidate_vacancy_id)
     if cv is None:
@@ -180,6 +259,19 @@ async def _load_vacancy_cache_inputs(
     vacancy = await db.get(Vacancy, cv.vacancy_id)
     vacancy_title = getattr(vacancy, "title", None) if vacancy else None
     vacancy_language = getattr(vacancy, "language", None) if vacancy else None
+
+    # Same "latest parsed resume" pick as the analysis task's prompt build.
+    resume_file_id = (
+        await db.execute(
+            select(CandidateFile.id)
+            .where(
+                CandidateFile.candidate_id == cv.candidate_id,
+                CandidateFile.parse_status == "completed",
+            )
+            .order_by(CandidateFile.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
     result = await db.execute(
         select(VacancyProfile.id, VacancyProfile.version).where(
@@ -191,18 +283,20 @@ async def _load_vacancy_cache_inputs(
     if row is None:
         return None
     profile_id, profile_version = row
-    return profile_id, profile_version, vacancy_title, vacancy_language
+    return profile_id, profile_version, vacancy_title, vacancy_language, resume_file_id
 
 
 def _load_vacancy_cache_inputs_sync(
     db: Session,
     tenant_id: uuid.UUID,
     interview: Interview,
-) -> tuple[uuid.UUID | None, int | None, str | None, str | None] | None:
+) -> (
+    tuple[uuid.UUID | None, int | None, str | None, str | None, uuid.UUID | None] | None
+):
     """Sync twin of ``_load_vacancy_cache_inputs`` for Celery."""
     if interview.candidate_vacancy_id is None:
         return None
-    from app.modules.recruitment.models import CandidateVacancy, Vacancy
+    from app.modules.recruitment.models import CandidateFile, CandidateVacancy, Vacancy
 
     cv = db.get(CandidateVacancy, interview.candidate_vacancy_id)
     if cv is None:
@@ -211,6 +305,17 @@ def _load_vacancy_cache_inputs_sync(
     vacancy = db.get(Vacancy, cv.vacancy_id)
     vacancy_title = getattr(vacancy, "title", None) if vacancy else None
     vacancy_language = getattr(vacancy, "language", None) if vacancy else None
+
+    # Same "latest parsed resume" pick as the analysis task's prompt build.
+    resume_file_id = db.execute(
+        select(CandidateFile.id)
+        .where(
+            CandidateFile.candidate_id == cv.candidate_id,
+            CandidateFile.parse_status == "completed",
+        )
+        .order_by(CandidateFile.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
 
     row = db.execute(
         select(VacancyProfile.id, VacancyProfile.version).where(
@@ -221,7 +326,7 @@ def _load_vacancy_cache_inputs_sync(
     if row is None:
         return None
     profile_id, profile_version = row
-    return profile_id, profile_version, vacancy_title, vacancy_language
+    return profile_id, profile_version, vacancy_title, vacancy_language, resume_file_id
 
 
 async def compute_cache_key_for_interview(
@@ -243,13 +348,15 @@ async def compute_cache_key_for_interview(
     inputs = await _load_vacancy_cache_inputs(db, tenant_id, interview)
     if inputs is None:
         return None
-    profile_id, profile_version, vacancy_title, vacancy_language = inputs
+    profile_id, profile_version, vacancy_title, vacancy_language, resume_id = inputs
     return compute_cache_key(
         interview.transcript,
         profile_id,
         profile_version,
         vacancy_title=vacancy_title,
         vacancy_language=vacancy_language,
+        candidate_vacancy_id=interview.candidate_vacancy_id,
+        resume_file_id=resume_id,
     )
 
 
@@ -324,11 +431,13 @@ def compute_cache_key_for_interview_sync(
     inputs = _load_vacancy_cache_inputs_sync(db, tenant_id, interview)
     if inputs is None:
         return None
-    profile_id, profile_version, vacancy_title, vacancy_language = inputs
+    profile_id, profile_version, vacancy_title, vacancy_language, resume_id = inputs
     return compute_cache_key(
         interview.transcript,
         profile_id,
         profile_version,
         vacancy_title=vacancy_title,
         vacancy_language=vacancy_language,
+        candidate_vacancy_id=interview.candidate_vacancy_id,
+        resume_file_id=resume_id,
     )

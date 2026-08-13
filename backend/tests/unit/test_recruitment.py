@@ -873,22 +873,35 @@ class TestHiringManager:
         assert v["hiring_manager_id"] == other.id
         assert v["hiring_manager_name"] == "Jane Manager"
 
-    async def test_create_rejects_non_admin(self, db: AsyncSession, tenant, user):
+    async def test_create_accepts_any_tenant_user(
+        self, db: AsyncSession, tenant, user
+    ):
+        """HRP-441: eligibility is tenant membership, not the admin tier —
+        a team lead with no role at all can own the requisition."""
         no_role = await _make_tenant_user(db, tenant.id)
         data = _vacancy_data()
         data.hiring_manager_id = no_role.id
+        v = await service.create_vacancy(db, tenant.id, user.id, data)
+        assert v["hiring_manager_id"] == no_role.id
+
+    async def test_create_rejects_inactive_user(self, db: AsyncSession, tenant, user):
+        inactive = await _make_tenant_user(db, tenant.id)
+        inactive.is_active = False
+        await db.commit()
+        data = _vacancy_data()
+        data.hiring_manager_id = inactive.id
         with pytest.raises(HTTPException) as exc_info:
             await service.create_vacancy(db, tenant.id, user.id, data)
         assert exc_info.value.status_code == 422
 
-    async def test_create_by_non_admin_leaves_default_empty(
+    async def test_create_by_non_admin_defaults_to_creator(
         self, db: AsyncSession, tenant, user
     ):
-        """A creator without an admin-tier role must not become the hiring
-        manager by default — the picker could never display them."""
+        """HRP-441: the picker now shows every active member, so the
+        creator is a valid default whatever role they hold."""
         no_role = await _make_tenant_user(db, tenant.id)
         v = await service.create_vacancy(db, tenant.id, no_role.id, _vacancy_data())
-        assert v["hiring_manager_id"] is None
+        assert v["hiring_manager_id"] == no_role.id
 
     async def test_create_rejects_foreign_tenant_user(
         self, db: AsyncSession, tenant, user, admin_role
@@ -929,11 +942,68 @@ class TestHiringManager:
         no_role = await _make_tenant_user(
             db, tenant.id, first_name="No", last_name="Role"
         )
+        inactive = await _make_tenant_user(
+            db, tenant.id, first_name="Gone", last_name="Away"
+        )
+        inactive.is_active = False
+        await db.commit()
         options = await service.list_hiring_manager_options(db, tenant.id)
         ids = {o["id"] for o in options}
         assert user.id in ids
         assert admin2.id in ids
-        assert no_role.id not in ids
+        # HRP-441: every active member is offered, whatever their role.
+        assert no_role.id in ids
+        assert inactive.id not in ids
+
+    async def test_terminated_employee_is_not_offered(
+        self, db: AsyncSession, tenant, user
+    ):
+        """Somebody who has left the company cannot own a requisition.
+
+        The Employee card is the only record of that, but it cannot be
+        *required*: it is created only when an invitation named a division
+        or a position, and the workspace owner who self-registered never
+        gets one. So the card filters people out, it does not let them in.
+        """
+        from datetime import date
+
+        from app.modules.employee.models import Employee
+
+        left = await _make_tenant_user(
+            db, tenant.id, first_name="Gone", last_name="Employee"
+        )
+        stayed = await _make_tenant_user(
+            db, tenant.id, first_name="Still", last_name="Here"
+        )
+        db.add(
+            Employee(
+                user_id=left.id,
+                tenant_id=tenant.id,
+                hire_date=date(2020, 1, 1),
+                status="terminated",
+            )
+        )
+        db.add(
+            Employee(
+                user_id=stayed.id,
+                tenant_id=tenant.id,
+                hire_date=date(2020, 1, 1),
+                status="active",
+            )
+        )
+        await db.commit()
+
+        ids = {o["id"] for o in await service.list_hiring_manager_options(db, tenant.id)}
+        assert stayed.id in ids
+        assert left.id not in ids
+        # The owner has no Employee card at all and stays eligible.
+        assert user.id in ids
+
+        data = _vacancy_data()
+        data.hiring_manager_id = left.id
+        with pytest.raises(HTTPException) as exc_info:
+            await service.create_vacancy(db, tenant.id, user.id, data)
+        assert exc_info.value.status_code == 422
 
 
 # --------------- TestVacancyListJoinedFields (HRP-363) ---------------

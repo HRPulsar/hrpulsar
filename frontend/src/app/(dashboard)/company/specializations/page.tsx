@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { BADGE_COLOR } from "@/lib/badge-tones";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -227,6 +229,12 @@ export default function SpecializationsPage() {
               <TableHead className="w-32 text-right">
                 {t("colAssignedPlan")}
               </TableHead>
+              {/* HRP-294: last column before the action menu, mirroring
+                  the Dictionaries → Specializations reference table. The
+                  list already carries the tenant-effective flag (HRP-337),
+                  so an inactive origin specialization reads the same on
+                  both screens. */}
+              <TableHead className="w-24">{t("status")}</TableHead>
               {canManage && <TableHead className="w-12" />}
             </TableRow>
           </TableHeader>
@@ -281,6 +289,20 @@ export default function SpecializationsPage() {
                 <TableCell className="text-right">
                   {spec.assigned_count}/{spec.headcount_total}
                 </TableCell>
+                <TableCell>
+                  <Badge
+                    variant="secondary"
+                    className={
+                      spec.is_active ? BADGE_COLOR.green : BADGE_COLOR.neutral
+                    }
+                    data-testid={`specializations-row-${spec.id}-status`}
+                    data-status={spec.is_active ? "active" : "inactive"}
+                  >
+                    {spec.is_active
+                      ? t("specializationStatusActive")
+                      : t("specializationStatusInactive")}
+                  </Badge>
+                </TableCell>
                 {canManage && (
                   <TableCell>
                     <DropdownMenu>
@@ -321,7 +343,7 @@ export default function SpecializationsPage() {
             {filtered.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={canManage ? 5 : 4}
+                  colSpan={canManage ? 6 : 5}
                   className="py-8 text-center text-muted-foreground"
                 >
                   {search

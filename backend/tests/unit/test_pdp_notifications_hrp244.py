@@ -42,7 +42,8 @@ class TestHRP244Templates:
             "Ivan Owner", pdp_title="Q3 Growth Plan"
         )
         assert (
-            subject == "Your employee's development plan submitted for review: Q3 Growth Plan"
+            subject
+            == "Your employee's development plan submitted for review: Q3 Growth Plan"
         )
         assert "Ivan Owner" in html
         assert "Q3 Growth Plan" in html
@@ -81,9 +82,7 @@ class TestHRP244Templates:
         subject, html = render_pdp_done_to_reviewer_email(
             "Ivan Owner", pdp_title="Q3 Growth Plan"
         )
-        assert (
-            subject == "Your employee's development plan completed: Q3 Growth Plan"
-        )
+        assert subject == "Your employee's development plan completed: Q3 Growth Plan"
         assert "Ivan Owner" in html
 
     def test_cancelled_to_employee(self):
@@ -99,6 +98,32 @@ class TestHRP244Templates:
         )
         assert subject == "Your employee's development plan cancelled: Q3 Growth Plan"
         assert "Ivan Owner" in html
+
+    def test_noname_variants_drop_the_placeholder(self):
+        # HRP-584: employee_name=None must render dedicated nameless copy
+        # instead of a "The employee" stand-in (in ru the label and the
+        # generic fallback name used to collide into the same word twice).
+        for render in (
+            render_pdp_done_to_employee_email,
+            render_pdp_done_to_reviewer_email,
+            render_pdp_cancelled_to_employee_email,
+            render_pdp_cancelled_to_reviewer_email,
+        ):
+            for title in ("Q3 Growth Plan", None):
+                subject, html = render(None, pdp_title=title)
+                assert "The employee" not in html, (render.__name__, title)
+                assert "{employee_name}" not in html, (render.__name__, title)
+                if title:
+                    assert title in subject
+
+    def test_employee_name_is_html_escaped(self):
+        # HRP-584 review: the name is user-editable profile data and lands
+        # inside markup — it must be escaped like the title next to it.
+        _, html = render_pdp_done_to_reviewer_email(
+            '</strong><a href="http://evil">x</a>', pdp_title="Q3 Growth Plan"
+        )
+        assert '<a href="http://evil">' not in html
+        assert "&lt;a href=&#34;http://evil&#34;&gt;" in html
 
 
 # ---------------------------------------------------------------------------
@@ -197,9 +222,7 @@ class TestHRP244ServiceHooks:
         await _drive_to_review(db, tenant, pdp["id"])
         capture_emails.clear()
 
-        await pdp_service.change_pdp_status(
-            db, tenant.id, pdp["id"], "returned"
-        )
+        await pdp_service.change_pdp_status(db, tenant.id, pdp["id"], "returned")
 
         returned_calls = [
             c
@@ -256,14 +279,12 @@ class TestHRP244ServiceHooks:
             for c in capture_emails
             if c["kwargs"].get("template_code", "").startswith("pdp.done")
         }
-        assert '<html lang="en">' in by_recipient[user.email], (
-            "User.language must beat the tenant default for the plan "
-            "owner's own email"
-        )
-        assert '<html lang="de">' in by_recipient[reviewer.email], (
-            "A reviewer without a language preference falls back to the "
-            "tenant default"
-        )
+        assert (
+            '<html lang="en">' in by_recipient[user.email]
+        ), "User.language must beat the tenant default for the plan owner's own email"
+        assert (
+            '<html lang="de">' in by_recipient[reviewer.email]
+        ), "A reviewer without a language preference falls back to the tenant default"
 
     async def test_post_launch_cancel_notifies_owner_and_reviewer(
         self, db: AsyncSession, tenant, user, employee, capture_emails
@@ -272,9 +293,7 @@ class TestHRP244ServiceHooks:
         await pdp_service.change_pdp_status(db, tenant.id, pdp["id"], "sent")
         capture_emails.clear()
 
-        await pdp_service.change_pdp_status(
-            db, tenant.id, pdp["id"], "cancelled"
-        )
+        await pdp_service.change_pdp_status(db, tenant.id, pdp["id"], "cancelled")
 
         templates = {
             c["kwargs"].get("template_code"): c
@@ -300,9 +319,7 @@ class TestHRP244ServiceHooks:
             user.id,
             PDPCreate(title="Draft Plan", employee_id=employee.id),
         )
-        await pdp_service.change_pdp_status(
-            db, tenant.id, pdp["id"], "cancelled"
-        )
+        await pdp_service.change_pdp_status(db, tenant.id, pdp["id"], "cancelled")
         assert capture_emails == []
 
     async def test_review_with_only_division_manager_falls_back(
@@ -432,9 +449,45 @@ class TestHRP244ServiceHooks:
         ]
         assert len(reviewer_calls) == 1
         assert reviewer_calls[0]["to"] == reviewer.email
+        # HRP-584: the missing owner renders the nameless copy, not a
+        # generic "The employee" placeholder name.
+        from app.core.i18n import translate
+
+        assert "The employee" not in reviewer_calls[0]["body"]
+        assert (
+            translate(
+                "email.pdp_done_to_reviewer.intro_noname", "en", title="Orphan Plan"
+            )
+            in reviewer_calls[0]["body"]
+        )
         employee_calls = [
             c
             for c in capture_emails
             if c["kwargs"].get("template_code") == "pdp.done.employee"
         ]
         assert employee_calls == []
+
+    async def test_blank_name_owner_gets_nameless_copy(
+        self, db: AsyncSession, tenant, user, employee, capture_emails
+    ):
+        # HRP-584: an owner whose profile carries empty first/last names
+        # (CSV/SCIM onboarding) must get the nameless wording — their login
+        # email must not be rendered as a display name.
+        pdp, reviewer = await _pdp_with_reviewer(db, tenant, user, employee)
+        user.first_name = ""
+        user.last_name = ""
+        await db.commit()
+        await _drive_to_review(db, tenant, pdp["id"])
+        capture_emails.clear()
+
+        await pdp_service.change_pdp_status(db, tenant.id, pdp["id"], "done")
+
+        by_template = {
+            c["kwargs"].get("template_code"): c
+            for c in capture_emails
+            if c["kwargs"].get("template_code", "").startswith("pdp.done")
+        }
+        assert set(by_template) == {"pdp.done.employee", "pdp.done.reviewer"}
+        for call in by_template.values():
+            assert user.email not in call["body"]
+            assert "The employee" not in call["body"]

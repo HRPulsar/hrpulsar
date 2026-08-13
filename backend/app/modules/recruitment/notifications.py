@@ -31,7 +31,6 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
 
-from jinja2 import Template
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -44,6 +43,7 @@ from app.modules.notification.models import (
     NotificationPreference,
     NotificationTemplate,
 )
+from app.modules.notification.service import render_db_template
 
 log = logging.getLogger(__name__)
 
@@ -281,8 +281,7 @@ async def _async_dispatch(
             # HRP-442/460: payloads carry a relative ``link`` so in-app
             # notifications can route on it; email needs it absolute.
             _add_absolute_link(ctx)
-            subject = Template(template.subject_template).render(**ctx)
-            body = Template(template.body_template).render(**ctx)
+            subject, body = render_db_template(template, ctx)
         except Exception:
             log.exception("notification render failed: %s", template_code)
             continue
@@ -761,8 +760,7 @@ def notify_sync(
             # HRP-442/460: payloads carry a relative ``link`` so in-app
             # notifications can route on it; email needs it absolute.
             _add_absolute_link(ctx)
-            subject = Template(template.subject_template).render(**ctx)
-            body = Template(template.body_template).render(**ctx)
+            subject, body = render_db_template(template, ctx)
         except Exception:
             log.exception("notify_sync render failed for %s", template_code)
             continue

@@ -51,6 +51,10 @@ async def list_employees(
     limit: int = Query(50, ge=1, le=500),
     q: str | None = Query(default=None, max_length=255),
     division_id: list[uuid.UUID] | None = Query(default=None),
+    # HRP-58: widen `division_id` to the division subtree (nested
+    # departments included). Off by default — existing callers keep the
+    # exact-division semantics they were written against.
+    include_sub_divisions: bool = Query(default=False),
     status: list[str] | None = Query(default=None),
     specialization_id: list[uuid.UUID] | None = Query(default=None),
     position_id: list[uuid.UUID] | None = Query(default=None),
@@ -77,6 +81,7 @@ async def list_employees(
         unassigned_only=unassigned_only,
         with_alerts=with_alerts,
         q=q,
+        include_sub_divisions=include_sub_divisions,
     )
     return {"items": items, "total": total}
 

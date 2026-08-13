@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
-import type { CandidateVacancy, Vacancy, VacancyProfile } from "@/lib/types";
+import type { Vacancy, VacancyProfile } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -43,9 +43,6 @@ export default function VacancyDetailPage() {
   const [vacancy, setVacancy] = useState<Vacancy | null>(null);
   const [etag, setEtag] = useState<string | null>(null);
   const [profile, setProfile] = useState<VacancyProfile | null>(null);
-  const [candidateVacancies, setCandidateVacancies] = useState<CandidateVacancy[]>(
-    [],
-  );
   const [loading, setLoading] = useState(true);
 
   const loadVacancy = useCallback(async () => {
@@ -71,32 +68,16 @@ export default function VacancyDetailPage() {
     }
   }, [id]);
 
-  const loadCandidateVacancies = useCallback(async () => {
-    try {
-      const data = await api.get<
-        { items: CandidateVacancy[] } | CandidateVacancy[]
-      >(`/recruitment/vacancies/${id}/candidates`);
-      const items = Array.isArray(data) ? data : (data.items ?? []);
-      setCandidateVacancies(items);
-    } catch {
-      // ignore — questions tab can still render without the lookup
-    }
-  }, [id]);
-
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      await Promise.all([
-        loadVacancy(),
-        loadProfile(),
-        loadCandidateVacancies(),
-      ]);
+      await Promise.all([loadVacancy(), loadProfile()]);
       if (!cancelled) setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [loadVacancy, loadProfile, loadCandidateVacancies]);
+  }, [loadVacancy, loadProfile]);
 
   // HRP-180: rewrite legacy ?tab=profile / ?tab=candidates to the main
   // page with an anchor — the standalone tabs are gone.
@@ -279,10 +260,9 @@ export default function VacancyDetailPage() {
         </TabsContent>
 
         <TabsContent value="questions" className="space-y-4">
-          <VacancyQuestionsTab
-            vacancyId={vacancy.id}
-            candidates={candidateVacancies}
-          />
+          {/* HRP-504: the tab loads its own candidates + competences from
+              the vacancy-level question-sets endpoint. */}
+          <VacancyQuestionsTab vacancyId={vacancy.id} />
         </TabsContent>
 
         <TabsContent value="assessments" className="space-y-4">

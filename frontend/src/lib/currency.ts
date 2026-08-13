@@ -33,12 +33,55 @@ function readEnv(key: CurrencyEnvKey): string | undefined {
   return window.__ENV__?.[key] || buildTimeEnv(key) || undefined;
 }
 
+/** ISO 4217 is exactly three letters. */
+const CURRENCY_CODE = /^[A-Za-z]{3}$/;
+
+/**
+ * Normalize an env-provided currency code, mirroring the backend rule in
+ * `app/core/currency.py`: three letters uppercased, anything else falls
+ * back to USD. Without this a typo like "EURO" reached the API (422 on
+ * save, since the column is String(3)) and Intl.NumberFormat, which
+ * throws on an invalid code.
+ */
+function normalizeCurrency(raw: string | undefined): string {
+  const value = (raw ?? "").trim();
+  return CURRENCY_CODE.test(value) ? value.toUpperCase() : DEFAULT_CURRENCY;
+}
+
 export function getBillingCurrency(): string {
-  return readEnv("NEXT_PUBLIC_BILLING_CURRENCY") || DEFAULT_CURRENCY;
+  return normalizeCurrency(readEnv("NEXT_PUBLIC_BILLING_CURRENCY"));
 }
 
 export function getBillingLocale(): string {
   return readEnv("NEXT_PUBLIC_BILLING_LOCALE") || DEFAULT_LOCALE;
+}
+
+/**
+ * HRP-439: default currency for HR money fields (grade salary ranges,
+ * employee compensations).
+ *
+ * Those defaults used to be literals — "RUB" on the grade chain, "USD" on
+ * compensations — so at least one of them was wrong on every site. The HR
+ * domain reuses the per-installation billing currency rather than adding
+ * a second knob; the backend mirrors this with `app/core/currency.py`.
+ * Kept as its own named export so the two can be split later without
+ * hunting down call sites.
+ */
+export function getDefaultSalaryCurrency(): string {
+  return getBillingCurrency();
+}
+
+/** Currencies commonly picked in HR forms, most relevant first. */
+const COMMON_CURRENCIES = ["USD", "EUR", "GBP", "RUB"];
+
+/**
+ * Options for a currency picker: the installation's currency first (it is
+ * the default and the most likely pick), then the common codes, without
+ * duplicates.
+ */
+export function getCurrencyOptions(): string[] {
+  const installation = getDefaultSalaryCurrency();
+  return [installation, ...COMMON_CURRENCIES.filter((c) => c !== installation)];
 }
 
 /** Price formatter: whole amounts stay whole (₽2 500, $25), fractional

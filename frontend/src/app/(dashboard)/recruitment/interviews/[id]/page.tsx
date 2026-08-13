@@ -43,8 +43,13 @@ import {
   labelForAssessmentRound,
   splitLocalDateTime,
 } from "@/lib/recruitment-helpers";
+import { useCreditGate } from "@/hooks/use-cost-confirmation";
 
 const POLL_INTERVAL = 3000;
+
+// HRP-275: the action the backend charges for `POST .../analyze`, so the
+// button can quote the price instead of spending credits unannounced.
+const ANALYZE_ACTION = "recruitment.analyze_interview";
 
 const EM_DASH = "—";
 
@@ -66,6 +71,14 @@ export default function InterviewDetailPage() {
   const [busyAction, setBusyAction] = useState<
     null | "transcribe" | "analyze"
   >(null);
+  // Server-priced Analyze cost. Community builds keep `cost` null and the
+  // button label stays unsuffixed.
+  const {
+    isSaas: billingActive,
+    cost: analyzeCost,
+    insufficient: analyzeInsufficient,
+    refresh: refreshAnalyzeCredits,
+  } = useCreditGate(ANALYZE_ACTION);
   const [editing, setEditing] = useState<EditableField>(null);
   const [savingField, setSavingField] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -259,10 +272,19 @@ export default function InterviewDetailPage() {
     if (!interview) return;
     setBusyAction("analyze");
     try {
-      await api.post(
+      // HRP-275: a cache hit returns the finished analysis inline (200,
+      // status="completed"); only a real enqueue (202) is "started".
+      // Reporting both as "started" made a cache hit look like a silent
+      // no-op to the operator.
+      const result = await api.post<{ status?: string }>(
         `/recruitment/interviews/${interview.id}/analyze`,
       );
-      toast.success(t("interviewToastAnalysisStarted"));
+      toast.success(
+        result?.status === "completed"
+          ? t("interviewToastAnalysisReady")
+          : t("interviewToastAnalysisStarted"),
+      );
+      refreshAnalyzeCredits();
       await refresh();
     } catch (err) {
       toast.error(
@@ -812,9 +834,19 @@ export default function InterviewDetailPage() {
                 ) : (
                   <Sparkles className="size-4" />
                 )}
-                {t("interviewAnalyze")}
+                {billingActive && analyzeCost !== null
+                  ? t("interviewAnalyzeCr", { cost: analyzeCost })
+                  : t("interviewAnalyze")}
               </Button>
             </div>
+            {billingActive && analyzeInsufficient && analyzeCost !== null && (
+              <p
+                data-testid="recruitment-interview-analyze-insufficient"
+                className="mt-2 text-xs text-amber-600 dark:text-amber-500"
+              >
+                {t("interviewAnalyzeInsufficient", { cost: analyzeCost })}
+              </p>
+            )}
           </section>
 
           <section>

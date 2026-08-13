@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  API_BASE,
   createDictionaryItem,
   registerUser,
   setAuthTokens,
@@ -70,6 +71,37 @@ test.describe("Specializations page", () => {
     await page.getByTestId("confirm-dialog-btn-confirm").click();
 
     await expect(row).toBeHidden({ timeout: 10000 });
+  });
+
+  test("HRP-294: the row carries a Status badge that follows is_active", async ({
+    page,
+  }) => {
+    const spec = await createDictionaryItem(
+      { page, accessToken },
+      "specialization",
+      `StatusSpec-${Date.now()}`,
+    );
+
+    await page.goto("/company/specializations");
+    const status = page.getByTestId(`specializations-row-${spec.id}-status`);
+    // Fresh dictionary items are active — the badge must say so rather
+    // than leaving the operator to open the reference table to find out.
+    await expect(status).toBeVisible({ timeout: 10000 });
+    await expect(status).toHaveAttribute("data-status", "active");
+
+    const resp = await page.request.put(
+      `${API_BASE}/dictionaries/items/${spec.id}`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: { is_active: false },
+      },
+    );
+    expect(resp.ok()).toBeTruthy();
+
+    await page.reload();
+    await expect(
+      page.getByTestId(`specializations-row-${spec.id}-status`),
+    ).toHaveAttribute("data-status", "inactive", { timeout: 10000 });
   });
 
   test("HRP-103: admin can delete an unused specialization from detail page", async ({

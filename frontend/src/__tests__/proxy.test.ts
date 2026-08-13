@@ -56,14 +56,26 @@ function makeRequest(
     demoSession?: boolean;
     localeCookie?: string;
     acceptLanguage?: string;
+    /** ?lang= carried by an invitation link (HRP-516). */
+    lang?: string;
+    /** Other query params, e.g. the invite token. */
+    query?: string;
   } = {},
 ) {
   const host = opts.host || "app.hrpulsar.com";
-  const url = `https://${host}${path}`;
+  const params = [opts.query, opts.lang ? `lang=${opts.lang}` : ""].filter(
+    Boolean,
+  );
+  const search = params.length ? `?${params.join("&")}` : "";
+  const url = `https://${host}${path}${search}`;
   const headerInit: Record<string, string> = { host };
   if (opts.acceptLanguage) headerInit["accept-language"] = opts.acceptLanguage;
   return {
-    nextUrl: { pathname: path, search: "" },
+    nextUrl: {
+      pathname: path,
+      search,
+      searchParams: new URLSearchParams(search),
+    },
     // A real Headers instance — publicAssessmentResponse clones it via
     // `new Headers(request.headers)` for the nonce'd CSP path.
     headers: new Headers(headerInit),
@@ -414,9 +426,12 @@ describe("NEXT_LOCALE cookie", () => {
     expect(setCookies.has("NEXT_LOCALE")).toBe(false);
   });
 
-  it("does not touch the hardened public-assessment response", () => {
+  // HRP-516: this shell now carries a language switcher and its invitation
+  // link carries ?lang=, so it needs the cookie like every other public
+  // surface. The CSP hardening around it is unchanged.
+  it("sets the cookie on the hardened public-assessment response", () => {
     proxy(makeRequest("/public/assessments/some-token", { host }));
-    expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+    expect(setCookies.get("NEXT_LOCALE")).toBe("en");
   });
 
   it("does not set the cookie on the marketing bounce or robots.txt", () => {
@@ -429,5 +444,80 @@ describe("NEXT_LOCALE cookie", () => {
   it("skips the authed auth-page redirect (self-heals on the next request)", () => {
     proxy(makeRequest("/login", { host, hasToken: true }));
     expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+  });
+
+  // HRP-516: invitation emails append the recipient's locale to the link.
+  // It is consumed once — cookie written, parameter stripped by a redirect
+  // — so it cannot outlive the user's own later choice (review finding 2).
+  describe("?lang= from an invitation link", () => {
+    async function localizedProxy() {
+      vi.resetModules();
+      vi.stubEnv("NEXT_PUBLIC_AVAILABLE_LOCALES", "de,en");
+      const mod = await import("../proxy");
+      return mod.proxy as typeof proxy;
+    }
+
+    it("adopts the locale and redirects to the same URL without lang", async () => {
+      const res = (await localizedProxy())(
+        makeRequest("/public/assessments/tok", { host, lang: "de" }),
+      );
+      expect(setCookies.get("NEXT_LOCALE")).toBe("de");
+      expect(res.type).toBe("redirect");
+      expect(String(redirectTarget)).toBe(
+        `https://${host}/public/assessments/tok`,
+      );
+      // Never 301/308 here: a cached redirect would pin the locale
+      // forever (incident 2026-04-30).
+      expect(redirectStatus).toBe(307);
+      expect(res.headers?.get("Cache-Control")).toBe("no-store");
+      vi.unstubAllEnvs();
+    });
+
+    it("keeps the rest of the query when stripping lang", async () => {
+      (await localizedProxy())(
+        makeRequest("/accept-invite", { host, lang: "de", query: "token=tok" }),
+      );
+      expect(String(redirectTarget)).toBe(
+        `https://${host}/accept-invite?token=tok`,
+      );
+      vi.unstubAllEnvs();
+    });
+
+    it("overrides an existing cookie on the link visit itself", async () => {
+      (await localizedProxy())(
+        makeRequest("/recruitment/invite/tok", {
+          host,
+          lang: "de",
+          localeCookie: "en",
+          acceptLanguage: "en-US,en;q=0.9",
+        }),
+      );
+      expect(setCookies.get("NEXT_LOCALE")).toBe("de");
+      vi.unstubAllEnvs();
+    });
+
+    it("leaves a later switch alone once the parameter is gone", async () => {
+      // The reload after the redirect carries no lang, so the cookie the
+      // switcher wrote survives — the F5 regression this guards.
+      const localized = await localizedProxy();
+      localized(makeRequest("/login", { host, localeCookie: "en" }));
+      expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+      vi.unstubAllEnvs();
+    });
+
+    it("does not redirect an RSC navigation", async () => {
+      const request = makeRequest("/login", { host, lang: "de" });
+      request.headers.set("rsc", "1");
+      const res = (await localizedProxy())(request);
+      expect(res.type).toBe("next");
+      expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+      vi.unstubAllEnvs();
+    });
+
+    it("ignores a locale this deployment does not ship", () => {
+      const res = proxy(makeRequest("/login", { host, lang: "fr", localeCookie: "en" }));
+      expect(res.type).not.toBe("redirect");
+      expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+    });
   });
 });

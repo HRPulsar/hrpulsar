@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import { useCompetenceTree } from "@/hooks/use-competence-tree";
 import { cn, flattenTree } from "@/lib/utils";
 import { formatDate } from "@/lib/date-format";
+import { getCurrencyOptions, getDefaultSalaryCurrency } from "@/lib/currency";
 import {
   ASSESSMENT_STATUS_COLORS,
   assessmentRowDate,
@@ -245,10 +246,12 @@ export default function EmployeeDetailPage() {
   // GF5: Compensation dialog
   const [compOpen, setCompOpen] = useState(false);
   const [compEditId, setCompEditId] = useState<string | null>(null);
+  // HRP-439: compensations default to the installation's currency, the
+  // same source the grade salary ranges use.
   const [compForm, setCompForm] = useState({
     type: "salary",
     amount: "",
-    currency: "USD",
+    currency: getDefaultSalaryCurrency(),
     effective_date: "",
     end_date: "",
     notes: "",
@@ -714,7 +717,14 @@ export default function EmployeeDetailPage() {
   function openCompAdd() {
     setCompEditId(null);
     setCompError(null);
-    setCompForm({ type: "salary", amount: "", currency: "USD", effective_date: "", end_date: "", notes: "" });
+    setCompForm({
+      type: "salary",
+      amount: "",
+      currency: getDefaultSalaryCurrency(),
+      effective_date: "",
+      end_date: "",
+      notes: "",
+    });
     setCompOpen(true);
   }
 
@@ -2276,11 +2286,15 @@ export default function EmployeeDetailPage() {
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
+                  {/* HRP-439: the installation's currency leads the list;
+                      the codes themselves are machine-readable and stay
+                      untranslated. */}
                   <SelectContent>
-                    <SelectItem value="USD">USD</SelectItem>
-                    <SelectItem value="EUR">EUR</SelectItem>
-                    <SelectItem value="GBP">GBP</SelectItem>
-                    <SelectItem value="RUB">RUB</SelectItem>
+                    {getCurrencyOptions().map((code) => (
+                      <SelectItem key={code} value={code}>
+                        {code}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

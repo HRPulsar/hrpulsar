@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { validateSalaryRange } from "@/lib/vacancy-salary";
 import type { Vacancy } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -32,6 +33,12 @@ export default function CreateVacancyPage() {
   async function handleSubmit(generateProfile: boolean) {
     if (!form.title.trim()) {
       toast.error(t("vacancyTitleRequired"));
+      return;
+    }
+    // HRP-440: the salary range obeys the same contract on every surface.
+    const salaryError = validateSalaryRange(form);
+    if (salaryError) {
+      toast.error(t(salaryError));
       return;
     }
 

@@ -29,8 +29,9 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "load: long-running QueuePool/connection load tests (excluded by default; run with -m load)",
+    "migrations: schema-drift guard that replays alembic into a scratch DB (excluded by default; run with -m migrations)",
 ]
-addopts = "-m 'not load'"
+addopts = "-m 'not load and not migrations'"
 
 [tool.coverage.run]
 source = ["backend"]

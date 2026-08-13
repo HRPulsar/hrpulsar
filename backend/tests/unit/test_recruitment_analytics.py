@@ -89,6 +89,13 @@ class TestVacancyAnalytics:
     async def test_win_loss_after_close_hired(
         self, db: AsyncSession, tenant, user
     ):
+        # HRP-425: the tiles count funnel stages, so closing as hired has
+        # to land the candidate on the terminal-positive stage. The test DB
+        # is created from metadata without the seed migration, hence the
+        # explicit seeding here (production tenants always have a funnel).
+        from app.modules.recruitment import vacancy_service
+
+        await vacancy_service.seed_default_recruitment_stages(db, tenant.id)
         vac = await _make_vacancy(db, tenant, user, "Close")
         cand = await _make_candidate(db, tenant, user)
         await service.attach_candidate(

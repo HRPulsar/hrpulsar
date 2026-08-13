@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from statistics import median
 
 from fastapi import status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
@@ -31,6 +31,7 @@ from app.modules.recruitment.models import (
     AIAssessment,
     CandidateVacancy,
     Vacancy,
+    VacancyStage,
 )
 
 
@@ -49,13 +50,17 @@ async def vacancy_analytics(
 
     stages = await _get_applicable_stages(db, tenant_id, vacancy_id)
     cv_rows = (
-        await db.execute(
-            select(CandidateVacancy).where(
-                CandidateVacancy.vacancy_id == vacancy_id,
-                CandidateVacancy.tenant_id == tenant_id,
+        (
+            await db.execute(
+                select(CandidateVacancy).where(
+                    CandidateVacancy.vacancy_id == vacancy_id,
+                    CandidateVacancy.tenant_id == tenant_id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     counts: dict[uuid.UUID | None, int] = {}
     medians: dict[uuid.UUID | None, list[float]] = {}
@@ -101,23 +106,81 @@ async def vacancy_analytics(
             }
         )
 
-    # Win/loss donut — groups by close_resolution / candidate status.
+    # HRP-425: the tiles follow the vacancy's own funnel, not the legacy
+    # ``CandidateVacancy.status`` string. Nothing in the product writes
+    # "rejected" or "withdrew" there — only the vacancy-close flow ever
+    # sets "hired", and only on the one candidate it closed with — so the
+    # tiles read Hired 0 / Rejected 0 / In progress = everybody while the
+    # funnel column right next to them showed the real picture. A stage's
+    # ``stage_type`` is the source of truth.
+    stage_types: dict[uuid.UUID, str] = {
+        stage.id: (stage.stage_type or "active") for stage in stages
+    }
+    # A candidate can still sit on a stage that has since dropped out of
+    # the effective list (tenant defaults replaced by a per-vacancy
+    # override). Resolve those rather than silently calling them active.
+    unresolved = {
+        cv.stage_id
+        for cv in cv_rows
+        if cv.stage_id is not None and cv.stage_id not in stage_types
+    }
+    if unresolved:
+        for stage in (
+            (
+                await db.execute(
+                    select(VacancyStage).where(
+                        VacancyStage.id.in_(unresolved),
+                        # Stage rows are tenant-scoped (NULL = system
+                        # default); every other query here filters, and so
+                        # must this one.
+                        or_(
+                            VacancyStage.tenant_id == tenant_id,
+                            VacancyStage.tenant_id.is_(None),
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        ):
+            stage_types[stage.id] = stage.stage_type or "active"
+
     win_loss = {"hired": 0, "rejected": 0, "withdrew": 0, "in_progress": 0}
     for cv in cv_rows:
-        s = (cv.status or "").lower()
-        if s == "hired":
+        stage_type = stage_types.get(cv.stage_id) if cv.stage_id else None
+        if stage_type == "terminal_positive":
             win_loss["hired"] += 1
-        elif s == "rejected":
+        elif stage_type == "terminal_negative":
             win_loss["rejected"] += 1
-        elif s == "withdrew":
+        elif stage_type == "terminal_neutral":
             win_loss["withdrew"] += 1
+        elif vacancy.status == "closed" and (cv.status or "").lower() == "hired":
+            # Fallback for rows the stage move never reached: a vacancy
+            # closed before HRP-425 (no backfill migration moved those
+            # candidates onto a terminal stage), or a funnel that has no
+            # ``terminal_positive`` stage for close_vacancy to move to.
+            # ``status`` is the write close_vacancy guarantees; without
+            # this a closed, filled requisition reads as fully open.
+            # Gated on the vacancy being closed: on a live vacancy a stale
+            # ``status`` string must not outvote the funnel (HRP-425).
+            win_loss["hired"] += 1
         else:
+            # Not on a terminal stage (or not staged at all) — still moving.
             win_loss["in_progress"] += 1
 
     return {
         "vacancy_id": vacancy_id,
         "funnel": funnel,
         "win_loss": win_loss,
+        # The tiles are labelled with the funnel's own terminal stage names
+        # ("Hired" / "Rejected" are just the defaults), so a vacancy that
+        # renamed or split them reads consistently across the two views.
+        "positive_stage_names": [
+            stage.name for stage in stages if stage.stage_type == "terminal_positive"
+        ],
+        "negative_stage_names": [
+            stage.name for stage in stages if stage.stage_type == "terminal_negative"
+        ],
         "total_candidates": len(cv_rows),
     }
 
@@ -140,10 +203,10 @@ async def recruitment_summary(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
     """
 
     vacancies = (
-        await db.execute(
-            select(Vacancy).where(Vacancy.tenant_id == tenant_id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Vacancy).where(Vacancy.tenant_id == tenant_id)))
+        .scalars()
+        .all()
+    )
     if not vacancies:
         return {
             "top_velocity": [],
@@ -156,12 +219,16 @@ async def recruitment_summary(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
     now = datetime.now(timezone.utc)
 
     cv_rows = (
-        await db.execute(
-            select(CandidateVacancy).where(
-                CandidateVacancy.tenant_id == tenant_id,
+        (
+            await db.execute(
+                select(CandidateVacancy).where(
+                    CandidateVacancy.tenant_id == tenant_id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     by_vacancy: dict[uuid.UUID, list[CandidateVacancy]] = {}
     for cv in cv_rows:
         by_vacancy.setdefault(cv.vacancy_id, []).append(cv)
@@ -180,9 +247,7 @@ async def recruitment_summary(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
                 if isinstance(ts, str):
                     try:
                         first = datetime.fromisoformat(ts)
-                        velocities.append(
-                            (first - cv.created_at).total_seconds()
-                        )
+                        velocities.append((first - cv.created_at).total_seconds())
                     except ValueError:
                         pass
             if (cv.status or "").lower() in {"rejected", "withdrew"}:
@@ -212,8 +277,7 @@ async def recruitment_summary(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
     if cv_rows:
         ai_rows = (
             await db.execute(
-                select(AIAssessment.interview_id, AIAssessment.score)
-                .where(
+                select(AIAssessment.interview_id, AIAssessment.score).where(
                     AIAssessment.tenant_id == tenant_id,
                     AIAssessment.score.is_not(None),
                 )
@@ -258,7 +322,7 @@ async def recruitment_summary(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
         if len(scores) >= 2:
             avg = sum(scores) / len(scores)
             variance = sum((s - avg) ** 2 for s in scores) / len(scores)
-            stddev = variance ** 0.5
+            stddev = variance**0.5
         else:
             stddev = None
         ai_variance.append(
@@ -304,9 +368,7 @@ async def comparison_radar(
     if not candidate_ids:
         return {"vacancy_id": vacancy_id, "candidates": [], "competences": []}
 
-    base = await service.compare_candidates(
-        db, tenant_id, vacancy_id, candidate_ids
-    )
+    base = await service.compare_candidates(db, tenant_id, vacancy_id, candidate_ids)
     competences = base.get("competences", [])
     candidates = []
     for cand in base.get("candidates", []):

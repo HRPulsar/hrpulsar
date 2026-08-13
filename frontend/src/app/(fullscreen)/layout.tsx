@@ -1,6 +1,7 @@
 "use client";
 
 import { AuthProvider } from "@/context/auth-context";
+import { PlatformAdminRedirect } from "@/components/platform-admin-redirect";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
@@ -10,6 +11,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
  * these pages are single-purpose full-viewport surfaces (the assessment
  * canvas) where every pixel of width is the point. Navigation back into
  * the app is the page's own "Back" control.
+ *
+ * HRP-550: "same auth guard" now includes the platform-admin bounce the
+ * dashboard shell has always had — without it a platform admin could open
+ * a tenant-scoped canvas by URL and get a half-authorised surface.
  */
 export default function FullscreenLayout({
   children,
@@ -18,11 +23,13 @@ export default function FullscreenLayout({
 }) {
   return (
     <AuthProvider>
-      <TooltipProvider>
-        <div className="flex h-screen flex-col overflow-hidden bg-background">
-          {children}
-        </div>
-      </TooltipProvider>
+      <PlatformAdminRedirect>
+        <TooltipProvider>
+          <div className="flex h-screen flex-col overflow-hidden bg-background">
+            {children}
+          </div>
+        </TooltipProvider>
+      </PlatformAdminRedirect>
     </AuthProvider>
   );
 }

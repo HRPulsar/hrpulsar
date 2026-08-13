@@ -128,6 +128,7 @@ from app.modules.talent_market.models import (
 _ELENA_KEY = "elena.volkov@example.com"
 _TOMAS_KEY = "tomas.becker@example.com"
 from app.modules.recruitment.models import (
+    AIAssessment,
     Candidate,
     CandidateVacancy,
     Interview,
@@ -1874,6 +1875,86 @@ def _build_tomas_interview(
     )
 
 
+def _build_seed_assessment_rows(analysis: dict) -> list[dict]:
+    """AIAssessment payload rows for one seeded interview analysis.
+
+    Single source for both writers: the rows persisted on the seeded
+    interview (so the compact matrix is populated before anyone clicks
+    Analyze — HRP-250) and the pre-populated cache payload a re-analyze
+    replays (HRP-276 / L3). ``competence_id`` is minted from the profile
+    slug, the namespace the matrix reads back (HRP-275).
+    """
+    from app.modules.recruitment.common import normalize_competence_id
+    from app.modules.recruitment.tasks.demo_analysis import (
+        _DEMO_VERDICT_TO_SCORE,
+        _DEMO_VERDICT_TO_STATUS,
+    )
+
+    rows: list[dict] = []
+    for ca in analysis.get("competence_assessments", []) or []:
+        label = (ca.get("competence") or "").strip()
+        slug = (ca.get("competence_id") or "").strip()
+        verdict = (ca.get("verdict") or "unknown").lower()
+        if not slug:
+            # HRP-275: every writer must key off the same slug the
+            # killswitch and the Compact matrix use; without it the
+            # cache-hit branch would resurrect the label-derived UUIDs
+            # the rest of the system stopped recognising.
+            logger.warning(
+                "demo seed: skipping assessment for %r — missing competence_id slug",
+                label,
+            )
+            continue
+        comp_uuid = normalize_competence_id(slug)
+        if comp_uuid is None:
+            continue
+        rows.append(
+            {
+                "competence_id": str(comp_uuid),
+                "score": _DEMO_VERDICT_TO_SCORE.get(verdict, 0.0),
+                "status": _DEMO_VERDICT_TO_STATUS.get(verdict, "not_covered"),
+                "citations": [
+                    {
+                        "competence": label,
+                        "quote": ca.get("evidence") or "",
+                        "verdict": verdict,
+                    }
+                ],
+                "reasoning": ca.get("evidence") or "",
+            }
+        )
+    return rows
+
+
+def _seed_ai_assessments(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview: Interview,
+) -> list[dict]:
+    """Persist the ready AI assessment rows of a seeded interview.
+
+    HRP-250 acceptance: a freshly cloned demo tenant shows the finished
+    AI evaluation with citations straight away. The seed already stored
+    ``analysis_status='completed'`` plus ``analysis_data``, but the
+    compact matrix reads AIAssessment rows — without them every
+    competence rendered ``--`` until someone pressed Analyze.
+    """
+    rows = _build_seed_assessment_rows(interview.analysis_data or {})
+    for row in rows:
+        db.add(
+            AIAssessment(
+                tenant_id=tenant_id,
+                interview_id=interview.id,
+                competence_id=uuid.UUID(row["competence_id"]),
+                score=row["score"],
+                status=row["status"],
+                citations=row["citations"],
+                reasoning=row["reasoning"],
+            )
+        )
+    return rows
+
+
 async def _maybe_seed_analysis_cache(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1891,11 +1972,6 @@ async def _maybe_seed_analysis_cache(
         compute_cache_key_for_interview,
         store_cached_analysis,
     )
-    from app.modules.recruitment.common import normalize_competence_id
-    from app.modules.recruitment.tasks.demo_analysis import (
-        _DEMO_VERDICT_TO_SCORE,
-        _DEMO_VERDICT_TO_STATUS,
-    )
 
     try:
         cache_key = await compute_cache_key_for_interview(db, tenant_id, interview)
@@ -1910,39 +1986,7 @@ async def _maybe_seed_analysis_cache(
     # Localized copy so the cache-hit payload matches the localized
     # ``analysis_data`` stored on the seeded Interview row.
     elena_analysis = localize(ELENA_INTERVIEW_ANALYSIS)
-    assessments: list[dict] = []
-    for ca in elena_analysis.get("competence_assessments", []) or []:
-        label = (ca.get("competence") or "").strip()
-        slug = (ca.get("competence_id") or "").strip()
-        verdict = (ca.get("verdict") or "unknown").lower()
-        if not slug:
-            # HRP-275: cache pre-population must key off the same slug
-            # the killswitch and the Compact matrix use; without it the
-            # cache-hit branch would resurrect the label-derived UUIDs
-            # the rest of the system stopped recognising.
-            logger.warning(
-                "demo seed: skipping cache assessment for %r — missing competence_id slug",
-                label,
-            )
-            continue
-        comp_uuid = normalize_competence_id(slug)
-        if comp_uuid is None:
-            continue
-        assessments.append(
-            {
-                "competence_id": str(comp_uuid),
-                "score": _DEMO_VERDICT_TO_SCORE.get(verdict, 0.0),
-                "status": _DEMO_VERDICT_TO_STATUS.get(verdict, "not_covered"),
-                "citations": [
-                    {
-                        "competence": label,
-                        "quote": ca.get("evidence") or "",
-                        "verdict": verdict,
-                    }
-                ],
-                "reasoning": ca.get("evidence") or "",
-            }
-        )
+    assessments = _build_seed_assessment_rows(elena_analysis)
 
     try:
         await store_cached_analysis(
@@ -2119,17 +2163,25 @@ async def clone_seed_into_demo_tenant(
             db.add(elena_interview)
             interview_count += 1
         tomas_cv = cv_for_interview.get(_TOMAS_KEY)
+        tomas_interview = None
         if tomas_cv is not None:
-            db.add(
-                _build_tomas_interview(
-                    tenant_id=tenant_id,
-                    cv=tomas_cv,
-                    owner_user_id=owner_user_id,
-                    now=now,
-                )
+            tomas_interview = _build_tomas_interview(
+                tenant_id=tenant_id,
+                cv=tomas_cv,
+                owner_user_id=owner_user_id,
+                now=now,
             )
+            db.add(tomas_interview)
             interview_count += 1
         await db.flush()
+
+        # HRP-250: both seeded interviews already carry
+        # ``analysis_status='completed'``; give them the AIAssessment
+        # rows the compact matrix reads so the demo opens on a finished
+        # AI evaluation with citations instead of an empty matrix.
+        for seeded_interview in (elena_interview, tomas_interview):
+            if seeded_interview is not None:
+                _seed_ai_assessments(db, tenant_id, seeded_interview)
 
         # HRP-276 / L3: pre-populate the analysis cache for Elena so a
         # re-analyze from the demo SPA hits the cache instead of either

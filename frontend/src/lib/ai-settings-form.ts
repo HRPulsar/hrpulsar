@@ -2,6 +2,7 @@ import type {
   AISettings,
   AISettingsPatch,
   EffortLevel,
+  ProviderStatus,
 } from "@/lib/api/ai-settings";
 
 export type AISettingsFormState = {
@@ -65,4 +66,20 @@ export function isFormValid(form: AISettingsFormState): boolean {
 
 export function roundUpTenth(value: number): number {
   return Math.ceil(value * 10) / 10;
+}
+
+/**
+ * Providers whose stored BYOK key no longer decrypts (HRP-543).
+ *
+ * The backend has reported `key_status` since HRP-514, but nothing read
+ * it: a provider whose key became unreadable (an `ENCRYPTION_KEY` rotated
+ * without re-encrypting, say) silently fell back to the platform key — or,
+ * with no platform key, went `configured: false` and disappeared from the
+ * page altogether. Selecting on the status instead of on `configured`
+ * keeps the broken provider visible so the operator can re-issue the key.
+ */
+export function brokenKeyProviders(
+  providers: ProviderStatus[],
+): ProviderStatus[] {
+  return providers.filter((p) => p.key_status === "decrypt_failed");
 }

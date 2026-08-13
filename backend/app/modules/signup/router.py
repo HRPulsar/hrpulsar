@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.client_ip import client_ip
+from app.core.i18n import resolve_locale_from_request
 from app.database import get_db
 from app.modules.signup import service
 from app.modules.signup.schemas import (
@@ -42,7 +43,7 @@ async def create(
         db,
         payload,
         remote_ip=_client_ip(request),
-        accept_language=request.headers.get("accept-language"),
+        request_locale=resolve_locale_from_request(request),
     )
     return SignupRequestRead.model_validate(row, from_attributes=True)
 

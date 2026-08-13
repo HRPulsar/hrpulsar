@@ -1,11 +1,31 @@
 import logging
 import re
+from email.utils import parseaddr
 from pathlib import Path
 from typing import ClassVar, Literal
 from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings
+
+_ADDR_SPEC_RE = re.compile(r"[^\s<>,;'\"]+@[^\s<>,;'\"]+")
+
+
+def email_address_domain(raw: str) -> str:
+    """Domain of the addr-spec in a From-style header value, "" if none.
+
+    ``parseaddr`` alone gives up on display names with unquoted commas or
+    ``@`` ("Acme, Inc <hr@acme.example>") and returns an empty address —
+    fall back to the last addr-spec-looking token so a working sender is
+    not misread as absent. Shared by the brand-default warnings below and
+    the SMTP Message-ID derivation (``app.core.email``, HRP-568).
+    """
+    address = parseaddr(raw)[1]
+    if "@" not in address:
+        found = _ADDR_SPEC_RE.findall(raw)
+        address = found[-1] if found else ""
+    _, sep, domain = address.rpartition("@")
+    return domain.strip().rstrip(">.").lower() if sep else ""
 
 
 def _version_from_file() -> str:
@@ -84,6 +104,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     gemini_api_key: str = ""
     llm_provider: str = "claude"  # claude, openai, gemini
+    # HRP-505: operator escape hatch for the saas SSRF guard on
+    # tenant-supplied AI base_url values — comma-separated hostnames that
+    # skip validation and IP pinning (e.g. a vetted corporate gateway).
+    # Operator-only; never exposed to tenants.
+    ai_base_url_allowed_hosts: str = ""
     # HRP-71 phase 4: per-item delay for the synthetic indicator-stream so the
     # UI counter animates 1/N → N/N. Set to 0 to disable for matrices that
     # produce thousands of indicators.
@@ -474,6 +499,60 @@ class Settings(BaseSettings):
                 f"'{env}' environment. Refusing to start with the "
                 "moderated /api/signup-request endpoint exposed without "
                 "a bot guard."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _warn_brand_defaults(self) -> "Settings":
+        """Warn a branded install about stock-brand leftovers (HRP-568).
+
+        A custom BRAND_NAME rebrands email copy, but three adjacent
+        surfaces keep the stock identity unless configured alongside it:
+        the email-link base (FRONTEND_URL), the sender address
+        (EMAIL_FROM — its domain also stamps SMTP Message-IDs), and the
+        email header logo (BRAND_LOGO_URL). Warn rather than fail — a
+        half-configured staging boot must stay possible, and none of the
+        values is strictly required to run.
+
+        The FRONTEND_URL warning respects the documented self-hosted
+        fallback (first CORS_ORIGINS entry): it only fires when that
+        fallback cannot produce an operator-owned URL — SaaS mode (links
+        pin the stock hosted domain) or CORS_ORIGINS left at the
+        localhost dev default. Logging from the validator follows the S3
+        validator's precedent: at import time only logging's last-resort
+        stderr handler exists, which container logs still capture.
+        """
+        fields = type(self).model_fields
+        if self.brand_name == fields["brand_name"].default:
+            return self
+        log = logging.getLogger(__name__)
+        if not self.frontend_url.strip() and (
+            self.deployment_mode == "saas"
+            or self.cors_origins == fields["cors_origins"].default
+        ):
+            log.warning(
+                "BRAND_NAME is '%s' but FRONTEND_URL is empty — links in "
+                "outgoing email fall back to the first CORS_ORIGINS entry "
+                "(or the stock hosted domain on SaaS). Set FRONTEND_URL to "
+                "this installation's public URL.",
+                self.brand_name,
+            )
+        sender_domain = email_address_domain(self.email_from)
+        if sender_domain in ("", email_address_domain(fields["email_from"].default)):
+            log.warning(
+                "BRAND_NAME is '%s' but EMAIL_FROM ('%s') does not carry a "
+                "branded sender address — recipients see the stock identity "
+                "in the From header and in derived Message-IDs. Set "
+                "EMAIL_FROM to an address on a branded domain.",
+                self.brand_name,
+                self.email_from,
+            )
+        if not self.brand_logo_url.strip():
+            log.warning(
+                "BRAND_NAME is '%s' but BRAND_LOGO_URL is empty — outgoing "
+                "email renders the stock header logo. Set BRAND_LOGO_URL "
+                "to a branded logo image URL.",
+                self.brand_name,
             )
         return self
 

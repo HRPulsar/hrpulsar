@@ -209,6 +209,16 @@ Outgoing emails then carry the custom name, header logo (rendered at
 31px height) and button/link color. `EMAIL_FROM` controls the From
 header.
 
+**On a branded install, always set `EMAIL_FROM`, `FRONTEND_URL` and
+`BRAND_LOGO_URL` together with `BRAND_NAME`.** `EMAIL_FROM` defaults to
+the stock HRPulsar sender — leaving its address on the stock domain
+means recipients see the stock brand in the From header (and in the
+SMTP Message-ID, which is derived from the sender's domain).
+`FRONTEND_URL` is what links inside emails point at, and without
+`BRAND_LOGO_URL` the email header renders the stock logo. The backend
+logs a startup warning when `BRAND_NAME` is customized but any of the
+three is left at its default.
+
 Static assets that live in the frontend image (`site.webmanifest`,
 `apple-touch-icon.png`, PNG icons) can be replaced by mounting your own
 files over `/app/public/*` in the frontend container if you need a

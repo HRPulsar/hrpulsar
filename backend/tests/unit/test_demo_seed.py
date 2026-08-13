@@ -144,6 +144,45 @@ async def test_clone_seed_marks_interviews_completed_with_analysis(
 
 
 @pytest.mark.asyncio
+async def test_clone_seed_writes_ready_ai_assessments_with_citations(
+    db: AsyncSession, tenant, user
+):
+    """HRP-250 acceptance: the demo opens on a finished AI evaluation.
+
+    QA saw an empty AI matrix on a freshly started demo: the seed marked
+    the interviews ``completed`` and stored ``analysis_data``, but wrote
+    no AIAssessment rows — and the compact matrix reads those rows, not
+    the JSON blob. Nothing was visible until someone pressed Analyze.
+    """
+    from app.modules.recruitment.common import normalize_competence_id
+    from app.modules.recruitment.models import AIAssessment
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    rows = (
+        (
+            await db.execute(
+                select(AIAssessment).where(AIAssessment.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows, "seeded interviews must carry ready AI assessments"
+    assert all(r.citations for r in rows), "citations are the demo's headline"
+
+    # Keyed on the vacancy-profile slug namespace, the ids the matrix
+    # looks up (HRP-275) — a label-derived uuid renders as '--'.
+    expected = {
+        str(normalize_competence_id(ca["competence_id"]))
+        for ca in ELENA_INTERVIEW_ANALYSIS["competence_assessments"]
+    }
+    assert expected <= {str(r.competence_id) for r in rows}
+
+
+@pytest.mark.asyncio
 async def test_clone_seed_is_idempotent(db: AsyncSession, tenant, user):
     await _flag_demo(db, tenant)
     await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)

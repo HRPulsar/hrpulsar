@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { AlertTriangle, ArrowLeft, Download, Info, Loader2 } from "lucide-react";
 
@@ -54,6 +54,10 @@ const EMPTY_CELL: AssessmentMatrixCell = {
 
 export default function AssessmentCanvasPage() {
   const { id } = useParams<{ id: string }>();
+  // HRP-507: the Divergence badge on the vacancy Candidates block links
+  // here with ?filter=divergences, so the recruiter lands on exactly the
+  // cells the badge counted instead of the full grid.
+  const searchParams = useSearchParams();
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
   const locale = useLocale();
@@ -68,7 +72,9 @@ export default function AssessmentCanvasPage() {
   const [round, setRound] = useState("latest");
   const [scale, setScale] = useState<CanvasScale>("points");
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-  const [onlyDivergences, setOnlyDivergences] = useState(false);
+  const [onlyDivergences, setOnlyDivergences] = useState(
+    () => searchParams.get("filter") === "divergences",
+  );
   const [hideUnscored, setHideUnscored] = useState(false);
 
   const [selected, setSelected] = useState<SelectedCell | null>(null);
