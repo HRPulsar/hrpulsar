@@ -15,7 +15,7 @@ from app.modules.ai_competence_generation import tasks
 from app.modules.ai_competence_generation.models import (
     CompetenceGenerationSession,
 )
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -32,19 +32,6 @@ async def _touch_foreign_running_rows(db: AsyncSession):
         .values(updated_at=datetime.now(timezone.utc))
     )
     await db.commit()
-
-
-@pytest_asyncio.fixture
-async def session_factory(db: AsyncSession):
-    """Match the convention from ``test_competence_generation_celery``:
-    one fresh async sessionmaker per test against the shared schema."""
-    from app.config import settings as app_settings
-
-    test_url = app_settings.database_url.rsplit("/", 1)[0] + "/hrpulsar_test"
-    engine = create_async_engine(test_url, echo=False)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield factory
-    await engine.dispose()
 
 
 async def _make_session(

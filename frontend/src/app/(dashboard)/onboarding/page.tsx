@@ -106,9 +106,15 @@ export default function OnboardingPage() {
   const [divisionDesc, setDivisionDesc] = useState("");
   const [createdDivisions, setCreatedDivisions] = useState<Division[]>([]);
 
-  // Step 3: Invitations
-  const [inviteEmails, setInviteEmails] = useState<string[]>([""]);
+  // Step 3: Invitations — POST /api/invitations requires a name since
+  // INV1 (HRP-195), so the wizard collects one next to the address
+  // instead of losing every invite to a 422 (HRP-526).
+  const [invites, setInvites] = useState<{ name: string; email: string }[]>([
+    { name: "", email: "" },
+  ]);
   const [sentCount, setSentCount] = useState(0);
+  /** Per-row failures from the last send, kept visible after the toast. */
+  const [inviteErrors, setInviteErrors] = useState<string[]>([]);
 
   // Check if onboarding is needed
   useEffect(() => {
@@ -201,25 +207,52 @@ export default function OnboardingPage() {
 
   // Step 3: Send invitations
   async function sendInvitations() {
-    const emails = inviteEmails.filter((e) => e.trim());
-    if (emails.length === 0) {
+    const filled = invites.filter((row) => row.email.trim() || row.name.trim());
+    if (filled.length === 0) {
       setStep(4);
+      return;
+    }
+    if (filled.some((row) => !row.email.trim() || !row.name.trim())) {
+      toast.error(t("inviteRowIncomplete"));
       return;
     }
     setSaving(true);
     let sent = 0;
-    for (const email of emails) {
+    const failures: string[] = [];
+    const failedRows: { name: string; email: string }[] = [];
+    for (const row of filled) {
+      const email = row.email.trim();
       try {
-        await api.post("/invitations", { email: email.trim(), role_code: "employee" });
+        await api.post("/invitations", {
+          email,
+          name: row.name.trim(),
+          role_code: "employee",
+        });
         sent++;
-      } catch {
-        // skip failed
+      } catch (err) {
+        // HRP-526: this used to be an empty catch — every invite could
+        // fail and the wizard still moved on claiming success.
+        failures.push(`${email}: ${err instanceof Error ? err.message : ""}`);
+        failedRows.push(row);
       }
     }
-    setSentCount(sent);
+    setSentCount((count) => count + sent);
+    setInviteErrors(failures);
     if (sent > 0) toast.success(t("invitationsSent", { count: sent }));
+    if (failures.length > 0) {
+      toast.error(t("invitationsFailed", { count: failures.length }));
+    }
     setSaving(false);
-    setStep(4);
+    // Advancing on partial success hid the per-address error panel (it
+    // only renders on this step) — stay whenever something failed, and
+    // keep only the failing rows so a retry doesn't re-POST addresses
+    // that already went through (those would 409 now). The Skip button
+    // below the panel still moves on.
+    if (failures.length === 0) {
+      setStep(4);
+    } else {
+      setInvites(failedRows);
+    }
   }
 
   // Complete onboarding
@@ -241,19 +274,17 @@ export default function OnboardingPage() {
     await completeOnboarding();
   }
 
-  const updateInviteEmail = useCallback(
-    (index: number, value: string) => {
-      setInviteEmails((prev) => {
-        const next = [...prev];
-        next[index] = value;
-        return next;
-      });
+  const updateInvite = useCallback(
+    (index: number, field: "name" | "email", value: string) => {
+      setInvites((prev) =>
+        prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)),
+      );
     },
     [],
   );
 
-  function addEmailField() {
-    setInviteEmails((prev) => [...prev, ""]);
+  function addInviteField() {
+    setInvites((prev) => [...prev, { name: "", email: "" }]);
   }
 
   if (loading) {
@@ -511,21 +542,43 @@ export default function OnboardingPage() {
               <p className="text-sm text-muted-foreground">
                 {t("inviteIntro")}
               </p>
-              {inviteEmails.map((email, i) => (
-                <div key={i} className="space-y-2">
-                  <Label>{i === 0 ? t("emailAddresses") : ""}</Label>
-                  <Input
-                    type="email"
-                    placeholder={t("emailPlaceholder")}
-                    value={email}
-                    onChange={(e) => updateInviteEmail(i, e.target.value)}
-                  />
+              {inviteErrors.length > 0 && (
+                <div
+                  className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                  data-testid="onboarding-invite-errors"
+                >
+                  {inviteErrors.map((line) => (
+                    <p key={line}>{line}</p>
+                  ))}
+                </div>
+              )}
+              {invites.map((row, i) => (
+                <div key={i} className="grid gap-2 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>{i === 0 ? t("inviteName") : ""}</Label>
+                    <Input
+                      placeholder={t("inviteNamePlaceholder")}
+                      value={row.name}
+                      onChange={(e) => updateInvite(i, "name", e.target.value)}
+                      data-testid={`onboarding-input-invite-name-${i}`}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{i === 0 ? t("emailAddresses") : ""}</Label>
+                    <Input
+                      type="email"
+                      placeholder={t("emailPlaceholder")}
+                      value={row.email}
+                      onChange={(e) => updateInvite(i, "email", e.target.value)}
+                      data-testid={`onboarding-input-invite-email-${i}`}
+                    />
+                  </div>
                 </div>
               ))}
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={addEmailField}
+                onClick={addInviteField}
                 className="text-muted-foreground"
               >
                 {t("addAnotherEmail")}
@@ -535,20 +588,36 @@ export default function OnboardingPage() {
                   <ArrowLeft className="mr-1 h-4 w-4" />
                   {t("back")}
                 </Button>
-                <Button
-                  onClick={async () => {
-                    await sendInvitations();
-                  }}
-                  disabled={saving}
-                  data-testid="onboarding-btn-next"
-                >
-                  {saving
-                    ? t("sending")
-                    : inviteEmails.some((e) => e.trim())
-                      ? t("sendAndNext")
-                      : t("skip")}
-                  <ArrowRight className="ml-1 h-4 w-4" />
-                </Button>
+                <div className="flex items-center gap-2">
+                  {inviteErrors.length > 0 && (
+                    // Without this escape a wizard whose every invite
+                    // fails (drained credits, duplicate addresses) has
+                    // no forward control at all — the primary button
+                    // only re-POSTs the same failing rows.
+                    <Button
+                      variant="ghost"
+                      onClick={() => setStep(4)}
+                      disabled={saving}
+                      data-testid="onboarding-btn-skip-invites"
+                    >
+                      {t("skip")}
+                    </Button>
+                  )}
+                  <Button
+                    onClick={async () => {
+                      await sendInvitations();
+                    }}
+                    disabled={saving}
+                    data-testid="onboarding-btn-next"
+                  >
+                    {saving
+                      ? t("sending")
+                      : invites.some((row) => row.email.trim() || row.name.trim())
+                        ? t("sendAndNext")
+                        : t("skip")}
+                    <ArrowRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </div>
               </div>
             </div>
           )}

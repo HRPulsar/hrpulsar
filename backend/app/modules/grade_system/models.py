@@ -52,15 +52,14 @@ class GradeSpecialization(BaseModel, TenantMixin):
     salary_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # HRP-439: the ORM default follows the installation (BILLING_CURRENCY),
     # so a chain created without an explicit currency lands in the site's
-    # own money. ``server_default`` is the DDL literal from the original
-    # migration and stays until a migration rewrites it — every insert
-    # goes through the ORM or a schema, both of which supply a value, so
-    # the DB-level default never actually fires.
+    # own money. HRP-570 dropped the original ``server_default='RUB'``
+    # instead of swapping in another literal: no literal is right on all
+    # sites, and with the column NOT NULL a writer outside the application
+    # path now fails loudly rather than inventing a currency.
     salary_currency: Mapped[str] = mapped_column(
         String(3),
         nullable=False,
         default=installation_currency,
-        server_default="RUB",
     )
     sort_index: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     passing_score: Mapped[int | None] = mapped_column(

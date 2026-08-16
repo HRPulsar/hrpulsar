@@ -89,19 +89,16 @@ class Vacancy(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("dictionary_items.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     grade_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("dictionary_items.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     division_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("divisions.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default="draft", server_default="draft"
@@ -110,7 +107,6 @@ class Vacancy(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     # HRP-360: the responsible hiring manager (admin-tier user), separate
     # from ``owner_id`` which records who created the vacancy.
@@ -362,7 +358,6 @@ class Candidate(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("persons.id", ondelete="CASCADE"),
         nullable=True,
-        index=True,
     )
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -433,7 +428,6 @@ class CandidateVacancy(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     # HRP-186: denormalized aggregated score so the candidate table
     # can render Manager score without joining round + assessments. The
@@ -539,7 +533,6 @@ class CandidateFile(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("files.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     file_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default="resume", server_default="resume"
@@ -576,12 +569,10 @@ class CandidateQuestion(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("vacancies.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     competence_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         nullable=True,
-        index=True,
     )
     question_text: Mapped[str] = mapped_column(Text, nullable=False)
     good_answer: Mapped[str] = mapped_column(Text, nullable=False)
@@ -621,7 +612,6 @@ class Interview(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     interview_date: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -653,13 +643,11 @@ class Interview(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("files.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     video_file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("files.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     transcript_file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -872,13 +860,11 @@ class HumanAssessment(BaseModel, TenantMixin):
     competence_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         nullable=False,
-        index=True,
     )
     evaluator_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=True,
-        index=True,
     )
     evaluator_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     invite_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -909,7 +895,6 @@ class AIAssessment(BaseModel, TenantMixin):
     competence_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         nullable=False,
-        index=True,
     )
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -1205,13 +1190,11 @@ class ConsolidatedReport(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("vacancies.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("files.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     report_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     sections: Mapped[list | None] = mapped_column(JSONB, nullable=True)
@@ -1226,7 +1209,6 @@ class ConsolidatedReport(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
 
 
@@ -1399,7 +1381,7 @@ class RecruitmentAuditLog(BaseModel, TenantMixin):
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
     entity_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, index=True
+        UUID(as_uuid=True), nullable=True
     )
     payload_diff: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
@@ -1420,12 +1402,9 @@ class GDPRExportRequest(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     subject_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    subject_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
-    )
+    subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default="pending", server_default="pending"
     )
@@ -1456,9 +1435,7 @@ class GDPRErasureLog(BaseModel, TenantMixin):
         nullable=True,
     )
     subject_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    subject_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
-    )
+    subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     affected: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
@@ -1561,11 +1538,8 @@ class VacancyCompetence(BaseModel, TenantMixin):
         UUID(as_uuid=True),
         ForeignKey("vacancies.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
-    competence_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
-    )
+    competence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     skill_level_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     source: Mapped[str] = mapped_column(
         String(20), nullable=False, default="manual", server_default="manual"

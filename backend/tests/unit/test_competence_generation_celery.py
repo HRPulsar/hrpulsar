@@ -19,24 +19,7 @@ from app.modules.ai_settings.schemas import AISettingsUpdate
 from app.modules.dictionary.models import DictionaryItem
 from app.modules.notification.models import Notification
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-
-@pytest_asyncio.fixture
-async def session_factory(db: AsyncSession):
-    """Build a real `async_sessionmaker` against the test DB.
-
-    We rely on `db` being requested first so the schema is set up. Then we
-    create a fresh engine for the worker code paths — `execute_session`
-    opens its own `async with session_factory() as session` context.
-    """
-    from app.config import settings as app_settings
-
-    test_url = app_settings.database_url.rsplit("/", 1)[0] + "/hrpulsar_test"
-    engine = create_async_engine(test_url, echo=False)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield factory
-    await engine.dispose()
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest_asyncio.fixture

@@ -93,20 +93,41 @@ def catalog_path(locale: str) -> Path:
     return _CATALOG_DIR / f"seed_i18n_{locale}.json"
 
 
+def ee_asset_path(name: str) -> Path | None:
+    """Enterprise-only seed asset (open-core mechanism 3).
+
+    Locales offered only on white-label installations (``ru``) keep
+    their seed catalogs and transcripts in ``backend/ee/demo_seed/`` —
+    the public-repo sync blocks Cyrillic, so the content must never
+    live under ``seed_assets/``. Community builds have no ``ee``
+    package and fall through to the English source.
+    """
+    try:
+        from ee.i18n_catalogs import demo_seed_dir
+    except ImportError:
+        return None
+    return demo_seed_dir() / name
+
+
 @lru_cache(maxsize=8)
 def _load_catalog(locale: str) -> dict[str, str]:
-    try:
-        raw = json.loads(catalog_path(locale).read_text(encoding="utf-8"))
-    except OSError:
-        return {}
-    except ValueError:
-        logger.warning("demo seed i18n: catalog for %r is not valid JSON", locale)
-        return {}
-    return {
-        key: value
-        for key, value in raw.items()
-        if isinstance(key, str) and isinstance(value, str)
-    }
+    name = f"seed_i18n_{locale}.json"
+    for path in (catalog_path(locale), ee_asset_path(name)):
+        if path is None:
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        except ValueError:
+            logger.warning("demo seed i18n: catalog at %s is not valid JSON", path)
+            continue
+        return {
+            key: value
+            for key, value in raw.items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
+    return {}
 
 
 def seed_locale() -> str:

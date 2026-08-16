@@ -163,6 +163,22 @@ class Settings(BaseSettings):
     recruitment_max_resume_mb: int = 10
     recruitment_max_bulk_total_mb: int = 100
 
+    # External-evaluator invitation mail throttles (HRP-545 / HRP-576).
+    # Both guard the same thing: the product puts an external address in
+    # the To: field on an authorized user's word, so a bug or a bored
+    # manager must not be able to turn it into a mail bomb.
+    # Per invitation: how long one invite stays un-resendable after a
+    # resend. Far below the rate a human retries a bounced delivery.
+    invite_resend_cooldown_seconds: int = 300
+    # Per recipient address: hourly ceiling on invitation emails
+    # (new invites *and* resends), well above legitimate bulk use — one
+    # evaluator invited for a whole shortlist in one sitting. 0 disables.
+    invite_mail_cap_per_recipient_per_hour: int = 20
+    # Per user: hourly ceiling on in-product feedback submissions — the
+    # endpoint fans out to the operators' chat, and demo sandboxes hand
+    # tokens to anonymous visitors (HRP-586/587). 0 disables.
+    feedback_rate_limit_per_user_per_hour: int = 5
+
     # Public API
     public_api_rate_limit: str = "60/minute"
     public_api_batch_max_items: int = 100

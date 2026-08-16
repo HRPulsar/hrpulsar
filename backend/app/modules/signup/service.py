@@ -19,14 +19,12 @@ empty bot-guard secret in prod cannot widen the funnel.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import redis.asyncio as aioredis
 from fastapi import HTTPException, status
 from jwt import PyJWTError as JWTError
 from sqlalchemy import func, select
@@ -35,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.errors import AppError
 from app.core.i18n import resolve_locale
+from app.core.redis import redis_client
 from app.core.security import (
     create_magic_login_token,
     create_signup_verify_token,
@@ -113,16 +112,15 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
     limit = settings.signup_rate_limit_per_ip_per_hour
     if remote_ip is None or limit <= 0:
         return
-    client = None
     try:
-        client = aioredis.from_url(settings.redis_url, decode_responses=True)
-        key = f"signup:rl:{remote_ip}"
-        async with client.pipeline(transaction=True) as pipe:
-            pipe.incr(key)
-            pipe.expire(key, 3600)
-            count, _ = await pipe.execute()
-        if count > limit:
-            raise AppError("signup_rate_limited", status.HTTP_429_TOO_MANY_REQUESTS)
+        async with redis_client() as client:
+            key = f"signup:rl:{remote_ip}"
+            async with client.pipeline(transaction=True) as pipe:
+                pipe.incr(key)
+                pipe.expire(key, 3600)
+                count, _ = await pipe.execute()
+            if count > limit:
+                raise AppError("signup_rate_limited", status.HTTP_429_TOO_MANY_REQUESTS)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -131,10 +129,6 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
             "signup_temporarily_unavailable",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
-    finally:
-        if client is not None:
-            with contextlib.suppress(Exception):
-                await client.aclose()  # type: ignore[attr-defined]
 
 
 async def _find_by_email(db: AsyncSession, email: str) -> SignupRequest | None:
@@ -174,6 +168,7 @@ async def create_signup_request(
     await _enforce_rate_limit(remote_ip)
 
     email_norm = data.email.lower().strip()
+    locale = resolve_locale(accept_language=request_locale)
 
     existing = await _find_by_email(db, email_norm)
     if existing is not None:
@@ -186,6 +181,15 @@ async def create_signup_request(
         # created_at + id. ``status`` stays whatever it was — a click
         # on the old link must still flip a pending_email_verify row
         # to pending_moderation; a click on the new link is harmless.
+        #
+        # The verify email below is re-sent in *this* request's locale
+        # (the visitor may have used the language switcher since), so the
+        # stored locale follows it. Keeping the original would let the
+        # later decision email contradict the last email they received.
+        if existing.locale != locale:
+            existing.locale = locale
+            await db.commit()
+            await db.refresh(existing)
         await _send_signup_verify_email(existing, request_locale=request_locale)
         if existing.status == "pending_moderation":
             # The visitor came back and re-submitted the form while their
@@ -203,6 +207,7 @@ async def create_signup_request(
         role=(data.role or "").strip() or None,
         status="pending_email_verify",
         source=source,
+        locale=locale,
         demo_tenant_id_snapshot=demo_tenant_id_snapshot,
     )
     db.add(row)
@@ -377,12 +382,11 @@ async def _maybe_publish_moderation_reminder(row: SignupRequest) -> None:
     if datetime.now(timezone.utc) - verified_at < _REMINDER_MIN_AGE:
         return
 
-    client = None
     try:
-        client = aioredis.from_url(settings.redis_url, decode_responses=True)
-        first = await client.set(f"signup:remind:{row.id}", "1", nx=True, ex=3600)
-        if not first:
-            return
+        async with redis_client() as client:
+            first = await client.set(f"signup:remind:{row.id}", "1", nx=True, ex=3600)
+            if not first:
+                return
     except Exception:  # noqa: BLE001
         logger.warning(
             "signup: reminder throttle unavailable — skipping reminder for %s",
@@ -390,10 +394,6 @@ async def _maybe_publish_moderation_reminder(row: SignupRequest) -> None:
             exc_info=True,
         )
         return
-    finally:
-        if client is not None:
-            with contextlib.suppress(Exception):
-                await client.aclose()  # type: ignore[attr-defined]
 
     try:
         from app.core.events import publish
@@ -532,6 +532,10 @@ async def approve_signup(
         last_name=row.last_name or "",
         tenant_id=tenant.id,
         email_verified_at=datetime.now(timezone.utc),
+        # HRP-575: the applicant chose this locale on the landing form —
+        # carrying it onto the account keeps the UI and every later
+        # email in that language, not just the moderation decision.
+        language=row.locale,
     )
     db.add(user)
     await db.flush()
@@ -598,16 +602,18 @@ async def reject_signup(
     await db.refresh(row)
 
     # Best-effort notification to the visitor — never blocks reject.
-    # i18n F4: Slack moderation has no HTTP request behind it and the
-    # rejected visitor never got a tenant, so the deployment default is
-    # the only signal (the moderator's own locale is irrelevant here).
-    # HRP-513 keeps this as accepted debt: fixing it means persisting the
-    # Accept-Language locale resolved in _send_signup_verify_email on a
-    # nullable signup_requests column, which needs a migration.
+    # The locale is the applicant's, captured at submit time (HRP-575):
+    # Slack moderation has no HTTP request behind it and a rejected
+    # visitor never got a tenant, so the stored value is the only signal
+    # for their language. Passed through ``resolve_locale`` so a locale
+    # the site has since dropped falls back instead of reaching the
+    # renderer.
     try:
         from app.core.email import send_signup_rejected_email
 
-        send_signup_rejected_email(row.email, reason_clean, locale=resolve_locale())
+        send_signup_rejected_email(
+            row.email, reason_clean, locale=resolve_locale(user_language=row.locale)
+        )
     except Exception:
         logger.exception(
             "signup: failed to send rejection email for request %s", row.id

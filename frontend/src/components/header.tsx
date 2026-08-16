@@ -8,6 +8,7 @@ import { useAuth } from "@/context/auth-context";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { GlobalSearch } from "@/components/global-search";
 import { NotificationBell } from "@/components/notification-bell";
+import { FeedbackDialog } from "@/components/feedback-dialog";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { MobileSidebar } from "@/components/mobile-sidebar";
@@ -139,6 +140,7 @@ export function Header() {
       <GlobalSearch />
 
       <div className="flex items-center gap-2">
+        <FeedbackDialog />
         <LanguageSwitcher />
         <ThemeToggle />
         <NotificationBell />

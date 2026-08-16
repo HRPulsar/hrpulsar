@@ -56,6 +56,14 @@ class SignupRequest(BaseModel):
         nullable=False,
         default="landing",
     )
+    # HRP-575: interface locale resolved when the form was submitted. The
+    # moderation decision happens later, from Slack or the platform-admin
+    # UI, where the applicant's request headers are long gone — without
+    # this column the approve/reject email cannot know their language.
+    # Nullable: NULL means "not captured" (pre-migration rows) and falls
+    # through resolve_locale to the tenant/deployment default instead of
+    # outranking it with a backfilled literal.
+    locale: Mapped[str | None] = mapped_column(String(10), nullable=True)
     email_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

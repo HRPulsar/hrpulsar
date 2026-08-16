@@ -88,6 +88,9 @@ interface InviteDto {
   email: string;
   evaluator_name: string | null;
   status: string;
+  /** HRP-577: set once the evaluator submitted, and it survives a revoke. */
+  submitted_at: string | null;
+  revoked_at: string | null;
   expires_at: string;
   allow_reediting: boolean;
   delivery_status: string;
@@ -244,9 +247,14 @@ export function ManagerAssessmentSection({
   // HRP-348 REDO: one debounce timer per score row — a shared timer would
   // silently drop the previous row's PATCH when the evaluator moves fast
   // between competences/indicators inside the autosave window.
-  const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map(),
-  );
+  // The armed save is kept next to its timer (HRP-579) so a vacancy switch
+  // can fire it instead of throwing the evaluator's last edit away.
+  const debounceTimers = useRef<
+    Map<
+      string,
+      { timer: ReturnType<typeof setTimeout>; run: () => Promise<void> }
+    >
+  >(new Map());
   const pendingSaves = useRef(0);
   // The "Saved" badge fades on its own timer; it has to die with the
   // component too, or it calls setState on an unmounted tree.
@@ -257,7 +265,7 @@ export function ManagerAssessmentSection({
   useEffect(() => {
     const timers = debounceTimers.current;
     return () => {
-      for (const timer of timers.values()) clearTimeout(timer);
+      for (const pending of timers.values()) clearTimeout(pending.timer);
       timers.clear();
       pendingSaves.current = 0;
       if (savedResetTimer.current) clearTimeout(savedResetTimer.current);
@@ -341,8 +349,27 @@ export function ManagerAssessmentSection({
     // HRP-550: the submission drawer belongs to an invite on the vacancy
     // being left behind — it must not survive the switch either.
     setViewingInvite(null);
+    // HRP-579: neither does the autosave state. The armed PATCHes belong to
+    // the sheet being left, so fire them now (their closures carry that
+    // sheet's id, and the 1.5 s debounce window is long enough to swallow
+    // the evaluator's last click otherwise), then reset the indicator —
+    // otherwise the previous vacancy's "Saving… / Saved" finishes playing
+    // over the new one.
+    for (const pending of debounceTimers.current.values()) {
+      clearTimeout(pending.timer);
+      void pending.run().catch(() => {
+        toast.error(t("managerAssessmentScoreSaveFailed"));
+      });
+    }
+    debounceTimers.current.clear();
+    pendingSaves.current = 0;
+    if (savedResetTimer.current) {
+      clearTimeout(savedResetTimer.current);
+      savedResetTimer.current = null;
+    }
+    setSavingState("idle");
     void loadRounds(activeCvId);
-  }, [activeCvId, loadRounds]);
+  }, [activeCvId, loadRounds, t]);
 
   // ── Load vacancy snapshot + profile ──────────────────────────────────
   useEffect(() => {
@@ -558,11 +585,11 @@ export function ManagerAssessmentSection({
   function scheduleAutosave(key: string, fn: () => Promise<void>) {
     setSavingState("saving");
     const existing = debounceTimers.current.get(key);
-    if (existing) clearTimeout(existing);
+    if (existing) clearTimeout(existing.timer);
     else pendingSaves.current += 1;
-    debounceTimers.current.set(
-      key,
-      setTimeout(async () => {
+    debounceTimers.current.set(key, {
+      run: fn,
+      timer: setTimeout(async () => {
         debounceTimers.current.delete(key);
         try {
           await fn();
@@ -583,14 +610,14 @@ export function ManagerAssessmentSection({
           }
         }
       }, AUTOSAVE_MS),
-    );
+    });
   }
 
   /** Cancel this competence's still-pending indicator saves (HRP-378). */
   function dropPendingIndicatorSaves(competenceId: string) {
     for (const key of [...debounceTimers.current.keys()]) {
       if (!key.startsWith(`ind:${competenceId}:`)) continue;
-      clearTimeout(debounceTimers.current.get(key)!);
+      clearTimeout(debounceTimers.current.get(key)!.timer);
       debounceTimers.current.delete(key);
       pendingSaves.current = Math.max(0, pendingSaves.current - 1);
     }
@@ -1205,7 +1232,13 @@ function InviteKebab({
     (invite.status === "pending" ||
       invite.delivery_status === "delivery_failed");
   const canRevoke = !terminal;
-  const canView = invite.status === "submitted";
+  // HRP-577: revoking drops the sheet out of every aggregate, it does not
+  // delete it. Keying `View submission` on the current status hid a
+  // submitted evaluation the moment it was revoked; key it on the fact
+  // that a submission exists instead — the drawer marks it as no longer
+  // counted.
+  const canView =
+    invite.status === "submitted" || Boolean(invite.submitted_at);
 
   async function run(action: "resend" | "revoke") {
     setBusy(true);
@@ -1341,6 +1374,17 @@ function SubmissionDrawer({
         </button>
       </div>
       <div className="flex-1 space-y-3 overflow-y-auto p-4">
+        {/* HRP-577: a revoked invitation keeps its submitted sheet
+            readable, but the scores stopped counting the moment it was
+            revoked — say so where the numbers are being read. */}
+        {invite.revoked_at && (
+          <p
+            className="rounded-md border bg-muted/20 p-2 text-xs italic text-muted-foreground"
+            data-testid="assessment-invite-submission-not-counted"
+          >
+            {t("managerAssessmentInviteSubmissionNotCounted")}
+          </p>
+        )}
         {!loaded ? (
           <Loader2 className="size-4 animate-spin text-muted-foreground" />
         ) : sheet ? (

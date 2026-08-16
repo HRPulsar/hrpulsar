@@ -31,6 +31,7 @@ import {
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useCreditGate } from "@/hooks/use-cost-confirmation";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { questionSetGenerationModeLabel } from "@/lib/recruitment-types";
 import {
   Dialog,
   DialogContent,
@@ -665,7 +666,10 @@ export function InterviewQuestionSets({
                   className="text-xs uppercase tracking-wide"
                   data-testid="recruitment-interview-questions-mode-badge"
                 >
-                  {currentSet.generation_mode.replace(/_/g, " ")}
+                  {questionSetGenerationModeLabel(
+                    t,
+                    currentSet.generation_mode,
+                  )}
                 </Badge>
                 {currentSet.status === "sample" && (
                   <Badge variant="secondary">

@@ -48,6 +48,9 @@ const PUBLIC_ENV_KEYS = [
   "NEXT_PUBLIC_BRAND_THEME",
   "NEXT_PUBLIC_BRAND_AUTH_BG_COLOR",
   "NEXT_PUBLIC_BRAND_AUTH_BG_URL",
+  // Delay before the demo feedback popup appears, in ms (HRP-587) —
+  // read by components/dashboard/demo-feedback-popup.tsx.
+  "NEXT_PUBLIC_DEMO_FEEDBACK_DELAY_MS",
   // Per-site billing currency/locale (HRP-451) — read by lib/currency.ts.
   "NEXT_PUBLIC_BILLING_CURRENCY",
   "NEXT_PUBLIC_BILLING_LOCALE",

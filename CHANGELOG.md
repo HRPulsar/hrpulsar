@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.19.0] - 2026-08-16
+
+### Added
+- Feedback widget in the app header: rate the product with a thumb up or down and leave a suggestion, in the interface language (HRP-586)
+
+### Changed
+- Evaluator invitation emails are now capped per recipient address per hour on top of the per-invitation resend cooldown; both windows are configurable, and refusals carry a `Retry-After` header readable by cross-origin clients (HRP-576)
+
+### Fixed
+- The interview page shows readable labels for the analysis verdict, process findings and red flags instead of raw codes, and switching vacancies on a candidate card no longer carries the previous sheet's autosave indicator and pending saves over (HRP-579)
+- A submitted evaluator invitation that is later revoked keeps its evaluation readable from the invite menu, marked as no longer counted toward the round score (HRP-577)
+- Onboarding: the invite step now asks for a name next to each address, reports which invitations failed, and keeps a way forward when some of them do (HRP-526)
+- Status page: the whole 90-day uptime bar now reads under one formula — days rolled up before degraded minutes counted as half-up are restated on read instead of being shown side by side with the newer numbers (HRP-549)
+- Recruitment lookups are indexed as the models always declared: the 14 indexes that carry the hot read paths are created, the rest are dropped from the models (HRP-581)
+- Salary currency on the grade/specialization chain no longer carries a database-level RUB default: rows written outside the application now fail loudly instead of landing in the wrong currency (HRP-570)
+
 ## [1.18.2] - 2026-08-14
 
 ## [1.18.1] - 2026-08-14

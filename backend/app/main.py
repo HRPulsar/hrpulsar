@@ -201,7 +201,9 @@ app.add_middleware(
     # HRP-177: ETag is not on the CORS-safelisted response-header list, so
     # cross-origin browsers can't read it via fetch unless we expose it
     # explicitly. The vacancy edit page needs it to send If-Match on PATCH.
-    expose_headers=["ETag"],
+    # HRP-576: Retry-After joins it — a cross-origin client can't read the
+    # throttle's "come back in N seconds" hint unless it is exposed.
+    expose_headers=["ETag", "Retry-After"],
 )
 
 # Routers
@@ -221,6 +223,7 @@ from app.modules.demo.router import router as demo_router  # noqa: E402
 from app.modules.dictionary.router import router as dictionary_router  # noqa: E402
 from app.modules.employee.router import router as employee_router  # noqa: E402
 from app.modules.exam.router import router as exam_router  # noqa: E402
+from app.modules.feedback.router import router as feedback_router  # noqa: E402
 from app.modules.grade_system.router import router as grade_system_router  # noqa: E402
 from app.modules.notification.router import router as notification_router  # noqa: E402
 from app.modules.position.router import router as position_router  # noqa: E402
@@ -270,6 +273,7 @@ app.include_router(recruitment_public_assessment_router, prefix="/api")
 app.include_router(task_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
 app.include_router(signup_router, prefix="/api")
+app.include_router(feedback_router, prefix="/api")
 
 
 # Load-test endpoints (guarded by LOAD_TEST_MODE — never enable in prod)

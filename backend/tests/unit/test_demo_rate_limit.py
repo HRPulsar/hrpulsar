@@ -69,9 +69,7 @@ async def redis_cleanup() -> AsyncIterator[list[str]]:
             await r.aclose()
 
 
-async def _start_with_ip(
-    client: AsyncClient, ip: str
-) -> int:
+async def _start_with_ip(client: AsyncClient, ip: str) -> int:
     """Call ``POST /api/demo/start`` carrying a synthetic ``X-Forwarded-
     For`` so the throttle keys on a stable, test-controllable IP."""
     resp = await client.post(
@@ -261,12 +259,12 @@ async def test_throttle_fails_closed_when_redis_unavailable(
     def _explode(*_args, **_kwargs):
         raise ConnectionError("redis dead")
 
-    # ``from_url`` is invoked at call time inside ``_enforce_rate_limit``,
-    # so monkeypatching the symbol is enough — no need to reach into the
-    # already-imported helper.
-    import app.modules.demo.service as svc
+    # ``from_url`` is invoked at call time inside the shared
+    # ``app.core.redis.redis_client`` helper, so patching the symbol
+    # there is enough — no need to reach into the caller.
+    import app.core.redis as redis_helper
 
-    monkeypatch.setattr(svc.aioredis, "from_url", _explode)
+    monkeypatch.setattr(redis_helper.aioredis, "from_url", _explode)
 
     resp = await client.post(
         "/api/demo/start",

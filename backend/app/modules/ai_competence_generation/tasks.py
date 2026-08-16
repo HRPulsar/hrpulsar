@@ -1423,18 +1423,16 @@ async def _build_scope_prompt(
 def _normalise_payload(
     ctx: _SessionContext,
     model_instance: BaseModel,
-    built: _BuiltPrompt | None = None,
+    built: _BuiltPrompt,
 ) -> tuple[dict[str, Any], dict[str, bool]]:
     """Attach temp_ids + default selection to the parsed LLM payload."""
     payload_dict = model_instance.model_dump()
     if ctx.sess.scope == "competence_indicators":
-        return _normalise_indicators(
-            payload_dict, built.skill_levels if built else None
-        )
+        return _normalise_indicators(payload_dict, built.skill_levels)
     payload_dict, selection = _normalise_tree(
         payload_dict,
-        built.skill_levels if built else None,
-        built.grade_titles if built else None,
+        built.skill_levels,
+        built.grade_titles,
     )
     # HRP-155: in group-scope augment mode (source_tree included)
     # annotate matched existing nodes with ``snapshot_id`` so the

@@ -95,6 +95,26 @@ class TestRevokedExternalScores:
         assert agg["average"] is None
         assert agg["competences"] == []
 
+    async def test_a_revoked_submission_stays_readable(
+        self, db: AsyncSession, tenant, user
+    ):
+        """HRP-577: dropping out of the aggregates is not deletion — the
+        recruiter still opens the sheet from the invite's kebab, and the
+        UI keys that on ``submitted_at`` surviving the revoke."""
+        _, rd_id, inv, sheet = await _scored_external_invite(db, tenant, user)
+
+        revoked = await service.revoke_invite(db, tenant.id, user.id, inv.id)
+        assert revoked["status"] == "revoked"
+        assert revoked["submitted_at"] is not None
+        assert revoked["revoked_at"] is not None
+
+        rows = await service.list_assessments_for_round(
+            db, tenant.id, rd_id, viewer_user_id=user.id
+        )
+        readable = next(a for a in rows if a["evaluator_invite_id"] == inv.id)
+        assert readable["id"] == sheet.id
+        assert readable["status"] == "submitted"
+
     async def test_revoking_rebuilds_the_denormalized_manager_score(
         self, db: AsyncSession, tenant, user
     ):

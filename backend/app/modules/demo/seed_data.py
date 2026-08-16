@@ -58,15 +58,16 @@ def load_transcript() -> str:
     produces a syntactically valid Interview row in a stripped-down
     distribution.
     """
-    from app.modules.demo.seed_i18n import seed_locale
+    from app.modules.demo.seed_i18n import ee_asset_path, seed_locale
 
     locale = seed_locale()
     paths = [TRANSCRIPT_PATH]
     if locale != "en":
-        paths.insert(
-            0,
-            TRANSCRIPT_PATH.with_name(f"interview-transcript-elena.{locale}.txt"),
-        )
+        name = f"interview-transcript-elena.{locale}.txt"
+        ee_path = ee_asset_path(name)
+        if ee_path is not None:
+            paths.insert(0, ee_path)
+        paths.insert(0, TRANSCRIPT_PATH.with_name(name))
     for path in paths:
         try:
             return path.read_text(encoding="utf-8")

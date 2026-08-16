@@ -88,11 +88,15 @@ export function AnalysisProgress({ interview }: AnalysisProgressProps) {
         ? "active"
         : "todo";
 
-  const verdict: StageState = interview.analysis?.verdict
-    ? "done"
-    : interview.analysis_status === "processing"
-      ? "active"
-      : "todo";
+  // ``verdict`` is flat in analysis_data; rows written before it was
+  // emitted still carry ``verdict_summary``, which is required on every
+  // completed analysis.
+  const verdict: StageState =
+    interview.analysis?.verdict || interview.analysis?.verdict_summary
+      ? "done"
+      : interview.analysis_status === "processing"
+        ? "active"
+        : "todo";
 
   return (
     <ul className="space-y-1.5">

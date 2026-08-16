@@ -23,17 +23,18 @@ import hashlib
 import logging
 import secrets
 import uuid
+from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import redis.asyncio as aioredis
 from fastapi import HTTPException, status
 from sqlalchemy import and_, case, delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.errors import AppError
+from app.core.redis import redis_client
 from app.modules.recruitment import audit_service
 from app.modules.recruitment.common import candidate_display_name
 from app.modules.recruitment.manager_assessment_models import (
@@ -1758,6 +1759,10 @@ async def create_invites(
     # evaluator on an empty sheet — refuse upfront with an actionable error.
     if not await list_vacancy_profile_competences(db, tenant_id, cv.vacancy_id):
         raise AppError("vacancy_profile_no_competences", status.HTTP_400_BAD_REQUEST)
+    # HRP-576: claimed for the whole batch before the first row is
+    # written — a refusal mid-loop would leave part of the batch invited
+    # and part not, with no way for the caller to tell which.
+    await _claim_invite_mail_budget([i.email for i in payload.invitees])
     expires_at = datetime.now(timezone.utc) + timedelta(days=payload.expires_in_days)
 
     candidate = await db.get(Candidate, cv.candidate_id)
@@ -1823,6 +1828,7 @@ async def create_invites(
             invite.delivery_status = "sent"
         except Exception:
             log.exception("Failed to enqueue recruitment invite email for cv=%s", cv_id)
+            await _refund_invite_mail_budget([invitee.email])
             invite.delivery_status = "delivery_failed"
             invite.delivery_error = "Email backend rejected the send"
 
@@ -1921,72 +1927,192 @@ RESENDABLE_INVITE_STATUSES = ("pending",)
 #: claim it "expires in 1 day" on top of that.
 TERMINAL_INVITE_STATUSES = ("submitted", "declined", "revoked", "expired")
 
-#: HRP-545: how long one invitation stays un-resendable after a resend.
-#: Resending is free (``BILLING_EXEMPT``) and needs no evaluator consent,
-#: so without a throttle any authorized manager could mail-bomb an
-#: external address the product itself put in the To: field. Five minutes
-#: is far below the rate a human retries a bounced delivery and far above
-#: the rate that makes an inbox unusable.
-INVITE_RESEND_COOLDOWN_SECONDS = 300
+#: Window of the per-recipient mail cap (HRP-576 (e)).
+INVITE_MAIL_WINDOW_SECONDS = 3600
+
+#: What to put in ``Retry-After`` when the throttle store itself is down
+#: (HRP-576 (a)): the client should come back soon — the refusal is about
+#: a missing dependency, not about an exhausted budget.
+THROTTLE_OUTAGE_RETRY_AFTER_SECONDS = 30
+
+
+#: Header the 503 carries so a client knows the refusal is temporary.
+THROTTLE_OUTAGE_HEADERS = {"Retry-After": str(THROTTLE_OUTAGE_RETRY_AFTER_SECONDS)}
+
+
+def _throttle_fails_closed(ref: object) -> bool:
+    """Deployment-dependent policy for an unreachable throttle store.
+
+    * SaaS — fail **closed** (the caller raises 503), like
+      ``signup._enforce_rate_limit``. Redis is part of the platform
+      there, and a multi-tenant mail reputation is not worth risking on
+      a flaky dependency.
+    * Community / self-hosted — fail **open** with a warning. Redis is
+      genuinely optional in those builds: ``core.email.enqueue_email``
+      falls back to sending inline when the broker is unreachable, so a
+      hard refusal here would break invitations on installations where
+      they work today, to guard an inbox the operator owns anyway.
+
+    Returns whether the caller must refuse; the caller raises so its
+    error code stays a literal the i18n catalog guard can check.
+    """
+    if settings.deployment_mode == "saas":
+        log.exception(
+            "recruitment: invite mail throttle unavailable, refusing send for %s",
+            ref,
+        )
+        return True
+    log.warning(
+        "recruitment: invite mail throttle unavailable, sending %s without "
+        "a limit (no Redis on this deployment)",
+        ref,
+        exc_info=True,
+    )
+    return False
 
 
 async def _claim_resend_slot(invite_id: uuid.UUID) -> None:
     """Per-invite resend throttle backed by an atomic Redis ``SET NX EX``.
 
+    Resending is free (``BILLING_EXEMPT``) and needs no evaluator
+    consent, so without a throttle any authorized manager could mail-bomb
+    an external address the product itself put in the To: field.
+
     The claim is atomic — two concurrent resends can't both win, because
     ``SET NX`` picks a single owner without a read-then-write race — and
     it is taken *before* the send, not after: an attacker must not be
     able to buy extra sends by making the delivery fail.
-
-    Behaviour when Redis is unreachable depends on the deployment:
-
-    * SaaS — fail **closed** (503), like ``signup._enforce_rate_limit``.
-      Redis is part of the platform there, and a multi-tenant mail
-      reputation is not worth risking on a flaky dependency.
-    * Community / self-hosted — fail **open** with a warning. Redis is
-      genuinely optional in those builds: ``core.email.enqueue_email``
-      falls back to sending inline when the broker is unreachable, so a
-      hard refusal here would break resend on installations where it
-      works today, to guard an inbox the operator owns anyway.
     """
-    client = None
+    cooldown = settings.invite_resend_cooldown_seconds
+    if cooldown <= 0:
+        return
     try:
-        client = aioredis.from_url(settings.redis_url, decode_responses=True)
-        key = f"recruitment:invite-resend:{invite_id}"
-        claimed = await client.set(key, "1", nx=True, ex=INVITE_RESEND_COOLDOWN_SECONDS)
-        if not claimed:
-            # Exact remaining seconds go in the header, not the message:
-            # a localized "try again in N seconds" would need plural rules
-            # in every catalog to stay grammatical.
-            ttl = await client.ttl(key)
-            retry_after = ttl if ttl and ttl > 0 else INVITE_RESEND_COOLDOWN_SECONDS
-            raise AppError(
-                "invite_resend_cooldown",
-                status.HTTP_429_TOO_MANY_REQUESTS,
-                headers={"Retry-After": str(retry_after)},
-            )
+        async with redis_client() as client:
+            key = f"recruitment:invite-resend:{invite_id}"
+            claimed = await client.set(key, "1", nx=True, ex=cooldown)
+            if not claimed:
+                # Exact remaining seconds go in the header, not the
+                # message: a localized "try again in N seconds" would
+                # need plural rules in every catalog to stay grammatical.
+                ttl = await client.ttl(key)
+                raise AppError(
+                    "invite_resend_cooldown",
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    headers={"Retry-After": str(ttl if ttl and ttl > 0 else cooldown)},
+                )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        if settings.deployment_mode == "saas":
-            log.exception(
-                "recruitment: resend throttle unavailable, refusing resend of %s",
-                invite_id,
-            )
+        if _throttle_fails_closed(invite_id):
             raise AppError(
                 "invite_resend_throttle_unavailable",
                 status.HTTP_503_SERVICE_UNAVAILABLE,
+                headers=dict(THROTTLE_OUTAGE_HEADERS),
             ) from exc
-        log.warning(
-            "recruitment: resend throttle unavailable, sending %s without "
-            "cooldown (no Redis on this deployment)",
-            invite_id,
-            exc_info=True,
-        )
-    finally:
-        if client is not None:
-            with contextlib.suppress(Exception):
-                await client.aclose()  # type: ignore[attr-defined]
+
+
+async def _claim_invite_mail_budget(emails: Sequence[str]) -> None:
+    """Hourly cap on invitation emails per recipient address (HRP-576 (e)).
+
+    The per-invite cooldown only slows *resends* of one invitation: new
+    invites to the same mailbox were unlimited, so the flood the cooldown
+    blocks was still reachable by creating invitations in a loop. This
+    counts every invitation email — new and re-sent — against the
+    recipient.
+
+    A cap, not a cooldown: inviting one hiring manager to evaluate a
+    whole shortlist in one sitting is normal use, and a per-address
+    cooldown would break it. The ceiling sits far above that batch and
+    far below an unusable inbox.
+    """
+    cap = settings.invite_mail_cap_per_recipient_per_hour
+    if cap <= 0:
+        return
+    try:
+        async with redis_client() as client:
+            # Counted, not de-duplicated: one batch repeating the same
+            # address is exactly the flood this guards against. Hashed:
+            # counting a recipient does not require keeping the address
+            # itself in the throttle keyspace.
+            counted = [
+                (_invite_mail_key(email), sends)
+                for email, sends in sorted(
+                    Counter(e.strip().lower() for e in emails).items()
+                )
+            ]
+            # One pipeline for the whole batch, checked afterwards: a
+            # refusal rolls every increment back, so a rejected batch
+            # never leaves part of its addresses charged for mail that
+            # was not sent (review fix).
+            async with client.pipeline(transaction=True) as pipe:
+                for key, sends in counted:
+                    pipe.incrby(key, sends)
+                    # NX: the window is anchored at the first send. An
+                    # unconditional EXPIRE would re-arm it on every
+                    # refused attempt, so a retrying client could keep an
+                    # address over cap forever (review fix).
+                    pipe.expire(key, INVITE_MAIL_WINDOW_SECONDS, nx=True)
+                results = await pipe.execute()
+            over = next(
+                (
+                    key
+                    for (key, _), count in zip(counted, results[::2], strict=True)
+                    if count > cap
+                ),
+                None,
+            )
+            if over is not None:
+                async with client.pipeline(transaction=True) as pipe:
+                    for key, sends in counted:
+                        pipe.decrby(key, sends)
+                    await pipe.execute()
+                ttl = await client.ttl(over)
+                raise AppError(
+                    "invite_email_rate_limited",
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    headers={
+                        "Retry-After": str(
+                            ttl if ttl and ttl > 0 else INVITE_MAIL_WINDOW_SECONDS
+                        )
+                    },
+                )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if _throttle_fails_closed("recipient batch"):
+            raise AppError(
+                "invite_mail_throttle_unavailable",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                headers=dict(THROTTLE_OUTAGE_HEADERS),
+            ) from exc
+
+
+def _invite_mail_key(normalized_email: str) -> str:
+    digest = hashlib.sha256(normalized_email.encode()).hexdigest()[:32]
+    return f"recruitment:invite-mail:{digest}"
+
+
+async def _refund_invite_mail_budget(emails: Sequence[str]) -> None:
+    """Return unsent units to the recipient's hourly mail budget.
+
+    Best-effort compensation for a claim whose email never left the
+    building (the broker refused the enqueue): the cap protects the
+    recipient's inbox, and an unsent email never reached it. Never
+    raises — the send path already recorded ``delivery_failed`` and a
+    failed refund only costs headroom that expires with the window.
+    """
+    if settings.invite_mail_cap_per_recipient_per_hour <= 0:
+        return
+    try:
+        async with redis_client() as client:
+            for email, sends in Counter(e.strip().lower() for e in emails).items():
+                key = _invite_mail_key(email)
+                if await client.decrby(key, sends) < 0:
+                    # The window lapsed between claim and refund — a
+                    # negative counter would grant extra headroom.
+                    await client.delete(key)
+    except Exception:  # noqa: BLE001
+        log.warning("invite mail budget refund failed", exc_info=True)
 
 
 async def resend_invite(
@@ -2021,6 +2147,10 @@ async def resend_invite(
     # a dead invite keeps answering the informative 409 instead of
     # burning the cooldown slot on an email that was never going to go.
     await _claim_resend_slot(inv.id)
+    # HRP-576: and the resend counts against the recipient's hourly cap,
+    # so per-invite cooldowns can't be stacked into a flood by rotating
+    # invitations aimed at the same mailbox.
+    await _claim_invite_mail_budget([inv.email])
 
     cv = await _load_cv(db, tenant_id, inv.candidate_vacancy_id)
     candidate = await db.get(Candidate, cv.candidate_id)
@@ -2062,6 +2192,10 @@ async def resend_invite(
         log.exception("Failed to re-enqueue recruitment invite email %s", invite_id)
         inv.delivery_status = "delivery_failed"
         inv.delivery_error = "Email backend rejected the send"
+        # The resend *slot* stays consumed (an attacker must not buy
+        # extra sends by making delivery fail) — but the recipient's
+        # hourly budget counts delivered mail, and this one never left.
+        await _refund_invite_mail_budget([inv.email])
     inv.delivery_retry_count = (inv.delivery_retry_count or 0) + 1
     await db.commit()
     await db.refresh(inv)

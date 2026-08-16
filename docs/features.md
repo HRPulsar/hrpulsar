@@ -200,7 +200,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 - The round header carries the round's average score — the mean across every evaluator and competence, alongside its position on the scale's weights — and shows an em dash until the first score lands. While you are still scoring the round yourself, it counts only the sheets you may already read, so the header cannot hand you a colleague's number before you submit
 - Each competence shows its own cross-evaluator average, highlighted with a warning and a breakdown tooltip when evaluators differ by the scale's divergence threshold or more. External evaluators count toward these averages once they submit; a sheet whose invitation is revoked or declined stops counting
 - External evaluators join through secure token links with expiry, no account needed. The public evaluation page shows the resume and question list next to the scoring sheet and keeps the platform itself closed off. PDF resumes render inline; Word and text resumes are shown as an extracted preview, and the file is only downloaded when the evaluator asks for it
-- Recruiters track invite status (pending, opened, in progress, submitted, expired) and act on each invitation from its own menu — resend the same link, revoke it, or read the submitted evaluation in a read-only panel. Resending the same invitation is throttled for a few minutes, so a repeated click cannot flood an evaluator's inbox
+- Recruiters track invite status (pending, opened, in progress, submitted, expired) and act on each invitation from its own menu — resend the same link, revoke it, or read the submitted evaluation in a read-only panel — revoking an invitation that was already filled in keeps that evaluation readable and marks it as no longer counted toward the round score. Resending the same invitation is throttled for a few minutes, and every invitation email counts against an hourly ceiling per recipient address, so neither a repeated click nor a stream of new invitations can flood an evaluator's inbox. Both limits are deployment-tunable
 - The vacancy's Assessments tab expands into a full-screen canvas: a candidates-by-competences matrix with manager and AI scores side by side, view and round switches, divergence-only and no-score filters, a cell-details footer, per-candidate totals, and XLSX/CSV export
 
 ### Interviews & AI Analysis
@@ -466,6 +466,11 @@ Per-workspace configuration that applies to every AI call.
 - The Admin area (dictionaries, invitations, data import, AI settings) is reserved for admins: the whole sidebar group is hidden for everyone else, and opening one of its links directly shows an error and returns the user to the dashboard
 - Every action in the Admin area is admin-only on the API too, so a hidden section is never merely hidden (reference data stays readable across the product, as the rest of the app depends on it)
 
+### Product Feedback
+
+- A "?" button in the app header opens a short form: rate the product with a thumb up or down and leave a suggestion, in the user's interface language
+- Nothing is stored in the workspace — the submission is forwarded to the operator's notification channel when one is configured, and simply accepted when it is not
+
 ### Multi-Tenancy
 
 - Complete data isolation between organizations; self-hosted mode runs a single workspace
@@ -533,6 +538,7 @@ A first-login wizard for newly registered organizations.
 
 - Shows automatically while the workspace has no employees and setup is not finished; skippable on every step
 - Four steps: company info, first divisions, team invitations, and a look at the built-in competence library
+- The invitation step asks for a name next to each address (invitations require one) and reports exactly which invitations went out and which failed, instead of moving on silently
 
 ---
 

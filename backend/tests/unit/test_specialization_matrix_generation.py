@@ -30,18 +30,7 @@ from app.modules.grade_system.models import (
     GradeSpecialization,
 )
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-
-@pytest_asyncio.fixture
-async def session_factory(db: AsyncSession):
-    from app.config import settings as app_settings
-
-    test_url = app_settings.database_url.rsplit("/", 1)[0] + "/hrpulsar_test"
-    engine = create_async_engine(test_url, echo=False)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield factory
-    await engine.dispose()
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest_asyncio.fixture

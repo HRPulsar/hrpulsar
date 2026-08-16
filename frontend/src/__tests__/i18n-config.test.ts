@@ -11,6 +11,7 @@ import {
   resolveRequestLocale,
   setLocaleCookie,
 } from "@/i18n/config";
+import { CATALOG_LOCALES } from "@/lib/locale";
 
 type Env = NonNullable<Window["__ENV__"]>;
 
@@ -90,6 +91,23 @@ describe("resolveRequestLocale", () => {
     });
     expect(resolveRequestLocale(undefined, "fr")).toBe("de");
     expect(resolveRequestLocale(undefined, undefined)).toBe("de");
+  });
+
+  it("never selects a shipped catalog the site does not offer", () => {
+    // The bundle carries more catalogs than a given site enables (an
+    // enterprise build ships ru while an English-default site offers
+    // en only) — neither a cookie nor the browser language may pull the
+    // interface, demo popup included, into a locale outside
+    // AVAILABLE_LOCALES.
+    setEnv({
+      NEXT_PUBLIC_AVAILABLE_LOCALES: "en",
+      NEXT_PUBLIC_DEFAULT_LOCALE: "en",
+    });
+    expect(resolveRequestLocale("de", "de-DE,de;q=0.9")).toBe("en");
+    if (CATALOG_LOCALES.includes("ru")) {
+      // Enterprise bundle only — the community stub ships no ru catalog.
+      expect(resolveRequestLocale("ru", "ru-RU,ru;q=0.9")).toBe("en");
+    }
   });
 });
 

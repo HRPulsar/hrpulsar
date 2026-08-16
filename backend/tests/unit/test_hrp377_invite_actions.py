@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from app.config import settings
 from app.modules.recruitment import manager_assessment_public as public_service
 from app.modules.recruitment import manager_assessment_service as service
 from app.modules.recruitment.manager_assessment_schemas import (
@@ -30,26 +31,95 @@ from tests.unit.test_hrp186_manager_assessment import (
 )
 
 
+class _FakePipeline:
+    """Queues commands like redis-py does — ``incrby``/``expire`` are
+    synchronous queueing calls, only ``execute`` awaits."""
+
+    def __init__(self, redis: _FakeRedis) -> None:
+        self._redis = redis
+        self._ops: list[tuple[str, str, int]] = []
+
+    async def __aenter__(self) -> _FakePipeline:
+        return self
+
+    async def __aexit__(self, *_exc) -> bool:
+        return False
+
+    def incrby(self, key, amount=1):
+        self._ops.append(("incrby", (key, amount), {}))
+        return self
+
+    def decrby(self, key, amount=1):
+        self._ops.append(("decrby", (key, amount), {}))
+        return self
+
+    def expire(self, key, seconds, **kwargs):
+        self._ops.append(("expire", (key, seconds), kwargs))
+        return self
+
+    async def execute(self):
+        out = [
+            await getattr(self._redis, op)(*args, **kwargs)
+            for op, args, kwargs in self._ops
+        ]
+        self._ops.clear()
+        return out
+
+
 class _FakeRedis:
-    """Dict-backed stand-in honouring ``SET NX`` — enough for the throttle.
+    """Dict-backed stand-in honouring ``SET NX``, ``INCRBY`` and ``TTL``.
 
     Real Redis semantics that matter here: ``SET NX`` returns ``None``
-    when the key is taken, and ``TTL`` answers the remaining seconds.
+    when the key is taken, ``TTL`` answers the remaining seconds (``-2``
+    for a missing key), and a counter survives until its TTL runs out.
+    ``ttl_override`` lets a test pin what ``TTL`` reports, which is how
+    the "partway through the window" and "TTL already gone" branches of
+    the ``Retry-After`` fallback get exercised.
     """
 
     def __init__(self) -> None:
         self.store: dict[str, int] = {}
+        self.ttls: dict[str, int | None] = {}
         self.calls: list[tuple[str, bool | None, int | None]] = []
+        self.ttl_override: int | None = None
 
     async def set(self, key, value, nx=None, ex=None):
         self.calls.append((key, nx, ex))
         if nx and key in self.store:
             return None
-        self.store[key] = ex
+        self.store[key] = value
+        self.ttls[key] = ex
+        return True
+
+    async def incrby(self, key, amount=1):
+        self.store[key] = int(self.store.get(key, 0)) + amount
+        return self.store[key]
+
+    async def decrby(self, key, amount=1):
+        self.store[key] = int(self.store.get(key, 0)) - amount
+        return self.store[key]
+
+    async def delete(self, key):
+        self.store.pop(key, None)
+        self.ttls.pop(key, None)
+        return 1
+
+    async def expire(self, key, seconds, nx=False):
+        # Real EXPIRE NX only sets a TTL on a key that has none.
+        if nx and self.ttls.get(key):
+            return False
+        self.ttls[key] = seconds
         return True
 
     async def ttl(self, key):
-        return self.store.get(key, -2)
+        if self.ttl_override is not None:
+            return self.ttl_override
+        if key not in self.store:
+            return -2
+        return self.ttls.get(key) or -1
+
+    def pipeline(self, transaction=True):
+        return _FakePipeline(self)
 
     async def aclose(self):
         return None
@@ -57,12 +127,12 @@ class _FakeRedis:
 
 @pytest.fixture(autouse=True)
 def resend_throttle(monkeypatch):
-    """Stub the HRP-545 resend cooldown — autouse so no test in this
-    module reaches the real Redis. The outage test re-patches
-    ``from_url`` inside its own body."""
+    """Stub the invitation-mail throttles — autouse so no test in this
+    module reaches the real Redis. The outage tests re-patch
+    ``from_url`` inside their own body."""
     fake = _FakeRedis()
     monkeypatch.setattr(
-        "app.modules.recruitment.manager_assessment_service.aioredis.from_url",
+        "app.core.redis.aioredis.from_url",
         lambda *_a, **_kw: fake,
     )
     return fake
@@ -229,7 +299,7 @@ class TestResendCooldown:
 
         assert exc.value.status_code == 429
         assert exc.value.headers["Retry-After"] == str(
-            service.INVITE_RESEND_COOLDOWN_SECONDS
+            settings.invite_resend_cooldown_seconds
         )
         # The whole point: no second copy reaches the evaluator's inbox.
         enqueue.assert_not_called()
@@ -247,7 +317,7 @@ class TestResendCooldown:
         # both pass the check.
         assert key == f"recruitment:invite-resend:{inv.id}"
         assert nx is True
-        assert ex == service.INVITE_RESEND_COOLDOWN_SECONDS
+        assert ex == settings.invite_resend_cooldown_seconds
 
     async def test_the_cooldown_is_per_invite(self, db: AsyncSession, tenant, user):
         """One evaluator's cooldown must not block a different invite."""
@@ -309,7 +379,7 @@ class TestResendCooldown:
             raise ConnectionError("redis down")
 
         monkeypatch.setattr(
-            "app.modules.recruitment.manager_assessment_service.aioredis.from_url",
+            "app.core.redis.aioredis.from_url",
             _boom,
         )
 
@@ -340,7 +410,7 @@ class TestResendCooldown:
             raise ConnectionError("no redis on this box")
 
         monkeypatch.setattr(
-            "app.modules.recruitment.manager_assessment_service.aioredis.from_url",
+            "app.core.redis.aioredis.from_url",
             _boom,
         )
 
@@ -385,3 +455,272 @@ class TestViewSubmission:
         sheet = next(a for a in rows if a["evaluator_invite_id"] == inv.id)
         assert sheet["status"] == "submitted"
         assert sheet["final_notes"] == "Solid systems thinker"
+
+
+class TestRetryAfterHeader:
+    """HRP-576 (a)/(f): the throttle always says when to come back."""
+
+    async def test_retry_after_reports_the_remaining_window(
+        self, db: AsyncSession, tenant, user, resend_throttle
+    ):
+        _, _, inv = await _round_with_invite(db, tenant, user)
+        with patch("app.core.email.enqueue_email"):
+            await service.resend_invite(db, tenant.id, user.id, inv.id)
+
+        # Partway through the window: the header must carry what Redis
+        # reports, not the full cooldown.
+        resend_throttle.ttl_override = 137
+        with pytest.raises(HTTPException) as exc:
+            await service.resend_invite(db, tenant.id, user.id, inv.id)
+
+        assert exc.value.status_code == 429
+        assert exc.value.headers["Retry-After"] == "137"
+
+    @pytest.mark.parametrize("reported_ttl", [-1, -2, 0])
+    async def test_retry_after_falls_back_when_ttl_is_unavailable(
+        self, db: AsyncSession, tenant, user, resend_throttle, reported_ttl
+    ):
+        """A key without a TTL (or already gone between SET and TTL) must
+        still produce a usable header rather than 'Retry-After: -1'."""
+        _, _, inv = await _round_with_invite(db, tenant, user)
+        with patch("app.core.email.enqueue_email"):
+            await service.resend_invite(db, tenant.id, user.id, inv.id)
+
+        resend_throttle.ttl_override = reported_ttl
+        with pytest.raises(HTTPException) as exc:
+            await service.resend_invite(db, tenant.id, user.id, inv.id)
+
+        assert exc.value.headers["Retry-After"] == str(
+            settings.invite_resend_cooldown_seconds
+        )
+
+    async def test_saas_outage_503_carries_retry_after_through_the_api(
+        self, db: AsyncSession, tenant, user, auth_client, monkeypatch
+    ):
+        """HRP-576 (f): the negative path end-to-end — a SaaS deployment
+        with an unreachable throttle answers 503 *with* the hint, not a
+        bare refusal the client has to guess about."""
+        _, _, inv = await _round_with_invite(db, tenant, user)
+        monkeypatch.setattr(
+            "app.modules.recruitment.manager_assessment_service.settings."
+            "deployment_mode",
+            "saas",
+        )
+
+        def _boom(*_a, **_kw):
+            raise ConnectionError("redis down")
+
+        monkeypatch.setattr("app.core.redis.aioredis.from_url", _boom)
+
+        with patch("app.core.email.enqueue_email") as enqueue:
+            resp = await auth_client.post(
+                f"/api/v1/manager-assessment-invites/{inv.id}/resend"
+            )
+
+        assert resp.status_code == 503, resp.text
+        assert resp.headers["Retry-After"] == str(
+            service.THROTTLE_OUTAGE_RETRY_AFTER_SECONDS
+        )
+        enqueue.assert_not_called()
+
+
+class TestRecipientMailCap:
+    """HRP-576 (e): the per-invite cooldown only slowed resends — new
+    invitations to the same mailbox were unlimited."""
+
+    @pytest.fixture(autouse=True)
+    def _cap(self, monkeypatch):
+        monkeypatch.setattr(settings, "invite_mail_cap_per_recipient_per_hour", 2)
+
+    async def _invite(self, db, tenant, user, cv, round_id, email, count=1):
+        return await service.create_invites(
+            db,
+            tenant.id,
+            user.id,
+            cv.id,
+            ManagerAssessmentInviteCreate(
+                invitees=[
+                    ManagerAssessmentInviteIn(email=email, name="Ext Eval")
+                    for _ in range(count)
+                ],
+                round_id=round_id,
+            ),
+        )
+
+    async def test_new_invites_to_one_address_stop_at_the_cap(
+        self, db: AsyncSession, tenant, user
+    ):
+        cv, rd_id, _ = await _round_with_invite(db, tenant, user)
+        email = f"{uuid.uuid4().hex[:8]}@example.com"
+
+        with patch("app.core.email.enqueue_email"):
+            await self._invite(db, tenant, user, cv, rd_id, email)
+            await self._invite(db, tenant, user, cv, rd_id, email)
+
+        with (
+            patch("app.core.email.enqueue_email") as enqueue,
+            pytest.raises(HTTPException) as exc,
+        ):
+            await self._invite(db, tenant, user, cv, rd_id, email)
+
+        assert exc.value.status_code == 429
+        assert exc.value.headers["Retry-After"] == str(
+            service.INVITE_MAIL_WINDOW_SECONDS
+        )
+        enqueue.assert_not_called()
+
+    async def test_a_refused_attempt_does_not_restart_the_window(
+        self, db: AsyncSession, tenant, user, resend_throttle
+    ):
+        """The window is anchored at the first send. Re-arming the TTL on
+        every refused retry would keep the address over cap forever, and
+        ``Retry-After`` would never count down (review fix)."""
+        cv, rd_id, _ = await _round_with_invite(db, tenant, user)
+        email = f"{uuid.uuid4().hex[:8]}@example.com"
+        with patch("app.core.email.enqueue_email"):
+            await self._invite(db, tenant, user, cv, rd_id, email, count=2)
+        key = service._invite_mail_key(email)
+        resend_throttle.ttls[key] = 137  # partway through the hour
+
+        with (
+            patch("app.core.email.enqueue_email"),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await self._invite(db, tenant, user, cv, rd_id, email)
+
+        assert exc.value.headers["Retry-After"] == "137"
+        assert resend_throttle.ttls[key] == 137  # not re-armed
+        assert resend_throttle.store[key] == 2  # the refusal rolled back
+
+    async def test_a_refused_batch_leaves_no_partial_charge(
+        self, db: AsyncSession, tenant, user
+    ):
+        """A batch that trips the cap on one address must not leave the
+        other addresses charged for mail that was never sent."""
+        cv, rd_id, _ = await _round_with_invite(db, tenant, user)
+        hot = f"{uuid.uuid4().hex[:8]}@example.com"
+        clean = f"{uuid.uuid4().hex[:8]}@example.com"
+        with patch("app.core.email.enqueue_email"):
+            await self._invite(db, tenant, user, cv, rd_id, hot, count=2)
+
+        with (
+            patch("app.core.email.enqueue_email"),
+            pytest.raises(HTTPException),
+        ):
+            await service.create_invites(
+                db,
+                tenant.id,
+                user.id,
+                cv.id,
+                ManagerAssessmentInviteCreate(
+                    invitees=[
+                        ManagerAssessmentInviteIn(email=clean, name="Ext Eval"),
+                        ManagerAssessmentInviteIn(email=hot, name="Ext Eval"),
+                    ],
+                    round_id=rd_id,
+                ),
+            )
+
+        # The clean address keeps its full budget: both sends still fit.
+        with patch("app.core.email.enqueue_email") as enqueue:
+            await self._invite(db, tenant, user, cv, rd_id, clean, count=2)
+        enqueue.assert_called()
+
+    async def test_a_failed_enqueue_refunds_the_recipient_budget(
+        self, db: AsyncSession, tenant, user
+    ):
+        """The cap counts mail that reached the recipient — a broker
+        refusal must not burn budget for an email that never left."""
+        cv, rd_id, _ = await _round_with_invite(db, tenant, user)
+        email = f"{uuid.uuid4().hex[:8]}@example.com"
+        with patch(
+            "app.core.email.enqueue_email", side_effect=RuntimeError("broker down")
+        ):
+            rows = await self._invite(db, tenant, user, cv, rd_id, email)
+        assert rows[0]["delivery_status"] == "delivery_failed"
+
+        # Both real sends still fit under the cap of 2.
+        with patch("app.core.email.enqueue_email") as enqueue:
+            await self._invite(db, tenant, user, cv, rd_id, email, count=2)
+        assert enqueue.call_count == 2
+
+    async def test_redis_outage_fails_closed_for_new_invites_on_saas(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ):
+        """The 503 branch of the recipient cap itself — distinct from the
+        resend-slot outage tests, which raise before this code runs."""
+        cv, rd_id, _ = await _round_with_invite(db, tenant, user)
+        monkeypatch.setattr(
+            "app.modules.recruitment.manager_assessment_service.settings."
+            "deployment_mode",
+            "saas",
+        )
+        monkeypatch.setattr(
+            "app.core.redis.aioredis.from_url",
+            lambda *_a, **_kw: (_ for _ in ()).throw(ConnectionError("redis down")),
+        )
+
+        with (
+            patch("app.core.email.enqueue_email") as enqueue,
+            pytest.raises(HTTPException) as exc,
+        ):
+            await self._invite(
+                db, tenant, user, cv, rd_id, f"{uuid.uuid4().hex[:8]}@example.com"
+            )
+
+        assert exc.value.status_code == 503
+        assert exc.value.headers["Retry-After"] == str(
+            service.THROTTLE_OUTAGE_RETRY_AFTER_SECONDS
+        )
+        enqueue.assert_not_called()
+
+    async def test_one_batch_counts_every_copy_of_the_same_address(
+        self, db: AsyncSession, tenant, user
+    ):
+        """Repeating the address inside a single batch is the same flood —
+        and the whole batch is refused before any row is written."""
+        cv, rd_id, _ = await _round_with_invite(db, tenant, user)
+        email = f"{uuid.uuid4().hex[:8]}@example.com"
+
+        with (
+            patch("app.core.email.enqueue_email") as enqueue,
+            pytest.raises(HTTPException) as exc,
+        ):
+            await self._invite(db, tenant, user, cv, rd_id, email, count=3)
+
+        assert exc.value.status_code == 429
+        enqueue.assert_not_called()
+        assert not [
+            inv
+            for inv in (await service.list_manager_invites(db, tenant.id, cv.id))
+            if inv["email"] == email
+        ]
+
+    async def test_the_cap_is_per_address(self, db: AsyncSession, tenant, user):
+        cv, rd_id, _ = await _round_with_invite(db, tenant, user)
+        with patch("app.core.email.enqueue_email") as enqueue:
+            for _ in range(3):
+                await self._invite(
+                    db, tenant, user, cv, rd_id, f"{uuid.uuid4().hex[:8]}@example.com"
+                )
+        assert enqueue.call_count == 3
+
+    async def test_resends_count_against_the_recipient_cap(
+        self, db: AsyncSession, tenant, user
+    ):
+        """Otherwise a fresh invitation per resend walks around the cap."""
+        cv, rd_id, _ = await _round_with_invite(db, tenant, user)
+        email = f"{uuid.uuid4().hex[:8]}@example.com"
+        with patch("app.core.email.enqueue_email"):
+            rows = await self._invite(db, tenant, user, cv, rd_id, email)
+            second = await self._invite(db, tenant, user, cv, rd_id, email)
+
+        with (
+            patch("app.core.email.enqueue_email") as enqueue,
+            pytest.raises(HTTPException) as exc,
+        ):
+            await service.resend_invite(db, tenant.id, user.id, rows[0]["id"])
+
+        assert exc.value.status_code == 429
+        assert second  # the second invite did go out, the third send did not
+        enqueue.assert_not_called()

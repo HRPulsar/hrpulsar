@@ -3,6 +3,7 @@ import {
   registerUser,
   setAuthTokens,
   standAvailableLocales,
+  uniqueEmail,
 } from "./helpers";
 
 test.describe("Onboarding wizard", () => {
@@ -98,6 +99,46 @@ test.describe("Onboarding wizard", () => {
     await expect(page.getByText("First Division")).toBeVisible({
       timeout: 10000,
     });
+  });
+
+  // HRP-526: the invite step used to POST without a name (422) and swallow
+  // the error — the wizard advanced claiming success while nothing was sent.
+  test("step 3 - invitations need a name and report failures", async ({
+    page,
+  }) => {
+    await page.goto("/onboarding");
+    await expect(page.getByTestId("onboarding-btn-next")).toBeVisible({
+      timeout: 10000,
+    });
+    for (let i = 0; i < 3; i++) {
+      await page.getByTestId("onboarding-btn-next").click();
+    }
+    await expect(page.getByTestId("onboarding-input-invite-name-0")).toBeVisible(
+      { timeout: 10000 },
+    );
+
+    // Email without a name: the wizard refuses and stays on the step.
+    // Asserting on the validation toast, not on an element that was
+    // already visible before the click (review fix: that assertion
+    // passed against the very regression it guards).
+    await page.getByTestId("onboarding-input-invite-email-0").fill(uniqueEmail());
+    await page.getByTestId("onboarding-btn-next").click();
+    await expect(
+      page.getByText("Enter a name and an email for every invitation"),
+    ).toBeVisible();
+
+    // With both fields the invitation goes through and the wizard advances:
+    // the invite step's marker flips to the completed style (bg-primary) and
+    // step 4 becomes the current one (border-primary ring).
+    await page.getByTestId("onboarding-input-invite-name-0").fill("Invited Person");
+    await page.getByTestId("onboarding-btn-next").click();
+    await expect(page.getByTestId("onboarding-step-3")).toHaveClass(
+      /bg-primary/,
+      { timeout: 10000 },
+    );
+    await expect(page.getByTestId("onboarding-step-4")).toHaveClass(
+      /border-primary/,
+    );
   });
 
   test("step 1 - back button returns to language step", async ({ page }) => {

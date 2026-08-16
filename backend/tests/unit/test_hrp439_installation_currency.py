@@ -101,3 +101,35 @@ class TestOrmDefault:
             ),
         )
         assert chain["salary_currency"] == "EUR"
+
+
+class TestNoServerSideCurrencyLiteral:
+    """HRP-570: the DB must not invent a currency for anyone.
+
+    The column was created with ``server_default='RUB'``, which is wrong
+    on every non-Russian site the moment a row is written outside the
+    application path (raw SQL, a migration backfill). With the default
+    gone and the column still NOT NULL, such a writer fails loudly.
+    """
+
+    def test_model_declares_no_server_default(self):
+        from app.modules.grade_system.models import GradeSpecialization
+
+        column = GradeSpecialization.__table__.c.salary_currency
+        assert column.server_default is None
+        assert column.nullable is False
+
+    async def test_created_schema_has_no_column_default(self, db):
+        """The DDL the model produces carries no default either."""
+        from sqlalchemy import text
+
+        default = (
+            await db.execute(
+                text(
+                    "SELECT column_default FROM information_schema.columns "
+                    "WHERE table_name = 'grade_specializations' "
+                    "AND column_name = 'salary_currency'"
+                )
+            )
+        ).scalar_one()
+        assert default is None

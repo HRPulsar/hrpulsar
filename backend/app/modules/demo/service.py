@@ -10,20 +10,19 @@ opens the demo's first screen.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, get_args
 
-import redis.asyncio as aioredis
 from fastapi import HTTPException, status
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.errors import AppError
+from app.core.redis import redis_client
 from app.core.security import (
     create_demo_access_token,
     decode_token,
@@ -74,19 +73,18 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
     if remote_ip is None or settings.demo_rate_limit_per_ip_per_hour <= 0:
         return
 
-    client = None
     try:
-        client = aioredis.from_url(settings.redis_url, decode_responses=True)
-        key = f"demo:rl:{remote_ip}"
-        async with client.pipeline(transaction=True) as pipe:
-            pipe.incr(key)
-            pipe.expire(key, 3600)
-            count, _ = await pipe.execute()
-        if count > settings.demo_rate_limit_per_ip_per_hour:
-            raise AppError(
-                "demo_rate_limited",
-                status.HTTP_429_TOO_MANY_REQUESTS,
-            )
+        async with redis_client() as client:
+            key = f"demo:rl:{remote_ip}"
+            async with client.pipeline(transaction=True) as pipe:
+                pipe.incr(key)
+                pipe.expire(key, 3600)
+                count, _ = await pipe.execute()
+            if count > settings.demo_rate_limit_per_ip_per_hour:
+                raise AppError(
+                    "demo_rate_limited",
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -95,13 +93,6 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
             "demo_sandbox_unavailable",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
-    finally:
-        if client is not None:
-            # ``aclose`` exists at runtime in redis-py >=5 but the
-            # bundled type stubs still only expose ``close``; mirror
-            # the rest of the codebase and silence the false positive.
-            with contextlib.suppress(Exception):
-                await client.aclose()  # type: ignore[attr-defined]
 
 
 async def _count_live_demo_tenants(db: AsyncSession, *, now: datetime) -> int:
@@ -138,9 +129,7 @@ async def _enforce_concurrent_limit(db: AsyncSession, *, now: datetime) -> None:
         )
 
 
-async def _peek_concurrent_capacity(
-    db: AsyncSession, *, now: datetime
-) -> None:
+async def _peek_concurrent_capacity(db: AsyncSession, *, now: datetime) -> None:
     """Best-effort cap check that does NOT take the advisory lock.
 
     HRP-276 / M4: used for fast-fail before rate-limit INCR so a full
@@ -194,9 +183,7 @@ async def _create_demo_user(
             user.id,
         )
     else:
-        await db.execute(
-            user_roles.insert().values(user_id=user.id, role_id=role.id)
-        )
+        await db.execute(user_roles.insert().values(user_id=user.id, role_id=role.id))
     return user
 
 
@@ -232,18 +219,14 @@ async def _grant_demo_credits(
     except ImportError:
         return 0
     try:
-        await grant_bonus_credits(
-            db, tenant_id, user_id, amount, reason="demo_grant"
-        )
+        await grant_bonus_credits(db, tenant_id, user_id, amount, reason="demo_grant")
     except Exception:  # noqa: BLE001
         # Credit grant is best-effort — a transient DB hiccup, a partial
         # ee/ migration on a fresh deploy, or an HTTPException out of
         # ``_get_tc`` must not tear down a perfectly good tenant + seed.
         # The user just lands with zero bonus credits and will hit the
         # standard precheck flow on the first AI call.
-        logger.exception(
-            "demo: bonus credit grant failed for tenant %s", tenant_id
-        )
+        logger.exception("demo: bonus credit grant failed for tenant %s", tenant_id)
         return 0
     return amount
 
@@ -456,9 +439,7 @@ async def create_demo_session(
     try:
         interview_id = await _find_first_screen_interview(db, tenant.id)
     except Exception:  # noqa: BLE001
-        logger.exception(
-            "demo: first-screen lookup failed for tenant %s", tenant.id
-        )
+        logger.exception("demo: first-screen lookup failed for tenant %s", tenant.id)
         interview_id = None
 
     # HRP-276 / M7: no refresh token for demo sessions. The access

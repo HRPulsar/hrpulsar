@@ -411,6 +411,87 @@ export function aiNextStepLabel(
   return key ? t(key) : step;
 }
 
+// HRP-579 review fix: the analysis verdict is the same flat
+// ``recommended | needs_check | not_recommended`` enum every other AI
+// surface shows (``Verdict`` in prompts_interview.py) — it resolves
+// through `aiVerdictLabel` above. The previous hire/consider/reject map
+// mirrored a vocabulary the backend never emitted.
+
+// HRP-579: mirrors ``ProcessFinding.finding_type`` (prompts_interview.py).
+export type ProcessFindingType =
+  | "bias"
+  | "leading_question"
+  | "emotional_pressure"
+  | "overloaded_question"
+  | "too_detailed";
+
+export const PROCESS_FINDING_LABEL_KEYS: Record<ProcessFindingType, string> = {
+  bias: "processFindingBias",
+  leading_question: "processFindingLeadingQuestion",
+  emotional_pressure: "processFindingEmotionalPressure",
+  overloaded_question: "processFindingOverloadedQuestion",
+  too_detailed: "processFindingTooDetailed",
+};
+
+/** Translated interview process finding type with a de-slugged fallback. */
+export function processFindingLabel(
+  t: (key: string) => string,
+  findingType: string,
+): string {
+  const key = PROCESS_FINDING_LABEL_KEYS[findingType as ProcessFindingType];
+  return key ? t(key) : findingType.replaceAll("_", " ");
+}
+
+// HRP-579: mirrors ``RedFlag.flag_type`` (prompts_interview.py).
+export type RedFlagType =
+  | "contradiction"
+  | "resume_inconsistency"
+  | "evasion"
+  | "exaggeration_risk";
+
+export const RED_FLAG_LABEL_KEYS: Record<RedFlagType, string> = {
+  contradiction: "redFlagContradiction",
+  resume_inconsistency: "redFlagResumeInconsistency",
+  evasion: "redFlagEvasion",
+  exaggeration_risk: "redFlagExaggerationRisk",
+};
+
+/** Translated interview red-flag type with a de-slugged fallback. */
+export function redFlagLabel(
+  t: (key: string) => string,
+  flagType: string,
+): string {
+  const key = RED_FLAG_LABEL_KEYS[flagType as RedFlagType];
+  return key ? t(key) : flagType.replaceAll("_", " ");
+}
+
+// HRP-579: mirrors ``InterviewQuestionSet.generation_mode`` (models.py).
+export type QuestionSetGenerationMode =
+  | "initial"
+  | "regenerated"
+  | "dynamic_next"
+  | "manual";
+
+export const QUESTION_SET_GENERATION_MODE_LABEL_KEYS: Record<
+  QuestionSetGenerationMode,
+  string
+> = {
+  initial: "questionSetsModeInitial",
+  regenerated: "questionSetsModeRegenerated",
+  dynamic_next: "questionSetsModeDynamicNext",
+  manual: "questionSetsModeManual",
+};
+
+/** Translated question-set generation mode with a de-slugged fallback. */
+export function questionSetGenerationModeLabel(
+  t: (key: string) => string,
+  mode: string,
+): string {
+  const key =
+    QUESTION_SET_GENERATION_MODE_LABEL_KEYS[mode as QuestionSetGenerationMode];
+  return key ? t(key) : mode.replaceAll("_", " ");
+}
+
 // HRP-271: verbatim resume quote anchored to a parsed-resume section.
 // Mirrors backend ``ResumeExcerptRead`` (schemas.py) — keep the section
 // union and field names in sync.

@@ -42,7 +42,7 @@ from app.modules.ai_competence_generation.schemas import (
 from app.modules.ai_settings import service as ai_settings_service
 from app.modules.ai_settings.schemas import AISettingsUpdate
 from app.modules.dictionary.models import DictionaryItem
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Levels echoed the way models actually echo them: wrong case on one,
 # padded on the other. `title ILIKE` survives the first, not the second.
@@ -52,17 +52,6 @@ _PAYLOAD = {
         {"title": "Entwirft idempotente Endpunkte", "skill_level": " Advanced\n"},
     ]
 }
-
-
-@pytest_asyncio.fixture
-async def session_factory(db: AsyncSession):
-    from app.config import settings as app_settings
-
-    test_url = app_settings.database_url.rsplit("/", 1)[0] + "/hrpulsar_test"
-    engine = create_async_engine(test_url, echo=False)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield factory
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture

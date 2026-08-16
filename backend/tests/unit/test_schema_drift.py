@@ -55,12 +55,27 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 # Dedicated database: tests/conftest.py drops and rebuilds the public
 # schema of ``hrpulsar_test`` on first use of the ``db`` fixture, which
 # would race a migrated schema living in the same database.
-MIGRATIONS_DB_NAME = "hrpulsar_migrations_test"
+#
+# The name carries a per-process suffix: a fixed one would have two
+# pytest-xdist workers dropping and recreating each other's database
+# mid-run. Outside xdist the pid keeps concurrent local runs apart.
+MIGRATIONS_DB_NAME = (
+    f"hrpulsar_migrations_test_"
+    f"{os.environ.get('PYTEST_XDIST_WORKER') or f'pid{os.getpid()}'}"
+)
 
 
 def _server_url(database: str) -> str:
-    """Swap the database name in the configured async URL."""
-    return settings.database_url.rsplit("/", 1)[0] + f"/{database}"
+    """Swap the database name in the configured async URL.
+
+    ``make_url`` keeps query parameters (``?sslmode=require``) that naive
+    string surgery on the last path segment would drop.
+    """
+    return (
+        sa.make_url(settings.database_url)
+        .set(database=database)
+        .render_as_string(hide_password=False)
+    )
 
 
 def _sync(url: str) -> str:
@@ -96,56 +111,31 @@ for _key in (
 ):
     ALLOWED_DRIFT[_key] = "DB NOT NULL vs model nullable — server_default fills it."
 
-# --- Indexes declared on the model but never created by a migration -------
-# Under-created indexes: the model asks for them, no migration ever emitted
-# the DDL. Reads stay correct, they just scan more — a query-plan concern,
-# not a correctness one. A follow-up ticket tracks creating or dropping
-# them; until then each is listed so a NEW one cannot slip in unnoticed.
+# --- TenantMixin's index, superseded by a composite (HRP-581) -------------
+# ``TenantMixin`` declares ``index=True`` on every tenant-scoped table, so
+# these four models ask for a plain ``tenant_id`` index. Their migrations
+# deliberately created something better instead — a composite that *leads*
+# with ``tenant_id`` (``(tenant_id, created_at DESC)``, or a UNIQUE on
+# ``tenant_id`` alone for the retention config). Postgres serves both the
+# tenant-scoped reads and the ON DELETE CASCADE check from that leading
+# column, so adding the plain index back would only slow writes on the
+# highest-write tables in the system.
+#
+# This is a reviewed decision, not a backlog item: HRP-581 walked all 42
+# model-only indexes, created the 14 that earn their keep (migration
+# ``hrp581recidx``) and dropped ``index=True`` from the other 24. These
+# four cannot be dropped from the model without overriding the mixin per
+# table, which would break a platform-wide invariant to save four lines.
 for _key in (
-    "add_index:ai_assessments.ix_ai_assessments_competence_id",
-    "add_index:ai_assessments.ix_ai_assessments_interview_id",
-    "add_index:assessment_invites.ix_assessment_invites_candidate_vacancy_id",
-    "add_index:candidate_files.ix_candidate_files_candidate_id",
-    "add_index:candidate_files.ix_candidate_files_file_id",
-    "add_index:candidate_questions.ix_candidate_questions_candidate_id",
-    "add_index:candidate_questions.ix_candidate_questions_competence_id",
-    "add_index:candidate_questions.ix_candidate_questions_vacancy_id",
-    "add_index:candidate_vacancies.ix_candidate_vacancies_attached_by",
-    "add_index:candidate_vacancies.ix_candidate_vacancies_candidate_id",
-    "add_index:candidate_vacancies.ix_candidate_vacancies_stage_id",
-    "add_index:candidate_vacancies.ix_candidate_vacancies_vacancy_id",
-    "add_index:candidates.ix_candidates_person_id",
-    "add_index:consolidated_reports.ix_consolidated_reports_file_id",
-    "add_index:consolidated_reports.ix_consolidated_reports_generated_by",
-    "add_index:consolidated_reports.ix_consolidated_reports_vacancy_id",
-    "add_index:gdpr_erasure_log.ix_gdpr_erasure_log_subject_id",
     "add_index:gdpr_erasure_log.ix_gdpr_erasure_log_tenant_id",
-    "add_index:gdpr_export_requests.ix_gdpr_export_requests_requested_by",
-    "add_index:gdpr_export_requests.ix_gdpr_export_requests_subject_id",
     "add_index:gdpr_export_requests.ix_gdpr_export_requests_tenant_id",
-    "add_index:human_assessments.ix_human_assessments_candidate_vacancy_id",
-    "add_index:human_assessments.ix_human_assessments_competence_id",
-    "add_index:human_assessments.ix_human_assessments_evaluator_id",
-    "add_index:interview_segments.ix_interview_segments_interview_id",
-    "add_index:interviews.ix_interviews_audio_file_id",
-    "add_index:interviews.ix_interviews_candidate_vacancy_id",
-    "add_index:interviews.ix_interviews_interviewer_id",
-    "add_index:interviews.ix_interviews_video_file_id",
-    "add_index:recruitment_audit_log.ix_recruitment_audit_log_entity_id",
     "add_index:recruitment_audit_log.ix_recruitment_audit_log_tenant_id",
     "add_index:recruitment_retention_configs.ix_recruitment_retention_configs_tenant_id",
-    "add_index:vacancies.ix_vacancies_division_id",
-    "add_index:vacancies.ix_vacancies_grade_id",
-    "add_index:vacancies.ix_vacancies_owner_id",
-    "add_index:vacancies.ix_vacancies_specialization_id",
-    "add_index:vacancy_attachments.ix_vacancy_attachments_tenant_id",
-    "add_index:vacancy_competences.ix_vacancy_competences_competence_id",
-    "add_index:vacancy_competences.ix_vacancy_competences_tenant_id",
-    "add_index:vacancy_competences.ix_vacancy_competences_vacancy_id",
-    "add_index:vacancy_profile_sessions.ix_vacancy_profile_sessions_tenant_id",
-    "add_index:vacancy_stages.ix_vacancy_stages_vacancy_id",
 ):
-    ALLOWED_DRIFT[_key] = "index=True on the model, no matching migration."
+    ALLOWED_DRIFT[_key] = (
+        "TenantMixin's plain tenant_id index — a composite leading with "
+        "tenant_id already covers it."
+    )
 
 # --- Indexes created by a migration but not declared on the model ---------
 # Composite / partial / expression indexes added for specific queries and
@@ -380,7 +370,12 @@ def _alembic_config(target_url: str) -> Config:
     if (versions / "ee").is_dir():
         locations.append(versions / "ee")
     cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
-    cfg.set_main_option("version_locations", " ".join(str(path) for path in locations))
+    # os.pathsep, not a space: a checkout under a path with a space in it
+    # would otherwise split into bogus version locations.
+    cfg.set_main_option(
+        "version_locations", os.pathsep.join(str(path) for path in locations)
+    )
+    cfg.set_main_option("path_separator", "os")
     cfg.set_main_option("sqlalchemy.url", target_url)
     return cfg
 
@@ -392,17 +387,20 @@ def migrated_engine():
     target_async_url = _server_url(MIGRATIONS_DB_NAME)
     target_sync_url = _sync(target_async_url)
 
+    def _drop(conn: sa.Connection) -> None:
+        conn.execute(
+            sa.text(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = :name AND pid <> pg_backend_pid()"
+            ),
+            {"name": MIGRATIONS_DB_NAME},
+        )
+        conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{MIGRATIONS_DB_NAME}"'))
+
     admin = sa.create_engine(admin_url, isolation_level="AUTOCOMMIT")
     try:
         with admin.connect() as conn:
-            conn.execute(
-                sa.text(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                    "WHERE datname = :name AND pid <> pg_backend_pid()"
-                ),
-                {"name": MIGRATIONS_DB_NAME},
-            )
-            conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{MIGRATIONS_DB_NAME}"'))
+            _drop(conn)
             conn.execute(sa.text(f'CREATE DATABASE "{MIGRATIONS_DB_NAME}"'))
     finally:
         admin.dispose()
@@ -431,6 +429,15 @@ def migrated_engine():
     yield engine
 
     engine.dispose()
+
+    # The name is per-process now, so leaving it behind would litter the
+    # server with one scratch database per run.
+    admin = sa.create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as conn:
+            _drop(conn)
+    finally:
+        admin.dispose()
 
 
 @pytest.fixture(scope="module")

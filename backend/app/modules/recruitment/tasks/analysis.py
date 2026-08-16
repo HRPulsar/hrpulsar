@@ -978,6 +978,9 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 "process_findings": [f.model_dump() for f in analysis.process_findings],
                 "blind_spots": [b.model_dump() for b in analysis.blind_spots],
                 "red_flags": [r.model_dump() for r in analysis.red_flags],
+                # HRP-579 review fix: the verdict enum was never written
+                # here, so the UI's verdict panel could not render at all.
+                "verdict": analysis.verdict,
                 "verdict_summary": analysis.verdict_summary,
                 "key_strength": analysis.key_strength,
                 "key_risk": analysis.key_risk,

@@ -10,6 +10,7 @@ import { Header } from "@/components/header";
 import { ImpersonationBanner } from "@/components/impersonation-banner";
 import { AIGenerationBanner } from "@/components/ai-generation-banner";
 import { DemoBanner } from "@/components/dashboard/demo-banner";
+import { DemoFeedbackPopup } from "@/components/dashboard/demo-feedback-popup";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WebSocketProvider } from "@/lib/ws";
 import { useInAppNotifications } from "@/hooks/use-in-app-notifications";
@@ -54,6 +55,7 @@ export default function DashboardLayout({
                 <DemoBanner />
                 <Header />
                 <main className="flex-1 overflow-auto p-4 sm:p-6">{children}</main>
+                <DemoFeedbackPopup />
               </div>
             </div>
           </TooltipProvider>

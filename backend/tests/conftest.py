@@ -9,6 +9,14 @@ os.environ["DEPLOYMENT_MODE"] = "onprem"
 # The suite runs onprem (above) regardless of the operator's .env, so pin
 # the flag off too — demo tests opt in via monkeypatch on settings.
 os.environ["DEMO_ENABLED"] = "false"
+# HRP-576: the per-recipient invitation cap counts in real Redis, which
+# outlives a test run — fixture emails like ext@example.com would pile up
+# across runs and start refusing unrelated invites. Off by default; the
+# tests that cover the cap turn it back on via monkeypatch.
+os.environ["INVITE_MAIL_CAP_PER_RECIPIENT_PER_HOUR"] = "0"
+# Same story for the per-user feedback cap (HRP-586): real Redis outlives
+# a run, so fixture users would pile up 429s across runs.
+os.environ["FEEDBACK_RATE_LIMIT_PER_USER_PER_HOUR"] = "0"
 
 import pytest
 import pytest_asyncio
@@ -35,15 +43,21 @@ from app.modules.recruitment.notifications import (
     HANDLERS as _RECRUITMENT_HANDLERS,
 )
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 _events._handlers.get("employee.event_created", []).remove(_on_employee_event)
 for _event, _handler in _RECRUITMENT_HANDLERS.items():
     _events._handlers.get(_event, []).remove(_handler)
 
-# Use a separate test database to avoid clobbering alembic_version in dev DB
-_base = settings.database_url
-TEST_DB_URL = _base.rsplit("/", 1)[0] + "/hrpulsar_test"
+# Use a separate test database to avoid clobbering alembic_version in dev DB.
+# ``make_url`` keeps query parameters (``?sslmode=require``) that string
+# surgery on the last path segment would drop.
+TEST_DB_URL = (
+    make_url(settings.database_url)
+    .set(database="hrpulsar_test")
+    .render_as_string(hide_password=False)
+)
 
 _tables_created = False
 
@@ -163,6 +177,20 @@ async def db():
     yield session
     await session.close()
     await _engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def session_factory(db: AsyncSession):
+    """A real ``async_sessionmaker`` against the test DB.
+
+    Worker code paths (``execute_session`` and friends) open their own
+    ``async with session_factory() as session`` context instead of taking a
+    session, so they need a factory rather than the ``db`` session itself.
+    Requesting ``db`` first guarantees the schema is set up.
+    """
+    engine = create_async_engine(TEST_DB_URL, echo=False)
+    yield async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    await engine.dispose()
 
 
 @pytest.fixture(autouse=True)

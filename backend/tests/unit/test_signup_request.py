@@ -22,9 +22,7 @@ def stub_signup_email(monkeypatch):
         sent.append((to, token))
         return True
 
-    monkeypatch.setattr(
-        "app.core.email.send_signup_verify_email", _fake_send
-    )
+    monkeypatch.setattr("app.core.email.send_signup_verify_email", _fake_send)
     return sent
 
 
@@ -33,9 +31,7 @@ def no_rate_limit(monkeypatch):
     async def _noop(_remote_ip):
         return None
 
-    monkeypatch.setattr(
-        "app.modules.signup.service._enforce_rate_limit", _noop
-    )
+    monkeypatch.setattr("app.modules.signup.service._enforce_rate_limit", _noop)
 
 
 @pytest.fixture
@@ -70,9 +66,7 @@ async def test_create_signup_request_persists_row_and_sends_email(
     assert body["status"] == "pending_email_verify"
 
     row = (
-        await db.execute(
-            select(SignupRequest).where(SignupRequest.email == email)
-        )
+        await db.execute(select(SignupRequest).where(SignupRequest.email == email))
     ).scalar_one()
     assert row.status == "pending_email_verify"
     assert row.source == "landing"
@@ -139,9 +133,7 @@ async def test_verify_signup_request_flips_to_pending_moderation(
     await db.refresh(row)
 
     token = create_signup_verify_token(str(row.id))
-    resp = await client.post(
-        "/api/signup-request/verify", json={"token": token}
-    )
+    resp = await client.post("/api/signup-request/verify", json={"token": token})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "pending_moderation"
@@ -169,9 +161,7 @@ async def test_verify_signup_request_is_idempotent_on_repeat(
     await db.commit()
 
     token = create_signup_verify_token(str(row.id))
-    resp = await client.post(
-        "/api/signup-request/verify", json={"token": token}
-    )
+    resp = await client.post("/api/signup-request/verify", json={"token": token})
     assert resp.status_code == 200
     assert resp.json()["already_verified"] is True
 
@@ -202,9 +192,7 @@ async def test_verify_signup_request_rejects_expired_token(
     token = jwt.encode(
         expired_payload, settings.jwt_secret, algorithm=settings.jwt_algorithm
     )
-    resp = await client.post(
-        "/api/signup-request/verify", json={"token": token}
-    )
+    resp = await client.post("/api/signup-request/verify", json={"token": token})
     assert resp.status_code == 401
 
 
@@ -226,9 +214,7 @@ async def test_verify_signup_request_rejects_finalized(
     await db.refresh(row)
 
     token = create_signup_verify_token(str(row.id))
-    resp = await client.post(
-        "/api/signup-request/verify", json={"token": token}
-    )
+    resp = await client.post("/api/signup-request/verify", json={"token": token})
     assert resp.status_code == 409
 
 
@@ -242,13 +228,9 @@ async def test_create_signup_request_returns_429_when_rate_limited(
     from fastapi import HTTPException, status
 
     async def _block(_remote_ip):
-        raise HTTPException(
-            status.HTTP_429_TOO_MANY_REQUESTS, "too many"
-        )
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many")
 
-    monkeypatch.setattr(
-        "app.modules.signup.service._enforce_rate_limit", _block
-    )
+    monkeypatch.setattr("app.modules.signup.service._enforce_rate_limit", _block)
     resp = await client.post(
         "/api/signup-request",
         json={"email": "rate@example.com", "first_name": "R"},
@@ -263,9 +245,7 @@ async def test_verify_signup_request_404_for_missing_row(
     no_turnstile,
 ):
     token = create_signup_verify_token(str(uuid.uuid4()))
-    resp = await client.post(
-        "/api/signup-request/verify", json={"token": token}
-    )
+    resp = await client.post("/api/signup-request/verify", json={"token": token})
     assert resp.status_code == 404
 
 
@@ -311,7 +291,7 @@ def reminder_redis(monkeypatch):
     behavior re-patch ``from_url`` inside their own body."""
     fake = _FakeRedis(set_result=True)
     monkeypatch.setattr(
-        "app.modules.signup.service.aioredis.from_url",
+        "app.core.redis.aioredis.from_url",
         lambda *_a, **_kw: fake,
     )
     return fake
@@ -346,9 +326,7 @@ async def test_repeat_verify_click_publishes_moderation_reminder(
     await db.refresh(row)
 
     token = create_signup_verify_token(str(row.id))
-    resp = await client.post(
-        "/api/signup-request/verify", json={"token": token}
-    )
+    resp = await client.post("/api/signup-request/verify", json={"token": token})
     assert resp.status_code == 200
     assert resp.json()["already_verified"] is True
 
@@ -425,7 +403,7 @@ async def test_reminder_throttled_by_redis(
 ):
     fake = _FakeRedis(set_result=None)  # SET NX lost — already reminded
     monkeypatch.setattr(
-        "app.modules.signup.service.aioredis.from_url",
+        "app.core.redis.aioredis.from_url",
         lambda *_a, **_kw: fake,
     )
     row = SignupRequest(
@@ -439,9 +417,7 @@ async def test_reminder_throttled_by_redis(
     await db.refresh(row)
 
     token = create_signup_verify_token(str(row.id))
-    resp = await client.post(
-        "/api/signup-request/verify", json={"token": token}
-    )
+    resp = await client.post("/api/signup-request/verify", json={"token": token})
     assert resp.status_code == 200
     assert _reminder_events(capture_events) == []
 
@@ -458,9 +434,7 @@ async def test_reminder_redis_failure_does_not_break_flow(
     def _boom(*_a, **_kw):
         raise RuntimeError("redis down")
 
-    monkeypatch.setattr(
-        "app.modules.signup.service.aioredis.from_url", _boom
-    )
+    monkeypatch.setattr("app.core.redis.aioredis.from_url", _boom)
     row = SignupRequest(
         email="redis-down@example.com",
         first_name="R",
@@ -472,9 +446,7 @@ async def test_reminder_redis_failure_does_not_break_flow(
     await db.refresh(row)
 
     token = create_signup_verify_token(str(row.id))
-    resp = await client.post(
-        "/api/signup-request/verify", json={"token": token}
-    )
+    resp = await client.post("/api/signup-request/verify", json={"token": token})
     # Visitor flow unaffected; reminder silently skipped.
     assert resp.status_code == 200
     assert resp.json()["already_verified"] is True
@@ -502,9 +474,7 @@ async def test_no_reminder_within_age_gate(
     await db.refresh(row)
 
     token = create_signup_verify_token(str(row.id))
-    resp = await client.post(
-        "/api/signup-request/verify", json={"token": token}
-    )
+    resp = await client.post("/api/signup-request/verify", json={"token": token})
     assert resp.status_code == 200
     assert resp.json()["already_verified"] is True
     assert _reminder_events(capture_events) == []

@@ -53,3 +53,32 @@ describe("Manager assessment — vacancy switch resets the sheet (HRP-550)", () 
     expect(FLAT.slice(effect, load)).toContain("setViewingInvite(null);");
   });
 });
+
+// HRP-579 (b): the autosave state was left behind by the same switch —
+// the previous vacancy's "Saving… / Saved" finished playing under the new
+// one, and its armed PATCHes fired minutes into the new sheet's session.
+describe("Manager assessment — vacancy switch resets autosave (HRP-579)", () => {
+  const effect = FLAT.indexOf("if (!activeCvId) return;");
+  const load = FLAT.indexOf("void loadRounds(activeCvId);");
+  const body = FLAT.slice(effect, load);
+
+  it("disarms the debounced saves before loading the new vacancy", () => {
+    expect(effect).toBeGreaterThan(-1);
+    expect(body).toContain("clearTimeout(pending.timer);");
+    expect(body).toContain("debounceTimers.current.clear();");
+    expect(body).toContain("pendingSaves.current = 0;");
+  });
+
+  it("flushes them instead of dropping the evaluator's last edit", () => {
+    // The armed closure carries the old sheet's id, so firing it now still
+    // writes where the edit was made — dropping it would lose whatever
+    // happened inside the 1.5 s debounce window.
+    expect(body).toContain("void pending.run()");
+  });
+
+  it("resets the indicator so it cannot play under the new vacancy", () => {
+    expect(body).toContain('setSavingState("idle");');
+    expect(body).toContain("clearTimeout(savedResetTimer.current);");
+    expect(body).toContain("savedResetTimer.current = null;");
+  });
+});

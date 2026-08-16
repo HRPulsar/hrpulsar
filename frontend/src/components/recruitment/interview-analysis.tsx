@@ -8,6 +8,11 @@ import type {
   InterviewAnalysis,
   InterviewAnalysisCompetence,
 } from "@/lib/types";
+import {
+  aiVerdictLabel,
+  processFindingLabel,
+  redFlagLabel,
+} from "@/lib/recruitment-types";
 import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, Lightbulb, ShieldAlert, Target, Trophy } from "lucide-react";
 import { ALERT_TONE, BADGE_COLOR } from "@/lib/badge-tones";
@@ -28,10 +33,12 @@ interface InterviewAnalysisProps {
 
 const FALLBACK_SCALE_MAX = 5;
 
+// Keyed on the backend ``Verdict`` enum (prompts_interview.py) — the
+// same vocabulary ai-verdict-badge colours.
 const verdictTone: Record<string, string> = {
-  hire: BADGE_COLOR.green,
-  consider: BADGE_COLOR.amber,
-  reject: BADGE_COLOR.red,
+  recommended: BADGE_COLOR.green,
+  needs_check: BADGE_COLOR.amber,
+  not_recommended: BADGE_COLOR.red,
 };
 
 function CompetenceBars({
@@ -132,7 +139,7 @@ export function InterviewAnalysisPanel({
   const analysis: InterviewAnalysis | null = interview.analysis ?? null;
 
   const verdictClass = useMemo(() => {
-    const r = (analysis?.verdict?.recommendation || "").toLowerCase();
+    const r = (analysis?.verdict || "").toLowerCase();
     return verdictTone[r] || "bg-muted text-muted-foreground border-border";
   }, [analysis]);
 
@@ -203,32 +210,37 @@ export function InterviewAnalysisPanel({
 
   return (
     <div data-testid="recruitment-interview-analysis" className="space-y-5">
-      {analysis.verdict && (
+      {(analysis.verdict || analysis.verdict_summary) && (
         <section className="space-y-1">
           <h3 className="flex items-center gap-1.5 text-sm font-medium">
             <Trophy className="size-4 text-amber-500" />
             {t("interviewAnalysisVerdictHeading")}
           </h3>
           <div className={`rounded-md border p-3 text-sm ${verdictClass}`}>
-            <p className="font-semibold capitalize">
-              {analysis.verdict.recommendation}
-            </p>
-            {analysis.verdict.key_strength && (
+            {analysis.verdict && (
+              <p className="font-semibold">
+                {aiVerdictLabel(t, analysis.verdict)}
+              </p>
+            )}
+            {analysis.verdict_summary && (
+              <p className="mt-1 text-xs">{analysis.verdict_summary}</p>
+            )}
+            {analysis.key_strength && (
               <p className="mt-1 text-xs">
                 <strong>{t("interviewAnalysisKeyStrength")}</strong>{" "}
-                {analysis.verdict.key_strength}
+                {analysis.key_strength}
               </p>
             )}
-            {analysis.verdict.key_risk && (
+            {analysis.key_risk && (
               <p className="mt-1 text-xs">
                 <strong>{t("interviewAnalysisRisk")}</strong>{" "}
-                {analysis.verdict.key_risk}
+                {analysis.key_risk}
               </p>
             )}
-            {analysis.verdict.risk_mitigation && (
+            {analysis.risk_mitigation && (
               <p className="mt-1 text-xs">
                 <strong>{t("interviewAnalysisMitigation")}</strong>{" "}
-                {analysis.verdict.risk_mitigation}
+                {analysis.risk_mitigation}
               </p>
             )}
           </div>
@@ -257,9 +269,10 @@ export function InterviewAnalysisPanel({
           <ul className="space-y-1.5">
             {analysis.blind_spots.map((b, i) => (
               <li key={i} className="rounded-md border bg-muted/30 p-2 text-xs">
-                {b.topic && <p className="font-medium">{b.topic}</p>}
-                {b.reason && (
-                  <p className="text-muted-foreground">{b.reason}</p>
+                {b.competence_id && competences[b.competence_id]?.name && (
+                  <p className="font-medium">
+                    {competences[b.competence_id]?.name}
+                  </p>
                 )}
                 {b.suggested_question && (
                   <p className="mt-1">
@@ -284,9 +297,11 @@ export function InterviewAnalysisPanel({
           <ul className="space-y-1.5">
             {analysis.process_findings.map((f, i) => (
               <li key={i} className="rounded-md border bg-muted/30 p-2 text-xs">
-                <p className="font-medium capitalize">{f.finding_type}</p>
-                {f.detail && (
-                  <p className="text-muted-foreground">{f.detail}</p>
+                <p className="font-medium">
+                  {processFindingLabel(t, f.finding_type)}
+                </p>
+                {f.full_description && (
+                  <p className="text-muted-foreground">{f.full_description}</p>
                 )}
                 {f.positive_reframe && (
                   <p className="mt-1 text-emerald-700">
@@ -311,8 +326,8 @@ export function InterviewAnalysisPanel({
                 key={i}
                 className={`rounded-md border p-2 text-xs ${ALERT_TONE.rose}`}
               >
-                <p className="font-medium capitalize">{f.finding_type}</p>
-                {f.detail && <p>{f.detail}</p>}
+                <p className="font-medium">{redFlagLabel(t, f.flag_type)}</p>
+                {f.description && <p>{f.description}</p>}
               </li>
             ))}
           </ul>

@@ -27,6 +27,7 @@ from app.core.i18n import (
 from app.core.security import create_access_token
 from fastapi import Request
 from httpx import AsyncClient
+from sqlalchemy import select
 
 
 def _make_request(accept_language: str | None = None) -> Request:
@@ -690,6 +691,9 @@ class TestSignedOutFunnelEmailLocale:
         monkeypatch.setattr(
             "app.core.email.send_signup_verify_email", _capture("signup")
         )
+        monkeypatch.setattr(
+            "app.core.email.send_signup_rejected_email", _capture("rejected")
+        )
         return seen
 
     @pytest.fixture
@@ -791,3 +795,77 @@ class TestSignedOutFunnelEmailLocale:
         )
         assert resp.status_code == 201, resp.text
         assert captured["signup"] == "de"
+
+    # --- HRP-575: the decision email speaks the applicant's language ---
+    #
+    # Moderation happens minutes or days later, from Slack or the
+    # platform-admin UI — neither carries the applicant's headers, so
+    # without the stored locale these emails fall back to the deployment
+    # default and a German applicant gets an English answer.
+
+    async def _submit(self, client: AsyncClient, *, locale: str | None) -> str:
+        email = f"lead-{uuid.uuid4().hex[:8]}@example.com"
+        headers = {"Accept-Language": "en-US,en;q=0.9"}
+        if locale:
+            headers["X-Locale"] = locale
+        resp = await client.post(
+            "/api/signup-request",
+            json={"email": email, "first_name": "Lead"},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+        return email
+
+    async def _load(self, db, email: str):
+        from app.modules.signup.models import SignupRequest
+
+        return (
+            await db.execute(select(SignupRequest).where(SignupRequest.email == email))
+        ).scalar_one()
+
+    async def test_signup_request_stores_the_applicant_locale(
+        self, client: AsyncClient, db, captured, open_signup, locales_de_en
+    ):
+        email = await self._submit(client, locale="de")
+        assert (await self._load(db, email)).locale == "de"
+
+    async def test_resubmit_follows_a_language_switch(
+        self, client: AsyncClient, db, captured, open_signup, locales_de_en
+    ):
+        """The verify email goes out in the new locale — the row follows."""
+        email = await self._submit(client, locale="de")
+        resp = await client.post(
+            "/api/signup-request",
+            json={"email": email, "first_name": "Lead"},
+            headers={"X-Locale": "en"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert (await self._load(db, email)).locale == "en"
+
+    async def test_stored_locale_matches_the_last_verify_email(
+        self, client: AsyncClient, db, captured, open_signup, locales_de_en
+    ):
+        """A re-submit with no locale signal at all falls to the deployment
+        default — and the row must agree with the email that just went out,
+        so the later decision email cannot contradict it."""
+        email = await self._submit(client, locale="de")
+        resp = await client.post(
+            "/api/signup-request",
+            json={"email": email, "first_name": "Lead"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert captured["signup"] == "en"
+        assert (await self._load(db, email)).locale == captured["signup"]
+
+    async def test_rejection_email_follows_the_applicant_locale(
+        self, client: AsyncClient, db, captured, open_signup, locales_de_en
+    ):
+        from app.modules.signup.service import reject_signup
+
+        email = await self._submit(client, locale="de")
+        row = await self._load(db, email)
+        row.status = "pending_moderation"
+        await db.commit()
+
+        await reject_signup(db, row.id, reason="not a fit")
+        assert captured["rejected"] == "de"

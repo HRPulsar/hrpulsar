@@ -1869,33 +1869,41 @@ export interface InterviewAnalysisCompetence {
   reasoning?: string;
 }
 
+/** Mirrors backend ``BlindSpot`` (prompts_interview.py). */
 export interface InterviewAnalysisBlindSpot {
   competence_id?: string;
-  topic?: string;
-  reason?: string;
+  human_score?: number | null;
   suggested_question?: string;
 }
 
+/** Mirrors backend ``ProcessFinding`` (prompts_interview.py). */
 export interface InterviewAnalysisFinding {
   finding_type: string;
   severity?: string;
-  detail?: string;
+  full_description?: string;
   positive_reframe?: string;
 }
 
-export interface InterviewAnalysisVerdict {
-  recommendation: string;
-  key_strength?: string;
-  key_risk?: string;
-  risk_mitigation?: string;
+/** Mirrors backend ``RedFlag`` (prompts_interview.py). */
+export interface InterviewAnalysisRedFlag {
+  flag_type: string;
+  severity?: string;
+  description?: string;
 }
 
+/** Shape of ``interviews.analysis_data`` as written by tasks/analysis.py —
+ * the verdict fields are flat, there is no nested verdict object. */
 export interface InterviewAnalysis {
   competence_assessments?: InterviewAnalysisCompetence[];
   blind_spots?: InterviewAnalysisBlindSpot[];
   process_findings?: InterviewAnalysisFinding[];
-  red_flags?: InterviewAnalysisFinding[];
-  verdict?: InterviewAnalysisVerdict;
+  red_flags?: InterviewAnalysisRedFlag[];
+  data_completeness?: string;
+  verdict?: string;
+  verdict_summary?: string;
+  key_strength?: string;
+  key_risk?: string;
+  risk_mitigation?: string;
 }
 
 export interface Interview {
