@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * HRP-264 (M6): end-to-end smoke for the moderated signup flow.

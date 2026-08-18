@@ -8,7 +8,7 @@
  * in_progress → answers → done — scoring two competences deliberately far
  * apart so the matrix has something to sort and filter.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures";
 
 import {
   API_BASE,

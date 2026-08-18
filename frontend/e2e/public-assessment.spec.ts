@@ -12,7 +12,7 @@
  * Requires E2E_MODE=true on the backend so the dev token-fetch endpoint
  * is available; `registerUser` already depends on the same flag.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures";
 import { registerUser } from "./helpers";
 
 const API_BASE = "http://localhost:8100/api";

@@ -9,7 +9,7 @@
  * public link round-trip. The billing/credit-purchase surface is
  * covered by SaaS-only tests.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { registerUser, setAuthTokens, loginViaUI } from "./helpers";
 
 const API_BASE = "http://localhost:8100/api";

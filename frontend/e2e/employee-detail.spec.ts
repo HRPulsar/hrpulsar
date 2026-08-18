@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { setupFullTenant, setAuthTokens, createDivision } from "./helpers";
 
 test.describe("Employee detail", () => {

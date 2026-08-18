@@ -287,6 +287,7 @@ async def create_demo_session(
     *,
     turnstile_token: str | None,
     remote_ip: str | None,
+    user_agent: str | None = None,
     existing_token: str | None = None,
 ) -> dict[str, Any]:
     """Spin up a brand-new public-demo tenant + user + seed.
@@ -416,6 +417,11 @@ async def create_demo_session(
                 "credits_granted": credits_granted,
                 "redirect_url": DEMO_REDIRECT_URL,
                 "remote_ip": remote_ip or "",
+                # Raw UA, for the EE Slack handler to fingerprint. Two
+                # sessions from one address are only suspicious when the
+                # browser is the same one (2026-08-16: one IP, two
+                # different browsers, both legitimately resumable).
+                "user_agent": user_agent or "",
             },
         )
     except Exception:  # noqa: BLE001

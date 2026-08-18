@@ -5,7 +5,7 @@
  * handler; with no Slack configured (CI) the endpoint still answers 204,
  * so this spec covers the full user path on both deployment modes.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { registerUser, setAuthTokens } from "./helpers";
 
 test.describe("Feedback widget", () => {

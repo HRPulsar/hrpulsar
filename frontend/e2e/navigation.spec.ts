@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { registerUser, setAuthTokens, completeOnboarding } from "./helpers";
 
 test.describe("Sidebar navigation", () => {

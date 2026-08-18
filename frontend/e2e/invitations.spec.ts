@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { registerUser, setAuthTokens, createInvitation } from "./helpers";
 
 test.describe("Invitations — INV1 (Name + Division column + reordered columns)", () => {

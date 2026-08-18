@@ -5,7 +5,7 @@
  * the Analytics tab. The funnel-kanban + radar should render without
  * any client-side error (status='ready' on the analytics tab).
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { registerUser, loginViaUI } from "./helpers";
 
 const API_BASE = "http://localhost:8100/api";

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { registerUser, loginViaUI, completeOnboarding } from "./helpers";
 
 const API_BASE = "http://localhost:8100/api";

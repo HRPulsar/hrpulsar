@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { setupFullTenant, setAuthTokens } from "./helpers";
 
 test.describe("Division detail page (HRP-216 regression)", () => {

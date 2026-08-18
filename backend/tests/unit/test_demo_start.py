@@ -98,18 +98,24 @@ async def test_start_provisions_demo_tenant_with_seed(
     # one interview lands with a completed AI analysis (the demo's
     # first screen relies on it).
     vacancies = (
-        await db.execute(select(Vacancy).where(Vacancy.tenant_id == tenant_id))
-    ).scalars().all()
+        (await db.execute(select(Vacancy).where(Vacancy.tenant_id == tenant_id)))
+        .scalars()
+        .all()
+    )
     assert len(vacancies) >= 3
 
     candidates = (
-        await db.execute(select(Candidate).where(Candidate.tenant_id == tenant_id))
-    ).scalars().all()
+        (await db.execute(select(Candidate).where(Candidate.tenant_id == tenant_id)))
+        .scalars()
+        .all()
+    )
     assert len(candidates) >= 8
 
     interviews = (
-        await db.execute(select(Interview).where(Interview.tenant_id == tenant_id))
-    ).scalars().all()
+        (await db.execute(select(Interview).where(Interview.tenant_id == tenant_id)))
+        .scalars()
+        .all()
+    )
     assert len(interviews) >= 2
     assert any(iv.analysis_status == "completed" for iv in interviews)
 
@@ -134,9 +140,7 @@ async def test_start_pins_ai_content_language_to_platform_default_locale(
 
     row = (
         await db.execute(
-            select(TenantAISettings).where(
-                TenantAISettings.tenant_id == tenant_id
-            )
+            select(TenantAISettings).where(TenantAISettings.tenant_id == tenant_id)
         )
     ).scalar_one()
     assert row.content_language == "de"
@@ -201,9 +205,7 @@ async def test_failed_seed_leaves_only_short_lived_tenant(
 
     now = datetime.now(timezone.utc)
     with pytest.raises(RuntimeError, match="simulated seed failure"):
-        await demo_service.create_demo_session(
-            db, turnstile_token=None, remote_ip=None
-        )
+        await demo_service.create_demo_session(db, turnstile_token=None, remote_ip=None)
     # The mini-tx already committed before the seed failure, so the
     # tenant row exists; the request session may be poisoned, so rollback
     # whatever the failure left in flight before reading back.
@@ -213,9 +215,7 @@ async def test_failed_seed_leaves_only_short_lived_tenant(
     # not the full 4-hour session window.
     rows = (
         await db.execute(
-            select(Tenant.id, Tenant.expires_at).where(
-                Tenant.is_demo.is_(True)
-            )
+            select(Tenant.id, Tenant.expires_at).where(Tenant.is_demo.is_(True))
         )
     ).all()
     assert len(rows) == 1, f"expected exactly one orphan, got {rows}"
@@ -269,6 +269,35 @@ async def test_xff_ignored_when_no_trusted_proxies_configured(
         await r.delete("demo:rl:127.0.0.1")
     finally:
         await r.aclose()
+
+
+@pytest.mark.asyncio
+async def test_start_event_carries_user_agent(
+    client: AsyncClient, admin_role, enable_demo, monkeypatch
+):
+    """``demo.session_started`` forwards the visitor's User-Agent.
+
+    The EE Slack handler digests it into the card's "Client" field —
+    two demo sessions off one address are only a resume bug when the
+    browser is the same one.
+    """
+    seen: list[dict] = []
+
+    async def _capture(event: str, payload: dict) -> None:
+        if event == "demo.session_started":
+            seen.append(payload)
+
+    monkeypatch.setattr("app.core.events.publish", _capture)
+
+    resp = await client.post(
+        "/api/demo/start",
+        json={},
+        headers={"User-Agent": "Mozilla/5.0 (probe)"},
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert seen, "demo.session_started was not published"
+    assert seen[0]["user_agent"] == "Mozilla/5.0 (probe)"
 
 
 @pytest.mark.asyncio
@@ -496,9 +525,7 @@ async def test_start_survives_skipped_seed(
             "skipped": True,
         }
 
-    monkeypatch.setattr(
-        demo_service, "clone_seed_into_demo_tenant", _fake_seed
-    )
+    monkeypatch.setattr(demo_service, "clone_seed_into_demo_tenant", _fake_seed)
 
     resp = await client.post("/api/demo/start", json={})
     assert resp.status_code == 201

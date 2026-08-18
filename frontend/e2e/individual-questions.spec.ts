@@ -13,7 +13,7 @@
  *
  * Requires E2E_MODE=true on the backend.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { registerUser, setAuthTokens } from "./helpers";
 
 const API_BASE = "http://localhost:8100/api";

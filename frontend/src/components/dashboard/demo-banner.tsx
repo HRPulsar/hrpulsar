@@ -231,7 +231,7 @@ export function DemoBanner() {
   if (expired) {
     return (
       <div
-        className="border-b border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+        className="border-b border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400"
         data-testid="demo-banner-expired"
       >
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-3">
@@ -251,7 +251,7 @@ export function DemoBanner() {
   return (
     <>
       <div
-        className="border-b border-brand/40 bg-brand/10 px-4 py-2 text-sm text-white"
+        className="border-b border-brand/40 bg-brand/10 px-4 py-2 text-sm text-foreground"
         data-testid="demo-banner"
       >
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-3">
@@ -271,7 +271,7 @@ export function DemoBanner() {
           <button
             type="button"
             onClick={() => setShowModal(true)}
-            className="rounded-md border border-white/30 px-3 py-1 text-sm hover:bg-white/10"
+            className="rounded-md border border-foreground/30 px-3 py-1 text-sm hover:bg-foreground/10"
             data-testid="demo-banner-save-access"
           >
             {t("demoSaveAccess")}

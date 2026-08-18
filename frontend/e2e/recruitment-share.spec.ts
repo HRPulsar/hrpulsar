@@ -7,7 +7,7 @@
  * the share dialog UI as far as it goes against a freshly seeded
  * demo tenant.
  */
-import { test, expect, request as pwRequest } from "@playwright/test";
+import { test, expect, request as pwRequest } from "./fixtures";
 import { registerUser, loginViaUI } from "./helpers";
 
 const API_BASE = "http://localhost:8100/api";

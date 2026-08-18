@@ -70,6 +70,7 @@ async def start_demo_session(
         db,
         turnstile_token=payload.turnstile_token,
         remote_ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
         existing_token=_bearer_token(authorization),
     )
 

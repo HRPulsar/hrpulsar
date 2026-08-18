@@ -6,7 +6,7 @@
  * Requires E2E_MODE=true on the backend (helpers.registerUser uses
  * /auth/dev/auto-register).
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { registerUser, loginViaUI } from "./helpers";
 
 test.describe("Recruitment onboarding", () => {
