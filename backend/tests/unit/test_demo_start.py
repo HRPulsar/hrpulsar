@@ -61,7 +61,7 @@ async def test_start_returns_201_with_tokens_and_redirect(
     assert body["token_type"] == "bearer"
     assert body["access_token"]
     assert uuid.UUID(body["tenant_id"])
-    assert body["redirect_url"].startswith("/recruitment/interviews/")
+    assert body["redirect_url"] == "/dashboard"
 
     # HRP-276 / M7: no refresh token + no refresh cookie for demo.
     assert "refresh_token" not in body
@@ -170,26 +170,6 @@ async def test_start_returns_503_when_concurrent_limit_reached(
     monkeypatch.setattr(settings, "demo_max_concurrent_sessions", 0)
     resp = await client.post("/api/demo/start", json={})
     assert resp.status_code == 503
-
-
-@pytest.mark.asyncio
-async def test_start_falls_back_to_vacancies_when_first_screen_lookup_fails(
-    client: AsyncClient, admin_role, enable_demo, monkeypatch
-):
-    """HRP-276 / L2: a DB hiccup on the redirect-target lookup must
-    not 500 a fully-provisioned demo. The response still arrives with
-    a fallback redirect URL.
-    """
-    async def _explode(*_args, **_kwargs):
-        raise RuntimeError("simulated DB blip on first-screen lookup")
-
-    monkeypatch.setattr(
-        demo_service, "_find_first_screen_interview", _explode
-    )
-
-    resp = await client.post("/api/demo/start", json={})
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["redirect_url"] == "/recruitment/vacancies"
 
 
 @pytest.mark.asyncio
@@ -503,11 +483,10 @@ async def test_start_falls_back_to_request_client_on_empty_xff(
 
 
 @pytest.mark.asyncio
-async def test_redirect_url_falls_back_when_seed_skipped(
+async def test_start_survives_skipped_seed(
     client: AsyncClient, admin_role, enable_demo, monkeypatch
 ):
-    """If the seed short-circuits (no interview row), the redirect
-    should still be a usable URL, not a None/empty string."""
+    """A short-circuiting seed must not break session creation."""
 
     async def _fake_seed(*args, **kwargs):
         return {
@@ -524,4 +503,4 @@ async def test_redirect_url_falls_back_when_seed_skipped(
     resp = await client.post("/api/demo/start", json={})
     assert resp.status_code == 201
     body = resp.json()
-    assert body["redirect_url"] == "/recruitment/vacancies"
+    assert body["redirect_url"] == "/dashboard"

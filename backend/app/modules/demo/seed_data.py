@@ -30,12 +30,10 @@ logger = logging.getLogger(__name__)
 INVESTOR_MARKER = "demo-investor"
 
 
-# Canonical email of the candidate whose completed interview opens the
-# demo's first screen. Source-of-truth for both seed_data.candidates()
-# below and the hosted endpoint's redirect lookup
-# (``app.modules.demo.service._find_first_screen_interview``) — keep
-# them in lockstep by importing from here instead of duplicating the
-# string.
+# Canonical email of the demo's headline candidate. Source-of-truth for
+# seed_data.candidates() below and the analysis killswitch
+# (``recruitment.tasks.demo_analysis``) — keep them in lockstep by
+# importing from here instead of duplicating the string.
 DEMO_FIRST_SCREEN_CANDIDATE_EMAIL = "elena.volkov@example.com"
 
 
@@ -356,6 +354,7 @@ def candidates() -> list[dict]:
 
 ELENA_INTERVIEW_ANALYSIS: dict = {
     "data_completeness": "high",
+    "verdict": "recommended",
     "verdict_summary": (
         "Strong recommend. Elena demonstrated senior-level systems thinking on "
         "the settlement design question, including idempotency, reconciliation "
@@ -423,18 +422,23 @@ ELENA_INTERVIEW_ANALYSIS: dict = {
             "evidence": "Differentiated approach for mid-level vs junior, honest about lacking a clean metric.",
         },
     ],
-    "process_findings": [
-        "Asked clarifying questions before starting the design (volume, SLA).",
-        "Self-flagged the domain gap unprompted at the end of the interview — high-trust behavior.",
-    ],
+    # Items mirror the real ``ProcessFinding``/``BlindSpot`` shapes from
+    # prompts_interview.py — the analysis panel reads those exact fields
+    # (HRP-579); the plain strings seeded before crashed the interview
+    # page render on ``finding_type``.
+    "process_findings": [],
     "blind_spots": [
-        "Did not discuss observability/metrics for the settlement pipeline explicitly. Worth probing if hired.",
+        {
+            "competence_id": "streaming",
+            "suggested_question": "How would you detect and recover from Kafka consumer lag in the settlement pipeline during a peak day?",
+        },
     ],
     "red_flags": [],
 }
 
 TOMAS_INTERVIEW_ANALYSIS: dict = {
     "data_completeness": "medium",
+    "verdict": "needs_check",
     "verdict_summary": (
         "Recommend with reservations. Direct payments-domain background and "
         "clear technical fundamentals, but candidate had limited time and the "
@@ -450,6 +454,11 @@ TOMAS_INTERVIEW_ANALYSIS: dict = {
         {"competence_id": "mentorship", "competence": "Mentorship", "verdict": "unknown", "evidence": "Not assessed in this round."},
     ],
     "process_findings": [],
-    "blind_spots": ["Mentorship and team-leadership signals not covered in this interview."],
+    "blind_spots": [
+        {
+            "competence_id": "mentorship",
+            "suggested_question": "Tell me about a time you mentored a mid-level engineer through their first production incident.",
+        },
+    ],
     "red_flags": [],
 }

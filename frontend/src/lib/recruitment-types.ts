@@ -381,10 +381,10 @@ export const AI_VERDICT_LABEL_KEYS: Record<AiVerdict, string> = {
  */
 export function aiVerdictLabel(
   t: (key: string) => string,
-  verdict: string,
+  verdict: string | null | undefined,
 ): string {
   const key = AI_VERDICT_LABEL_KEYS[verdict as AiVerdict];
-  return key ? t(key) : verdict.replaceAll("_", " ");
+  return key ? t(key) : (verdict ?? "").replaceAll("_", " ");
 }
 
 // HRP-550: mirrors the backend Literal on ``recommendation_for_next_step``
@@ -436,10 +436,10 @@ export const PROCESS_FINDING_LABEL_KEYS: Record<ProcessFindingType, string> = {
 /** Translated interview process finding type with a de-slugged fallback. */
 export function processFindingLabel(
   t: (key: string) => string,
-  findingType: string,
+  findingType: string | null | undefined,
 ): string {
   const key = PROCESS_FINDING_LABEL_KEYS[findingType as ProcessFindingType];
-  return key ? t(key) : findingType.replaceAll("_", " ");
+  return key ? t(key) : (findingType ?? "").replaceAll("_", " ");
 }
 
 // HRP-579: mirrors ``RedFlag.flag_type`` (prompts_interview.py).
@@ -459,10 +459,10 @@ export const RED_FLAG_LABEL_KEYS: Record<RedFlagType, string> = {
 /** Translated interview red-flag type with a de-slugged fallback. */
 export function redFlagLabel(
   t: (key: string) => string,
-  flagType: string,
+  flagType: string | null | undefined,
 ): string {
   const key = RED_FLAG_LABEL_KEYS[flagType as RedFlagType];
-  return key ? t(key) : flagType.replaceAll("_", " ");
+  return key ? t(key) : (flagType ?? "").replaceAll("_", " ");
 }
 
 // HRP-579: mirrors ``InterviewQuestionSet.generation_mode`` (models.py).

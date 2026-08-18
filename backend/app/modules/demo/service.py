@@ -4,8 +4,7 @@ Exposes :func:`create_demo_session`, the one mutating call behind
 ``POST /api/demo/start``. Wraps every guard described in the Demo v2
 plan: master switch, Turnstile bot guard, per-IP throttle, concurrent-
 session cap, brand-new isolated tenant + user, seed, credit grant,
-JWT pair, and a redirect URL pointing at the Elena interview that
-opens the demo's first screen.
+JWT pair, and a redirect URL pointing at the dashboard.
 """
 
 from __future__ import annotations
@@ -34,18 +33,12 @@ from app.modules.ai_settings.service import DEFAULT_LANGUAGE
 from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Tenant
 from app.modules.demo.seed import clone_seed_into_demo_tenant
-from app.modules.demo.seed_data import (
-    DEMO_FIRST_SCREEN_CANDIDATE_EMAIL,
-    INVESTOR_MARKER,
-)
 from app.modules.demo.turnstile import verify_turnstile_token
-from app.modules.recruitment.models import (
-    Candidate,
-    CandidateVacancy,
-    Interview,
-)
 
 logger = logging.getLogger(__name__)
+
+# Where a fresh (or resumed) demo session lands.
+DEMO_REDIRECT_URL = "/dashboard"
 
 
 # Stable 64-bit integer key for ``pg_advisory_xact_lock`` so two
@@ -231,42 +224,6 @@ async def _grant_demo_credits(
     return amount
 
 
-async def _find_first_screen_interview(
-    db: AsyncSession, tenant_id: uuid.UUID
-) -> uuid.UUID | None:
-    """The interview the demo opens on the first screen.
-
-    Elena Volkov's completed-interview row carries the deep AI analysis
-    payload — clicking it lands on the citations panel that the demo
-    pitch is built around.
-    """
-    return (
-        await db.execute(
-            select(Interview.id)
-            .join(
-                CandidateVacancy,
-                Interview.candidate_vacancy_id == CandidateVacancy.id,
-            )
-            .join(Candidate, CandidateVacancy.candidate_id == Candidate.id)
-            .where(
-                Interview.tenant_id == tenant_id,
-                Candidate.source == INVESTOR_MARKER,
-                Candidate.email == DEMO_FIRST_SCREEN_CANDIDATE_EMAIL,
-            )
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-
-def _redirect_url_for(interview_id: uuid.UUID | None) -> str:
-    if interview_id is None:
-        return "/recruitment/vacancies"
-    # The interview detail page renders the analysis panel inline —
-    # there's no separate /analysis subroute. The trailing slash keeps
-    # any future ``?tab=analysis`` query param attachable.
-    return f"/recruitment/interviews/{interview_id}"
-
-
 async def _try_resume_demo_session(
     db: AsyncSession, token: str
 ) -> dict[str, Any] | None:
@@ -312,14 +269,6 @@ async def _try_resume_demo_session(
     await db.commit()
     await db.refresh(tenant)
 
-    try:
-        interview_id = await _find_first_screen_interview(db, tenant.id)
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "demo: first-screen lookup failed on resume for tenant %s", tenant.id
-        )
-        interview_id = None
-
     access = create_demo_access_token(str(user.id), str(tenant.id))
     logger.info("demo: resumed session tenant=%s user=%s", tenant.id, user.id)
 
@@ -327,7 +276,7 @@ async def _try_resume_demo_session(
         "access_token": access,
         "tenant_id": tenant.id,
         "expires_at": tenant.expires_at,
-        "redirect_url": _redirect_url_for(interview_id),
+        "redirect_url": DEMO_REDIRECT_URL,
         "credits_granted": 0,
         "resumed": True,
     }
@@ -432,16 +381,6 @@ async def create_demo_session(
     await db.refresh(tenant)
     await db.refresh(user)
 
-    # ── Redirect target ──────────────────────────────────────────────
-    # HRP-276 / L2: a transient DB error on the redirect lookup must
-    # not 500-out a fully-provisioned demo (slot would be burned, user
-    # would see a generic error). Fall back to /recruitment/vacancies.
-    try:
-        interview_id = await _find_first_screen_interview(db, tenant.id)
-    except Exception:  # noqa: BLE001
-        logger.exception("demo: first-screen lookup failed for tenant %s", tenant.id)
-        interview_id = None
-
     # HRP-276 / M7: no refresh token for demo sessions. The access
     # token's TTL is pinned to ``demo_session_ttl_seconds`` (same
     # setting that drives the tenant lifetime) so the JWT can't expire
@@ -475,7 +414,7 @@ async def create_demo_session(
                 if tenant.expires_at
                 else None,
                 "credits_granted": credits_granted,
-                "redirect_url": _redirect_url_for(interview_id),
+                "redirect_url": DEMO_REDIRECT_URL,
                 "remote_ip": remote_ip or "",
             },
         )
@@ -486,6 +425,6 @@ async def create_demo_session(
         "access_token": access,
         "tenant_id": tenant.id,
         "expires_at": tenant.expires_at,
-        "redirect_url": _redirect_url_for(interview_id),
+        "redirect_url": DEMO_REDIRECT_URL,
         "credits_granted": credits_granted,
     }

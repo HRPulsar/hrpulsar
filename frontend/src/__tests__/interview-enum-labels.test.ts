@@ -121,6 +121,15 @@ describe("Interview enum labels (HRP-579)", () => {
     }
   });
 
+  it("tolerates legacy payload items without a type field", () => {
+    // Pre-HRP-579 demo seeds stored plain strings in process_findings /
+    // blind_spots — ``item.finding_type`` came through undefined and the
+    // de-slug fallback crashed the whole interview page render.
+    expect(processFindingLabel(t, undefined)).toBe("");
+    expect(redFlagLabel(t, undefined)).toBe("");
+    expect(aiVerdictLabel(t, null)).toBe("");
+  });
+
   it("de-slugs an unknown code instead of printing the wire form", () => {
     expect(processFindingLabel(t, "future_finding")).toBe("future finding");
     expect(redFlagLabel(t, "future_flag")).toBe("future flag");

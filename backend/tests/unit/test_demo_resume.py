@@ -56,9 +56,7 @@ async def test_resume_returns_same_tenant(
     assert body["resumed"] is True
     assert body["tenant_id"] == tenant_id
     assert body["credits_granted"] == 0
-    # The redirect URL is recomputed but must still point at the same
-    # demo's first screen.
-    assert body["redirect_url"].startswith("/recruitment/")
+    assert body["redirect_url"] == "/dashboard"
 
 
 @pytest.mark.asyncio

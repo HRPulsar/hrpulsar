@@ -25,6 +25,7 @@ from app.modules.demo.seed import clone_seed_into_demo_tenant
 from app.modules.demo.seed_data import (
     ELENA_INTERVIEW_ANALYSIS,
     INVESTOR_MARKER,
+    TOMAS_INTERVIEW_ANALYSIS,
     VACANCIES,
     candidates,
 )
@@ -846,3 +847,32 @@ def test_demo_session_ttl_default_is_four_hours():
 
     assert settings.demo_session_ttl_seconds == 14400
     assert settings.demo_inactivity_ttl_seconds == 14400
+
+
+def test_seed_analysis_payloads_match_writer_schemas():
+    """The interview page renders ``analysis_data`` through the real
+    ``ProcessFinding``/``BlindSpot``/``RedFlag`` shapes (HRP-579) —
+    the plain strings seeded before crashed the demo's Elena page."""
+    from app.modules.recruitment.prompts_interview import (
+        BlindSpot,
+        ProcessFinding,
+        RedFlag,
+    )
+
+    profile_slugs = {
+        c["id"]
+        for v in VACANCIES
+        if v["key"] == "senior-backend"
+        for c in v["profile"]["competences"]
+    }
+    for payload in (ELENA_INTERVIEW_ANALYSIS, TOMAS_INTERVIEW_ANALYSIS):
+        assert payload["verdict"] in {"recommended", "needs_check", "not_recommended"}
+        for item in payload["process_findings"]:
+            ProcessFinding.model_validate(item)
+        for item in payload["blind_spots"]:
+            BlindSpot.model_validate(item)
+            # The panel resolves the competence name via the vacancy
+            # profile — an unknown slug renders a nameless blind spot.
+            assert item["competence_id"] in profile_slugs
+        for item in payload["red_flags"]:
+            RedFlag.model_validate(item)

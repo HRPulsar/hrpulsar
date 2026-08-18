@@ -72,6 +72,8 @@ TRANSLATABLE_KEYS = frozenset(
         "process_findings",
         "blind_spots",
         "red_flags",
+        # Nested inside ``blind_spots`` items (BlindSpot schema).
+        "suggested_question",
     }
 )
 
