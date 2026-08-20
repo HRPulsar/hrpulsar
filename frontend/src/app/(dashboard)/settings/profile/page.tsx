@@ -157,7 +157,7 @@ export default function ProfilePage() {
               <Avatar size="lg" className="h-16 w-16 text-xl" data-testid="settings-profile-avatar">
                 {user.avatar_url && <AvatarImage src={user.avatar_url} />}
                 <AvatarFallback className="bg-accent text-accent-foreground text-xl font-semibold">
-                  {user.first_name[0]}{user.last_name[0]}
+                  {user.first_name[0] ?? ""}{user.last_name[0] ?? ""}
                 </AvatarFallback>
               </Avatar>
               <input

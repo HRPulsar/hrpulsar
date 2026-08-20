@@ -14,7 +14,7 @@ Deploy HRPulsar on your own infrastructure using Docker Compose.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/hrpulsar/hrpulsar.git
+git clone https://github.com/HRPulsar/hrpulsar.git
 cd hrpulsar
 ```
 
@@ -116,7 +116,9 @@ the hosted-product entry surface.
 | `ANTHROPIC_API_KEY` | No | — | Claude API key (for AI features) |
 | `OPENAI_API_KEY` | No | — | OpenAI API key (for AI features) |
 | `GEMINI_API_KEY` | No | — | Gemini API key (for AI features) |
-| `LLM_PROVIDER` | No | `claude` | LLM provider (`claude`, `openai`, `gemini`) |
+| `YANDEX_API_KEY` | No | — | Yandex Foundation Models API key (for AI features) |
+| `YANDEX_FOLDER_ID` | No | — | Yandex Cloud folder id, required with `YANDEX_API_KEY` |
+| `LLM_PROVIDER` | No | `claude` | LLM provider (`claude`, `openai`, `gemini`, `yandex`) |
 | `SMTP_HOST` | No | — | SMTP server for email notifications |
 | `SMTP_PORT` | No | `587` | SMTP port |
 | `SMTP_USER` | No | — | SMTP username |

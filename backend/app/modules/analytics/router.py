@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.schemas import TaskAccepted
@@ -10,6 +11,13 @@ from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
 
 router = APIRouter(tags=["analytics"])
+
+
+class AiSummaryRequest(BaseModel):
+    """Optional echo of the ``data_version`` the client got from the GET —
+    lets a cache hit skip the aggregation pass entirely."""
+
+    data_version: str | None = None
 
 
 @router.get("/analytics/assessments")
@@ -26,6 +34,53 @@ async def pdp_stats(
     current_user: User = Depends(require_role("admin", "manager")),
 ):
     return await service.pdp_stats(db, current_user.tenant_id)
+
+
+@router.get("/analytics/dev-loop")
+async def dev_loop(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "manager")),
+):
+    return await service.dev_loop(db, current_user.tenant_id)
+
+
+@router.post("/analytics/dev-loop/ai-summary")
+async def dev_loop_ai_summary(
+    body: AiSummaryRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "manager")),
+):
+    """On-demand AI summary of the development loop; cached per data state."""
+    return await service.dev_loop_ai_summary(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        client_fingerprint=body.data_version if body else None,
+    )
+
+
+@router.get("/analytics/my-loop")
+async def my_loop(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Personal development loop for the logged-in employee."""
+    return await service.my_loop(db, current_user.tenant_id, current_user.id)
+
+
+@router.post("/analytics/my-loop/ai-summary")
+async def my_loop_ai_summary(
+    body: AiSummaryRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """On-demand coach-style AI summary of the personal loop; cached per data state."""
+    return await service.my_loop_ai_summary(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        client_fingerprint=body.data_version if body else None,
+    )
 
 
 @router.get("/analytics/compensation")

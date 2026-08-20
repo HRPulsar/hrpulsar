@@ -107,5 +107,5 @@ Highlights — full per-version list lives in the [changelog](/changelog).
 
 ## Want to influence what comes next?
 
-- File a feature request on [GitHub Discussions](https://github.com/hrpulsar/hrpulsar/discussions)
+- File a feature request on [GitHub Discussions](https://github.com/HRPulsar/hrpulsar/discussions)
 - Email `support@hrpulsar.com` for enterprise priorities

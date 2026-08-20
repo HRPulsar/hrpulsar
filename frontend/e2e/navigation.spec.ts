@@ -51,15 +51,15 @@ test.describe("Sidebar navigation", () => {
     await expect(page).toHaveURL(/\/company/);
   });
 
-  test("dashboard KPI strip renders", async ({ page }) => {
+  test("dashboard development loop renders", async ({ page }) => {
     await page.goto("/dashboard");
     await expect(page.getByTestId("dashboard-title")).toBeVisible({
       timeout: 10000,
     });
-    await expect(page.getByTestId("dashboard-kpi-headcount")).toBeVisible();
-    await expect(page.getByTestId("dashboard-kpi-active-reviews")).toBeVisible();
-    await expect(page.getByTestId("dashboard-kpi-divisions")).toBeVisible();
-    await expect(page.getByTestId("dashboard-kpi-open-pdps")).toBeVisible();
+    await expect(page.getByTestId("dashboard-loop-stage-assessed")).toBeVisible();
+    await expect(page.getByTestId("dashboard-loop-stage-gaps")).toBeVisible();
+    await expect(page.getByTestId("dashboard-loop-stage-developing")).toBeVisible();
+    await expect(page.getByTestId("dashboard-loop-stage-closed")).toBeVisible();
   });
 });
 

@@ -13,6 +13,8 @@ export interface DemoSaveAccessPayload {
   company_name?: string | null;
   role?: string | null;
   turnstile_token?: string | null;
+  /** Convert the demo tenant into the real workspace on approve. */
+  keep_demo_data?: boolean;
 }
 
 export interface DemoSaveAccessResponse {
@@ -56,4 +58,32 @@ export async function saveDemoAccess(
   data: DemoSaveAccessPayload,
 ): Promise<DemoSaveAccessResponse> {
   return api.post<DemoSaveAccessResponse>("/demo/save-access", data);
+}
+
+// --- Demo persona switcher (HRP-612 wave 2) ---
+
+export type DemoPersona = "admin" | "employee";
+
+interface DemoSwitchViewResponse {
+  access_token: string;
+  persona: DemoPersona;
+}
+
+/** Swap the demo session to the requested persona and reload the app on
+ * /dashboard so AuthProvider re-initializes with the new identity.
+ *
+ * Deliberately NOT persistDemoSession: the resume hint must keep the
+ * original marketing-issued token — otherwise a later "Try the demo"
+ * click would resume the sandbox as the last-viewed persona. Tokens are
+ * not stored per persona either; /demo/switch-view re-issues them on
+ * every swap, so nothing privileged lingers in localStorage. */
+export async function switchDemoPersona(persona: DemoPersona): Promise<void> {
+  const res = await api.post<DemoSwitchViewResponse>("/demo/switch-view", {
+    persona,
+  });
+  localStorage.setItem("access_token", res.access_token);
+  localStorage.removeItem("refresh_token");
+  document.cookie = "has_token=1; path=/; SameSite=Lax";
+  document.cookie = "demo_session=1; path=/; SameSite=Lax";
+  window.location.assign("/dashboard");
 }

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # it (locale-ee stub), but stored values must stay valid everywhere.
 ContentLanguage = Literal["en", "de", "ru"]
 EffortLevel = Literal["fast", "balanced", "thorough", "custom"]
-LLMProvider = Literal["anthropic", "openai", "gemini"]
+LLMProvider = Literal["anthropic", "openai", "gemini", "yandex"]
 
 
 class AISettingsRead(BaseModel):

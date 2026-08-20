@@ -66,13 +66,9 @@ def _seed_origin_levels(skill_levels):
 
 
 @pytest.mark.asyncio
-async def test_clone_seed_populates_expected_counts(
-    db: AsyncSession, tenant, user
-):
+async def test_clone_seed_populates_expected_counts(db: AsyncSession, tenant, user):
     await _flag_demo(db, tenant)
-    result = await clone_seed_into_demo_tenant(
-        db, tenant.id, owner_user_id=user.id
-    )
+    result = await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
     await db.commit()
 
     assert result["skipped"] is False
@@ -84,20 +80,24 @@ async def test_clone_seed_populates_expected_counts(
     assert result["interviews"] >= 2
 
     vac_count = (
-        await db.execute(
-            select(Vacancy).where(Vacancy.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Vacancy).where(Vacancy.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert len(vac_count) == result["vacancies"]
 
     cand_count = (
-        await db.execute(
-            select(Candidate).where(
-                Candidate.tenant_id == tenant.id,
-                Candidate.source == INVESTOR_MARKER,
+        (
+            await db.execute(
+                select(Candidate).where(
+                    Candidate.tenant_id == tenant.id,
+                    Candidate.source == INVESTOR_MARKER,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(cand_count) == result["candidates"]
     # HRP-276 / H2: demo seed must NOT mint Person rows — those are
     # tenant-less and would accumulate after each demo purge.
@@ -113,10 +113,10 @@ async def test_clone_seed_marks_interviews_completed_with_analysis(
     await db.commit()
 
     interviews = (
-        await db.execute(
-            select(Interview).where(Interview.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Interview).where(Interview.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert len(interviews) >= 2
 
     # The two legacy AI-analyzed interviews still carry the deep
@@ -189,9 +189,7 @@ async def test_clone_seed_is_idempotent(db: AsyncSession, tenant, user):
     await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
     await db.commit()
 
-    second = await clone_seed_into_demo_tenant(
-        db, tenant.id, owner_user_id=user.id
-    )
+    second = await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
     await db.commit()
     assert second["skipped"] is True
     assert second["vacancies"] == 0
@@ -202,13 +200,17 @@ async def test_clone_seed_is_idempotent(db: AsyncSession, tenant, user):
     # the HRP-281 / S7 extras, but the assertion is still: same number
     # of marked candidates after a re-run as after the first run.
     cand_count = (
-        await db.execute(
-            select(Candidate).where(
-                Candidate.tenant_id == tenant.id,
-                Candidate.source == INVESTOR_MARKER,
+        (
+            await db.execute(
+                select(Candidate).where(
+                    Candidate.tenant_id == tenant.id,
+                    Candidate.source == INVESTOR_MARKER,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(cand_count) >= len(candidates())
 
 
@@ -224,10 +226,10 @@ async def test_clone_seed_without_interviews_skips_interview_rows(
     assert result["interviews"] == 0
 
     interviews = (
-        await db.execute(
-            select(Interview).where(Interview.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Interview).where(Interview.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert interviews == []
 
 
@@ -241,9 +243,7 @@ async def test_clone_seed_refuses_non_demo_tenant_by_default(
     assert tenant.is_demo is False
 
     with pytest.raises(ValueError, match="is_demo"):
-        await clone_seed_into_demo_tenant(
-            db, tenant.id, owner_user_id=user.id
-        )
+        await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
 
 
 @pytest.mark.asyncio
@@ -274,17 +274,15 @@ async def test_seed_creates_minimum_employees(db: AsyncSession, tenant, user):
     """S3 must materialise at least 30 employee cards so the Employees
     page is no longer empty."""
     await _flag_demo(db, tenant)
-    result = await clone_seed_into_demo_tenant(
-        db, tenant.id, owner_user_id=user.id
-    )
+    result = await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
     await db.commit()
 
     assert result["employees"] >= 30
     rows = (
-        await db.execute(
-            select(Employee).where(Employee.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Employee).where(Employee.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert len(rows) >= 30
     # Statuses are mixed — not every row is active.
     statuses = {r.status for r in rows}
@@ -301,17 +299,17 @@ async def test_seed_division_tree_consistent(db: AsyncSession, tenant, user):
     await db.commit()
 
     divisions = (
-        await db.execute(
-            select(Division).where(Division.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Division).where(Division.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert divisions
     ids = {d.id for d in divisions}
     for d in divisions:
         if d.parent_id is not None:
-            assert d.parent_id in ids, (
-                f"Division {d.name} has orphan parent_id {d.parent_id}"
-            )
+            assert (
+                d.parent_id in ids
+            ), f"Division {d.name} has orphan parent_id {d.parent_id}"
 
 
 @pytest.mark.asyncio
@@ -323,8 +321,10 @@ async def test_seed_pdps_cover_all_statuses(db: AsyncSession, tenant, user):
     await db.commit()
 
     pdps = (
-        await db.execute(select(PDP).where(PDP.tenant_id == tenant.id))
-    ).scalars().all()
+        (await db.execute(select(PDP).where(PDP.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     statuses = {p.status for p in pdps}
     for expected in {"draft", "in_progress", "review", "returned", "done", "cancelled"}:
         assert expected in statuses, f"PDP status '{expected}' is missing"
@@ -341,24 +341,24 @@ async def test_seed_exam_assignments_have_mix_of_statuses(
     await db.commit()
 
     mass_exams = (
-        await db.execute(
-            select(MassExam).where(MassExam.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(MassExam).where(MassExam.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert len(mass_exams) >= 4
 
     exams = (
-        await db.execute(select(Exam).where(Exam.tenant_id == tenant.id))
-    ).scalars().all()
+        (await db.execute(select(Exam).where(Exam.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     statuses = {e.status for e in exams}
     for expected in {"done", "in_progress", "assigned"}:
         assert expected in statuses, f"Exam assignment status '{expected}' is missing"
 
 
 @pytest.mark.asyncio
-async def test_seed_talent_cards_cover_every_status(
-    db: AsyncSession, tenant, user
-):
+async def test_seed_talent_cards_cover_every_status(db: AsyncSession, tenant, user):
     """S6 must produce TalentCards in every status (draft / published /
     completed / cancelled)."""
     await _flag_demo(db, tenant)
@@ -366,10 +366,10 @@ async def test_seed_talent_cards_cover_every_status(
     await db.commit()
 
     cards = (
-        await db.execute(
-            select(TalentCard).where(TalentCard.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(TalentCard).where(TalentCard.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     statuses = {c.status for c in cards}
     for expected in {"draft", "published", "completed", "cancelled"}:
         assert expected in statuses, f"TalentCard status '{expected}' is missing"
@@ -411,21 +411,23 @@ async def test_seed_cross_tenant_isolation(db: AsyncSession, tenant, user):
     await db.commit()
     await db.refresh(other_user)
 
-    await clone_seed_into_demo_tenant(
-        db, other_tenant.id, owner_user_id=other_user.id
-    )
+    await clone_seed_into_demo_tenant(db, other_tenant.id, owner_user_id=other_user.id)
     await db.commit()
 
     first_employees = (
-        await db.execute(
-            select(Employee).where(Employee.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Employee).where(Employee.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     second_employees = (
-        await db.execute(
-            select(Employee).where(Employee.tenant_id == other_tenant.id)
+        (
+            await db.execute(
+                select(Employee).where(Employee.tenant_id == other_tenant.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert first_employees
     assert second_employees
     first_ids = {e.id for e in first_employees}
@@ -447,37 +449,45 @@ async def test_seed_creates_assessments_across_statuses(
     every kanban status (draft / in_progress / done / cancelled) so the
     /assessments page lands on real content."""
     await _flag_demo(db, tenant)
-    result = await clone_seed_into_demo_tenant(
-        db, tenant.id, owner_user_id=user.id
-    )
+    result = await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
     await db.commit()
 
     assert result["assessments"] > 0, "demo seed must create Assessment rows (HRP-314)"
     assert result["pdps"] > 0
-    assert result["notifications"] > 0, "expected Notification rows when templates present"
+    assert (
+        result["notifications"] > 0
+    ), "expected Notification rows when templates present"
 
     assessments = (
-        await db.execute(
-            select(Assessment)
-            .join(AssessmentStatus, Assessment.status_id == AssessmentStatus.id)
-            .where(Assessment.tenant_id == tenant.id)
+        (
+            await db.execute(
+                select(Assessment)
+                .join(AssessmentStatus, Assessment.status_id == AssessmentStatus.id)
+                .where(Assessment.tenant_id == tenant.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(assessments) == result["assessments"]
 
     status_rows = (await db.execute(select(AssessmentStatus))).scalars().all()
     code_by_id = {s.id: s.code for s in status_rows}
     seen_statuses = {code_by_id[a.status_id] for a in assessments}
     for expected in {"draft", "in_progress", "done", "cancelled"}:
-        assert expected in seen_statuses, (
-            f"Assessment status '{expected}' is missing — kanban will look empty"
-        )
+        assert (
+            expected in seen_statuses
+        ), f"Assessment status '{expected}' is missing — kanban will look empty"
 
     notifications = (
-        await db.execute(
-            select(Notification).where(Notification.tenant_id == tenant.id)
+        (
+            await db.execute(
+                select(Notification).where(Notification.tenant_id == tenant.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(notifications) == result["notifications"]
 
 
@@ -498,13 +508,17 @@ async def test_seed_assessments_have_criteria_type_set(
     await db.commit()
 
     assessments = (
-        await db.execute(
-            select(Assessment).where(Assessment.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Assessment).where(Assessment.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert assessments
     for a in assessments:
-        assert a.criteria_type in {"competences", "target_position", "current_positions"}, (
+        assert a.criteria_type in {
+            "competences",
+            "target_position",
+            "current_positions",
+        }, (
             f"Assessment {a.title!r} has criteria_type={a.criteria_type!r}, "
             "expected one of competences/target_position/current_positions"
         )
@@ -527,29 +541,37 @@ async def test_seed_180_360_assessments_have_division_manager(
     await db.commit()
 
     assessments = (
-        await db.execute(
-            select(Assessment)
-            .join(AssessmentType, Assessment.type_id == AssessmentType.id)
-            .where(
-                Assessment.tenant_id == tenant.id,
-                AssessmentType.code.in_(("180", "360")),
+        (
+            await db.execute(
+                select(Assessment)
+                .join(AssessmentType, Assessment.type_id == AssessmentType.id)
+                .where(
+                    Assessment.tenant_id == tenant.id,
+                    AssessmentType.code.in_(("180", "360")),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert assessments, "demo seed must include at least one 180/360 cycle"
 
     for a in assessments:
         participants = (
-            await db.execute(
-                select(AssessmentParticipant).where(
-                    AssessmentParticipant.assessment_id == a.id,
+            (
+                await db.execute(
+                    select(AssessmentParticipant).where(
+                        AssessmentParticipant.assessment_id == a.id,
+                    )
                 )
             )
-        ).scalars().all()
-        roles = {p.role for p in participants}
-        assert "self" in roles, (
-            f"Assessment {a.title!r} is missing the self participant"
+            .scalars()
+            .all()
         )
+        roles = {p.role for p in participants}
+        assert (
+            "self" in roles
+        ), f"Assessment {a.title!r} is missing the self participant"
         assert "manager" in roles, (
             f"Assessment {a.title!r} ({a.id}) is a 180/360 cycle but has no "
             f"'manager' participant — the Division chain lookup did not "
@@ -595,12 +617,16 @@ async def test_seed_done_assessments_have_results_for_each_competence(
             )
         ).scalar_one()
         results = (
-            await db.execute(
-                select(AssessmentResult).where(
-                    AssessmentResult.assessment_id == assessment.id,
+            (
+                await db.execute(
+                    select(AssessmentResult).where(
+                        AssessmentResult.assessment_id == assessment.id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(results) == len(spec["result_overrides"]), (
             f"Done assessment {spec['title']!r} has {len(results)} result rows, "
             f"expected {len(spec['result_overrides'])}"
@@ -630,10 +656,10 @@ async def test_seed_competences_have_indicators_per_skill_level(
     await db.commit()
 
     competences = (
-        await db.execute(
-            select(Competence).where(Competence.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Competence).where(Competence.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert len(competences) >= len(COMPETENCES)
 
     # Expected count: unique (competence_key, collapsed skill_level_key)
@@ -648,10 +674,10 @@ async def test_seed_competences_have_indicators_per_skill_level(
     }
 
     indicators = (
-        await db.execute(
-            select(Indicator).where(Indicator.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Indicator).where(Indicator.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert len(indicators) == len(expected_cells)
 
     by_competence: dict = {}
@@ -703,12 +729,16 @@ async def test_seed_in_progress_and_done_assessments_have_answers(
             )
         ).scalar_one()
         answers = (
-            await db.execute(
-                select(AssessmentAnswer).where(
-                    AssessmentAnswer.assessment_id == assessment.id,
+            (
+                await db.execute(
+                    select(AssessmentAnswer).where(
+                        AssessmentAnswer.assessment_id == assessment.id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if spec["status_code"] in {"in_progress", "done"}:
             assert answers, (
                 f"Assessment {spec['title']!r} ({spec['status_code']}) "
@@ -740,10 +770,10 @@ async def test_seed_uses_origin_skill_levels_only(
     await db.commit()
 
     tenant_levels = (
-        await db.execute(
-            select(SkillLevel).where(SkillLevel.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(SkillLevel).where(SkillLevel.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert tenant_levels == [], (
         "demo seed should not create tenant-scoped SkillLevels (HRP-299); "
         f"got {[lvl.title for lvl in tenant_levels]}"
@@ -762,17 +792,17 @@ async def test_seed_attaches_materials_to_every_competence_level(
     await db.commit()
 
     competences = (
-        await db.execute(
-            select(Competence).where(Competence.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Competence).where(Competence.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert competences
 
     materials = (
-        await db.execute(
-            select(Material).where(Material.tenant_id == tenant.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Material).where(Material.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
     assert len(materials) == len(MATERIALS)
 
     by_competence: dict = {}
@@ -798,13 +828,17 @@ async def test_seed_grades_reuse_origin_dictionary_items(
     await db.commit()
 
     tenant_grades = (
-        await db.execute(
-            select(DictionaryItem).where(
-                DictionaryItem.tenant_id == tenant.id,
-                DictionaryItem.type == "grade",
+        (
+            await db.execute(
+                select(DictionaryItem).where(
+                    DictionaryItem.tenant_id == tenant.id,
+                    DictionaryItem.type == "grade",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert tenant_grades == [], (
         "demo seed should not create tenant-scoped grade DictionaryItems "
         f"when origin rows exist (HRP-302); got {[g.title for g in tenant_grades]}"
@@ -834,9 +868,9 @@ async def test_seed_engineering_parent_has_manager_and_deputy(
     ).scalar_one()
     assert eng.manager_id is not None, "Engineering must have a Manager"
     assert eng.deputy_manager_id is not None, "Engineering must have a Deputy Manager"
-    assert eng.manager_id != eng.deputy_manager_id, (
-        "Manager and Deputy Manager must be different employees"
-    )
+    assert (
+        eng.manager_id != eng.deputy_manager_id
+    ), "Manager and Deputy Manager must be different employees"
 
 
 def test_demo_session_ttl_default_is_four_hours():
@@ -876,3 +910,127 @@ def test_seed_analysis_payloads_match_writer_schemas():
             assert item["competence_id"] in profile_slugs
         for item in payload["red_flags"]:
             RedFlag.model_validate(item)
+
+
+@pytest.mark.asyncio
+async def test_seeded_results_survive_a_recompute(
+    db: AsyncSession,
+    tenant,
+    user,
+    assessment_statuses,
+    assessment_types,
+    default_answer_scale,
+):
+    """The seeded percent must equal what the recompute engine derives
+    from the seeded answers — otherwise the first status re-transition
+    (or calibration reset) silently rewrites the storyline: every
+    below-the-bar score snapped to 75 and the dev-loop story vanished
+    (review finding)."""
+    from app.modules.assessment.service import _recompute_assessment_results
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    done = (
+        await db.execute(
+            select(Assessment)
+            .join(AssessmentStatus, AssessmentStatus.id == Assessment.status_id)
+            .where(
+                Assessment.tenant_id == tenant.id,
+                AssessmentStatus.code == "done",
+            )
+        )
+    ).scalars().all()
+    assert done
+
+    before: dict = {}
+    for a in done:
+        rows = (
+            await db.execute(
+                select(AssessmentResult).where(
+                    AssessmentResult.assessment_id == a.id
+                )
+            )
+        ).scalars().all()
+        for r in rows:
+            before[(a.id, r.competence_id)] = r.percent
+
+    for a in done:
+        await _recompute_assessment_results(db, a)
+    await db.commit()
+
+    drifted = {}
+    for a in done:
+        rows = (
+            await db.execute(
+                select(AssessmentResult).where(
+                    AssessmentResult.assessment_id == a.id
+                )
+            )
+        ).scalars().all()
+        for r in rows:
+            if before[(a.id, r.competence_id)] != r.percent:
+                drifted[(str(a.title), str(r.competence_id))] = (
+                    before[(a.id, r.competence_id)],
+                    r.percent,
+                )
+    assert not drifted, f"recompute changed seeded percents: {drifted}"
+
+
+async def test_seeded_tenant_tells_the_dev_loop_story(
+    db: AsyncSession,
+    tenant,
+    user,
+    assessment_statuses,
+    assessment_types,
+    default_answer_scale,
+):
+    """The demo's first screen is the dashboard dev-loop: the seed must
+    produce below-the-bar employees without a plan (GTM storyline), an
+    overdue plan and a stalled review — so a fresh demo session opens
+    on real problems with real actions, not flat stats."""
+    from app.modules.analytics.service import dev_loop
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    payload = await dev_loop(db, tenant.id)
+    findings = {f["code"]: f for f in payload["findings"]}
+
+    # Storyline A: sales team below the bar with no development plan.
+    assert "gaps_without_plan" in findings
+    assert findings["gaps_without_plan"]["count"] >= 4
+    # Storyline B: an overdue plan and a plan stuck in review/returned.
+    assert findings["pdp_overdue"]["count"] >= 1
+    assert findings["pdp_stuck_review"]["count"] >= 1
+    # Coverage is deliberately partial — the "run assessments" CTA fires.
+    assert "assessment_coverage" in findings
+    assert 0 < payload["stages"]["assessed"]["percent"] < 100
+    # Ivan Petrov: gap that HAS a plan — the plan is just going nowhere.
+    assert payload["stages"]["developing"]["gap_employees_with_plan"] >= 1
+    # Storyline C: Bella Martins closed her Python gap in a re-assessment.
+    assert payload["stages"]["closed"]["gaps_closed_90d"] >= 1
+    # Carlos's Q3 plan finished before its deadline — the sub-line is alive.
+    assert payload["stages"]["closed"]["plans_done_on_time_90d"] >= 1
+
+    # The demo employee persona (Carlos Mendez, HRP-612 wave 2) opens a
+    # live personal dashboard: strengths, a gap without a plan, and a
+    # growth direction up the seeded backend ladder.
+    from app.modules.analytics.service import my_loop
+    from app.modules.auth.models import User as AuthUser
+
+    carlos = (
+        await db.execute(
+            select(AuthUser).where(
+                AuthUser.tenant_id == tenant.id,
+                AuthUser.email == "carlos.mendez@demo.example.com",
+            )
+        )
+    ).scalar_one()
+    personal = await my_loop(db, tenant.id, carlos.id)
+    assert personal["strengths"]["top"]
+    assert any(f["code"] == "gap_without_plan" for f in personal["findings"])
+    assert personal["growth"] is not None
+    assert personal["growth"]["next_grade"] is not None

@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { toast } from "sonner";
 
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/auth-context";
 import { useIsSaas } from "@/hooks/use-is-saas";
-import { saveDemoAccess } from "@/lib/demo";
+import { saveDemoAccess, switchDemoPersona, type DemoPersona } from "@/lib/demo";
+import { cn } from "@/lib/utils";
 import { TURNSTILE_FAILED_MESSAGE_KEY, useTurnstileGate } from "@/lib/turnstile";
 import type { CreditBalance } from "@/lib/types";
 
@@ -45,6 +47,7 @@ function SaveAccessModal({
     last_name: "",
     company_name: "",
     role: "",
+    keep_demo_data: false,
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +71,7 @@ function SaveAccessModal({
         company_name: form.company_name || null,
         role: form.role || null,
         turnstile_token: turnstile.token,
+        keep_demo_data: form.keep_demo_data,
       });
       setDone(true);
       onSaved();
@@ -150,6 +154,21 @@ function SaveAccessModal({
               }
               className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/30"
             />
+            <label className="flex items-start gap-2 text-sm text-white/80">
+              <input
+                type="checkbox"
+                checked={form.keep_demo_data}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    keep_demo_data: e.target.checked,
+                  }))
+                }
+                className="mt-0.5"
+                data-testid="demo-save-access-keep-data"
+              />
+              {t("demoKeepData")}
+            </label>
             {turnstile.failed && (
               <div
                 className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-300"
@@ -183,6 +202,53 @@ function SaveAccessModal({
         )}
       </div>
     </div>
+  );
+}
+
+/** The demo admin persona's throw-away user lives on this domain (see
+ * backend ``_create_demo_user``); seeded employees use demo.example.com. */
+const DEMO_ADMIN_EMAIL_DOMAIN = "@demo.hrpulsar.local";
+
+function PersonaSwitch({ activePersona }: { activePersona: DemoPersona }) {
+  const t = useTranslations("dashboard");
+  const [switching, setSwitching] = useState(false);
+
+  async function handleSwitch(persona: DemoPersona) {
+    if (persona === activePersona || switching) return;
+    setSwitching(true);
+    try {
+      await switchDemoPersona(persona);
+    } catch {
+      // A failed swap otherwise looks like a dead button — say so.
+      toast.error(t("demoPersonaSwitchFailed"));
+      setSwitching(false);
+    }
+  }
+
+  const personas: DemoPersona[] = ["admin", "employee"];
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="text-foreground/60">{t("demoViewAs")}</span>
+      <span className="flex overflow-hidden rounded-md border border-foreground/30">
+        {personas.map((p) => (
+          <button
+            key={p}
+            type="button"
+            disabled={switching}
+            onClick={() => handleSwitch(p)}
+            className={cn(
+              "px-2.5 py-0.5 text-sm",
+              p === activePersona
+                ? "bg-brand text-white"
+                : "hover:bg-foreground/10",
+            )}
+            data-testid={`demo-banner-view-${p}`}
+          >
+            {t(p === "admin" ? "demoPersonaAdmin" : "demoPersonaEmployee")}
+          </button>
+        ))}
+      </span>
+    </span>
   );
 }
 
@@ -268,14 +334,23 @@ export function DemoBanner() {
               </span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => setShowModal(true)}
-            className="rounded-md border border-foreground/30 px-3 py-1 text-sm hover:bg-foreground/10"
-            data-testid="demo-banner-save-access"
-          >
-            {t("demoSaveAccess")}
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <PersonaSwitch
+              activePersona={
+                user.email?.endsWith(DEMO_ADMIN_EMAIL_DOMAIN)
+                  ? "admin"
+                  : "employee"
+              }
+            />
+            <button
+              type="button"
+              onClick={() => setShowModal(true)}
+              className="rounded-md border border-foreground/30 px-3 py-1 text-sm hover:bg-foreground/10"
+              data-testid="demo-banner-save-access"
+            >
+              {t("demoSaveAccess")}
+            </button>
+          </div>
         </div>
       </div>
       {showModal && (

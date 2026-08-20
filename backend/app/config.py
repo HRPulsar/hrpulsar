@@ -103,7 +103,11 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     gemini_api_key: str = ""
-    llm_provider: str = "claude"  # claude, openai, gemini
+    yandex_api_key: str = ""
+    # Yandex Cloud folder id — completes short model names into full
+    # gpt://<folder>/<model> URIs (HRP-599).
+    yandex_folder_id: str = ""
+    llm_provider: str = "claude"  # claude, openai, gemini, yandex
     # HRP-505: operator escape hatch for the saas SSRF guard on
     # tenant-supplied AI base_url values — comma-separated hostnames that
     # skip validation and IP pinning (e.g. a vetted corporate gateway).

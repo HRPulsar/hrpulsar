@@ -355,7 +355,7 @@ class TestRouterModels:
         assert body, "whitelist must not be empty"
         for entry in body:
             assert {"provider", "model", "label", "credit_multiplier"} <= entry.keys()
-            assert entry["provider"] in ("anthropic", "openai", "gemini")
+            assert entry["provider"] in ("anthropic", "openai", "gemini", "yandex")
             assert isinstance(entry["credit_multiplier"], (int, float))
 
     async def test_get_settings_exposes_effective_credit_multiplier(

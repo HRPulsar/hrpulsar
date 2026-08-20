@@ -165,7 +165,12 @@ def _send_via_smtp(to: str, subject: str, html_body: str) -> tuple[bool, str | N
         logger.info("Email sent via SMTP to %s: %s (id=%s)", to, subject, message_id)
         return True, message_id
     except Exception:
-        logger.exception("Failed to send email via SMTP to %s", to)
+        logger.exception(
+            "Failed to send email via SMTP to %s (relay %s:%s)",
+            to,
+            settings.smtp_host,
+            settings.smtp_port,
+        )
         return False, None
 
 

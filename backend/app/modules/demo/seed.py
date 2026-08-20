@@ -388,6 +388,9 @@ async def _seed_company_structure(
             salary_max=spec.get("salary_max"),
             salary_currency="EUR",
             passing_score=spec.get("passing_score"),
+            # Ladder order mirrors the grade dictionary — my_loop walks
+            # the next rung by GradeSpecialization.sort_index.
+            sort_index=grade.sort_index,
         )
         db.add(gs)
         await db.flush()
@@ -851,7 +854,12 @@ async def _seed_assessments_and_pdps(
             started_at = now - timedelta(days=21)
             ended_at = now + timedelta(days=14)
         if spec["status_code"] == "done":
-            finished_at = now - timedelta(days=3)
+            # ``finished_days_ago`` lets a spec plant a historical done
+            # assessment (re-assessment storyline); dates shift with it so
+            # the cycle stays internally consistent (started < finished).
+            finished_at = now - timedelta(days=spec.get("finished_days_ago", 3))
+            started_at = finished_at - timedelta(days=18)
+            ended_at = finished_at + timedelta(days=17)
         if spec["status_code"] == "cancelled":
             finished_at = now - timedelta(days=5)
 
@@ -964,23 +972,21 @@ async def _seed_assessments_and_pdps(
                     scoring_participants.append(self_participant)
         await db.flush()
 
-        for comp_key, avg_score, percent in spec.get("result_overrides", []):
-            competence = ctx.competences.get(comp_key)
-            if competence is None:
-                continue
-            db.add(
-                AssessmentResult(
-                    assessment_id=assessment.id,
-                    competence_id=competence.id,
-                    avg_score=avg_score,
-                    percent=percent,
-                )
-            )
-
+        # Answers are generated before the result rows: the recorded
+        # percent must equal what ``_recompute_assessment_results`` would
+        # derive from these very answers — otherwise the first status
+        # re-transition (or a calibration reset) silently rewrites the
+        # storyline numbers, e.g. every "below the bar" 65 snapping to 75
+        # and the whole dev-loop story vanishing (review finding).
+        achieved: dict[str, float] = {}
+        max_scale_weight = (
+            max((o.weight or 0) for o in scoring_options) if scoring_options else 0
+        )
         if scoring_participants and scoring_options:
             avg_by_competence = {
                 comp_key: avg for comp_key, avg, _ in spec.get("result_overrides", [])
             }
+            n_parts = len(scoring_participants)
             for comp_key in spec["competence_keys"]:
                 competence = ctx.competences.get(comp_key)
                 if competence is None:
@@ -997,6 +1003,22 @@ async def _seed_assessments_and_pdps(
                 if not indicators:
                     continue
                 target_avg = avg_by_competence.get(comp_key)
+                n_inds = len(indicators)
+                per_participant_totals: list[int] = []
+                if target_avg is not None:
+                    # Closest achievable integer answer set: distribute
+                    # round(target · participants · indicators) points
+                    # across participants, then across indicators, so
+                    # every participant's (= role's) mean lands on the
+                    # same achievable value instead of the old ±1 nudges
+                    # that cancelled back to round(target).
+                    total = round(target_avg * n_parts * n_inds)
+                    base_t, rem = divmod(total, n_parts)
+                    per_participant_totals = [
+                        base_t + (1 if idx < rem else 0) for idx in range(n_parts)
+                    ]
+                    if spec["status_code"] == "done":
+                        achieved[comp_key] = total / (n_parts * n_inds)
                 for ind_idx, indicator in enumerate(indicators):
                     # in_progress: leave the top indicator unanswered so
                     # the form still looks partially completed.
@@ -1007,14 +1029,13 @@ async def _seed_assessments_and_pdps(
                         continue
                     for part_idx, participant in enumerate(scoring_participants):
                         if target_avg is not None:
-                            # done assessments: anchor on the recorded
-                            # avg so results widget numbers match the
-                            # underlying answers. Nudge ±1 across
-                            # indicators for spread without breaking the
-                            # average.
-                            base = int(round(target_avg))
-                            offset = (ind_idx + part_idx) % 3 - 1
-                            target_weight = base + offset
+                            t_total = per_participant_totals[part_idx]
+                            base, extra = divmod(t_total, n_inds)
+                            # Rotate which indicators carry the +1 per
+                            # participant: the comparison view still shows
+                            # different answers while the averages hold.
+                            pos = (ind_idx + part_idx) % n_inds
+                            target_weight = base + (1 if pos < extra else 0)
                         else:
                             # in_progress / no override: deterministic
                             # spread across the scale's actual weights
@@ -1042,6 +1063,26 @@ async def _seed_assessments_and_pdps(
                             )
                         )
 
+        for comp_key, avg_score, percent in spec.get("result_overrides", []):
+            competence = ctx.competences.get(comp_key)
+            if competence is None:
+                continue
+            if comp_key in achieved and max_scale_weight > 0:
+                # The recompute-stable value wins over the fixture: the
+                # fixture's percent is the *target*, the answers are the
+                # source of truth once the assessment lives its life.
+                value = achieved[comp_key]
+                avg_score = round(value, 2)
+                percent = round(value / max_scale_weight * 100)
+            db.add(
+                AssessmentResult(
+                    assessment_id=assessment.id,
+                    competence_id=competence.id,
+                    avg_score=avg_score,
+                    percent=percent,
+                )
+            )
+
         await db.flush()
 
     pdp_count = 0
@@ -1067,11 +1108,18 @@ async def _seed_assessments_and_pdps(
             started_at = now - timedelta(days=90)
             finished_at = now - timedelta(days=7)
 
-        deadline = (
-            now + timedelta(days=60)
-            if spec["status"] not in {"done", "cancelled"}
-            else None
-        )
+        if spec["status"] == "cancelled":
+            deadline = None
+        elif spec["status"] == "done":
+            # Finished a week ago, comfortably before its deadline —
+            # feeds the Closed stage's "plans done on time" sub-line.
+            deadline = now + timedelta(days=30)
+        elif spec.get("overdue"):
+            # Dev-loop storyline: an open plan two weeks past its
+            # deadline so the dashboard's action queue has a real row.
+            deadline = now - timedelta(days=14)
+        else:
+            deadline = now + timedelta(days=60)
 
         items = spec.get("items", [])
         passed = sum(1 for it in items if it.get("is_passed"))
@@ -1099,6 +1147,11 @@ async def _seed_assessments_and_pdps(
             started_at=started_at,
             finished_at=finished_at,
         )
+        if spec.get("stuck"):
+            # Dev-loop storyline: pin updated_at three weeks back so the
+            # review/returned plan reads as stalled on the dashboard
+            # (analytics.dev_loop flags no movement for >14 days).
+            pdp.updated_at = now - timedelta(days=21)
         db.add(pdp)
         await db.flush()
         pdp_count += 1

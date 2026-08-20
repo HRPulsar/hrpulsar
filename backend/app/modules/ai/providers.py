@@ -68,6 +68,18 @@ PROVIDERS: dict[str, ProviderSpec] = {
         global_key_attr="gemini_api_key",
         classify_prefixes=("gemini",),
     ),
+    "yandex": ProviderSpec(
+        name="yandex",
+        label="YandexGPT",
+        global_key_attr="yandex_api_key",
+        # Yandex model URIs ("gpt://<folder>/<model>") share their first
+        # three characters with the OpenAI prefix — classify_model picks
+        # the longest matching prefix, so ownership stays unambiguous.
+        classify_prefixes=("gpt://", "yandexgpt"),
+        # Alias-era rows carry a base_url (gateway/proxy); the yandex
+        # dispatch honours it instead of the platform endpoint.
+        supports_local=True,
+    ),
     "openai_compatible": ProviderSpec(
         name="openai_compatible",
         label="OpenAI-compatible (local)",
@@ -77,12 +89,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
 }
 
 # Legacy/BYOK provider names accepted from stored rows and recruitment
-# schemas, mapped onto a canonical spec. Azure/Yandex/GigaChat all expose
+# schemas, mapped onto a canonical spec. Azure/GigaChat expose
 # OpenAI-compatible chat endpoints — their rows carry a ``base_url``.
 PROVIDER_ALIASES: dict[str, str] = {
     "claude": "anthropic",
     "azure": "openai_compatible",
-    "yandex": "openai_compatible",
     "gigachat": "openai_compatible",
 }
 
@@ -98,13 +109,20 @@ def resolve_provider_name(name: str | None) -> str | None:
 
 
 def classify_model(model: str | None) -> str | None:
-    """Provider owning this model name by prefix, or None when unknown."""
+    """Provider owning this model name by prefix, or None when unknown.
+
+    The longest matching prefix wins — "gpt://…" (Yandex model URIs)
+    must not be claimed by the shorter OpenAI "gpt" prefix.
+    """
     if not model:
         return None
+    owner: str | None = None
+    owner_len = -1
     for spec in PROVIDERS.values():
-        if spec.classify_prefixes and model.startswith(spec.classify_prefixes):
-            return spec.name
-    return None
+        for prefix in spec.classify_prefixes:
+            if len(prefix) > owner_len and model.startswith(prefix):
+                owner, owner_len = spec.name, len(prefix)
+    return owner
 
 
 def default_provider() -> str:
@@ -178,8 +196,8 @@ def model_matches_provider(
 
     Prefix ownership says nothing about OpenAI-compatible proxies:
     ``openai_compatible`` owns no prefix at all (local model names are
-    arbitrary) and ``azure``/``yandex``/``gigachat`` canonicalize onto it
-    while serving upstream ids verbatim — ``{provider: "azure", model:
+    arbitrary) and ``azure``/``gigachat`` canonicalize onto it while
+    serving upstream ids verbatim — ``{provider: "azure", model:
     "gpt-4o"}`` is the *normal* Azure configuration. Treating it as a
     mismatch rejected every proxy BYOK row (HRP-498 review). The same
     applies to any row carrying a ``base_url``: there the endpoint, not
@@ -204,6 +222,21 @@ def row_is_consistent(row: Any) -> bool:
     return model_matches_provider(row.provider, row.model, _row_base_url(row))
 
 
+def yandex_byok_model_is_self_contained(
+    model: str | None, base_url: str | None
+) -> bool:
+    """Whether a keyed Yandex row would actually be dispatched.
+
+    Mirrors the skip inside ``_pick_target``: without a ``base_url`` a
+    Yandex row is self-contained only when its model URI carries the
+    folder (``gpt://<folder>/…``) — a short name would pair the tenant's
+    key with the operator's folder. The save path refuses such rows up
+    front (HRP-599 review): a silently skipped BYOK key means the
+    platform pays for what the tenant thinks is their own usage.
+    """
+    return base_url is not None or (model or "").startswith("gpt://")
+
+
 def _pick_target(rows: list[Any], model: str | None) -> GenerationTarget | None:
     """Resolve a tenant's config rows against the requested model.
 
@@ -216,6 +249,35 @@ def _pick_target(rows: list[Any], model: str | None) -> GenerationTarget | None:
     def _target(row: Any, provider: str) -> GenerationTarget | None:
         base_url = _row_base_url(row)
         api_key = decrypt_row_key(row)
+        if provider == "yandex":
+            # Stays on the yandex dispatch (model-URI expansion) even with
+            # a base_url — relabeling these rows openai_compatible sent the
+            # bare short name upstream (review fix). Yandex keys are
+            # folder-scoped, so a keyed row without a base_url is
+            # self-contained only when its model URI carries the folder;
+            # a short-name row would pair the tenant key with the
+            # operator's folder — skip it like a base_url-less local row.
+            if base_url is None and not (row.model or "").startswith("gpt://"):
+                # Rows like this predate the save-time guard
+                # (ensure_yandex_model_is_dispatchable) — leave a trace:
+                # the tenant thinks their key is in use, but the request
+                # is about to fall back to the platform credential.
+                logger.warning(
+                    "yandex BYOK row %s skipped: model %r is not a "
+                    "gpt:// URI and the row has no base_url",
+                    row.id,
+                    row.model,
+                )
+                return None
+            if base_url is None and api_key is None:
+                return None
+            return GenerationTarget(
+                provider="yandex",
+                api_key=api_key,
+                base_url=base_url,
+                source="local" if base_url is not None else "byok",
+                model=row.model or None,
+            )
         if provider == "openai_compatible" or (
             provider == "openai" and base_url is not None
         ):

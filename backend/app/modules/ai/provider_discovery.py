@@ -83,10 +83,43 @@ async def discover_gemini(api_key: str) -> list[dict[str, str]]:
     return out
 
 
+async def discover_yandex(api_key: str) -> list[dict[str, str]]:
+    from app.modules.ai import providers
+
+    client = llm_client._get_openai(api_key, llm_client.YANDEX_BASE_URL)
+    out: list[dict[str, str]] = []
+    async for model in client.models.list():
+        model_id: str = model.id
+        # The listing carries every modality under scheme-prefixed URIs
+        # (emb://, art://) — only the chat namespace may pass.
+        if not model_id.startswith("gpt://"):
+            continue
+        # Normalize gpt://<folder>/<model>/<version> to the short name the
+        # registry and credits.yaml use — a full URI would leak the
+        # operator's folder id into every tenant's picker and never fold
+        # with the seeded rows. The dispatch re-expands short names from
+        # the platform folder, which is the folder this listing came from.
+        short = model_id.removeprefix("gpt://").partition("/")[2]
+        short = short.removesuffix("/latest")
+        if not short or short.endswith("/deprecated"):
+            continue
+        # Live-listing hazards (2026-08): realtime speech models share the
+        # gpt:// namespace but are not chat; hosted open-weights ids owned
+        # by another provider's prefix (gpt-oss-*) would classify away from
+        # Yandex and could never be dispatched back to it.
+        if "speech" in short:
+            continue
+        if providers.classify_model(short) not in (None, "yandex"):
+            continue
+        out.append({"model_id": short, "label": short})
+    return out
+
+
 DISCOVERERS: dict[str, Callable[[str], Awaitable[list[dict[str, str]]]]] = {
     "anthropic": discover_anthropic,
     "openai": discover_openai,
     "gemini": discover_gemini,
+    "yandex": discover_yandex,
 }
 
 

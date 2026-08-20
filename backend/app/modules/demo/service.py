@@ -40,6 +40,16 @@ logger = logging.getLogger(__name__)
 # Where a fresh (or resumed) demo session lands.
 DEMO_REDIRECT_URL = "/dashboard"
 
+# The throw-away demo admin's email domain (see ``_create_demo_user``);
+# ``switch_demo_view`` finds the admin persona by it.
+DEMO_ADMIN_EMAIL_DOMAIN = "demo.hrpulsar.local"
+
+# The employee persona for the demo "View as" switcher: Carlos Mendez
+# (NAME_POOL idx 2) — his seed story has a done 360 with strengths and a
+# distributed-systems gap plus a completed Q3 plan, so the personal
+# dashboard is alive from the first render.
+DEMO_EMPLOYEE_PERSONA_INDEX = 2
+
 
 # Stable 64-bit integer key for ``pg_advisory_xact_lock`` so two
 # concurrent ``/api/demo/start`` requests serialise on the cap check.
@@ -145,7 +155,7 @@ async def _create_demo_user(
 ) -> User:
     user = User(
         id=uuid.uuid4(),
-        email=f"demo-{uuid.uuid4().hex[:12]}@demo.hrpulsar.local",
+        email=f"demo-{uuid.uuid4().hex[:12]}@{DEMO_ADMIN_EMAIL_DOMAIN}",
         # Long random secret nobody will ever type — the demo never
         # uses password auth, it logs in via the JWT pair we return.
         password_hash=hash_password(secrets.token_urlsafe(32)),
@@ -433,4 +443,56 @@ async def create_demo_session(
         "expires_at": tenant.expires_at,
         "redirect_url": DEMO_REDIRECT_URL,
         "credits_granted": credits_granted,
+    }
+
+
+async def switch_demo_view(
+    db: AsyncSession, *, tenant_id: uuid.UUID, persona: str
+) -> dict[str, Any]:
+    """Issue an access token for a demo persona of the same demo tenant.
+
+    ``admin`` → the throw-away demo user; ``employee`` → the seeded
+    Carlos Mendez. No passwords, no EE impersonation — just a fresh
+    demo-scoped JWT (TTL pinned to the tenant lifetime, like
+    ``create_demo_session``). Only callable with a live demo-tenant
+    bearer; the router already resolved it via ``get_current_user``.
+    """
+    tenant = await db.get(Tenant, tenant_id)
+    now = datetime.now(timezone.utc)
+    if (
+        tenant is None
+        or not tenant.is_demo
+        or (tenant.expires_at is not None and tenant.expires_at <= now)
+    ):
+        raise AppError(
+            "demo_switch_requires_demo_session",
+            status.HTTP_403_FORBIDDEN,
+        )
+
+    if persona == "admin":
+        stmt = select(User).where(
+            User.tenant_id == tenant_id,
+            User.email.like(f"%@{DEMO_ADMIN_EMAIL_DOMAIN}"),
+        )
+    else:
+        from app.modules.demo.seed_data_employees import NAME_POOL, email_for
+
+        first, last = NAME_POOL[DEMO_EMPLOYEE_PERSONA_INDEX]
+        stmt = select(User).where(
+            User.tenant_id == tenant_id,
+            User.email == email_for(first, last),
+        )
+    user = (await db.execute(stmt)).scalars().first()
+    if user is None:
+        raise AppError("demo_persona_not_available", status.HTTP_404_NOT_FOUND)
+
+    tenant.last_active_at = now
+    await db.commit()
+
+    access = create_demo_access_token(str(user.id), str(tenant_id))
+    return {
+        "access_token": access,
+        "tenant_id": tenant_id,
+        "expires_at": tenant.expires_at,
+        "persona": persona,
     }

@@ -142,3 +142,59 @@ def build_system_position(
     tenant_settings: TenantAISettings | None = None,
 ) -> str:
     return _augment(SYSTEM_POSITION, tenant_settings)
+
+
+SYSTEM_DEV_LOOP = """You are an HR analytics advisor for a talent-development platform.
+You are given a snapshot of a company's development loop: assessment coverage,
+competence gaps below the grade bar, development plans and their state.
+Write for a busy HR manager. Respond with plain text only — no markdown,
+no headings, no lists."""
+
+DEV_LOOP_SUMMARY = """Here is the current development-loop snapshot as JSON:
+
+{payload}
+
+Field notes: "stages" is the assess -> gaps -> develop -> close pipeline;
+"findings" are detected problems ("gaps_without_plan" = employees scoring
+below the grade bar with no open development plan, "pdp_overdue" = plans past
+their deadline, "pdp_stuck_review" = plans sitting in review/returned,
+"assessment_coverage" = active employees without a recent assessment).
+
+In 3-5 sentences: describe the overall state of the loop, name the single
+most pressing problem (mention concrete employee names if provided), and say
+which action to take first. Do not repeat raw numbers the reader already
+sees; interpret them."""
+
+
+def build_system_dev_loop(
+    tenant_settings: TenantAISettings | None = None,
+) -> str:
+    return _augment(SYSTEM_DEV_LOOP, tenant_settings)
+
+
+SYSTEM_MY_LOOP = """You are a supportive career coach inside a talent-development
+platform, writing directly to an employee about their own development data.
+Be encouraging and concrete; never use judgmental labels (no "weak", "poor",
+"underperformer"). Frame gaps as growth opportunities. Respond with plain
+text only — no markdown, no headings, no lists."""
+
+MY_LOOP_SUMMARY = """Here is the employee's personal development snapshot as JSON:
+
+{payload}
+
+Field notes: "stages" covers their latest assessment, competence gaps below
+the bar, active development plan and confirmed closures; "strengths" lists
+their top and rare competences; "growth" shows the next grade on their career
+ladder and what is still missing; "history" is their assessment score
+timeline.
+
+In 3-5 sentences, speaking to the employee as "you": acknowledge what is
+going well (strengths, progress, closed gaps), then suggest what to focus on
+in the next quarter and the first concrete step to take. Do not repeat raw
+numbers the reader already sees; interpret them."""
+
+
+def build_system_my_loop(
+    tenant_settings: TenantAISettings | None = None,
+) -> str:
+    return _augment(SYSTEM_MY_LOOP, tenant_settings)

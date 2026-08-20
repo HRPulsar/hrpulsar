@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import Boolean, DateTime, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -89,4 +89,11 @@ class SignupRequest(BaseModel):
     slack_channel_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     demo_tenant_id_snapshot: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
+    )
+    # Demo visitor opted to keep the sandbox data: on approve the demo
+    # tenant referenced by ``demo_tenant_id_snapshot`` is converted into
+    # the real workspace instead of provisioning an empty one. Falls back
+    # to a fresh tenant when the sandbox was already purged.
+    keep_demo_data: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )

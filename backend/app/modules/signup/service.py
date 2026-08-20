@@ -27,7 +27,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from jwt import PyJWTError as JWTError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -146,6 +146,7 @@ async def create_signup_request(
     remote_ip: str | None,
     source: str = "landing",
     demo_tenant_id_snapshot: uuid.UUID | None = None,
+    keep_demo_data: bool = False,
     request_locale: str | None = None,
 ) -> SignupRequest:
     """Create a fresh SignupRequest and email a verification link.
@@ -186,8 +187,25 @@ async def create_signup_request(
         # (the visitor may have used the language switcher since), so the
         # stored locale follows it. Keeping the original would let the
         # later decision email contradict the last email they received.
-        if existing.locale != locale:
+        # Same latest-submit-wins rule for keep_demo_data and the demo
+        # tenant snapshot — the visitor may have re-opened the save-access
+        # modal (possibly from a *newer* sandbox after the first one was
+        # purged) and changed their mind. A stale snapshot would convert
+        # the wrong sandbox on approve; a NULL one from an earlier landing
+        # submit would silently drop the checkbox. Only the demo save-access
+        # path supplies a snapshot, so never downgrade one to None here.
+        if (
+            existing.locale != locale
+            or existing.keep_demo_data != keep_demo_data
+            or (
+                demo_tenant_id_snapshot is not None
+                and existing.demo_tenant_id_snapshot != demo_tenant_id_snapshot
+            )
+        ):
             existing.locale = locale
+            existing.keep_demo_data = keep_demo_data
+            if demo_tenant_id_snapshot is not None:
+                existing.demo_tenant_id_snapshot = demo_tenant_id_snapshot
             await db.commit()
             await db.refresh(existing)
         await _send_signup_verify_email(existing, request_locale=request_locale)
@@ -209,6 +227,7 @@ async def create_signup_request(
         source=source,
         locale=locale,
         demo_tenant_id_snapshot=demo_tenant_id_snapshot,
+        keep_demo_data=keep_demo_data,
     )
     db.add(row)
     await db.commit()
@@ -446,6 +465,77 @@ async def _get_pending_for_moderation(
     return row
 
 
+async def _convert_demo_tenant(db: AsyncSession, row: SignupRequest) -> Any:
+    """Convert the visitor's demo sandbox into their real workspace.
+
+    Returns the converted ``Tenant`` or ``None`` when the sandbox no
+    longer exists (TTL purge won the race) — the caller then falls back
+    to provisioning a fresh empty tenant.
+
+    FOR UPDATE serialises against ``purge_expired_demo_tenants``: its
+    DELETE is guarded by ``is_demo IS TRUE``, so once we flip the flag
+    under the row lock the purge becomes a no-op for this tenant (the
+    task already logs and skips that case). The demo slug is kept — it
+    is an internal identifier and renaming would add a uniqueness race
+    for no user-visible gain.
+
+    All existing logins are deactivated: the throw-away demo admin and
+    the seeded employee accounts share well-known demo credentials that
+    must not survive into a real workspace. Data (employees, vacancies,
+    assessments) stays.
+    """
+    from app.modules.auth.models import User
+    from app.modules.company.models import Tenant
+
+    tenant = (
+        await db.execute(
+            select(Tenant)
+            .where(
+                Tenant.id == row.demo_tenant_id_snapshot,
+                Tenant.is_demo.is_(True),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if tenant is None:
+        logger.info(
+            "signup-approve: demo tenant %s for request %s already purged — "
+            "provisioning a fresh tenant instead",
+            row.demo_tenant_id_snapshot,
+            row.id,
+        )
+        return None
+
+    tenant.is_demo = False
+    tenant.expires_at = None
+    tenant.name = row.company_name or row.email
+
+    await db.execute(
+        update(User).where(User.tenant_id == tenant.id).values(is_active=False)
+    )
+
+    # Demo tenants start with zero free credits (only the demo bonus), so
+    # reset the free pool to the standard monthly allotment a fresh tenant
+    # would get. Point-wise lazy EE import (open-core mechanism 3):
+    # community builds have no billing and skip silently.
+    try:
+        from ee.credits import refill_free_credits
+        from ee.pricing import FREE_CREDITS_MONTHLY
+
+        await refill_free_credits(db, tenant.id, FREE_CREDITS_MONTHLY)
+    except ImportError:
+        pass
+
+    logger.info(
+        "signup-approve: converted demo tenant %s into a real workspace "
+        "for request %s",
+        tenant.id,
+        row.id,
+    )
+    return tenant
+
+
 async def approve_signup(
     db: AsyncSession,
     signup_request_id: uuid.UUID,
@@ -469,46 +559,56 @@ async def approve_signup(
     row = await _get_pending_for_moderation(db, signup_request_id)
 
     # ── Tenant ----------------------------------------------------------
-    # The slug uniqueness check is best-effort — two concurrent approves
-    # with the same company_name would both observe base_slug as free
-    # and race on the unique index. Wrap the insert in a small retry so
-    # the collision triggers the suffix path instead of bubbling a 500
-    # back to the moderator.
-    from sqlalchemy.exc import IntegrityError
-
-    base_slug = _slugify(row.company_name or row.email.split("@", 1)[0])
-    candidate_slugs = [base_slug] + [
-        f"{base_slug}-{uuid.uuid4().hex[:6]}" for _ in range(4)
-    ]
+    # A demo visitor who checked "keep my demo data" gets their sandbox
+    # converted into the real workspace instead of a fresh empty tenant.
+    # Falls through to fresh provisioning when the sandbox was already
+    # purged (the TTL beat runs every 5 minutes; moderation can take days).
     tenant: Tenant | None = None
-    last_error: Exception | None = None
-    for slug in candidate_slugs:
-        if (
-            await db.execute(select(Tenant).where(Tenant.slug == slug))
-        ).scalar_one_or_none():
-            continue
-        attempt = Tenant(name=row.company_name or row.email, slug=slug)
-        db.add(attempt)
-        try:
-            await db.flush()
-            tenant = attempt
-            break
-        except IntegrityError as exc:
-            last_error = exc
-            await db.rollback()
-            # The rollback released the FOR UPDATE lock and discarded the
-            # transaction — re-acquire the locked row so the next attempt
-            # keeps the same race protection (a concurrent moderator may
-            # have finalised the row in the gap, which raises the 409).
-            row = await _get_pending_for_moderation(db, signup_request_id)
+    if row.keep_demo_data and row.demo_tenant_id_snapshot is not None:
+        tenant = await _convert_demo_tenant(db, row)
+
     if tenant is None:
-        raise AppError(
-            "signup_tenant_slug_unavailable", status.HTTP_409_CONFLICT
-        ) from last_error
+        # The slug uniqueness check is best-effort — two concurrent approves
+        # with the same company_name would both observe base_slug as free
+        # and race on the unique index. Wrap the insert in a small retry so
+        # the collision triggers the suffix path instead of bubbling a 500
+        # back to the moderator.
+        from sqlalchemy.exc import IntegrityError
+
+        base_slug = _slugify(row.company_name or row.email.split("@", 1)[0])
+        candidate_slugs = [base_slug] + [
+            f"{base_slug}-{uuid.uuid4().hex[:6]}" for _ in range(4)
+        ]
+        last_error: Exception | None = None
+        for slug in candidate_slugs:
+            if (
+                await db.execute(select(Tenant).where(Tenant.slug == slug))
+            ).scalar_one_or_none():
+                continue
+            attempt = Tenant(name=row.company_name or row.email, slug=slug)
+            db.add(attempt)
+            try:
+                await db.flush()
+                tenant = attempt
+                break
+            except IntegrityError as exc:
+                last_error = exc
+                await db.rollback()
+                # The rollback released the FOR UPDATE lock and discarded the
+                # transaction — re-acquire the locked row so the next attempt
+                # keeps the same race protection (a concurrent moderator may
+                # have finalised the row in the gap, which raises the 409).
+                row = await _get_pending_for_moderation(db, signup_request_id)
+        if tenant is None:
+            raise AppError(
+                "signup_tenant_slug_unavailable", status.HTTP_409_CONFLICT
+            ) from last_error
 
     # HRP-181 REDO mirror: seed the canonical 9-stage recruitment funnel,
     # but isolate failures via SAVEPOINT so a half-applied chain doesn't
-    # block account creation.
+    # block account creation. Runs for converted demo tenants too — the
+    # demo seed never creates VacancyStage rows, and the seeder is
+    # idempotent for tenants that somehow already have them.
     try:
         from app.modules.recruitment.vacancy_service import (
             seed_default_recruitment_stages,
@@ -518,7 +618,8 @@ async def approve_signup(
             await seed_default_recruitment_stages(db, tenant.id)
     except Exception:
         logger.exception(
-            "signup-approve: failed to seed default recruitment stages for tenant %s",
+            "signup-approve: failed to seed default recruitment stages "
+            "for tenant %s",
             tenant.id,
         )
 

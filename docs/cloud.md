@@ -40,6 +40,7 @@ Pay only for what you use. Every organization starts with a free tier — no cre
 - **Long uploads reserve their credits** — starting an interview upload sets its cost aside for the length of the transfer, so a large recording cannot run out of balance halfway and fail at the end. The reservation is released the moment the upload finishes, is cancelled, or times out, and the balance page shows what is currently reserved
 - **Top up from the dashboard** — request a credit pack right from Settings → Billing. Depending on the region we issue an invoice for bank transfer (credits land as soon as payment clears) or take you to online checkout
 - **Local currency and invoicing** — regional and dedicated deployments price packs in the local currency and invoice from a local legal entity
+- **Invoice PDFs, generated for you** — on invoice-based deployments the numbered invoice document is generated automatically with your company's billing details, lands in Settings → Billing for download, and is announced by email
 
 ## Dedicated & White-Label Deployments
 

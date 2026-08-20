@@ -27,20 +27,6 @@ test.describe("Cross-page data consistency", () => {
     await setAuthTokens(page, accessToken, refreshToken);
   });
 
-  test("employee count on dashboard", async ({ page }) => {
-    await page.goto("/dashboard");
-    const card = page.getByTestId("dashboard-kpi-headcount");
-    await expect(card).toBeVisible({ timeout: 10000 });
-    await expect(card).toContainText("1", { timeout: 10000 });
-  });
-
-  test("division count on dashboard", async ({ page }) => {
-    await page.goto("/dashboard");
-    const card = page.getByTestId("dashboard-kpi-divisions");
-    await expect(card).toBeVisible({ timeout: 10000 });
-    await expect(card).toContainText("1", { timeout: 10000 });
-  });
-
   test("division visible in company tree", async ({ page }) => {
     await page.goto("/company");
     await expect(

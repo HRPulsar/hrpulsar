@@ -41,6 +41,7 @@ from app.modules.recruitment.settings_schemas import (
     TranscriptionProviderCreate,
     TranscriptionProviderUpdate,
     ensure_provider_owns_model,
+    ensure_yandex_model_is_dispatchable,
 )
 
 # ─── Scales (SCR-90) ────────────────────────────────────────────────
@@ -219,6 +220,22 @@ async def update_llm_provider(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 provider=cfg.provider,
                 model=payload["model"],
+            ) from None
+    if payload.get("model") or "settings" in payload:
+        # A patch must not strand a Yandex row in the dispatcher's skip
+        # zone (HRP-599): dropping the base_url or shortening the model
+        # both need the same guard as create.
+        effective_settings = payload.get("settings", cfg.settings)
+        effective_model = payload.get("model") or cfg.model
+        try:
+            ensure_yandex_model_is_dispatchable(
+                cfg.provider, effective_model, effective_settings
+            )
+        except ValueError:
+            raise AppError(
+                "llm_yandex_model_not_dispatchable",
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                model=effective_model,
             ) from None
     if "api_key" in payload:
         new_key = payload.pop("api_key")

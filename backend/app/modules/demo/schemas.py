@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -59,9 +60,31 @@ class DemoSaveAccessRequest(BaseModel):
     company_name: str | None = Field(None, max_length=255)
     role: str | None = Field(None, max_length=100)
     turnstile_token: str | None = None
+    # Keep the sandbox data: on approve the demo tenant is converted into
+    # the real workspace instead of provisioning an empty one.
+    keep_demo_data: bool = False
 
 
 class DemoSaveAccessResponse(BaseModel):
     signup_request_id: uuid.UUID
     email: EmailStr
     status: str
+
+
+class DemoSwitchViewRequest(BaseModel):
+    """Body of ``POST /api/demo/switch-view`` (HRP-612 wave 2).
+
+    Swaps the demo session between the admin persona (the throw-away
+    demo user) and the employee persona (a seeded employee with a
+    personal dashboard story).
+    """
+
+    persona: Literal["admin", "employee"]
+
+
+class DemoSwitchViewResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    tenant_id: uuid.UUID
+    expires_at: datetime
+    persona: Literal["admin", "employee"]

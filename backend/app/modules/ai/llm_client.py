@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 import anthropic
 import httpx
 import openai
+from fastapi import status
 from google import genai
 from pydantic import BaseModel
 
@@ -154,6 +155,13 @@ def _cache_put(key: tuple[str, str, str], client: Any) -> None:
         _schedule_close(evicted)
 
 
+# HRP-599: Yandex Foundation Models' OpenAI-compatible endpoint. Generation
+# reuses the whole OpenAI path (client cache, transport, no clamping — the
+# server enforces its own limits); only the model name needs completing
+# into a full URI.
+YANDEX_BASE_URL = "https://llm.api.cloud.yandex.net/v1"
+
+
 def _get_openai(
     api_key: str | None = None, base_url: str | None = None
 ) -> openai.AsyncOpenAI:
@@ -171,9 +179,11 @@ def _get_openai(
         # base_url gets a client that re-validates DNS and pins the public
         # IP on every request, with redirects disabled (the record may
         # have changed since save-time validation). None → SDK default
-        # (onprem, platform endpoint, operator allowlist).
+        # (onprem, platform endpoint, operator allowlist). The hardcoded
+        # Yandex platform endpoint is not tenant-supplied: it keeps the
+        # SDK transport and its retries like every other platform provider.
         http_client: httpx.AsyncClient | None = None
-        if base_url is not None:
+        if base_url is not None and base_url != YANDEX_BASE_URL:
             http_client = url_guard.tenant_endpoint_http_client(
                 base_url,
                 error_code="llm_base_url_not_public",
@@ -272,8 +282,12 @@ async def generate(
         # BYOK/local config supplies both the credentials and the model.
         model = target.model
 
-    provider = _resolve_provider(model)
+    # Model first, then provider: the default-model lookup falls back to
+    # OpenAI when the configured provider has no key, and the provider must
+    # follow that model instead of dispatching it to the keyless vendor
+    # (HRP-599 review).
     model = model or _get_default_model()
+    provider = _resolve_provider(model)
 
     api_key: str | None = None
     base_url: str | None = None
@@ -282,8 +296,8 @@ async def generate(
         base_url = target.base_url
         if target.provider == "anthropic":
             provider = "claude"
-        elif target.provider == "gemini":
-            provider = "gemini"
+        elif target.provider in ("gemini", "yandex"):
+            provider = target.provider
         else:  # openai / openai_compatible
             provider = "openai"
 
@@ -295,6 +309,16 @@ async def generate(
         if provider == "gemini":
             return await _generate_gemini(
                 prompt, system, model, temperature, max_tokens, api_key=api_key
+            )
+        if provider == "yandex":
+            return await _generate_yandex(
+                prompt,
+                system,
+                model,
+                temperature,
+                max_tokens,
+                api_key=api_key,
+                base_url=base_url,
             )
         return await _generate_openai(
             prompt,
@@ -470,6 +494,64 @@ def _clamp_openai_max_tokens(model: str, requested: int) -> int:
     return min(requested, cap)
 
 
+def _yandex_model_uri(model: str) -> str:
+    """Complete a short model name into a gpt://<folder>/<model> URI.
+
+    Scheme-carrying ids pass verbatim: gpt:// URIs bring their own folder,
+    and tuned models come as ds:// URIs that must not be nested inside a
+    gpt:// one. Short names (registry presets: "yandexgpt",
+    "yandexgpt-lite") need the installation's folder id — without one the
+    request cannot be formed, and a clear config error beats a
+    provider-side 404.
+    """
+    if "://" in model:
+        return model
+    folder = settings.yandex_folder_id
+    if not folder:
+        raise AppError(
+            "llm_yandex_folder_missing", status.HTTP_422_UNPROCESSABLE_CONTENT
+        )
+    suffix = "" if "/" in model else "/latest"
+    return f"gpt://{folder}/{model}{suffix}"
+
+
+async def _generate_yandex(
+    prompt: str,
+    system: str | None,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> str:
+    # Key semantics mirror the OpenAI factory: the platform key applies
+    # only on the platform endpoint — a tenant base_url (gateway/proxy row)
+    # keeps the tenant's own key or none at all, never the platform one.
+    # Model-URI expansion is also endpoint-scoped: only the official
+    # Yandex endpoint needs gpt://<folder>/… ids. A gateway row (alias-era
+    # openai_compatible) serves whatever model name it was saved with —
+    # expanding it would 422 on installs without YANDEX_FOLDER_ID or leak
+    # the operator's folder id to a tenant-controlled endpoint.
+    if base_url is None:
+        base_url = YANDEX_BASE_URL
+        api_key = api_key or settings.yandex_api_key
+        if not api_key:
+            raise AppError(
+                "llm_yandex_key_missing", status.HTTP_422_UNPROCESSABLE_CONTENT
+            )
+        model = _yandex_model_uri(model)
+    return await _generate_openai(
+        prompt,
+        system,
+        model,
+        temperature,
+        max_tokens,
+        api_key=api_key,
+        base_url=base_url,
+    )
+
+
 async def _generate_anthropic(
     prompt: str,
     system: str | None,
@@ -590,21 +672,32 @@ def _resolve_provider(model: str | None) -> str:
         canonical = providers.classify_model(model)
         if canonical == "anthropic":
             return "claude"
-        if canonical == "gemini":
-            return "gemini"
+        if canonical in ("gemini", "yandex"):
+            return canonical
         return "openai"
-    return settings.llm_provider
+    # No model: canonicalize the configured provider — LLM_PROVIDER accepts
+    # both legacy ("claude") and canonical ("anthropic") names.
+    canonical = providers.resolve_provider_name(settings.llm_provider)
+    if canonical == "anthropic":
+        return "claude"
+    if canonical in ("gemini", "yandex"):
+        return canonical
+    return "openai"
 
 
 def _get_default_model() -> str:
     # Mirrors `ai_settings.service.EFFORT_PRESETS["balanced"].models` (both read
     # `model_registry.BALANCED_MODELS`) so a caller without a `tenant_settings`
     # row gets the same model as the default tenant preset.
-    provider = settings.llm_provider
-    if provider == "claude" and settings.anthropic_api_key:
+    # Canonical names so LLM_PROVIDER=anthropic (legal everywhere else)
+    # does not silently fall through to the OpenAI model (HRP-599 review).
+    provider = providers.resolve_provider_name(settings.llm_provider)
+    if provider == "anthropic" and settings.anthropic_api_key:
         return model_registry.BALANCED_MODELS["anthropic"]
     if provider == "gemini" and settings.gemini_api_key:
         return model_registry.BALANCED_MODELS["gemini"]
+    if provider == "yandex" and settings.yandex_api_key:
+        return model_registry.BALANCED_MODELS["yandex"]
     return model_registry.BALANCED_MODELS["openai"]
 
 

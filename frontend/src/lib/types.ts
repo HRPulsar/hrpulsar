@@ -1189,6 +1189,9 @@ export interface BillingProfile {
   payment_provider: "manual_invoice" | "stripe" | "yookassa" | "none";
   legal_entity: BillingLegalEntity | null;
   packages: BillingPackage[];
+  // HRP-608: true when this site renders invoice PDFs — gates the
+  // buyer-requisites UI.
+  invoice_generation?: boolean;
 }
 
 export interface PurchaseCheckoutResult {
@@ -1201,9 +1204,39 @@ export interface PurchaseCheckoutResult {
   currency?: string;
   legal_entity?: BillingLegalEntity | null;
   checkout_url?: string;
+  // Set on sites with invoice generation (HRP-608); the PDF renders in
+  // the background and lands in the invoices list.
+  invoice_number?: string | null;
   // True when the request landed on an invoice the operator was already
   // pinged about (repeat click within the reuse window, HRP-502).
   reused?: boolean;
+}
+
+// Buyer-side legal requisites for invoice generation (HRP-608).
+export interface BillingRequisites {
+  legal_name: string;
+  inn: string;
+  kpp: string | null;
+  legal_address: string;
+}
+
+export interface TenantInvoice {
+  id: string;
+  invoice_number: string;
+  package_id: string;
+  credits: number;
+  amount: number;
+  currency: string;
+  status: "issued" | "paid" | "cancelled" | "expired";
+  created_at: string;
+  paid_at: string | null;
+  // False while the worker is still rendering the PDF.
+  file_ready: boolean;
+}
+
+export interface TenantInvoiceList {
+  items: TenantInvoice[];
+  total: number;
 }
 
 export interface CreditTransaction {

@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.20.0] - 2026-08-20
+
+### Added
+- Dashboard rebuilt as a management tool: a development-loop hero (assessed → gaps → developing → closed) and an action queue that turns detected problems (employees below the grade bar without a plan, overdue plans, stalled reviews, low assessment coverage) into deep-linked next steps
+- On-demand AI summary of the development loop on the dashboard, cached per data state so repeat requests over unchanged data are free
+- Demo seed now tells a problem story: a sales team scoring below the bar with no development plans, an overdue plan and a stalled review, so the dashboard opens on real actions in a fresh demo
+- Personal employee dashboard: my loop stages, a personal action queue (pending surveys, returned/overdue plans, gaps without a plan), strengths with rare-skill highlights, growth direction to the next grade, and an assessment-history sparkline
+- Coach-style personal AI summary on the employee dashboard, cached per data state
+- YandexGPT (Yandex Foundation Models) as a first-class LLM provider: platform-wide key + folder id, effort-tier presets, model catalog discovery, and BYOK without a custom endpoint URL (HRP-599)
+
+### Changed
+- Dashboard "Open dev plans" KPI subtitle now shows the share of employees covered by an open plan instead of the unrelated org-wide active-employee percentage
+- Dashboard "Closed" stage now counts gaps confirmed closed by a re-assessment within 90 days (with on-time plan completions as a sub-line) instead of the raw completed-plan count
+- Dashboard decluttered per the management-loop design: employee/division counters, department bars, the calendar stub and the "Add employee" button removed (those live in Employees and Analytics)
+
+### Fixed
+- SMTP send-failure logs now name the relay host and port, making delivery incidents self-describing
+- Header and profile avatar initials rendered the string "UNDEFINED" for accounts without a last name (e.g. ex-demo signups)
+- Dev-loop and personal dashboards honor an explicitly configured passing bar of 0 instead of silently treating it as 75
+- The personal dashboard no longer lists below-the-bar scores as strengths (nor feeds them to the AI coach as such)
+- Personal-dashboard AI summary cache no longer misses on unchanged data (payload ordering is now deterministic), and both AI-summary endpoints accept the client's data fingerprint to skip re-aggregation on cache hits
+- Daily AI-summary budget gains a per-user slice so one enthusiastic clicker cannot drain the whole workspace's allowance
+- Dev-loop aggregation no longer expands the tenant's whole assessment history into a single IN clause (large tenants would hit the bind-parameter limit)
+- The daily-cap message for AI summaries now reaches the user instead of a generic "try again" invitation
+- Dashboard shows an error state with a retry button when the backend is unreachable instead of an empty-but-healthy page
+- YandexGPT rows pointing at a gateway URL keep their model name verbatim (the folder-URI rewrite applied only to the official endpoint), and a tenant Yandex key that the dispatcher would silently ignore is now refused at save time with a clear message (HRP-599)
+- Grade-ladder cells created without an explicit order are backfilled from the grade's own order, so the personal dashboard's "next grade" card renders on existing installations (HRP-612)
+
 ## [1.19.2] - 2026-08-18
 
 ## [1.19.1] - 2026-08-18

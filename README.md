@@ -22,7 +22,7 @@ Manage competencies, run 360° assessments, build development plans, and track e
 ### Self-Hosted (Docker)
 
 ```bash
-git clone https://github.com/hrpulsar/hrpulsar.git
+git clone https://github.com/HRPulsar/hrpulsar.git
 cd hrpulsar
 cp .env.example .env
 # Edit .env: set JWT_SECRET, POSTGRES_PASSWORD, and an email provider
@@ -36,7 +36,7 @@ Open http://localhost and create your account. See the
 ### Development
 
 ```bash
-git clone https://github.com/hrpulsar/hrpulsar.git
+git clone https://github.com/HRPulsar/hrpulsar.git
 cd hrpulsar
 docker compose up -d          # Start PostgreSQL + Redis
 make install-dev               # Install dependencies

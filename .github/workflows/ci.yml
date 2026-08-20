@@ -156,10 +156,13 @@ jobs:
 
       - name: Set deployment mode
         # saas only when the EE package is present (monorepo / enterprise CI);
-        # community builds run e2e in the default onprem mode.
+        # community builds run e2e in the default onprem mode. The demo
+        # sandbox rides along: saas-only (enabling it in onprem is a
+        # startup config error), needed by demo-persona.spec.ts.
         run: |
           if [ -d backend/ee ]; then
             echo "DEPLOYMENT_MODE=saas" >> "$GITHUB_ENV"
+            echo "DEMO_ENABLED=true" >> "$GITHUB_ENV"
           else
             echo "DEPLOYMENT_MODE=onprem" >> "$GITHUB_ENV"
           fi

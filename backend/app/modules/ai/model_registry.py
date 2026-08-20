@@ -25,6 +25,13 @@ GEMINI_FAST = "gemini-2.5-flash"
 GEMINI_BALANCED = "gemini-2.5-pro"
 GEMINI_THOROUGH = "gemini-2.5-pro"
 
+# --- Yandex ------------------------------------------------------------------
+# Short names; the dispatch completes them into gpt://<folder>/<name>/latest
+# URIs from ``settings.yandex_folder_id`` (HRP-599).
+YANDEX_FAST = "yandexgpt-lite"
+YANDEX_BALANCED = "yandexgpt"
+YANDEX_THOROUGH = "yandexgpt"
+
 # --- Embeddings --------------------------------------------------------------
 EMBEDDING_MODEL = "text-embedding-3-small"
 
@@ -33,16 +40,19 @@ FAST_MODELS: dict[str, str] = {
     "anthropic": ANTHROPIC_FAST,
     "openai": OPENAI_FAST,
     "gemini": GEMINI_FAST,
+    "yandex": YANDEX_FAST,
 }
 BALANCED_MODELS: dict[str, str] = {
     "anthropic": ANTHROPIC_BALANCED,
     "openai": OPENAI_BALANCED,
     "gemini": GEMINI_BALANCED,
+    "yandex": YANDEX_BALANCED,
 }
 THOROUGH_MODELS: dict[str, str] = {
     "anthropic": ANTHROPIC_THOROUGH,
     "openai": OPENAI_THOROUGH,
     "gemini": GEMINI_THOROUGH,
+    "yandex": YANDEX_THOROUGH,
 }
 
 # HRP-122: per-model standard-API output ceilings, keyed by model-name prefix.

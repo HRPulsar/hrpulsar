@@ -578,3 +578,33 @@ async def notification_templates(db: AsyncSession):
         templates[code] = existing
     await db.commit()
     return templates
+
+
+@pytest.fixture
+def fake_openai_factory():
+    """Factory for a fake AsyncOpenAI client recording chat.completions
+    kwargs into the dict you pass in.
+
+    HRP-599 review: four inline copies of this fake had drifted across the
+    llm_client dispatch tests; any change to the fields the client reads
+    must land in one place.
+    """
+    from types import SimpleNamespace
+
+    def _make(captured: dict, content: str = "ok"):
+        class _Completions:
+            async def create(self, **kwargs):
+                captured.clear()
+                captured.update(kwargs)
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason="stop",
+                            message=SimpleNamespace(content=content),
+                        )
+                    ]
+                )
+
+        return SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+
+    return _make

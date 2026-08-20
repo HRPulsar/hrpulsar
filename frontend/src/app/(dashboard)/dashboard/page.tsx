@@ -3,27 +3,25 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useTranslations } from "next-intl";
-import { ArrowUpRight, Plus, Sparkles, AlertTriangle } from "lucide-react";
+import { useFormatter, useTranslations } from "next-intl";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Clock,
+  Info,
+  Loader2,
+  Sparkles,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/auth-context";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type {
-  AssessmentList,
-  Division,
-  Employee,
-  EmployeeList,
-  PDP,
-  Tenant,
-} from "@/lib/types";
+import { dictionaryItemLabel } from "@/lib/reference-labels";
+import type { AssessmentList, Tenant } from "@/lib/types";
 
 interface OnboardingStatus {
   needs_onboarding: boolean;
 }
-
-const PERIODS = ["7d", "30d", "90d", "YTD"] as const;
-type Period = (typeof PERIODS)[number];
 
 /** Loose shape of the next-intl translator so plain helpers below can take it
  * as an argument instead of being turned into components. */
@@ -32,18 +30,84 @@ type Translate = (
   values?: Record<string, string | number>,
 ) => string;
 
-function countDivisions(divs: Division[]): number {
-  return divs.reduce((acc, d) => acc + 1 + countDivisions(d.children), 0);
+// --- Development loop (GET /analytics/dev-loop) ---
+
+interface DevLoopStages {
+  assessed: { covered: number; total_active: number; percent: number };
+  gaps: { employees: number; competences: number };
+  developing: { open_pdps: number; gap_employees_with_plan: number };
+  closed: { gaps_closed_90d: number; plans_done_on_time_90d: number };
 }
 
-function flattenDivisions(divs: Division[]): Division[] {
-  const out: Division[] = [];
-  for (const d of divs) {
-    out.push(d);
-    if (d.children.length > 0) out.push(...flattenDivisions(d.children));
-  }
-  return out;
+interface DevLoopFindingEmployee {
+  id: string;
+  name: string;
+  division: string | null;
 }
+
+interface DevLoopFinding {
+  code: string;
+  severity: "alert" | "warn" | "info";
+  count: number;
+  employees: DevLoopFindingEmployee[];
+  href: string;
+}
+
+interface DevLoop {
+  stages: DevLoopStages;
+  findings: DevLoopFinding[];
+  data_version: string;
+}
+
+interface AiSummary {
+  summary: string;
+  cached: boolean;
+  data_version: string;
+}
+
+// --- Personal loop (GET /analytics/my-loop) ---
+
+interface DictItem {
+  id: string;
+  type: string;
+  title: string;
+  i18n_key: string | null;
+}
+
+interface MyCompetence {
+  competence_id: string;
+  title: string;
+  percent: number | null;
+}
+
+interface MyLoop {
+  stages: {
+    assessed: { finished_at: string | null; avg_percent: number | null };
+    gaps: { competences: number; items: MyCompetence[] };
+    developing: {
+      pdp: {
+        id: string;
+        title: string;
+        status: string;
+        progress: number;
+        deadline: string | null;
+      } | null;
+    };
+    closed: { gaps_closed_90d: number };
+  };
+  findings: { code: string; severity: "alert" | "warn" | "info"; count: number; href: string }[];
+  strengths: { top: MyCompetence[]; rare_skills: MyCompetence[] };
+  growth: {
+    current_grade: DictItem | null;
+    specialization: DictItem | null;
+    next_grade: DictItem | null;
+    missing: MyCompetence[];
+  } | null;
+  history: { finished_at: string; avg_percent: number }[];
+  data_version: string;
+}
+
+// --- Development loop hero ---
 
 function Sparkline({ values }: { values: number[] }) {
   const w = 100;
@@ -75,85 +139,598 @@ function Sparkline({ values }: { values: number[] }) {
   );
 }
 
-interface KpiCellProps {
-  label: string;
-  value: string | number;
-  sub?: string;
-  series?: number[];
+interface LoopStageSpec {
+  key: string;
+  href: string;
+  value: string;
+  sub: string;
+  attention?: boolean;
+  positive?: boolean;
+  badge?: number;
+  /** 0–100 → renders a thin progress bar under the value. */
   progress?: number;
-  borderRight?: boolean;
+  /** ≥2 points → renders a sparkline next to the value. */
+  series?: number[];
 }
 
-function KpiCell({ label, value, sub, series, progress, borderRight = true, testId }: KpiCellProps & { testId?: string }) {
+function buildStages(stages: DevLoopStages, t: Translate): LoopStageSpec[] {
+  return [
+    {
+      key: "assessed",
+      href: "/assessments",
+      value: `${stages.assessed.percent}%`,
+      sub: t("stageAssessedSub", {
+        covered: stages.assessed.covered,
+        total: stages.assessed.total_active,
+      }),
+      progress: stages.assessed.percent,
+    },
+    {
+      key: "gaps",
+      href: "/employees",
+      value: String(stages.gaps.employees),
+      sub: t("stageGapsSub", { count: stages.gaps.competences }),
+      attention: stages.gaps.employees > 0,
+      badge: stages.gaps.competences > 0 ? stages.gaps.competences : undefined,
+    },
+    {
+      key: "developing",
+      href: "/development",
+      value: String(stages.developing.open_pdps),
+      sub: t("stageDevelopingSub", {
+        count: stages.developing.gap_employees_with_plan,
+      }),
+      progress:
+        stages.gaps.employees > 0
+          ? Math.min(
+              100,
+              Math.round(
+                (stages.developing.gap_employees_with_plan /
+                  stages.gaps.employees) *
+                  100,
+              ),
+            )
+          : undefined,
+    },
+    {
+      key: "closed",
+      href: "/development",
+      value: String(stages.closed.gaps_closed_90d),
+      sub: t("stageClosedSub", { count: stages.closed.plans_done_on_time_90d }),
+      positive: stages.closed.gaps_closed_90d > 0,
+    },
+  ];
+}
+
+function StagesHero({
+  title,
+  subtitle,
+  stages,
+  testidPrefix,
+}: {
+  title: string;
+  subtitle: string;
+  stages: LoopStageSpec[];
+  testidPrefix: string;
+}) {
+  const t = useTranslations("dashboard");
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <span className="text-[11.5px] text-muted-foreground">{subtitle}</span>
+      </div>
+      <div className="grid grid-cols-2 lg:flex">
+        {stages.map((stage, i) => (
+          <div key={stage.key} className="flex flex-1 items-stretch min-w-0">
+            <Link
+              href={stage.href}
+              data-testid={`${testidPrefix}-${stage.key}`}
+              className="group flex-1 min-w-0 p-4 transition-colors hover:bg-muted/60"
+            >
+              <div className="text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                {t(`stage_${stage.key}`)}
+              </div>
+              <div className="mt-2 flex items-baseline justify-between gap-1.5">
+                <span className="flex items-baseline gap-1.5">
+                  <span
+                    className={cn(
+                      "text-[26px] font-bold leading-none tracking-[-0.025em]",
+                      stage.attention && "text-red-600 dark:text-red-400",
+                      stage.positive && "text-emerald-600 dark:text-emerald-400",
+                    )}
+                  >
+                    {stage.value}
+                  </span>
+                  {stage.badge !== undefined && (
+                    <span className="rounded-full bg-red-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-red-700 dark:text-red-400">
+                      {stage.badge}
+                    </span>
+                  )}
+                </span>
+                {stage.series && stage.series.length > 1 && (
+                  <Sparkline values={stage.series} />
+                )}
+              </div>
+              <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                {stage.sub}
+              </div>
+              {stage.progress !== undefined && (
+                <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-accent"
+                    style={{ width: `${stage.progress}%` }}
+                  />
+                </div>
+              )}
+            </Link>
+            {i < stages.length - 1 && (
+              <div className="hidden items-center px-1 text-muted-foreground/40 lg:flex">
+                <ArrowRight className="h-4 w-4" />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DevLoopHero({ loop }: { loop: DevLoop }) {
+  const t = useTranslations("dashboard");
+  return (
+    <StagesHero
+      title={t("loopTitle")}
+      subtitle={t("loopSubtitle")}
+      stages={buildStages(loop.stages, t)}
+      testidPrefix="dashboard-loop-stage"
+    />
+  );
+}
+
+// --- Action queue ---
+
+const SEVERITY_STYLES: Record<DevLoopFinding["severity"], string> = {
+  alert: "bg-red-500/10 text-red-700 dark:text-red-400",
+  warn: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  info: "bg-accent/10 text-accent",
+};
+
+function SeverityIcon({ severity }: { severity: DevLoopFinding["severity"] }) {
+  if (severity === "alert") return <AlertTriangle className="h-3.5 w-3.5" />;
+  if (severity === "warn") return <Clock className="h-3.5 w-3.5" />;
+  return <Info className="h-3.5 w-3.5" />;
+}
+
+function findingSubline(finding: DevLoopFinding, t: Translate): string | null {
+  if (finding.employees.length === 0) return null;
+  const names = finding.employees.map((e) => e.name).join(", ");
+  const rest = finding.count - finding.employees.length;
+  return rest > 0 ? `${names} ${t("andMore", { count: rest })}` : names;
+}
+
+type AiState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "done"; text: string }
+  | { status: "error"; message?: string };
+
+// The daily-cap 429 carries a localized explanation — surfacing the
+// generic "try again" for it would invite the user to keep burning the
+// counter with retries that can only fail until tomorrow.
+function aiErrorState(err: unknown): AiState {
+  return {
+    status: "error",
+    message:
+      err instanceof ApiError && err.status === 429 ? err.message : undefined,
+  };
+}
+
+function ActionQueue({
+  findings,
+  dataVersion,
+}: {
+  findings: DevLoopFinding[];
+  dataVersion: string;
+}) {
+  const t = useTranslations("dashboard");
+  const [ai, setAi] = useState<AiState>({ status: "idle" });
+
+  async function explain() {
+    setAi({ status: "loading" });
+    try {
+      // data_version lets a cache hit on the backend skip re-aggregating
+      // the loop — and pins the summary to the state on screen.
+      const res = await api.post<AiSummary>("/analytics/dev-loop/ai-summary", {
+        data_version: dataVersion,
+      });
+      setAi({ status: "done", text: res.summary });
+    } catch (err) {
+      setAi(aiErrorState(err));
+    }
+  }
+
+  return (
+    <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
+      <div className="flex items-center justify-between gap-2 border-b border-border p-4">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold">{t("queueTitle")}</h3>
+          <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[11px] font-semibold text-accent">
+            {t("queueCount", { count: findings.length })}
+          </span>
+        </div>
+        {ai.status !== "done" && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-accent hover:text-accent"
+            disabled={ai.status === "loading"}
+            onClick={explain}
+            data-testid="dashboard-ai-summary-btn"
+          >
+            {ai.status === "loading" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5" />
+            )}
+            {ai.status === "loading" ? t("aiExplaining") : t("aiExplain")}
+          </Button>
+        )}
+      </div>
+      {ai.status === "error" && (
+        <div className="border-b border-border bg-red-500/5 px-4 py-2 text-[12px] text-red-700 dark:text-red-400">
+          {ai.message ?? t("aiSummaryFailed")}
+        </div>
+      )}
+      {ai.status === "done" && (
+        <div
+          className="flex gap-2.5 border-b border-border bg-accent/5 px-4 py-3"
+          data-testid="dashboard-ai-summary-panel"
+        >
+          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-accent">
+              {t("aiSummaryTitle")}
+            </div>
+            <p className="mt-1 text-[13px] leading-relaxed">{ai.text}</p>
+          </div>
+        </div>
+      )}
+      {findings.length === 0 ? (
+        <div className="p-8 text-center text-sm text-muted-foreground">
+          {t("queueEmpty")}
+        </div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {findings.map((finding) => {
+            const subline = findingSubline(finding, t);
+            return (
+              <li
+                key={finding.code}
+                className="flex items-center gap-3 px-4 py-3"
+                data-testid={`dashboard-action-${finding.code}`}
+              >
+                <span
+                  className={cn(
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
+                    SEVERITY_STYLES[finding.severity],
+                  )}
+                >
+                  <SeverityIcon severity={finding.severity} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium">
+                    {t(`finding_${finding.code}`, { count: finding.count })}
+                  </div>
+                  {subline && (
+                    <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+                      {subline}
+                    </div>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  render={<Link href={finding.href} />}
+                  data-testid="dashboard-action-cta"
+                >
+                  {t(`findingCta_${finding.code}`)}
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// --- Personal dashboard (employee view) ---
+
+function buildMyStages(
+  loop: MyLoop,
+  t: Translate,
+  formatDate: (iso: string) => string,
+): LoopStageSpec[] {
+  const { assessed, gaps, developing, closed } = loop.stages;
+  const pdp = developing.pdp;
+  return [
+    {
+      key: "assessed",
+      href: "/assessments",
+      value: assessed.avg_percent !== null ? `${assessed.avg_percent}%` : "—",
+      sub:
+        assessed.finished_at !== null
+          ? t("myStageAssessedSub", { date: formatDate(assessed.finished_at) })
+          : t("myStageAssessedEmpty"),
+      series: loop.history.map((h) => h.avg_percent),
+    },
+    {
+      key: "gaps",
+      href: "/development",
+      value: String(gaps.competences),
+      sub:
+        gaps.competences > 0
+          ? gaps.items.map((g) => g.title).join(", ")
+          : t("myStageGapsEmpty"),
+      attention: gaps.competences > 0,
+    },
+    {
+      key: "developing",
+      href: "/development",
+      value: pdp ? `${pdp.progress}%` : "—",
+      sub: pdp ? pdp.title : t("myStageNoPlan"),
+      progress: pdp ? pdp.progress : undefined,
+    },
+    {
+      key: "closed",
+      href: "/development",
+      value: String(closed.gaps_closed_90d),
+      sub: t("myStageClosedSub"),
+      positive: closed.gaps_closed_90d > 0,
+    },
+  ];
+}
+
+function MyActionQueue({
+  findings,
+  dataVersion,
+}: {
+  findings: MyLoop["findings"];
+  dataVersion: string;
+}) {
+  const t = useTranslations("dashboard");
+  const [ai, setAi] = useState<AiState>({ status: "idle" });
+
+  async function explain() {
+    setAi({ status: "loading" });
+    try {
+      const res = await api.post<AiSummary>("/analytics/my-loop/ai-summary", {
+        data_version: dataVersion,
+      });
+      setAi({ status: "done", text: res.summary });
+    } catch (err) {
+      setAi(aiErrorState(err));
+    }
+  }
+
+  return (
+    <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
+      <div className="flex items-center justify-between gap-2 border-b border-border p-4">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold">{t("myQueueTitle")}</h3>
+          <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[11px] font-semibold text-accent">
+            {t("queueCount", { count: findings.length })}
+          </span>
+        </div>
+        {ai.status !== "done" && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-accent hover:text-accent"
+            disabled={ai.status === "loading"}
+            onClick={explain}
+            data-testid="dashboard-my-ai-btn"
+          >
+            {ai.status === "loading" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5" />
+            )}
+            {ai.status === "loading" ? t("aiExplaining") : t("myAiExplain")}
+          </Button>
+        )}
+      </div>
+      {ai.status === "error" && (
+        <div className="border-b border-border bg-red-500/5 px-4 py-2 text-[12px] text-red-700 dark:text-red-400">
+          {ai.message ?? t("aiSummaryFailed")}
+        </div>
+      )}
+      {ai.status === "done" && (
+        <div
+          className="flex gap-2.5 border-b border-border bg-accent/5 px-4 py-3"
+          data-testid="dashboard-my-ai-panel"
+        >
+          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-accent">
+              {t("myAiSummaryTitle")}
+            </div>
+            <p className="mt-1 text-[13px] leading-relaxed">{ai.text}</p>
+          </div>
+        </div>
+      )}
+      {findings.length === 0 ? (
+        <div className="p-8 text-center text-sm text-muted-foreground">
+          {t("myQueueEmpty")}
+        </div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {findings.map((finding) => (
+            <li
+              key={finding.code}
+              className="flex items-center gap-3 px-4 py-3"
+              data-testid={`dashboard-my-action-${finding.code}`}
+            >
+              <span
+                className={cn(
+                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
+                  SEVERITY_STYLES[finding.severity],
+                )}
+              >
+                <SeverityIcon severity={finding.severity} />
+              </span>
+              <div className="min-w-0 flex-1 text-[13px] font-medium">
+                {t(`myFinding_${finding.code}`, { count: finding.count })}
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                render={<Link href={finding.href} />}
+                data-testid="dashboard-my-action-cta"
+              >
+                {t(`myFindingCta_${finding.code}`)}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function StrengthsCard({ strengths }: { strengths: MyLoop["strengths"] }) {
+  const t = useTranslations("dashboard");
+  const rareIds = new Set(strengths.rare_skills.map((s) => s.competence_id));
+  const rows = [
+    ...strengths.top,
+    ...strengths.rare_skills.filter(
+      (s) => !strengths.top.some((x) => x.competence_id === s.competence_id),
+    ),
+  ];
   return (
     <div
-      data-testid={testId}
-      className={cn("flex-1 min-w-0 p-4", borderRight && "border-r border-border")}
+      className="flex flex-col overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5"
+      data-testid="dashboard-my-strengths"
     >
-      <div className="flex items-center justify-between">
-        <span className="text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
-          {label}
-        </span>
+      <div className="border-b border-border p-4">
+        <h3 className="text-sm font-semibold">{t("myStrengthsTitle")}</h3>
       </div>
-      <div className="mt-2.5 flex items-end justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-[26px] font-bold leading-none tracking-[-0.025em]">
-            {value}
-          </div>
-          {sub && (
-            <div className="mt-1 text-[11px] text-muted-foreground">{sub}</div>
-          )}
+      {rows.length === 0 ? (
+        <div className="p-8 text-center text-sm text-muted-foreground">
+          {t("myStrengthsEmpty")}
         </div>
-        {series && series.length > 1 && <Sparkline values={series} />}
-      </div>
-      {progress !== undefined && (
-        <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full rounded-full bg-accent"
-            style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-          />
+      ) : (
+        <div className="flex-1 p-4">
+          <ul className="space-y-2.5">
+            {rows.map((s) => (
+              <li key={s.competence_id} className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-[13px]">
+                  {s.title}
+                </span>
+                {rareIds.has(s.competence_id) && (
+                  <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[11px] font-semibold text-accent">
+                    {t("myRareBadge")}
+                  </span>
+                )}
+                <span className="font-mono text-xs font-semibold tabular-nums">
+                  {s.percent}%
+                </span>
+              </li>
+            ))}
+          </ul>
+          {strengths.rare_skills.length > 0 && (
+            <p className="mt-3 text-[11.5px] text-muted-foreground">
+              {t("myRareHint")}
+            </p>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-interface DeptRow {
-  name: string;
-  count: number;
-}
-
-function DeptBars({ rows, total }: { rows: DeptRow[]; total: number }) {
+function GrowthCard({ growth }: { growth: NonNullable<MyLoop["growth"]> }) {
   const t = useTranslations("dashboard");
-  if (rows.length === 0) {
-    return (
-      <div className="py-8 text-center text-sm text-muted-foreground">
-        {t("deptEmpty")}
-      </div>
-    );
-  }
+  const tRef = useTranslations("reference");
   return (
-    <div className="space-y-1.5">
-      {rows.map((r) => {
-        const pct = total > 0 ? Math.max(2, Math.round((r.count / total) * 100)) : 0;
-        return (
-          <div
-            key={r.name}
-            className="grid grid-cols-[110px_1fr_50px] items-center gap-2.5 py-1"
-          >
-            <div className="truncate text-[12.5px]">{r.name}</div>
-            <div className="h-2 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
-            </div>
-            <div className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-              {r.count}
-            </div>
-          </div>
-        );
-      })}
+    <div
+      className="flex flex-col overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5"
+      data-testid="dashboard-my-growth"
+    >
+      <div className="border-b border-border p-4">
+        <h3 className="text-sm font-semibold">{t("myGrowthTitle")}</h3>
+      </div>
+      <div className="flex-1 p-4">
+        {growth.next_grade && (
+          <p className="text-[13px] font-medium">
+            {t("myGrowthNext", {
+              grade: dictionaryItemLabel(tRef, growth.next_grade),
+            })}
+          </p>
+        )}
+        {growth.missing.length > 0 ? (
+          <>
+            <p className="mt-2 text-[11.5px] text-muted-foreground">
+              {t("myGrowthMissing")}
+            </p>
+            <ul className="mt-2 space-y-1.5">
+              {growth.missing.map((m) => (
+                <li key={m.competence_id} className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[13px]">
+                    {m.title}
+                  </span>
+                  <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                    {m.percent !== null ? `${m.percent}%` : "—"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <p className="mt-2 text-[11.5px] text-muted-foreground">
+            {t("myGrowthReady")}
+          </p>
+        )}
+      </div>
+      <div className="border-t border-border bg-muted px-4 py-3 text-right">
+        <Button
+          size="sm"
+          className="bg-accent text-accent-foreground hover:bg-accent/90"
+          render={<Link href="/development" />}
+          data-testid="dashboard-my-growth-cta"
+        >
+          {t("myGrowthCta")}
+        </Button>
+      </div>
     </div>
   );
 }
+
+function MyDashboard({ loop }: { loop: MyLoop }) {
+  const t = useTranslations("dashboard");
+  const format = useFormatter();
+  const stages = buildMyStages(loop, t, (iso) =>
+    format.dateTime(new Date(iso), { dateStyle: "medium" }),
+  );
+  return (
+    <>
+      <StagesHero
+        title={t("myLoopTitle")}
+        subtitle={t("myLoopSubtitle")}
+        stages={stages}
+        testidPrefix="dashboard-my-stage"
+      />
+      <MyActionQueue findings={loop.findings} dataVersion={loop.data_version} />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <StrengthsCard strengths={loop.strengths} />
+        {loop.growth && <GrowthCard growth={loop.growth} />}
+      </div>
+    </>
+  );
+}
+
+// --- Active cycle ---
 
 interface CycleStats {
   done: number;
@@ -255,148 +832,22 @@ function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }
   );
 }
 
-interface InboxItem {
-  tone: "alert" | "info";
-  title: string;
-  sub: string;
-  action: string;
-  href: string;
-}
-
-function buildInbox(
-  assessments: AssessmentList | null,
-  pdps: PDP[],
-  t: Translate,
-): InboxItem[] {
-  const out: InboxItem[] = [];
-  const inProgress =
-    assessments?.items.filter((a) => a.status_code === "in_progress").length ?? 0;
-  if (inProgress > 0) {
-    out.push({
-      tone: "alert",
-      title: t("inboxAssessmentsInProgress", { count: inProgress }),
-      sub: t("inboxCycleAwaiting"),
-      action: t("inboxActionReview"),
-      href: "/assessments",
-    });
-  }
-  const draftPdps = pdps.filter((p) => p.status === "draft").length;
-  if (draftPdps > 0) {
-    out.push({
-      tone: "info",
-      title: t("inboxPdpsDraft", { count: draftPdps }),
-      sub: t("inboxPendingReview"),
-      action: t("inboxActionOpen"),
-      href: "/development",
-    });
-  }
-  const overdue = pdps.filter(
-    (p) =>
-      p.status !== "completed" && p.deadline && new Date(p.deadline) < new Date(),
-  ).length;
-  if (overdue > 0) {
-    out.push({
-      tone: "alert",
-      title: t("inboxPdpsOverdue", { count: overdue }),
-      sub: t("inboxPastDeadline"),
-      action: t("inboxActionOpen"),
-      href: "/development",
-    });
-  }
-  return out.slice(0, 4);
-}
-
-function InboxCard({ items }: { items: InboxItem[] }) {
-  const t = useTranslations("dashboard");
-  return (
-    <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
-      <div className="flex items-center justify-between border-b border-border p-4">
-        <h3 className="text-sm font-semibold">{t("inboxTitle")}</h3>
-        <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[11px] font-semibold text-accent">
-          {t("inboxItemsCount", { count: items.length })}
-        </span>
-      </div>
-      {items.length === 0 ? (
-        <div className="p-8 text-center text-sm text-muted-foreground">
-          {t("inboxEmpty")}
-        </div>
-      ) : (
-        <ul className="divide-y divide-border">
-          {items.map((item, i) => (
-            <li
-              key={i}
-              className="flex items-center gap-3 px-4 py-3"
-              data-testid="dashboard-inbox-row"
-            >
-              <span
-                className={cn(
-                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
-                  item.tone === "alert"
-                    ? "bg-red-500/10 text-red-700 dark:text-red-400"
-                    : "bg-accent/10 text-accent",
-                )}
-              >
-                {item.tone === "alert" ? (
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                ) : (
-                  <Sparkles className="h-3.5 w-3.5" />
-                )}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium">{item.title}</div>
-                <div className="mt-0.5 text-[11.5px] text-muted-foreground">
-                  {item.sub}
-                </div>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                render={<Link href={item.href} />}
-              >
-                {item.action}
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function CalendarCard() {
-  const t = useTranslations("dashboard");
-  return (
-    <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
-      <div className="border-b border-border p-4">
-        <h3 className="text-sm font-semibold">{t("weekTitle")}</h3>
-      </div>
-      <div className="flex-1 p-8 text-center text-sm text-muted-foreground">
-        {t("weekEmpty")}
-      </div>
-    </div>
-  );
-}
+// --- Page ---
 
 interface DashboardData {
   tenant: Tenant | null;
-  employeeCount: number;
-  activeEmployeeCount: number;
-  divisionCount: number;
-  divisions: Division[];
-  employees: Employee[];
   assessments: AssessmentList | null;
-  pdps: PDP[];
+  /** null → endpoint unavailable for this role, hide the loop surfaces. */
+  loop: DevLoop | null;
+  /** Personal loop — loaded when the company loop is unavailable. */
+  myLoop: MyLoop | null;
 }
 
 const EMPTY_DATA: DashboardData = {
   tenant: null,
-  employeeCount: 0,
-  activeEmployeeCount: 0,
-  divisionCount: 0,
-  divisions: [],
-  employees: [],
   assessments: null,
-  pdps: [],
+  loop: null,
+  myLoop: null,
 };
 
 export default function DashboardPage() {
@@ -405,11 +856,14 @@ export default function DashboardPage() {
   const tCommon = useTranslations("common");
   const { user } = useAuth();
   const [data, setData] = useState<DashboardData>(EMPTY_DATA);
-  const [period, setPeriod] = useState<Period>("30d");
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     async function load() {
+      setLoading(true);
+      setFailed(false);
       try {
         if (!user?.is_platform_admin) {
           const onboarding = await api.get<OnboardingStatus>("/onboarding/status");
@@ -418,54 +872,45 @@ export default function DashboardPage() {
             return;
           }
         }
-        const [t, eList, divs, asmts, pdps, allEmps] = await Promise.allSettled([
+        const [t, asmts, loop] = await Promise.allSettled([
           api.get<Tenant>("/company"),
-          api.get<EmployeeList>("/employees?limit=1"),
-          api.get<Division[]>("/divisions"),
           api.get<AssessmentList>("/assessments?limit=100"),
-          api.get<PDP[]>("/pdp"),
-          api.get<EmployeeList>("/employees?limit=100"),
+          api.get<DevLoop>("/analytics/dev-loop"),
         ]);
-        const employees =
-          allEmps.status === "fulfilled" ? allEmps.value.items : [];
-        const activeEmployeeCount = employees.filter(
-          (e) => e.status === "active",
-        ).length;
+        // Company loop is admin/manager-only; a 403 (role denied) falls
+        // back to the personal loop. Other failures (network, 500) keep
+        // both null so a transient error doesn't flip an admin into the
+        // employee view (404 on my-loop = no employee profile → neither).
+        let myLoop: MyLoop | null = null;
+        if (
+          loop.status === "rejected" &&
+          loop.reason instanceof ApiError &&
+          loop.reason.status === 403
+        ) {
+          myLoop = await api.get<MyLoop>("/analytics/my-loop").catch(() => null);
+        }
         setData({
           tenant: t.status === "fulfilled" ? t.value : null,
-          employeeCount:
-            eList.status === "fulfilled"
-              ? eList.value.total
-              : employees.length,
-          activeEmployeeCount,
-          divisions: divs.status === "fulfilled" ? divs.value : [],
-          divisionCount:
-            divs.status === "fulfilled" ? countDivisions(divs.value) : 0,
-          employees,
           assessments: asmts.status === "fulfilled" ? asmts.value : null,
-          pdps: pdps.status === "fulfilled" ? pdps.value : [],
+          loop: loop.status === "fulfilled" ? loop.value : null,
+          myLoop,
         });
+        // Everything down (backend unreachable, expired session mid-race)
+        // must not render as an eerily empty-but-healthy dashboard.
+        setFailed(
+          t.status === "rejected" &&
+            asmts.status === "rejected" &&
+            loop.status === "rejected" &&
+            myLoop === null,
+        );
+      } catch {
+        setFailed(true);
       } finally {
         setLoading(false);
       }
     }
     load();
-  }, [router, user?.is_platform_admin]);
-
-  const deptRows = useMemo<DeptRow[]>(() => {
-    const flat = flattenDivisions(data.divisions);
-    const nameById = new Map(flat.map((d) => [d.id, d.name]));
-    const counts = new Map<string, number>();
-    for (const emp of data.employees) {
-      const key = emp.division_id ? nameById.get(emp.division_id) : null;
-      const label = key ?? t("unassigned");
-      counts.set(label, (counts.get(label) ?? 0) + 1);
-    }
-    return [...counts.entries()]
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 7);
-  }, [data.divisions, data.employees, t]);
+  }, [router, user?.is_platform_admin, attempt]);
 
   const cycleStats = useMemo<CycleStats>(() => {
     const items = data.assessments?.items ?? [];
@@ -483,18 +928,6 @@ export default function DashboardPage() {
     return { done, inProgress, notStarted, total: items.length };
   }, [data.assessments]);
 
-  const inbox = useMemo(
-    () => buildInbox(data.assessments, data.pdps, t),
-    [data.assessments, data.pdps, t],
-  );
-
-  const activeReviews = cycleStats.inProgress + cycleStats.notStarted;
-  const openPdpCount = data.pdps.filter((p) => p.status !== "completed").length;
-  const activePct =
-    data.employeeCount > 0
-      ? Math.round((data.activeEmployeeCount / data.employeeCount) * 100)
-      : 0;
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
@@ -503,146 +936,46 @@ export default function DashboardPage() {
     );
   }
 
+  if (failed) {
+    return (
+      <div
+        className="flex flex-col items-center justify-center gap-3 py-12"
+        data-testid="dashboard-load-failed"
+      >
+        <p className="text-sm text-muted-foreground">{t("loadFailed")}</p>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setAttempt((a) => a + 1)}
+        >
+          {t("loadRetry")}
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight" data-testid="dashboard-title">
-            {data.tenant?.name || t("title")}
-          </h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {t("orgHealthSummary", {
-              employees: data.employeeCount,
-              divisions: data.divisionCount,
-            })}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div
-            role="tablist"
-            aria-label={t("periodLabel")}
-            className="flex items-center gap-0.5 rounded-md bg-muted p-0.5"
-          >
-            {PERIODS.map((p) => {
-              const active = period === p;
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setPeriod(p)}
-                  className={cn(
-                    "rounded px-2.5 py-1 text-[11.5px] transition-colors",
-                    active
-                      ? "bg-card font-semibold text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                  data-testid={`dashboard-period-${p}`}
-                >
-                  {p}
-                </button>
-              );
-            })}
-          </div>
-          <Button
-            render={<Link href="/employees" />}
-            data-testid="dashboard-btn-add-employee"
-          >
-            <Plus className="h-4 w-4" />
-            {t("addEmployee")}
-          </Button>
-        </div>
-      </div>
+      <h1 className="text-2xl font-semibold tracking-tight" data-testid="dashboard-title">
+        {data.tenant?.name || t("title")}
+      </h1>
 
-      <div className="overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
-        <div className="flex flex-wrap">
-          <KpiCell
-            testId="dashboard-kpi-headcount"
-            label={t("kpiHeadcount")}
-            value={data.employeeCount}
-            sub={
-              data.activeEmployeeCount === data.employeeCount
-                ? t("allActive")
-                : t("activeCount", { count: data.activeEmployeeCount })
-            }
-            series={[
-              data.employeeCount,
-              data.employeeCount,
-              data.employeeCount,
-              data.employeeCount,
-              data.employeeCount,
-              data.employeeCount,
-              data.employeeCount,
-              data.employeeCount,
-            ]}
-          />
-          <KpiCell
-            testId="dashboard-kpi-active-reviews"
-            label={t("kpiActiveReviews")}
-            value={activeReviews}
-            sub={
-              cycleStats.inProgress > 0
-                ? t("inProgressCount", { count: cycleStats.inProgress })
-                : t("noActiveCycle")
-            }
-            series={[activeReviews, activeReviews, activeReviews, activeReviews]}
-          />
-          <KpiCell
-            testId="dashboard-kpi-divisions"
-            label={t("kpiDivisions")}
-            value={data.divisionCount}
-            sub={t("withPeopleCount", { count: deptRows.length })}
-            series={[
-              data.divisionCount,
-              data.divisionCount,
-              data.divisionCount,
-              data.divisionCount,
-            ]}
-          />
-          <KpiCell
-            testId="dashboard-kpi-open-pdps"
-            label={t("kpiOpenDevPlans")}
-            value={openPdpCount}
-            sub={t("orgActivePct", { percent: activePct })}
-            progress={activePct}
-            borderRight={false}
-          />
-        </div>
-      </div>
+      {data.loop && <DevLoopHero loop={data.loop} />}
 
-      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <div className="overflow-hidden rounded-xl border border-border bg-card ring-1 ring-foreground/5">
-          <div className="flex items-center justify-between border-b border-border p-4">
-            <div>
-              <h3 className="text-sm font-semibold">{t("deptTitle")}</h3>
-              <p className="mt-0.5 text-[11.5px] text-muted-foreground">
-                {t("deptSubtitle", { period })}
-              </p>
-            </div>
-            <Link
-              href="/analytics"
-              className="inline-flex items-center gap-1 text-xs font-medium text-accent transition-colors hover:underline"
-            >
-              {t("openAnalytics")}
-              <ArrowUpRight className="h-3 w-3" />
-            </Link>
-          </div>
-          <div className="px-4 pt-2 pb-4">
-            <DeptBars rows={deptRows} total={data.employeeCount} />
-          </div>
-        </div>
-
-        <CycleCard
-          stats={cycleStats}
-          hasCycle={cycleStats.total > 0}
+      {data.loop && (
+        <ActionQueue
+          findings={data.loop.findings}
+          dataVersion={data.loop.data_version}
         />
-      </div>
+      )}
 
-      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <InboxCard items={inbox} />
-        <CalendarCard />
-      </div>
+      {!data.loop && data.myLoop && <MyDashboard loop={data.myLoop} />}
+
+      {!data.myLoop && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <CycleCard stats={cycleStats} hasCycle={cycleStats.total > 0} />
+        </div>
+      )}
     </div>
   );
 }

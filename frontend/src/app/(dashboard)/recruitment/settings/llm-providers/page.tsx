@@ -42,19 +42,24 @@ const DEFAULT_MODELS: Record<string, string> = {
   anthropic: "claude-sonnet-5",
   openai: "gpt-4o",
   gemini: "gemini-2.5-pro",
+  yandex: "yandexgpt",
 };
 
 // Mirrors ai.providers.classify_model / PROVIDER_ALIASES: a name no
 // provider claims by prefix (local servers) belongs to whoever is picked.
+// Yandex model URIs ("gpt://...") must be checked before the OpenAI
+// prefixes — longest match wins, as on the backend (HRP-599).
 function modelOwner(model: string): string | null {
   if (model.startsWith("claude")) return "anthropic";
+  if (model.startsWith("gpt://") || model.startsWith("yandexgpt"))
+    return "yandex";
   if (/^(gpt|o1|o3|o4|text-embedding)/.test(model)) return "openai";
   if (model.startsWith("gemini")) return "gemini";
   return null;
 }
 
 function canonicalProvider(provider: string): string {
-  if (provider === "azure" || provider === "yandex" || provider === "gigachat")
+  if (provider === "azure" || provider === "gigachat")
     return "openai_compatible";
   return provider;
 }

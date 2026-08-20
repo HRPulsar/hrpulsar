@@ -8,7 +8,7 @@ import pytest
 from app.config import settings
 from app.core.crypto import encrypt_secret
 from app.core.errors import AppError
-from app.modules.ai import providers
+from app.modules.ai import model_registry, providers
 from app.modules.ai.models import ModelCatalogEntry
 from app.modules.recruitment.models import LLMProviderConfig
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,7 +41,11 @@ async def _add_config(
 
 def _no_global_keys():
     return patch.multiple(
-        settings, anthropic_api_key="", openai_api_key="", gemini_api_key=""
+        settings,
+        anthropic_api_key="",
+        openai_api_key="",
+        gemini_api_key="",
+        yandex_api_key="",
     )
 
 
@@ -559,33 +563,295 @@ class TestUnclassifiableModelDispatch:
 
 
 # ---------------------------------------------------------------------------
+# Yandex as a first-class provider (HRP-599)
+# ---------------------------------------------------------------------------
+
+
+class TestYandexProvider:
+    def test_yandex_is_canonical_not_an_alias(self) -> None:
+        assert "yandex" in providers.PROVIDERS
+        assert providers.resolve_provider_name("yandex") == "yandex"
+
+    def test_classify_yandex_models(self) -> None:
+        assert providers.classify_model("yandexgpt") == "yandex"
+        assert providers.classify_model("yandexgpt-lite") == "yandex"
+        # The model-URI scheme shares its first three characters with the
+        # OpenAI prefix — the longest matching prefix must win.
+        assert providers.classify_model("gpt://b1gfolder/yandexgpt/latest") == "yandex"
+        assert providers.classify_model("gpt-4o") == "openai"
+
+    def test_global_key_reads_yandex_setting(self) -> None:
+        with patch.object(settings, "yandex_api_key", "ya-global"):
+            assert providers.global_key("yandex") == "ya-global"
+
+    async def test_yandex_model_falls_back_to_platform_key(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        target = await providers.resolve_generation_target(db, tenant.id, "yandexgpt")
+        assert target.provider == "yandex"
+        assert target.source == "global"
+
+    async def test_base_url_row_keeps_endpoint_and_yandex_dispatch(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # Rows saved while "yandex" was an openai_compatible alias carry a
+        # base_url — the endpoint is preserved, and the yandex dispatch
+        # path keeps expanding model URIs (review fix: relabeling these
+        # rows openai_compatible skipped the URI expansion entirely).
+        await _add_config(
+            db,
+            tenant.id,
+            provider="yandex",
+            model="gpt://b1gfolder/yandexgpt/latest",
+            api_key="ya-tenant",
+            base_url="https://llm.api.cloud.yandex.net/v1",
+        )
+        target = await providers.resolve_generation_target(
+            db, tenant.id, "gpt://b1gfolder/yandexgpt/latest"
+        )
+        assert target.provider == "yandex"
+        assert target.base_url == "https://llm.api.cloud.yandex.net/v1"
+        assert target.api_key == "ya-tenant"
+        assert target.source == "local"
+
+    async def test_byok_key_with_full_uri_model(self, db: AsyncSession, tenant) -> None:
+        # Yandex keys are folder-scoped — a tenant config is self-contained
+        # only when the model URI carries the tenant's folder.
+        await _add_config(
+            db,
+            tenant.id,
+            provider="yandex",
+            model="gpt://b1gtenant/yandexgpt/latest",
+            api_key="ya-tenant",
+        )
+        target = await providers.resolve_generation_target(
+            db, tenant.id, "gpt://b1gtenant/yandexgpt/latest"
+        )
+        assert target.provider == "yandex"
+        assert target.api_key == "ya-tenant"
+        assert target.source == "byok"
+
+    async def test_byok_short_name_row_is_skipped(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # A short-name BYOK row would pair the tenant's folder-scoped key
+        # with the operator's folder id — like a base_url-less local row,
+        # it is misconfigured and must fall back to the platform credential
+        # (which is also what these rows did in the alias era).
+        await _add_config(
+            db, tenant.id, provider="yandex", model="yandexgpt", api_key="ya-tenant"
+        )
+        target = await providers.resolve_generation_target(db, tenant.id, "yandexgpt")
+        assert target.provider == "yandex"
+        assert target.api_key is None
+        assert target.source == "global"
+
+
+class TestYandexDispatch:
+    async def test_short_model_name_expands_to_folder_uri(
+        self, monkeypatch, fake_openai_factory
+    ) -> None:
+        from app.modules.ai import llm_client
+
+        captured: dict = {}
+        monkeypatch.setattr(llm_client.settings, "yandex_api_key", "ya-global")
+        monkeypatch.setattr(llm_client.settings, "yandex_folder_id", "b1gfolder")
+        with patch.object(
+            llm_client, "_get_openai", return_value=fake_openai_factory(captured)
+        ) as get_openai:
+            out = await llm_client.generate("hi", model="yandexgpt")
+        assert out == "ok"
+        get_openai.assert_called_once_with("ya-global", llm_client.YANDEX_BASE_URL)
+        assert captured["model"] == "gpt://b1gfolder/yandexgpt/latest"
+
+    async def test_full_model_uri_passes_verbatim(
+        self, monkeypatch, fake_openai_factory
+    ) -> None:
+        # A full URI carries its own folder — no folder config required.
+        from app.modules.ai import llm_client
+
+        captured: dict = {}
+        monkeypatch.setattr(llm_client.settings, "yandex_api_key", "ya-global")
+        monkeypatch.setattr(llm_client.settings, "yandex_folder_id", "")
+        with patch.object(
+            llm_client, "_get_openai", return_value=fake_openai_factory(captured)
+        ):
+            await llm_client.generate(
+                "hi", model="gpt://b1gother/yandexgpt-lite/latest"
+            )
+        assert captured["model"] == "gpt://b1gother/yandexgpt-lite/latest"
+
+    async def test_byok_credentials_reach_the_client(
+        self, monkeypatch, fake_openai_factory
+    ) -> None:
+        from app.modules.ai import llm_client
+
+        captured: dict = {}
+        monkeypatch.setattr(llm_client.settings, "yandex_api_key", "ya-platform")
+        target = providers.GenerationTarget(
+            provider="yandex", api_key="ya-byok", source="byok"
+        )
+        with patch.object(
+            llm_client, "_get_openai", return_value=fake_openai_factory(captured)
+        ) as get_openai:
+            await llm_client.generate(
+                "hi", model="gpt://b1gtenant/yandexgpt/latest", credentials=target
+            )
+        get_openai.assert_called_once_with("ya-byok", llm_client.YANDEX_BASE_URL)
+
+    async def test_tenant_endpoint_never_gets_the_platform_key(
+        self, monkeypatch, fake_openai_factory
+    ) -> None:
+        # A keyless row pointing at a tenant endpoint must not inherit the
+        # platform Yandex key (same invariant as the OpenAI factory).
+        from app.modules.ai import llm_client
+
+        captured: dict = {}
+        monkeypatch.setattr(llm_client.settings, "yandex_api_key", "ya-platform")
+        target = providers.GenerationTarget(
+            provider="yandex",
+            base_url="https://proxy.example/v1",
+            source="local",
+        )
+        with patch.object(
+            llm_client, "_get_openai", return_value=fake_openai_factory(captured)
+        ) as get_openai:
+            await llm_client.generate(
+                "hi", model="gpt://b1gfolder/yandexgpt/latest", credentials=target
+            )
+        get_openai.assert_called_once_with(None, "https://proxy.example/v1")
+
+    async def test_gateway_row_short_model_passes_verbatim(
+        self, monkeypatch, fake_openai_factory
+    ) -> None:
+        # Alias-era gateway rows store short names and the endpoint owns
+        # the model namespace: no folder expansion (which would leak the
+        # operator's folder id to a tenant endpoint) and no folder
+        # requirement (which would 422 every pre-existing install).
+        from app.modules.ai import llm_client
+
+        captured: dict = {}
+        monkeypatch.setattr(llm_client.settings, "yandex_folder_id", "")
+        target = providers.GenerationTarget(
+            provider="yandex",
+            base_url="https://gateway.example/v1",
+            source="local",
+        )
+        with patch.object(
+            llm_client, "_get_openai", return_value=fake_openai_factory(captured)
+        ):
+            await llm_client.generate("hi", model="yandexgpt", credentials=target)
+        assert captured["model"] == "yandexgpt"
+
+    async def test_missing_folder_is_a_config_error(self, monkeypatch) -> None:
+        from app.modules.ai import llm_client
+
+        monkeypatch.setattr(llm_client.settings, "yandex_api_key", "ya-global")
+        monkeypatch.setattr(llm_client.settings, "yandex_folder_id", "")
+        with (
+            patch.object(llm_client, "_get_openai"),
+            pytest.raises(AppError) as exc,
+        ):
+            await llm_client.generate("hi", model="yandexgpt")
+        assert exc.value.code == "llm_yandex_folder_missing"
+
+    async def test_missing_platform_key_is_a_config_error(self, monkeypatch) -> None:
+        # Review fix: an empty key used to ride the _get_openai "not-needed"
+        # hatch and come back as an opaque upstream 401.
+        from app.modules.ai import llm_client
+
+        monkeypatch.setattr(llm_client.settings, "yandex_api_key", "")
+        monkeypatch.setattr(llm_client.settings, "yandex_folder_id", "b1gfolder")
+        with (
+            patch.object(llm_client, "_get_openai"),
+            pytest.raises(AppError) as exc,
+        ):
+            await llm_client.generate("hi", model="yandexgpt")
+        assert exc.value.code == "llm_yandex_key_missing"
+
+    async def test_foreign_scheme_model_passes_verbatim(
+        self, monkeypatch, fake_openai_factory
+    ) -> None:
+        # Tuned models come as ds:// URIs — nesting them inside gpt:// would
+        # mangle them into a provider-side 404 (review fix).
+        from app.modules.ai import llm_client
+
+        captured: dict = {}
+        monkeypatch.setattr(llm_client.settings, "yandex_api_key", "ya-global")
+        monkeypatch.setattr(llm_client.settings, "yandex_folder_id", "b1gfolder")
+        target = providers.GenerationTarget(provider="yandex")
+        with patch.object(
+            llm_client, "_get_openai", return_value=fake_openai_factory(captured)
+        ):
+            await llm_client.generate(
+                "hi", model="ds://b1gfolder/tuned-1", credentials=target
+            )
+        assert captured["model"] == "ds://b1gfolder/tuned-1"
+
+    def test_platform_endpoint_client_keeps_sdk_retries(self) -> None:
+        # The hardcoded platform endpoint is not a tenant-supplied URL: it
+        # must keep the SDK transport and its 3 retries instead of the
+        # SSRF-guarded zero-retry client (review fix).
+        from app.modules.ai import llm_client
+
+        llm_client._client_cache.clear()
+        client = llm_client._get_openai("ya-key", llm_client.YANDEX_BASE_URL)
+        assert client.max_retries == 3
+        llm_client._client_cache.clear()
+
+    def test_platform_default_model(self) -> None:
+        from app.modules.ai import llm_client
+
+        with (
+            patch.object(settings, "llm_provider", "yandex"),
+            patch.object(settings, "yandex_api_key", "ya-global"),
+        ):
+            assert llm_client._get_default_model() == "yandexgpt"
+
+    def test_default_model_accepts_canonical_provider_names(self) -> None:
+        # LLM_PROVIDER=anthropic is legal everywhere else in the platform;
+        # the default-model lookup must not silently hand it gpt-4o.
+        from app.modules.ai import llm_client
+
+        with (
+            patch.object(settings, "llm_provider", "anthropic"),
+            patch.object(settings, "anthropic_api_key", "sk-ant"),
+        ):
+            assert (
+                llm_client._get_default_model()
+                == model_registry.BALANCED_MODELS["anthropic"]
+            )
+
+    async def test_keyless_default_falls_back_to_openai_entirely(
+        self, monkeypatch, fake_openai_factory
+    ) -> None:
+        # LLM_PROVIDER=yandex without a key: the default model falls back
+        # to OpenAI — the provider must follow the model, not stay yandex
+        # and mangle gpt-4o into a gpt:// URI (review fix).
+        from app.modules.ai import llm_client
+
+        captured: dict = {}
+        monkeypatch.setattr(llm_client.settings, "llm_provider", "yandex")
+        monkeypatch.setattr(llm_client.settings, "yandex_api_key", "")
+        with patch.object(
+            llm_client, "_get_openai", return_value=fake_openai_factory(captured)
+        ) as get_openai:
+            await llm_client.generate("hi")
+        get_openai.assert_called_once_with(None, None)
+        assert captured["model"] == model_registry.BALANCED_MODELS["openai"]
+
+
+# ---------------------------------------------------------------------------
 # llm_client dispatch honours resolved credentials
 # ---------------------------------------------------------------------------
 
 
 class TestLLMClientDispatch:
-    async def test_credentials_route_to_local_openai(self) -> None:
-        from types import SimpleNamespace
-
+    async def test_credentials_route_to_local_openai(self, fake_openai_factory) -> None:
         from app.modules.ai import llm_client
 
         captured: dict = {}
-
-        class _FakeCompletions:
-            async def create(self, **kwargs):
-                captured.update(kwargs)
-                return SimpleNamespace(
-                    choices=[
-                        SimpleNamespace(
-                            finish_reason="stop",
-                            message=SimpleNamespace(content="ok"),
-                        )
-                    ]
-                )
-
-        fake_client = SimpleNamespace(
-            chat=SimpleNamespace(completions=_FakeCompletions())
-        )
+        fake_client = fake_openai_factory(captured)
         target = providers.GenerationTarget(
             provider="openai_compatible",
             api_key="local-key",

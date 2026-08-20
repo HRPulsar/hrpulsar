@@ -266,6 +266,75 @@ class TestLLMProviders:
                 api_key="sk-proxy",
             )
 
+    async def test_create_rejects_undispatchable_yandex_short_name(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        """HRP-599 review: a keyed short-name Yandex row is silently
+        skipped by the dispatcher — refuse it at save time instead of
+        letting the tenant's key sit inert on the platform's dime."""
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError, match="gpt://"):
+            LLMProviderCreate(
+                provider="yandex",
+                model="yandexgpt",
+                api_key="ya-tenant",
+            )
+
+    async def test_create_allows_self_contained_yandex_uri(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        cfg = await settings_service.create_llm_provider(
+            db,
+            tenant.id,
+            LLMProviderCreate(
+                provider="yandex",
+                model="gpt://b1gtenant/yandexgpt/latest",
+                api_key="ya-tenant",
+            ),
+        )
+        assert cfg.model == "gpt://b1gtenant/yandexgpt/latest"
+
+    async def test_create_allows_yandex_short_name_behind_gateway(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # With a base_url the endpoint owns the model namespace.
+        cfg = await settings_service.create_llm_provider(
+            db,
+            tenant.id,
+            LLMProviderCreate(
+                provider="yandex",
+                model="yandexgpt",
+                settings={"base_url": "https://gateway.example.com/v1"},
+            ),
+        )
+        assert cfg.model == "yandexgpt"
+
+    async def test_update_cannot_strand_a_yandex_row(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # Dropping the base_url (or shortening the model) via PATCH must
+        # hit the same guard as create.
+        cfg = await settings_service.create_llm_provider(
+            db,
+            tenant.id,
+            LLMProviderCreate(
+                provider="yandex",
+                model="yandexgpt",
+                settings={"base_url": "https://gateway.example.com/v1"},
+            ),
+        )
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            await settings_service.update_llm_provider(
+                db,
+                tenant.id,
+                cfg.id,
+                LLMProviderUpdate(settings={}),
+            )
+        assert exc.value.status_code == 422
+
     async def test_update_allows_proxy_model_on_a_base_url_row(
         self, db: AsyncSession, tenant
     ) -> None:

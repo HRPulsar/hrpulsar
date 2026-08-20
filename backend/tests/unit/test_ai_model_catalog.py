@@ -465,6 +465,78 @@ class TestDiscoveryFilters:
             "o3-mini",
         }
 
+    async def test_yandex_filter_keeps_chat_uris(self, monkeypatch) -> None:
+        # The Yandex listing carries every modality under scheme-prefixed
+        # URIs — only the chat namespace (gpt://) may reach the catalog.
+        # Shapes from a live listing (2026-08): hosted open-weights models
+        # and realtime speech share the gpt:// namespace with chat models.
+        listed = [
+            "gpt://b1gfolder/yandexgpt/latest",
+            "gpt://b1gfolder/yandexgpt-lite/latest",
+            "gpt://b1gfolder/deepseek-v4-flash/latest",
+            "gpt://b1gfolder/speech-realtime-250923/latest",
+            "gpt://b1gfolder/gpt-oss-120b/latest",
+            "gpt://b1gfolder/yandexgpt-lite/deprecated",
+            "emb://b1gfolder/text-search-doc/latest",
+            "art://b1gfolder/yandex-art/latest",
+        ]
+
+        class FakeModel:
+            def __init__(self, model_id: str) -> None:
+                self.id = model_id
+
+        class FakeModels:
+            def list(self):
+                async def gen():
+                    for model_id in listed:
+                        yield FakeModel(model_id)
+
+                return gen()
+
+        class FakeClient:
+            models = FakeModels()
+
+        captured: dict = {}
+
+        def fake_get_openai(key, base_url):
+            captured["base_url"] = base_url
+            return FakeClient()
+
+        monkeypatch.setattr(llm_client, "_get_openai", fake_get_openai)
+        out = await provider_discovery.discover_yandex("key")
+        assert captured["base_url"] == llm_client.YANDEX_BASE_URL
+        # Discovered ids are normalized to the short names the registry and
+        # credits.yaml use — full URIs would leak the operator's folder id
+        # into every tenant's picker and never fold with the seeded rows
+        # (review fix). The dispatch re-expands them from the platform
+        # folder, which is the same folder the discovery listed.
+        # Dropped: speech models (not chat), /deprecated versions, and ids
+        # another provider owns by prefix (gpt-oss-* would classify to
+        # OpenAI and could never be dispatched back to Yandex). Hosted
+        # open-weights chat models with unowned names (deepseek) stay —
+        # the catalog records their provider.
+        assert {m["model_id"] for m in out} == {
+            "yandexgpt",
+            "yandexgpt-lite",
+            "deepseek-v4-flash",
+        }
+        assert {m["label"] for m in out} == {
+            "yandexgpt",
+            "yandexgpt-lite",
+            "deepseek-v4-flash",
+        }
+
+    def test_discoverable_providers_include_yandex_with_key(self) -> None:
+        with patch.multiple(
+            settings,
+            anthropic_api_key="",
+            openai_api_key="",
+            gemini_api_key="",
+            yandex_api_key="ya-global",
+        ):
+            pairs = provider_discovery.discoverable_providers()
+        assert pairs == [("yandex", "ya-global")]
+
     async def test_gemini_filter_requires_generate_content(self, monkeypatch) -> None:
         listed = [
             ("models/gemini-2.5-pro", ["generateContent", "countTokens"]),
@@ -1074,29 +1146,13 @@ class TestCatalogAsSourceOfTruth:
         assert clamp("claude-sonnet-4-6", 64000) == 64000
         assert clamp("claude-opus-4-7", 32768) == 32000
 
-    async def test_o_series_dispatch_uses_max_completion_tokens(self) -> None:
+    async def test_o_series_dispatch_uses_max_completion_tokens(
+        self, fake_openai_factory
+    ) -> None:
         # review #9: o-series passes the discovery filter and is pickable on
         # community installs, but the chat-completions parameter shape 400s.
-        from types import SimpleNamespace
-
         captured: dict = {}
-
-        class _FakeCompletions:
-            async def create(self, **kwargs):
-                captured.clear()
-                captured.update(kwargs)
-                return SimpleNamespace(
-                    choices=[
-                        SimpleNamespace(
-                            finish_reason="stop",
-                            message=SimpleNamespace(content="ok"),
-                        )
-                    ]
-                )
-
-        fake_client = SimpleNamespace(
-            chat=SimpleNamespace(completions=_FakeCompletions())
-        )
+        fake_client = fake_openai_factory(captured)
         with patch.object(llm_client, "_get_openai", return_value=fake_client):
             await llm_client.generate("hi", model="o3-mini", max_tokens=4096)
             assert captured["max_completion_tokens"] == 4096
@@ -1121,30 +1177,14 @@ class TestCatalogAsSourceOfTruth:
         assert clamp("o1", 100000) == 100000
         assert clamp("gpt-4o-mini", 100000) == 16384
 
-    async def test_o1_mini_folds_system_into_the_user_turn(self) -> None:
+    async def test_o1_mini_folds_system_into_the_user_turn(
+        self, fake_openai_factory
+    ) -> None:
         # o1-mini/o1-preview predate the `developer` role and reject a
         # `system` message outright — the schema contract generate_json
         # appends there must survive as part of the user turn.
-        from types import SimpleNamespace
-
         captured: dict = {}
-
-        class _FakeCompletions:
-            async def create(self, **kwargs):
-                captured.clear()
-                captured.update(kwargs)
-                return SimpleNamespace(
-                    choices=[
-                        SimpleNamespace(
-                            finish_reason="stop",
-                            message=SimpleNamespace(content="ok"),
-                        )
-                    ]
-                )
-
-        fake_client = SimpleNamespace(
-            chat=SimpleNamespace(completions=_FakeCompletions())
-        )
+        fake_client = fake_openai_factory(captured)
         with patch.object(llm_client, "_get_openai", return_value=fake_client):
             await llm_client.generate("hi", system="RULES", model="o1-mini")
             roles = [m["role"] for m in captured["messages"]]

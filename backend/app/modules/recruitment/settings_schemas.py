@@ -83,6 +83,35 @@ def ensure_provider_owns_model(
     raise ValueError("Model does not belong to the selected provider")
 
 
+def ensure_yandex_model_is_dispatchable(
+    provider: str | None,
+    model: str | None,
+    provider_settings: dict | None = None,
+) -> None:
+    """Reject a Yandex row the dispatcher would silently skip (HRP-599).
+
+    Without a ``base_url`` a Yandex row only dispatches when its model is
+    a full ``gpt://<folder>/…`` URI; a short name would sit inert and the
+    requests would quietly fall back to the platform key. Constant
+    English string — reverse-mapped by the i18n layer.
+    """
+    if provider != "yandex":
+        return
+    from app.modules.ai.providers import (
+        base_url_from_settings,
+        yandex_byok_model_is_self_contained,
+    )
+
+    if yandex_byok_model_is_self_contained(
+        model, base_url_from_settings(provider_settings)
+    ):
+        return
+    raise ValueError(
+        "Yandex model must be a full gpt://<folder>/<model> URI "
+        "unless a base URL is configured"
+    )
+
+
 class LLMProviderCreate(BaseModel):
     provider: LLMProviderName
     model: str = Field(max_length=100)
@@ -93,6 +122,7 @@ class LLMProviderCreate(BaseModel):
     @model_validator(mode="after")
     def _model_belongs_to_provider(self) -> LLMProviderCreate:
         ensure_provider_owns_model(self.provider, self.model, self.settings)
+        ensure_yandex_model_is_dispatchable(self.provider, self.model, self.settings)
         return self
 
 

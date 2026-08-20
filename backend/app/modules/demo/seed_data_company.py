@@ -323,7 +323,7 @@ POSITIONS: list[dict] = [
 # Salary numbers are in EUR-equivalent low-thousands so the demo
 # tenant doesn't anchor on a single market. ``passing_score`` is the
 # percent of competence coverage required to be considered for the
-# grade. Sales is intentionally absent (see S0 decision).
+# grade.
 
 GRADE_SPECIALIZATIONS: list[dict] = [
     # Backend
@@ -433,6 +433,42 @@ GRADE_SPECIALIZATIONS: list[dict] = [
         "salary_max": 105000,
         "passing_score": 75,
         "description": "Senior Product Designer ladder cell.",
+    },
+    # Sales — the dev-loop storyline's heroes are sellers (HRP-612):
+    # without a sales ladder their personal dashboards were the only
+    # ones with no "next grade" card (growth = null), which undercut
+    # the very story the demo opens with.
+    {
+        "grade_key": "g-junior",
+        "specialization_key": "sales",
+        "salary_min": 32000,
+        "salary_max": 44000,
+        "passing_score": 60,
+        "description": "Sales Development Representative ladder cell.",
+    },
+    {
+        "grade_key": "g-middle",
+        "specialization_key": "sales",
+        "salary_min": 46000,
+        "salary_max": 62000,
+        "passing_score": 70,
+        "description": "Account Executive ladder cell.",
+    },
+    {
+        "grade_key": "g-senior",
+        "specialization_key": "sales",
+        "salary_min": 65000,
+        "salary_max": 90000,
+        "passing_score": 75,
+        "description": "Senior Account Executive ladder cell.",
+    },
+    {
+        "grade_key": "g-lead",
+        "specialization_key": "sales",
+        "salary_min": 90000,
+        "salary_max": 120000,
+        "passing_score": 80,
+        "description": "Sales Lead ladder cell.",
     },
 ]
 

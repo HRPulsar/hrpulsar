@@ -94,6 +94,39 @@ async def test_create_signup_request_repeat_for_pending_resends(
     assert len(stub_signup_email) == 2  # both calls (re-)sent the email
 
 
+async def test_repeat_submit_refreshes_demo_snapshot_but_never_clears_it(
+    db,
+    stub_signup_email,
+    no_rate_limit,
+    no_turnstile,
+):
+    """A re-submit from a newer sandbox must win (the old one may be
+    purged before moderation); a later landing re-submit without a
+    snapshot must not clear the stored one."""
+    from app.modules.signup.schemas import SignupRequestCreate
+    from app.modules.signup.service import create_signup_request
+
+    email = f"resnap-{uuid.uuid4().hex[:8]}@example.com"
+    data = SignupRequestCreate(email=email, first_name="Snap")
+    sandbox_a, sandbox_b = uuid.uuid4(), uuid.uuid4()
+
+    row = await create_signup_request(
+        db, data, remote_ip=None,
+        demo_tenant_id_snapshot=sandbox_a, keep_demo_data=True,
+    )
+    assert row.demo_tenant_id_snapshot == sandbox_a
+
+    row = await create_signup_request(
+        db, data, remote_ip=None,
+        demo_tenant_id_snapshot=sandbox_b, keep_demo_data=True,
+    )
+    assert row.demo_tenant_id_snapshot == sandbox_b
+
+    row = await create_signup_request(db, data, remote_ip=None)
+    assert row.demo_tenant_id_snapshot == sandbox_b
+    assert row.keep_demo_data is False  # latest-submit-wins for the flag
+
+
 async def test_create_signup_request_409_when_already_finalized(
     client: AsyncClient,
     db,

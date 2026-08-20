@@ -444,7 +444,7 @@ Per-workspace configuration that applies to every AI call.
 - Models come from a managed allow list, so only vetted models can be selected
 - A content language setting (English or German) controls the language the AI generates competences, indicators, positions, learning materials, and development plans in — independent of the interface language
 - A company context field (up to 2000 characters) is appended to every prompt
-- Supported providers: Anthropic, OpenAI, Google Gemini, and any OpenAI-compatible server (Ollama, vLLM, LM Studio) via a custom endpoint URL
+- Supported providers: Anthropic, OpenAI, Google Gemini, YandexGPT (Yandex Foundation Models), and any OpenAI-compatible server (Ollama, vLLM, LM Studio) via a custom endpoint URL
 - The provider selector offers only providers with working credentials: a platform-wide key, a workspace key (bring your own key), or a configured local endpoint — workspace credentials take priority over platform keys in every AI call
 - The model list refreshes itself: a daily background sweep asks each configured provider for its current models, so newly released model versions appear without a redeploy; models a provider retires are never silently removed
 
@@ -587,7 +587,11 @@ A first-login wizard for newly registered organizations.
 
 ## Analytics & Dashboards
 
-- An overview dashboard with employee counts by status and division, active assessments, completion rates, plan progress, and recent activity
+- A management dashboard built around the development loop — assess, find gaps, develop, close: four clickable stages show assessment coverage, employees scoring below their grade bar, open development plans, and gaps confirmed closed by a re-assessment in the last quarter
+- An action queue that turns detected problems into next steps: employees below the bar with no development plan, overdue plans, plans stuck in review, and falling assessment coverage — each row deep-links into the module that fixes it
+- A personal dashboard for employees: my loop stages (latest assessment, my gaps, my active plan, confirmed closures), a personal to-do queue (pending surveys, returned or overdue plans, gaps without a plan), strengths with rare-skill highlights, growth direction to the next grade, and an assessment-score sparkline
+- An on-demand AI summary of the loop state — one click explains what is going on and what to do first; employees get a coach-style personal summary on their own dashboard (cached per data state)
+- Active assessment cycle progress at a glance
 - Reports: assessment score distributions, competence heatmaps, and division comparisons
 - Assessment export to XLSX, generated in the background with a download link when ready
 - Long-running operations (imports, exports, AI generation) report their status through a single task-tracking mechanism

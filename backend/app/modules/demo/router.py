@@ -17,8 +17,10 @@ from app.modules.demo.schemas import (
     DemoSaveAccessResponse,
     DemoStartRequest,
     DemoStartResponse,
+    DemoSwitchViewRequest,
+    DemoSwitchViewResponse,
 )
-from app.modules.demo.service import create_demo_session
+from app.modules.demo.service import create_demo_session, switch_demo_view
 from app.modules.demo.utils import is_demo_tenant
 from app.modules.signup.schemas import SignupRequestCreate
 from app.modules.signup.service import create_signup_request
@@ -96,7 +98,8 @@ async def save_demo_access(
     rejects a paid-account bearer with 403. The visitor flows back
     through the same email-verify → Slack moderation → magic-login
     pipeline as the landing form; on approve we provision a brand-new
-    Tenant (the demo sandbox keeps living until its TTL expires).
+    Tenant, or — when ``keep_demo_data`` was checked and the sandbox
+    still exists — convert the demo tenant into the real workspace.
     """
     if not await is_demo_tenant(db, current_user.tenant_id):
         raise AppError(
@@ -117,6 +120,7 @@ async def save_demo_access(
         remote_ip=_client_ip(request),
         source="demo",
         demo_tenant_id_snapshot=current_user.tenant_id,
+        keep_demo_data=payload.keep_demo_data,
         request_locale=resolve_locale_from_request(request),
     )
     return DemoSaveAccessResponse(
@@ -124,6 +128,24 @@ async def save_demo_access(
         email=row.email,
         status=row.status,
     )
+
+
+@router.post("/switch-view", response_model=DemoSwitchViewResponse)
+async def switch_view(
+    payload: DemoSwitchViewRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DemoSwitchViewResponse:
+    """Swap the demo session between the admin and employee personas.
+
+    Only callable with a live demo-tenant bearer — a paid-account token
+    is rejected with 403 inside the service. The issued token is scoped
+    to the same demo tenant, so no cross-tenant hop is possible.
+    """
+    result = await switch_demo_view(
+        db, tenant_id=current_user.tenant_id, persona=payload.persona
+    )
+    return DemoSwitchViewResponse(**result)
 
 
 def _bearer_token(header: str | None) -> str | None:

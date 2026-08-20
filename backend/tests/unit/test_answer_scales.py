@@ -64,56 +64,16 @@ def _full_levels() -> list[AnswerScaleLevelInput]:
 
 
 @pytest_asyncio.fixture
-async def default_scale(db: AsyncSession):
-    """Singleton global default scale (idempotent: reused across tests)."""
-    existing_q = await db.execute(
-        select(AnswerScale).where(
-            AnswerScale.tenant_id.is_(None),
-            AnswerScale.is_default.is_(True),
-            AnswerScale.deleted_at.is_(None),
-        )
-    )
-    existing = existing_q.scalar_one_or_none()
-    if existing is not None:
-        return existing
+async def default_scale(default_answer_scale):
+    """The origin default scale — the canonical conftest fixture.
 
-    scale = AnswerScale(
-        title="Standard 5-Point Scale",
-        is_default=True,
-        tenant_id=None,
-    )
-    db.add(scale)
-    await db.flush()
-    for idx, (lo, hi, title) in enumerate(
-        [
-            (0, 50, "Below expectations"),
-            (51, 75, "Growth zones"),
-            (76, 100, "Fully meets"),
-        ]
-    ):
-        db.add(
-            AnswerScaleLevel(
-                scale_id=scale.id,
-                percent_from=lo,
-                percent_to=hi,
-                system_title=title,
-                sort_index=idx,
-            )
-        )
-    for idx, title in enumerate(["Below", "Meets", "Exceeds"]):
-        db.add(
-            AnswerOption(
-                scale_id=scale.id,
-                title=title,
-                code=f"opt_{idx}",
-                weight=idx,
-                sort_index=idx,
-                is_neutral=False,
-            )
-        )
-    await db.commit()
-    await db.refresh(scale)
-    return scale
+    This suite used to build its own 3-option "default"; whichever suite
+    ran first then defined the global default for the whole session, and
+    the demo seed generated answers against the wrong weight range
+    (test-order-dependent failures in test_demo_seed). Only the id is
+    used here, so the canonical 5-point scale serves both.
+    """
+    return default_answer_scale
 
 
 # ---------- create ----------
