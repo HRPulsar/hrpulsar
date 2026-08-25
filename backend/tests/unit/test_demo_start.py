@@ -228,17 +228,22 @@ async def test_failed_seed_leaves_only_short_lived_tenant(
 
 
 @pytest.mark.asyncio
-async def test_xff_ignored_when_no_trusted_proxies_configured(
+async def test_xff_ignored_when_peer_is_not_a_trusted_proxy(
     client: AsyncClient, admin_role, enable_demo, monkeypatch
 ):
-    """HRP-276 / M5: with ``demo_trusted_proxies`` empty the throttle
-    keys on the socket peer, not on ``X-Forwarded-For``. Two requests
-    from different synthetic XFF IPs share the same per-IP bucket and
-    the second one trips the throttle. Pre-fix XFF was honoured
-    unconditionally so a script could mint a fresh bucket per request
-    by rotating the header.
+    """HRP-276 / M5: a caller that did not arrive through a trusted
+    proxy keys on the socket peer, not on ``X-Forwarded-For``. Two
+    requests from different synthetic XFF IPs share the same per-IP
+    bucket and the second one trips the throttle. Pre-fix XFF was
+    honoured unconditionally so a script could mint a fresh bucket per
+    request by rotating the header.
+
+    HRP-645: an unset list now means "trust the private ranges", which
+    covers the loopback peer of the test transport — so the untrusted
+    posture is expressed by a list that excludes it rather than by an
+    empty one.
     """
-    monkeypatch.setattr(settings, "demo_trusted_proxies", "")
+    monkeypatch.setattr(settings, "trusted_proxies", "10.0.0.0/8")
     monkeypatch.setattr(settings, "demo_rate_limit_per_ip_per_hour", 1)
 
     import redis.asyncio as aioredis
@@ -272,14 +277,15 @@ async def test_xff_ignored_when_no_trusted_proxies_configured(
 
 
 @pytest.mark.asyncio
-async def test_start_event_carries_user_agent(
+async def test_start_event_carries_client_hints(
     client: AsyncClient, admin_role, enable_demo, monkeypatch
 ):
-    """``demo.session_started`` forwards the visitor's User-Agent.
+    """``demo.session_started`` forwards User-Agent and Accept-Language.
 
-    The EE Slack handler digests it into the card's "Client" field —
+    The EE Slack handler digests the UA into the card's "Client" field —
     two demo sessions off one address are only a resume bug when the
-    browser is the same one.
+    browser is the same one — and shows the language tags, which a VPN
+    exit node cannot rewrite the way it rewrites the address.
     """
     seen: list[dict] = []
 
@@ -291,13 +297,40 @@ async def test_start_event_carries_user_agent(
 
     resp = await client.post(
         "/api/demo/start",
-        json={},
-        headers={"User-Agent": "Mozilla/5.0 (probe)"},
+        json={"timezone": "Europe/Moscow"},
+        headers={
+            "User-Agent": "Mozilla/5.0 (probe)",
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+        },
     )
 
     assert resp.status_code == 201, resp.text
     assert seen, "demo.session_started was not published"
     assert seen[0]["user_agent"] == "Mozilla/5.0 (probe)"
+    assert seen[0]["accept_language"] == "ru-RU,ru;q=0.9,en;q=0.8"
+    assert seen[0]["browser_timezone"] == "Europe/Moscow"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Europe/Moscow<script>",
+        "*" * 65,
+        "a/b/c/d",
+    ],
+)
+async def test_start_rejects_malformed_timezone(
+    client: AsyncClient, admin_role, enable_demo, value
+):
+    """The zone is untrusted input on a public endpoint — bound it.
+
+    It travels straight into a Slack card, so anything outside the IANA
+    shape is a 422 rather than something the notifier has to escape its
+    way out of.
+    """
+    resp = await client.post("/api/demo/start", json={"timezone": value})
+    assert resp.status_code == 422, resp.text
 
 
 @pytest.mark.asyncio
@@ -482,18 +515,18 @@ async def test_start_falls_back_to_request_client_on_empty_xff(
     client: AsyncClient, admin_role, enable_demo, monkeypatch
 ):
     """A leading-comma XFF (empty first hop) used to silently disable
-    the throttle by returning None — the helper must fall through to
-    ``request.client.host`` instead."""
+    the throttle by returning None — the helper must skip the blank and
+    keep throttling on the hop that is actually there."""
     monkeypatch.setattr(settings, "demo_rate_limit_per_ip_per_hour", 1)
 
     import redis.asyncio as aioredis
 
-    # The TestClient bound to ASGITransport sets request.client.host
-    # to ``127.0.0.1``; pre-load THAT key over the limit and the next
-    # call must 429 even though the XFF first hop is empty.
+    # The loopback peer is trusted by the fixture, so the surviving hop
+    # ``10.0.0.1`` is the caller; pre-load THAT key over the limit and
+    # the next call must 429 even though the XFF first hop is empty.
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
-        await r.set("demo:rl:127.0.0.1", "10", ex=3600)
+        await r.set("demo:rl:10.0.0.1", "10", ex=3600)
     finally:
         await r.aclose()
 
@@ -506,7 +539,7 @@ async def test_start_falls_back_to_request_client_on_empty_xff(
 
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
-        await r.delete("demo:rl:127.0.0.1")
+        await r.delete("demo:rl:10.0.0.1")
     finally:
         await r.aclose()
 

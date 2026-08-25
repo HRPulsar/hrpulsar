@@ -3,9 +3,11 @@
 # ships inside the image.
 FROM python:3.14-slim
 
-# System dependencies
+# System dependencies. ffmpeg is the worker's media pre-processing (HRP-646):
+# it strips the video track and re-encodes an interview recording to mono
+# 16 kHz before the transcription provider sees it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev postgresql-client curl && \
+    libpq-dev postgresql-client curl ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
 # Non-root user

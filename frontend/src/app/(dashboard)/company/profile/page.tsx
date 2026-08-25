@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { CompanyTabs } from "@/components/company/company-tabs";
 import { usePermissions } from "@/hooks/use-permissions";
 
@@ -47,6 +48,8 @@ interface CompanyProfile {
   description: string | null;
   logo_file_id: string | null;
   logo_url: string | null;
+  // HRP-623: show the grade on the directory card colleagues can open.
+  directory_show_grades: boolean;
 }
 
 export default function CompanyProfilePage() {
@@ -66,6 +69,7 @@ export default function CompanyProfilePage() {
     company_size: "",
     website: "",
     description: "",
+    directory_show_grades: false,
   });
 
   const load = useCallback(async () => {
@@ -77,6 +81,7 @@ export default function CompanyProfilePage() {
         company_size: data.company_size ?? "",
         website: data.website ?? "",
         description: data.description ?? "",
+        directory_show_grades: data.directory_show_grades,
       });
     } catch (err) {
       toast.error(
@@ -99,6 +104,7 @@ export default function CompanyProfilePage() {
         company_size: form.company_size || null,
         website: form.website.trim() || null,
         description: form.description.trim() || null,
+        directory_show_grades: form.directory_show_grades,
       };
       const data = await api.put<CompanyProfile>(
         "/settings/company-profile",
@@ -388,6 +394,26 @@ export default function CompanyProfilePage() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2.5">
+              <Checkbox
+                id="company-profile-show-grades"
+                checked={form.directory_show_grades}
+                disabled={readOnly}
+                onCheckedChange={(checked) =>
+                  setForm({ ...form, directory_show_grades: checked === true })
+                }
+                data-testid="company-profile-input-show-grades"
+              />
+              <div className="space-y-1">
+                <Label htmlFor="company-profile-show-grades">
+                  {t("directoryShowGrades")}
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  {t("directoryShowGradesHint")}
+                </p>
               </div>
             </div>
 

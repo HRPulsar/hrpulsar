@@ -60,10 +60,20 @@ const statusColors: Record<string, string> = {
 };
 
 // EMP3: keep this in sync with `_INVITE_ALLOWED` in backend/app/modules/auth/service.py
+// (pinned by src/__tests__/invite-tiers-parity.test.ts). The platform_admin
+// tier comes from the enterprise rbac_hooks seam, not from the core dict.
 const INVITE_ALLOWED: Record<string, ReadonlySet<string>> = {
-  platform_admin: new Set(["platform_admin", "admin", "hr", "manager", "employee"]),
-  admin: new Set(["admin", "hr", "manager", "employee"]),
-  hr: new Set(["admin", "hr", "manager", "employee"]),
+  platform_admin: new Set([
+    "platform_admin",
+    "admin",
+    "hr",
+    "manager",
+    "recruiter",
+    "hiring_manager",
+    "employee",
+  ]),
+  admin: new Set(["admin", "hr", "manager", "recruiter", "hiring_manager", "employee"]),
+  hr: new Set(["hr", "manager", "recruiter", "hiring_manager", "employee"]),
   manager: new Set(["employee"]),
 };
 

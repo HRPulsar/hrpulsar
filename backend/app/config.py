@@ -118,10 +118,16 @@ class Settings(BaseSettings):
     # produce thousands of indicators.
     ai_progress_step_delay_s: float = 0.04
 
-    # Transcription (optional, recruiting interview module — Phase R3)
+    # Transcription (optional, recruiting interview module — Phase R3).
+    # Every key configured here joins the fallback chain, tried in the
+    # order assemblyai → deepgram → yandex_speechkit → whisper (HRP-646).
+    # SpeechKit falls back to the YandexGPT service account when no
+    # dedicated key is set; its folder comes from `yandex_folder_id`.
     deepgram_api_key: str = ""
     assemblyai_api_key: str = ""
-    transcription_provider_default: str = "whisper"  # whisper | deepgram
+    yandex_speechkit_api_key: str = ""
+    # whisper | deepgram | assemblyai | yandex_speechkit
+    transcription_provider_default: str = "whisper"
 
     # Email (optional) — Resend (SaaS) or SMTP (self-hosted)
     resend_api_key: str = ""

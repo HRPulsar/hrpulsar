@@ -37,6 +37,7 @@ from app.modules.talent_market.models import (
     TalentCard,
     TalentCardCompetence,
 )
+from app.modules.talent_market.scope import TalentScope, resolve_talent_scope
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +70,17 @@ async def search_cards(
     tenant_id: uuid.UUID,
     data,
     *,
-    published_only: bool = False,
+    scope: TalentScope | None,
     assignee_employee_id: uuid.UUID | None = None,
     candidate_only: bool = False,
     viewer_employee_id: uuid.UUID | None = None,
 ) -> tuple[list[dict], int]:
+    """``scope`` narrows the board to what the caller may read and stamps
+    ``can_manage`` on every row (HRP-639); ``None`` means no restriction
+    and is deliberately not a default — a forgotten call site would hand
+    over every department's drafts.
+    It replaced a ``published_only`` flag that had no answer for a division
+    head, who consequently read every department's drafts."""
     query = select(TalentCard).where(TalentCard.tenant_id == tenant_id)
     count_q = select(func.count(TalentCard.id)).where(TalentCard.tenant_id == tenant_id)
 
@@ -96,19 +103,8 @@ async def search_cards(
             .scalar_subquery()
         )
         scope_clause = TalentCard.id.in_(visible_card_ids)
-    elif published_only:
-        if assignee_employee_id is not None:
-            assigned_subq = (
-                select(TalentCandidate.card_id)
-                .where(TalentCandidate.employee_id == assignee_employee_id)
-                .scalar_subquery()
-            )
-            scope_clause = or_(
-                TalentCard.is_published.is_(True),
-                TalentCard.id.in_(assigned_subq),
-            )
-        else:
-            scope_clause = TalentCard.is_published.is_(True)
+    elif scope is not None and not scope.unrestricted:
+        scope_clause = scope.read_filter()
     if scope_clause is not None:
         query = query.where(scope_clause)
         count_q = count_q.where(scope_clause)
@@ -170,7 +166,14 @@ async def search_cards(
             )
         ).all()
         reacted_ids = {row[0] for row in reacted_rows}
-    return [_card_to_read(c, reacted_by_me=c.id in reacted_ids) for c in cards], total
+    return [
+        _card_to_read(
+            c,
+            reacted_by_me=c.id in reacted_ids,
+            can_manage=scope.writable(c) if scope is not None else True,
+        )
+        for c in cards
+    ], total
 
 
 async def get_card_detail(
@@ -194,55 +197,53 @@ async def get_card_detail(
     if not card:
         raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     # HRP-209: pure-Employee viewers can only open cards they're
-    # attached to (Draft only when appointed). Managers + admins keep
-    # full visibility.
+    # attached to (Draft only when appointed).
+    # HRP-639: a division head is restricted too — published cards, their
+    # own department's, and the ones they authored. Refused as "not found"
+    # rather than 403, the way this module has always hidden a card, so the
+    # answer does not confirm that somebody else's draft exists.
+    scope = None
     if current_user is not None:
-        from app.core.access_scope import (
-            get_current_employee,
-            get_managed_division_ids,
-            is_employee_only,
-        )
+        from app.core.access_scope import is_employee_only
 
-        if is_employee_only(current_user):
-            emp = await get_current_employee(db, current_user)
-            managed = (
-                await get_managed_division_ids(db, current_user.tenant_id, emp.id)
-                if emp
-                else []
-            )
-            if not managed:
-                if emp is None:
+        scope = await resolve_talent_scope(db, current_user)
+        if not scope.unrestricted:
+            if is_employee_only(current_user) and not scope.division_ids:
+                if scope.employee_id is None:
                     raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
                 cand = next(
-                    (ca for ca in card.candidates if ca.employee_id == emp.id),
+                    (
+                        ca
+                        for ca in card.candidates
+                        if ca.employee_id == scope.employee_id
+                    ),
                     None,
                 )
                 if cand is None:
                     raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
                 if card.status == "draft" and cand.status != "appointed":
                     raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
+            elif not scope.readable(card):
+                raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     # HRP-149: viewer-scoped profile-link gating. Skip the lookup when no
     # user is in context (background callers) — defaults to "everyone
     # visible" via `_card_to_detail`'s `None` semantics.
     visible: set[uuid.UUID] | None = None
     viewer_employee_id: uuid.UUID | None = None
     reacted_by_me = False
-    if current_user is not None:
+    if current_user is not None and scope is not None:
         visible = await get_visible_employee_ids(db, current_user)
         # HRP-209: the detail response needs to flag the viewer's own
         # candidate row (is_me) so the UI can render "it's me", gate
         # drawer arrows, and hide Appoint for self.
-        from app.core.access_scope import get_current_employee as _gce
-
-        viewer_emp = await _gce(db, current_user)
-        if viewer_emp is not None:
-            viewer_employee_id = viewer_emp.id
+        viewer_employee_id = scope.employee_id
+        if viewer_employee_id is not None:
             # HRP-213: card-level reacted_by_me — True when the viewer's
             # candidate row has a response_at stamp. The detail page
             # uses this to mirror the list-preview chip and to decide
             # whether to render the React button.
             for ca in card.candidates:
-                if ca.employee_id == viewer_emp.id and ca.response_at is not None:
+                if ca.employee_id == viewer_employee_id and ca.response_at is not None:
                     reacted_by_me = True
                     break
     # HRP-173: per-candidate breakdown for the Match column. Skipped on
@@ -259,6 +260,7 @@ async def get_card_detail(
         breakdown_by_emp=breakdown_by_emp,
         viewer_employee_id=viewer_employee_id,
         reacted_by_me=reacted_by_me,
+        can_manage=scope.writable(card) if scope is not None else True,
     )
 
 

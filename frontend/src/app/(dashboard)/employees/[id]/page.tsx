@@ -83,6 +83,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/context/auth-context";
 import { usePermissions } from "@/hooks/use-permissions";
+import {
+  ASSIGNABLE_ROLE_CODES,
+  resolveAssignableRoleCode,
+  resolveRoleLabel,
+} from "@/lib/user-role-label";
 import { toast } from "sonner";
 import { ArrowLeft, DollarSign, ExternalLink, Info, Pencil, Plus, Trash2 } from "lucide-react";
 import { BADGE_COLOR } from "@/lib/badge-tones";
@@ -144,9 +149,10 @@ export default function EmployeeDetailPage() {
   const tAssessments = useTranslations("assessments");
   const tDevelopment = useTranslations("development");
   const tRef = useTranslations("reference");
+  const tRole = useTranslations("sidebar");
   const { id } = useParams<{ id: string }>();
   const { user: currentUser } = useAuth();
-  const { canManage } = usePermissions();
+  const { canManage, canAssignRoles } = usePermissions();
   const [employee, setEmployee] = useState<Employee | null>(null);
   // HRP-66: employee role keeps write access to the Education tab on their
   // own profile but loses every other write button (Edit profile, Add
@@ -155,7 +161,16 @@ export default function EmployeeDetailPage() {
   const isOwnProfile =
     !!currentUser?.id && !!employee?.user_id && currentUser.id === employee.user_id;
   const canEditOwnEducation = isOwnProfile;
-  const canEditProfile = canManage;
+  // HRP-623: a colleague outside the caller's read scope comes back in the
+  // directory schema — identity and department, no HR record and no
+  // sub-resources (those answer 403). `hire_date` is the discriminator:
+  // it is required on the full schema, absent on the trimmed one, and
+  // nothing on the client ever defaults it.
+  const isDirectoryCard = !!employee && employee.hire_date === undefined;
+  // A trimmed card means the caller is outside the write scope too — the
+  // dialog would open prefilled with blanks and the PUT would answer 403
+  // outside_division_scope.
+  const canEditProfile = canManage && !isDirectoryCard;
   const canEditOtherSections = canManage;
   const [events, setEvents] = useState<EmployeeEvent[]>([]);
   const [assessments, setAssessments] = useState<Assessment[]>([]);
@@ -259,6 +274,7 @@ export default function EmployeeDetailPage() {
   const [compError, setCompError] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
+  const [savingRole, setSavingRole] = useState(false);
 
   const load = useCallback(
     async function load() {
@@ -302,6 +318,21 @@ export default function EmployeeDetailPage() {
     load();
   }, [load]);
 
+  async function changeRole(roleCode: string) {
+    if (!employee || roleCode === resolveAssignableRoleCode(employee.roles))
+      return;
+    setSavingRole(true);
+    try {
+      await api.put(`/employees/${employee.id}/role`, { role_code: roleCode });
+      toast.success(t("roleChanged"));
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("roleChangeFailed"));
+    } finally {
+      setSavingRole(false);
+    }
+  }
+
   const flatDivisions = flattenTree(divisions);
 
   function openEdit() {
@@ -320,7 +351,7 @@ export default function EmployeeDetailPage() {
       last_name: lastName,
       division_id: employee.division_id || "",
       position_id: employee.position_id || "",
-      status: employee.status,
+      status: employee.status ?? "",
     });
     setEditOpen(true);
   }
@@ -825,7 +856,8 @@ export default function EmployeeDetailPage() {
   // HRP-246: Tenure measures "how long the employee has been using the
   // system", anchored to the first auth date. Falls back to hire_date
   // for accounts that have never logged in so the tile is never blank.
-  const tenureAnchorIso = employee.user_first_login_at ?? employee.hire_date;
+  const tenureAnchorIso =
+    employee.user_first_login_at ?? employee.hire_date ?? employee.created_at;
   const tenureYears = (() => {
     const ms = Date.now() - new Date(tenureAnchorIso).getTime();
     const years = ms / (365.25 * 24 * 3600 * 1000);
@@ -957,9 +989,48 @@ export default function EmployeeDetailPage() {
                 <h1 className="truncate text-2xl font-semibold tracking-tight" data-testid="employee-name">
                   {employee.user_name || tc("employee")}
                 </h1>
-                <Badge variant="secondary" className={statusColors[employee.status] || ""}>
-                  {employeeStatusLabel(t, employee.status)}
-                </Badge>
+                {!isDirectoryCard && (
+                  <Badge
+                    variant="secondary"
+                    className={statusColors[employee.status ?? ""] || ""}
+                  >
+                    {employeeStatusLabel(t, employee.status)}
+                  </Badge>
+                )}
+                {/* HRP-621: the role was previously visible only on the
+                    holder's own profile. Admins get the select, everyone
+                    else the read-only badge. */}
+                {isDirectoryCard ? null : canAssignRoles ? (
+                  <Select
+                    value={resolveAssignableRoleCode(employee.roles)}
+                    onValueChange={(value) => changeRole(String(value))}
+                    disabled={savingRole}
+                  >
+                    <SelectTrigger
+                      className="h-7 w-auto min-w-36 text-xs"
+                      data-testid="employee-detail-select-role"
+                      aria-label={t("changeRole")}
+                    >
+                      <SelectValue>
+                        {resolveRoleLabel(
+                          [resolveAssignableRoleCode(employee.roles)],
+                          tRole,
+                        )}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ASSIGNABLE_ROLE_CODES.map((code) => (
+                        <SelectItem key={code} value={code}>
+                          {resolveRoleLabel([code], tRole)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Badge variant="outline" data-testid="employee-detail-role-badge">
+                    {resolveRoleLabel(employee.roles, tRole)}
+                  </Badge>
+                )}
               </div>
               <p className="mt-1.5 truncate text-sm text-muted-foreground">
                 {[employee.position_title, employee.division_name, employee.user_email]
@@ -977,6 +1048,7 @@ export default function EmployeeDetailPage() {
             </div>
           )}
         </div>
+        {!isDirectoryCard && (
         <div className="flex flex-wrap border-t border-border">
           {kpis.map((k, i) => (
             <div
@@ -1014,9 +1086,12 @@ export default function EmployeeDetailPage() {
             </div>
           ))}
         </div>
+        )}
       </div>
 
-      {/* Tabbed content */}
+      {/* Tabbed content — every tab reads a sub-resource the directory does
+          not open, so a trimmed card shows none of them. */}
+      {!isDirectoryCard && (
       <Tabs defaultValue="events">
         <TabsList className="flex w-full max-w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <TabsTrigger value="events" data-testid="employee-tab-events" className="shrink-0">{t("tabEvents")}</TabsTrigger>
@@ -1759,6 +1834,7 @@ export default function EmployeeDetailPage() {
           </div>
         </TabsContent>
       </Tabs>
+      )}
 
       {/* ================================================================= */}
       {/* Dialogs                                                            */}

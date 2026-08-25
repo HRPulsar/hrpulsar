@@ -20,7 +20,7 @@ const API = "http://localhost:8100/api";
  *   manager   — invited member promoted to division manager
  */
 test.describe("Access scope (role-aware list filters)", () => {
-  test("admin sees full tenant; employee sees only self; manager sees subtree", async ({
+  test("admin sees full tenant; employee gets the directory; manager sees subtree", async ({
     page,
   }) => {
     // --- Admin tenant setup ---
@@ -56,7 +56,7 @@ test.describe("Access scope (role-aware list filters)", () => {
         .then(async (r) => {
           expect(r.ok(), await r.text()).toBeTruthy();
           return r.json() as Promise<{
-            items: Array<{ id: string; user_id: string }>;
+            items: Array<{ id: string; user_id?: string }>;
             total: number;
           }>;
         });
@@ -68,10 +68,17 @@ test.describe("Access scope (role-aware list filters)", () => {
       expect.arrayContaining([employee.employeeId, manager.employeeId]),
     );
 
-    // Employee sees only themselves
+    // HRP-623: for rank-and-file staff the list is a company directory —
+    // everyone is listed, but in the trimmed shape, without the HR columns
+    // (and without `user_id`, which is why the helper asks /employees/me).
     const empList = await list(employee.accessToken);
-    expect(empList.total).toBe(1);
-    expect(empList.items[0].id).toBe(employee.employeeId);
+    expect(empList.items.map((e) => e.id)).toEqual(
+      expect.arrayContaining([employee.employeeId, manager.employeeId]),
+    );
+    const ownRow = empList.items.find((e) => e.id === employee.employeeId)!;
+    for (const hidden of ["user_id", "hire_date", "status", "roles"]) {
+      expect(ownRow, `directory row leaks ${hidden}`).not.toHaveProperty(hidden);
+    }
 
     // Manager sees self + every employee in the managed subtree (= self + employee)
     const mgrList = await list(manager.accessToken);

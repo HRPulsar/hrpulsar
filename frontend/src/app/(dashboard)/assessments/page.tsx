@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
@@ -141,9 +142,29 @@ export default function AssessmentsPage() {
   const [bulkNewStatus, setBulkNewStatus] = useState("");
 
   // Filters — HRP-86: multi-select Types & Statuses.
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterTypes, setFilterTypes] = useState<string[]>([]);
-  const [filterStatuses, setFilterStatuses] = useState<string[]>([]);
+  // HRP-638: seeded from the URL and mirrored back, so the dashboard can
+  // link to a filtered view and a reload keeps it. The param names are the
+  // backend's own (``search``/``type``/``status``).
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialFilters = useMemo(
+    () => {
+      const params = new URLSearchParams(searchParams.toString());
+      return {
+        search: params.get("search") ?? "",
+        types: params.getAll("type").filter(Boolean),
+        statuses: params.getAll("status").filter(Boolean),
+      };
+    },
+    // read once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const [searchQuery, setSearchQuery] = useState(initialFilters.search);
+  const [filterTypes, setFilterTypes] = useState<string[]>(initialFilters.types);
+  const [filterStatuses, setFilterStatuses] = useState<string[]>(
+    initialFilters.statuses,
+  );
 
   const [saving, setSaving] = useState(false);
 
@@ -231,6 +252,18 @@ export default function AssessmentsPage() {
     }, 250);
     return () => clearTimeout(handle);
   }, [searchQuery, filterTypes, filterStatuses, loadData]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (searchQuery) params.set("search", searchQuery);
+    for (const value of filterTypes) params.append("type", value);
+    for (const value of filterStatuses) params.append("status", value);
+    const qs = params.toString();
+    if (qs !== searchParams.toString()) {
+      router.replace(qs ? `/assessments?${qs}` : "/assessments", { scroll: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, filterTypes, filterStatuses]);
 
   // Pagination changes (when the filters didn't move): reload the same
   // filtered slice for the new page. Page resets above already trigger

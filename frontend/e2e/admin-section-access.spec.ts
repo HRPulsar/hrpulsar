@@ -18,7 +18,7 @@ async function expectPermissionToast(page: Page) {
 
 /**
  * HRP-436: the Admin sidebar section (Dictionaries, Invitations, Import,
- * AI settings) is admin-only. Managers and employees must not see the group,
+ * Roles, AI settings) is admin-only. Managers and employees must not see the group,
  * and a direct link must be denied with a toast + redirect to /dashboard
  * rather than rendering an empty page.
  */
@@ -84,6 +84,35 @@ test.describe("Admin section access", () => {
     await expect(page.getByTestId("sidebar-link-invitations")).toHaveCount(0);
   });
 
+  test("employee sees neither recruitment nor talent market (HRP-622)", async ({
+    page,
+  }) => {
+    await setAuthTokens(page, employeeAccess, employeeRefresh);
+    await page.goto("/dashboard");
+    await expect(page.getByTestId("sidebar-nav")).toBeVisible({
+      timeout: 15000,
+    });
+    // Recruitment reads are role-gated server-side (HRP-615); the entry
+    // used to be rendered for everyone and led straight into a 403.
+    await expect(page.getByTestId("sidebar-link-recruitment")).toHaveCount(0);
+    await expect(page.getByTestId("sidebar-link-talent-market")).toHaveCount(0);
+    // Everyday surfaces stay reachable.
+    await expect(page.getByTestId("sidebar-link-employees")).toBeVisible();
+    await expect(page.getByTestId("sidebar-link-company")).toBeVisible();
+  });
+
+  test("manager keeps recruitment and talent market (HRP-622)", async ({
+    page,
+  }) => {
+    await setAuthTokens(page, managerAccess, managerRefresh);
+    await page.goto("/dashboard");
+    await expect(page.getByTestId("sidebar-nav")).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page.getByTestId("sidebar-link-recruitment")).toBeVisible();
+    await expect(page.getByTestId("sidebar-link-talent-market")).toBeVisible();
+  });
+
   test("manager: /dictionaries direct link redirects with an error toast", async ({
     page,
   }) => {
@@ -123,6 +152,33 @@ test.describe("Admin section access", () => {
 
     await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
     await expect(page.getByTestId("invitations-table")).toHaveCount(0);
+    await expectPermissionToast(page);
+  });
+
+  test("admin: /settings/roles lists roles with holder counts (HRP-634)", async ({
+    page,
+  }) => {
+    await setAuthTokens(page, adminAccess, adminRefresh);
+    await page.goto("/settings/roles");
+
+    await expect(page.getByTestId("roles-table")).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page.getByTestId("sidebar-link-roles")).toBeVisible();
+    // This tenant was registered by `adminAccess` and then handed exactly
+    // one manager and one employee, so both counts are known.
+    await expect(page.getByTestId("roles-count-admin")).toHaveText("1");
+    await expect(page.getByTestId("roles-count-manager")).toHaveText("1");
+  });
+
+  test("manager: /settings/roles direct link redirects with an error toast", async ({
+    page,
+  }) => {
+    await setAuthTokens(page, managerAccess, managerRefresh);
+    await page.goto("/settings/roles");
+
+    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
+    await expect(page.getByTestId("roles-table")).toHaveCount(0);
     await expectPermissionToast(page);
   });
 

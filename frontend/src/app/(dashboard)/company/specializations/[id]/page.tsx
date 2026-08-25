@@ -128,7 +128,9 @@ export default function SpecializationDetailPage() {
   const [deleteUsage, setDeleteUsage] = useState<DictionaryItemUsage | null>(
     null,
   );
-  const { canManage } = usePermissions();
+  // HRP-631: the grade ladder and matrices are workspace-wide (see
+  // the specializations list).
+  const { canManageCatalogues: canManage, canViewHrData } = usePermissions();
 
   const queryTab = searchParams?.get("tab");
   const tab: Tab = isTab(queryTab) ? queryTab : "grades";
@@ -404,21 +406,25 @@ export default function SpecializationDetailPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            type="button"
-            data-testid="specialization-add-grades-btn"
-            onClick={() => setAddGradesOpen(true)}
-            className="rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
-          >
-            {t("addGrades")}
-          </button>
-          <Link
-            href={`/company/specializations/${id}/ai-generate`}
-            data-testid="specialization-ai-generate-link"
-            className="rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
-          >
-            {t("aiGenerateMatrix")}
-          </Link>
+          {canManage && (
+            <button
+              type="button"
+              data-testid="specialization-add-grades-btn"
+              onClick={() => setAddGradesOpen(true)}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
+            >
+              {t("addGrades")}
+            </button>
+          )}
+          {canManage && (
+            <Link
+              href={`/company/specializations/${id}/ai-generate`}
+              data-testid="specialization-ai-generate-link"
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
+            >
+              {t("aiGenerateMatrix")}
+            </Link>
+          )}
           {canManage && (
             <button
               type="button"
@@ -536,6 +542,7 @@ export default function SpecializationDetailPage() {
                   onGradesChanged={applyGradesChange}
                   activeSessionsMap={activeSessionsMap}
                   onOpenActiveSession={openAiDrawerForSession}
+                  readOnly={!canManage}
                 />
               )}
             </section>
@@ -591,6 +598,7 @@ export default function SpecializationDetailPage() {
           >
             <EmployeeList
               employees={employeeRows as EmployeeListItem[]}
+              hrColumns={canViewHrData}
               testIdPrefix="specialization-employees-row"
             />
           </div>

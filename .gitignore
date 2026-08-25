@@ -80,3 +80,27 @@ status/web/out/
 # Enterprise overlay (local dev mode — see enterprise/scripts/dev-overlay.sh)
 frontend/.ee-overlay-manifest
 *.core-backup
+
+# Enterprise overlay: auto-mirrored paths (HRP-649).
+# sync_enterprise() in scripts/sync_repos.sh regenerates every path below from
+# its monorepo original (rsync --delete / cp) and only then copies enterprise/
+# into the enterprise repo clone — from the working tree, not from git archive.
+# Nothing ever reads the committed copy, so tracking it only produced drift.
+# Keep this list in step with is_auto_mirrored_overlay_path() in that script;
+# hand-maintained overlay files must stay tracked so check_overlay_drift() and
+# review can see them.
+enterprise/overlay/backend/ee/
+enterprise/overlay/backend/migrations/versions/ee/
+enterprise/overlay/frontend/e2e/ee/
+enterprise/overlay/frontend/messages/ru.json
+enterprise/overlay/frontend/src/app/(dashboard)/settings/billing/
+enterprise/overlay/frontend/src/app/(platform)/
+enterprise/overlay/frontend/src/components/billing/invoices-section.tsx
+enterprise/overlay/frontend/src/components/billing/requisites-form.tsx
+enterprise/overlay/frontend/src/components/credit-cost-badge.tsx
+enterprise/overlay/frontend/src/components/platform-guard.tsx
+enterprise/overlay/frontend/src/components/platform-header.tsx
+enterprise/overlay/frontend/src/components/platform-sidebar.tsx
+enterprise/overlay/frontend/src/lib/api-platform.ts
+enterprise/overlay/frontend/src/lib/ee-hooks.tsx
+enterprise/overlay/frontend/src/lib/locale-ee.ts

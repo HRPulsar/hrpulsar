@@ -138,13 +138,13 @@ class TestAssessmentAndPdpStats:
         )
         await db.commit()
 
-        stats = await analytics_service.assessment_stats(db, tenant.id)
+        stats = await analytics_service.assessment_stats(db, tenant.id, None)
         assert stats["total"] == 2
         assert stats["by_status"] == {"done": 2}
         assert stats["avg_score"] == 3.5
 
     async def test_assessment_stats_empty_tenant(self, db: AsyncSession, tenant):
-        stats = await analytics_service.assessment_stats(db, tenant.id)
+        stats = await analytics_service.assessment_stats(db, tenant.id, None)
         assert stats == {"total": 0, "by_status": {}, "avg_score": None}
 
     async def test_pdp_stats(self, db: AsyncSession, tenant, user):
@@ -171,7 +171,7 @@ class TestAssessmentAndPdpStats:
         )
         await db.commit()
 
-        stats = await analytics_service.pdp_stats(db, tenant.id)
+        stats = await analytics_service.pdp_stats(db, tenant.id, None)
         assert stats["total"] == 2
         assert stats["by_status"] == {"in_progress": 1, "done": 1}
         assert stats["avg_progress"] == 70.0
@@ -187,7 +187,7 @@ class TestExportAssessmentsXlsx:
         )
         await db.commit()
 
-        response = await analytics_service.export_assessments_xlsx(db, tenant.id)
+        response = await analytics_service.export_assessments_xlsx(db, tenant.id, None)
         assert response.headers["content-disposition"].endswith("assessments.xlsx")
 
         body = b"".join([chunk async for chunk in response.body_iterator])
@@ -334,7 +334,7 @@ class TestCompareCpaRounds:
         await db.commit()
 
         result = await analytics_service.compare_cpa_rounds(
-            db, tenant.id, cpa1.id, cpa2.id
+            db, tenant.id, cpa1.id, cpa2.id, None
         )
         assert result["round_1"] == {"id": str(cpa1.id), "title": "Q1"}
         assert result["round_2"] == {"id": str(cpa2.id), "title": "Q2"}
@@ -374,7 +374,7 @@ class TestCompareCpaRounds:
         await db.commit()
 
         result = await analytics_service.compare_cpa_rounds(
-            db, tenant.id, cpa1.id, cpa2.id
+            db, tenant.id, cpa1.id, cpa2.id, None
         )
         row = result["comparisons"][0]
         assert row["round_1_score"] == 2.0

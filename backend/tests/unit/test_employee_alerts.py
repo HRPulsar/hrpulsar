@@ -18,6 +18,7 @@ from app.modules.employee.alerts import (
     ALERT_PRIORITY,
     compute_employee_alert,
     compute_employee_alerts_bulk,
+    compute_employee_alerts_bulk_all,
 )
 from app.modules.employee.models import Employee
 from app.modules.position.models import Position
@@ -397,3 +398,51 @@ class TestBulkAlerts:
         result = await compute_employee_alerts_bulk(db, tenant.id, [own, outsider])
         assert result[own.id] is None
         assert result[outsider.id] is None
+
+
+class TestAllAlertsPerEmployee:
+    """HRP-638: the employee list shows every problem, not just the top one."""
+
+    async def test_two_problems_both_come_back(
+        self,
+        db: AsyncSession,
+        tenant,
+        user,
+        assessment_status_map,
+        assessment_type_self,
+    ):
+        emp = await _make_full_employee(db, tenant, user_active=False)
+        db.add(
+            Assessment(
+                tenant_id=tenant.id,
+                employee_id=emp.id,
+                type_id=assessment_type_self.id,
+                status_id=assessment_status_map["in_progress"].id,
+                initiator_id=user.id,
+                ended_at=datetime.now(timezone.utc) - timedelta(days=1),
+            )
+        )
+        await db.commit()
+
+        every = await compute_employee_alerts_bulk_all(db, tenant.id, [emp])
+
+        assert every[emp.id] == ["user_inactive", "assessment_overdue"]
+
+    async def test_single_alert_is_the_head_of_the_list(
+        self,
+        db: AsyncSession,
+        tenant,
+        user,
+        assessment_status_map,
+        assessment_type_self,
+    ):
+        """The narrowing wrapper must agree with the full scan."""
+        emp = await _make_full_employee(db, tenant, user_active=False)
+        every = await compute_employee_alerts_bulk_all(db, tenant.id, [emp])
+        top = await compute_employee_alerts_bulk(db, tenant.id, [emp])
+        assert top[emp.id] == every[emp.id][0]
+
+    async def test_clean_employee_gets_an_empty_list(self, db: AsyncSession, tenant):
+        emp = await _make_full_employee(db, tenant)
+        every = await compute_employee_alerts_bulk_all(db, tenant.id, [emp])
+        assert every[emp.id] == []

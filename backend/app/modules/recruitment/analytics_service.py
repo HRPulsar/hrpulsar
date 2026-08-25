@@ -5,7 +5,7 @@ power three frontend surfaces:
 
 * Vacancy detail → Analytics tab — stage funnel + win/loss donut
   (:func:`vacancy_analytics`).
-* HR/HRD dashboard — cross-vacancy summary
+* HR dashboard — cross-vacancy summary
   (:func:`recruitment_summary`).
 * Comparison page → radar chart
   (:func:`comparison_radar`).
@@ -193,7 +193,7 @@ def _safe_uuid(value: str) -> uuid.UUID | None:
 
 
 async def recruitment_summary(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
-    """Cross-vacancy view for HR/HRD.
+    """Cross-vacancy view for HR.
 
     * Top vacancies by velocity — fewest avg days from create → first
       stage transition.

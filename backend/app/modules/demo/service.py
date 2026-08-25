@@ -45,9 +45,10 @@ DEMO_REDIRECT_URL = "/dashboard"
 DEMO_ADMIN_EMAIL_DOMAIN = "demo.hrpulsar.local"
 
 # The employee persona for the demo "View as" switcher: Carlos Mendez
-# (NAME_POOL idx 2) — his seed story has a done 360 with strengths and a
-# distributed-systems gap plus a completed Q3 plan, so the personal
-# dashboard is alive from the first render.
+# (NAME_POOL idx 2, renamed per locale by ``localized_name_pool``) — his
+# seed story has a done 360 with strengths and a distributed-systems gap
+# plus a completed Q3 plan, so the personal dashboard is alive from the
+# first render.
 DEMO_EMPLOYEE_PERSONA_INDEX = 2
 
 
@@ -68,10 +69,20 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
     would mean a single Redis flake lifts the demo's only application-
     level brake against scripted abuse.
 
-    Implementation note: INCR and EXPIRE go through ``pipeline()`` so
-    we can't crash between them and leave the IP key TTL-less. The
-    earlier naive INCR-then-EXPIRE shape could permanently lock out
-    an IP after a worker OOM between the two round-trips.
+    Implementation note: the TTL is written by the same ``pipeline()``
+    that creates the bucket, so we can't crash between them and leave
+    the IP key TTL-less. The earlier naive INCR-then-EXPIRE shape could
+    permanently lock out an IP after a worker OOM between the two
+    round-trips.
+
+    The window is anchored at bucket creation and never extended
+    (HRP-645): re-arming the TTL on every call — blocked calls included
+    — let a throttled caller push its own reset an hour further with
+    each retry, so a demo button on a live landing page kept the bucket
+    alive indefinitely. ``SET ... EX NX`` + ``INCR`` rather than
+    ``EXPIRE ... NX`` because the fleet's system Redis is not
+    guaranteed to be 7.x, and an unsupported flag would surface as the
+    fail-closed 503 below.
     """
     if remote_ip is None or settings.demo_rate_limit_per_ip_per_hour <= 0:
         return
@@ -80,9 +91,9 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
         async with redis_client() as client:
             key = f"demo:rl:{remote_ip}"
             async with client.pipeline(transaction=True) as pipe:
+                pipe.set(key, 0, ex=3600, nx=True)
                 pipe.incr(key)
-                pipe.expire(key, 3600)
-                count, _ = await pipe.execute()
+                _, count = await pipe.execute()
             if count > settings.demo_rate_limit_per_ip_per_hour:
                 raise AppError(
                     "demo_rate_limited",
@@ -298,6 +309,8 @@ async def create_demo_session(
     turnstile_token: str | None,
     remote_ip: str | None,
     user_agent: str | None = None,
+    accept_language: str | None = None,
+    browser_timezone: str | None = None,
     existing_token: str | None = None,
 ) -> dict[str, Any]:
     """Spin up a brand-new public-demo tenant + user + seed.
@@ -432,6 +445,15 @@ async def create_demo_session(
                 # browser is the same one (2026-08-16: one IP, two
                 # different browsers, both legitimately resumable).
                 "user_agent": user_agent or "",
+                # Raw Accept-Language. A VPN exit node rewrites the
+                # address geoip reads, never the browser/OS language
+                # list — so this is the only honest hint about who
+                # actually clicked "Try the demo".
+                "accept_language": accept_language or "",
+                # The browser's IANA zone. A VPN client rewrites the
+                # route, not the clock, so "Europe/Moscow" behind a
+                # Paris exit node names the visitor's real country.
+                "browser_timezone": browser_timezone or "",
             },
         )
     except Exception:  # noqa: BLE001
@@ -452,7 +474,8 @@ async def switch_demo_view(
     """Issue an access token for a demo persona of the same demo tenant.
 
     ``admin`` → the throw-away demo user; ``employee`` → the seeded
-    Carlos Mendez. No passwords, no EE impersonation — just a fresh
+    ``NAME_POOL`` idx 2 card (Carlos Mendez in English, his localized
+    counterpart elsewhere). No passwords, no EE impersonation — just a fresh
     demo-scoped JWT (TTL pinned to the tenant lifetime, like
     ``create_demo_session``). Only callable with a live demo-tenant
     bearer; the router already resolved it via ``get_current_user``.
@@ -475,12 +498,24 @@ async def switch_demo_view(
             User.email.like(f"%@{DEMO_ADMIN_EMAIL_DOMAIN}"),
         )
     else:
-        from app.modules.demo.seed_data_employees import NAME_POOL, email_for
+        from app.modules.demo.seed_data_employees import (
+            NAME_POOL,
+            email_for,
+            localized_name_pool,
+        )
 
+        # The seed writes the *localized* email (``localized_name_pool``),
+        # so match both spellings: a deployment that flips DEFAULT_LOCALE
+        # after a demo tenant was seeded would otherwise lose its employee
+        # persona to a 404.
         first, last = NAME_POOL[DEMO_EMPLOYEE_PERSONA_INDEX]
+        emails = {
+            email_for(first, last),
+            localized_name_pool()[DEMO_EMPLOYEE_PERSONA_INDEX][2],
+        }
         stmt = select(User).where(
             User.tenant_id == tenant_id,
-            User.email == email_for(first, last),
+            User.email.in_(emails),
         )
     user = (await db.execute(stmt)).scalars().first()
     if user is None:

@@ -134,8 +134,11 @@ test.describe("Dashboard — development loop", () => {
     // AI summary is on-demand only: the button renders, no auto-call.
     await expect(page.getByTestId("dashboard-ai-summary-btn")).toBeVisible();
 
-    // The CTA deep-links into the development module.
+    // HRP-638: the CTA opens the employee list already filtered to the
+    // people this finding counted, not the development module at large.
     await gapRow.getByTestId("dashboard-action-cta").click();
-    await expect(page).toHaveURL(/\/development/, { timeout: 10000 });
+    await expect(page).toHaveURL(/\/employees\?.*issue=gaps_without_plan/, {
+      timeout: 10000,
+    });
   });
 });

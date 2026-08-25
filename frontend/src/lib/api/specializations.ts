@@ -90,22 +90,25 @@ export type IndicatorByLevel = {
 
 import type { EmployeeAlert } from "@/components/employees/EmployeeListRow";
 
+// HRP-633: a rank-and-file caller is answered in the directory shape, so
+// everything the directory withholds is optional here — absent from the
+// payload, not merely empty.
 export type SpecializationEmployee = {
   id: string;
-  user_id: string;
+  user_id?: string;
   user_name: string | null;
   user_email: string | null;
   position_title: string | null;
-  specialization_title: string | null;
+  specialization_title?: string | null;
   grade_title: string | null;
   // HRP-175: division_id surfaces so the unified EmployeeList renders
   // the Division cell as a clickable deep-link.
   division_id: string | null;
   division_name: string | null;
-  hire_date: string;
-  status: string;
+  hire_date?: string;
+  status?: string;
   avatar_url: string | null;
-  alert: EmployeeAlert | null;
+  alert?: EmployeeAlert | null;
 };
 
 export type GradesReorderEntry = { grade_id: string; sort_index: number };

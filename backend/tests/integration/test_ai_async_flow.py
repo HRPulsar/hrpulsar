@@ -47,8 +47,10 @@ class TestAsyncAIFlow:
         fake_drafts = [{"id": "p1", "title": "Backend Engineer", "source": "ai_draft"}]
         with patch("app.modules.ai.tasks._run_with_async_session") as mock_run:
             mock_run.return_value = fake_drafts
+            # HRP-631 added the caller's managed subtree as a third,
+            # deliberately default-less argument — `None` is "no restriction".
             result = generate_positions_task.apply(
-                args=("00000000-0000-0000-0000-000000000001", None)
+                args=("00000000-0000-0000-0000-000000000001", None, None)
             ).get()
 
         assert result == fake_drafts

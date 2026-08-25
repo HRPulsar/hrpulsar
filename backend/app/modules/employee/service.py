@@ -1,9 +1,10 @@
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, timezone
 from typing import Any
 
-from fastapi import HTTPException, status
+from fastapi import status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -11,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.core.access_scope import (
     assert_employee_write_scope,
     assert_not_self_edit_via_employees,
+    directory_show_grades,
 )
 from app.core.errors import AppError
 from app.core.s3 import get_presigned_url
@@ -23,15 +25,23 @@ from app.core.s3 import get_presigned_url
 # remain forbidden; cross-domain writes go through events.
 from app.modules.assessment.models import PDP, Assessment
 from app.modules.auth.models import Invitation, Role, User, user_roles
-from app.modules.auth.roles import ensure_baseline_employee_role
+from app.modules.auth.roles import BASELINE_ROLE_CODE
 from app.modules.company.models import Division
 from app.modules.employee.alerts import (
     ALERT_LABELS,
+    ALERT_PRIORITY,
     AlertCode,
-    compute_employee_alerts_bulk,
+    compute_employee_alerts_bulk_all,
 )
 from app.modules.employee.competence_overview import compute_competence_overview
 from app.modules.employee.duration import compute_duration
+from app.modules.employee.issues import (
+    ISSUE_LABELS,
+    ISSUE_PRIORITY,
+    collect_issue_facts,
+    issue_cohorts,
+    issues_by_employee,
+)
 from app.modules.employee.models import (
     Compensation,
     Course,
@@ -81,10 +91,29 @@ def _alert_payload(code: AlertCode | None) -> dict | None:
     return {"code": code, "label": ALERT_LABELS[code]}
 
 
+# The two code families share one badge list in the UI, so they share one
+# label map here. Keys cannot collide — the literals are disjoint.
+_ALL_ISSUE_LABELS: dict[str, str] = dict(
+    (*ALERT_LABELS.items(), *ISSUE_LABELS.items())
+)
+
+
+def _issue_payload(codes: list[str]) -> list[dict]:
+    """HRP-638: badge payloads, most urgent first."""
+    ordered = sorted(
+        codes,
+        key=lambda c: (
+            ISSUE_PRIORITY.index(c) if c in ISSUE_PRIORITY else len(ISSUE_PRIORITY)
+        ),
+    )
+    return [{"code": c, "label": _ALL_ISSUE_LABELS[c]} for c in ordered]
+
+
 def _employee_to_read(
     emp: Employee,
     avatar_url: str | None = None,
     alert: AlertCode | None = None,
+    issues: list[str] | None = None,
 ) -> dict:
     pos = emp.position
     spec = pos.specialization if pos else None
@@ -110,10 +139,77 @@ def _employee_to_read(
             f"{emp.user.first_name} {emp.user.last_name}" if emp.user else None
         ),
         "user_first_login_at": emp.user.first_login_at if emp.user else None,
+        # HRP-621: the role was invisible everywhere except the holder's own
+        # profile. ``User.roles`` is mapper-level ``lazy="selectin"``, so a
+        # page of 100 rows costs one extra query, not one per row.
+        "roles": sorted(r.code for r in emp.user.roles) if emp.user else [],
         "division_name": emp.division.name if emp.division else None,
         "avatar_url": avatar_url,
         "alert": _alert_payload(alert),
+        "issues": _issue_payload(issues) if issues else [],
     }
+
+
+async def directory_rows(
+    db: AsyncSession, tenant_id: uuid.UUID, rows: list[dict]
+) -> list[dict]:
+    """HRP-623: trim full read rows down to what a colleague may see.
+
+    Built by narrowing ``_employee_to_read`` output rather than by a second
+    query, so the directory can never drift away from the card it mirrors:
+    a field added to the full row stays invisible here until it is listed.
+    """
+    show_grades = await directory_show_grades(db, tenant_id)
+    return [
+        {
+            "id": row["id"],
+            "user_name": row["user_name"],
+            "user_email": row["user_email"],
+            "avatar_url": row["avatar_url"],
+            "position_title": row["position_title"],
+            "division_id": row["division_id"],
+            "division_name": row["division_name"],
+            "grade_title": row["grade_title"] if show_grades else None,
+        }
+        for row in rows
+    ]
+
+
+def is_row_in_read_scope(
+    employee_id: uuid.UUID, visible_employee_ids: set[uuid.UUID] | None
+) -> bool:
+    """HRP-633: may the caller read this employee's full HR row?
+
+    ``visible_employee_ids`` is ``get_visible_employee_ids`` output: ``None``
+    means no restriction (admin / hr), anything else is the exact set.
+    """
+    return visible_employee_ids is None or employee_id in visible_employee_ids
+
+
+async def apply_directory_scope(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    rows: list[dict],
+    visible_employee_ids: set[uuid.UUID] | None,
+) -> list[dict]:
+    """HRP-633: narrow the rows the caller may not read in full.
+
+    Used by the position drill-down and the specialization tab, which build
+    the same row shape. Order is preserved — a caller reading the list top
+    to bottom must not be able to tell which rows were trimmed from where
+    they sit.
+    """
+    if visible_employee_ids is None:
+        return rows
+    out_of_scope = [
+        row for row in rows if row["id"] not in visible_employee_ids
+    ]
+    if not out_of_scope:
+        return rows
+    trimmed = {
+        row["id"]: row for row in await directory_rows(db, tenant_id, out_of_scope)
+    }
+    return [trimmed.get(row["id"], row) for row in rows]
 
 
 def _event_to_read(event: EmployeeEvent) -> dict:
@@ -282,10 +378,12 @@ async def list_employees(
     specialization_id: list[uuid.UUID] | uuid.UUID | None = None,
     position_id: list[uuid.UUID] | uuid.UUID | None = None,
     grade_id: list[uuid.UUID] | uuid.UUID | None = None,
+    role: list[str] | str | None = None,
     unassigned_only: bool = False,
     with_alerts: bool = False,
     q: str | None = None,
     include_sub_divisions: bool = False,
+    issue: Sequence[str] | str | None = None,
 ) -> tuple[list[dict], int]:
     division_ids = _coerce_filter_list(division_id)
     # HRP-58: opt-in widening of the division filter to the whole subtree.
@@ -303,6 +401,7 @@ async def list_employees(
     position_ids = _coerce_filter_list(position_id)
     specialization_ids = _coerce_filter_list(specialization_id)
     grade_ids = _coerce_filter_list(grade_id)
+    role_codes = _coerce_filter_list(role)
 
     query = select(Employee).where(Employee.tenant_id == tenant_id)
     count_query = select(func.count(Employee.id)).where(Employee.tenant_id == tenant_id)
@@ -312,6 +411,25 @@ async def list_employees(
             return [], 0
         query = query.where(Employee.id.in_(visible_employee_ids))
         count_query = count_query.where(Employee.id.in_(visible_employee_ids))
+
+    # HRP-638: "show me the people the dashboard is talking about". Resolved
+    # tenant-wide (inside the caller's read scope) because the predicate has
+    # to select rows before pagination, and against the same cohorts the
+    # dashboard counts — a tile's number and this list cannot disagree.
+    # Several codes OR together, like every other multi-value filter here.
+    issue_codes = _coerce_filter_list(issue)
+    if issue_codes:
+        facts = await collect_issue_facts(
+            db, tenant_id, visible_employee_ids=visible_employee_ids
+        )
+        cohorts = issue_cohorts(facts)
+        matched: set[uuid.UUID] = set()
+        for code in issue_codes:
+            matched |= cohorts.get(code, set())
+        if not matched:
+            return [], 0
+        query = query.where(Employee.id.in_(matched))
+        count_query = count_query.where(Employee.id.in_(matched))
 
     if division_ids:
         query = query.where(Employee.division_id.in_(division_ids))
@@ -325,6 +443,38 @@ async def list_employees(
     if unassigned_only:
         query = query.where(Employee.position_id.is_(None))
         count_query = count_query.where(Employee.position_id.is_(None))
+
+    # HRP-621: role lives on the user behind the employee, so filter through
+    # a subquery instead of a join — the join would duplicate rows for users
+    # holding several roles and break the count.
+    if role_codes:
+
+        def _holders(codes: list[str]):
+            return (
+                select(user_roles.c.user_id)
+                .join(Role, Role.id == user_roles.c.role_id)
+                .where(Role.code.in_(codes))
+            )
+
+        conditions = []
+        stronger = [c for c in role_codes if c != BASELINE_ROLE_CODE]
+        if stronger:
+            conditions.append(Employee.user_id.in_(_holders(stronger)))
+        if BASELINE_ROLE_CODE in role_codes:
+            # "Employee" means *only* the baseline: every account keeps that
+            # role, so a plain membership test would return the whole
+            # workspace — and the Role column shows the strongest role, which
+            # would then disagree with the filter that produced the row.
+            conditions.append(
+                ~Employee.user_id.in_(
+                    select(user_roles.c.user_id)
+                    .join(Role, Role.id == user_roles.c.role_id)
+                    .where(Role.code != BASELINE_ROLE_CODE)
+                )
+            )
+        role_predicate = or_(*conditions)
+        query = query.where(role_predicate)
+        count_query = count_query.where(role_predicate)
 
     # spec/grade live on Position; if either filter is active, restrict the
     # employee's position with a single subquery so the predicates compose
@@ -369,15 +519,50 @@ async def list_employees(
     result = await db.execute(query.offset(skip).limit(limit))
     employees = list(result.scalars().all())
 
-    alerts_map: dict[uuid.UUID, AlertCode | None] = {}
-    if with_alerts:
-        alerts_map = await compute_employee_alerts_bulk(db, tenant_id, employees)
+    issues_map: dict[uuid.UUID, list[str]] = {}
+    if with_alerts and employees:
+        alerts_map = await compute_employee_alerts_bulk_all(db, tenant_id, employees)
+        # Scoped to this page, not the tenant: the badges only have to
+        # explain the twenty rows on screen, and the tenant-wide pass is
+        # the filter's job.
+        page_facts = await collect_issue_facts(
+            db,
+            tenant_id,
+            visible_employee_ids=visible_employee_ids,
+            employee_ids={e.id for e in employees},
+        )
+        loop_issues = issues_by_employee(issue_cohorts(page_facts))
+        for emp in employees:
+            issues_map[emp.id] = [
+                *alerts_map.get(emp.id, []),
+                *loop_issues.get(emp.id, []),
+            ]
 
-    items = []
-    for e in employees:
-        url = await _resolve_emp_avatar(db, e)
-        items.append(_employee_to_read(e, url, alerts_map.get(e.id)))
+    # One SELECT for the whole page instead of one per row: the directory
+    # (HRP-623) turned this into a 500-row read for any account.
+    avatars = await _resolve_emp_avatars_bulk(db, employees)
+    items = [
+        _employee_to_read(
+            e,
+            avatars.get(e.id),
+            _top_alert(issues_map.get(e.id)),
+            issues_map.get(e.id),
+        )
+        for e in employees
+    ]
     return items, total
+
+
+def _top_alert(codes: list[str] | None) -> AlertCode | None:
+    """The legacy single-alert field: highest-priority hygiene code only.
+
+    Development-loop codes never land in ``alert`` — its consumers (position
+    and specialization drill-downs) validate against the five-code literal.
+    """
+    for code in ALERT_PRIORITY:
+        if codes and code in codes:
+            return code
+    return None
 
 
 async def _resolve_emp_avatar(db: AsyncSession, emp: Employee) -> str | None:
@@ -616,80 +801,152 @@ async def delete_employee(
     return snapshot
 
 
-_NON_DOWNGRADABLE_ROLES = frozenset({"admin", "hr", "platform_admin"})
+#: Granted by the platform, never by a tenant admin — the change-role
+#: endpoint neither assigns nor strips it (accepted core mention of an
+#: enterprise role, see docs/guides/OPEN_CORE.md).
+_PLATFORM_ROLE_CODE = "platform_admin"
+
+#: Roles that may lead a division. Mirrors ``_MANAGER_OR_HIGHER`` in
+#: company/service.py, which is what decides whether assigning someone as
+#: division manager grants them ``manager`` at all — service-to-service
+#: imports stay forbidden here, so the set is repeated rather than shared.
+_DIVISION_LEADER_ROLES = frozenset({"manager", "admin", "hr", _PLATFORM_ROLE_CODE})
 
 
-async def downgrade_employee_role(
+async def _role_codes_of(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Role]:
+    rows = await db.execute(
+        select(Role)
+        .join(user_roles, user_roles.c.role_id == Role.id)
+        .where(user_roles.c.user_id == user_id)
+    )
+    return {r.code: r for r in rows.scalars().all()}
+
+
+async def set_employee_role(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     employee_id: uuid.UUID,
+    role_code: str,
+    current_user: User,
 ) -> dict:
-    """Strip the `manager` role from an employee.
+    """Replace an employee's system roles with ``role_code`` (HRP-620).
 
-    Re-checks server-side that the user no longer manages any division of the
-    tenant. Refuses to downgrade users who hold admin / hr / platform_admin —
-    those roles are independent of division assignments.
+    Supersedes the old manager-only downgrade: a role is now a thing an
+    admin sets, not a thing that only ever decays. A user carries exactly
+    one tenant role afterwards; a ``platform_admin`` membership is left
+    alone (it is granted platform-side, not per tenant).
     """
     emp = await _get_employee(db, tenant_id, employee_id)
 
-    still_managing = (
-        await db.execute(
-            select(func.count(Division.id)).where(
-                Division.tenant_id == tenant_id,
-                or_(
-                    Division.manager_id == emp.id,
-                    Division.deputy_manager_id == emp.id,
-                ),
+    if emp.user_id == current_user.id:
+        raise AppError("cannot_change_own_role", status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    role = (
+        (
+            await db.execute(
+                select(Role).where(
+                    Role.code == role_code,
+                    Role.is_system == True,  # noqa: E712
+                    Role.code != _PLATFORM_ROLE_CODE,
+                )
             )
         )
-    ).scalar() or 0
-    if still_managing > 0:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error_code": "still_manages_divisions",
-                "count": still_managing,
-            },
-        )
-
-    role_rows = await db.execute(
-        select(Role)
-        .join(user_roles, user_roles.c.role_id == Role.id)
-        .where(user_roles.c.user_id == emp.user_id)
+        .scalars()
+        .first()
     )
-    user_role_codes = {r.code: r for r in role_rows.scalars().all()}
-
-    if user_role_codes.keys() & _NON_DOWNGRADABLE_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error_code": "cannot_downgrade_admin"},
+    if role is None:
+        raise AppError(
+            "role_code_not_found",
+            status.HTTP_400_BAD_REQUEST,
+            role_code=role_code,
         )
 
-    manager_role = user_role_codes.get("manager")
-    if manager_role is None:
-        return {"employee_id": emp.id, "user_id": emp.user_id, "downgraded": False}
+    current = await _role_codes_of(db, emp.user_id)
+    tenant_role_codes = {c for c in current if c != _PLATFORM_ROLE_CODE}
+    if tenant_role_codes == {role_code}:
+        return {
+            "employee_id": emp.id,
+            "user_id": emp.user_id,
+            "role_code": role_code,
+            "changed": False,
+        }
 
+    if "admin" in current and role_code != "admin":
+        other_admins = (
+            await db.execute(
+                select(func.count(User.id))
+                .join(user_roles, user_roles.c.user_id == User.id)
+                .join(Role, Role.id == user_roles.c.role_id)
+                .where(
+                    User.tenant_id == tenant_id,
+                    User.id != emp.user_id,
+                    User.is_active.is_(True),
+                    Role.code == "admin",
+                )
+            )
+        ).scalar() or 0
+        if other_admins == 0:
+            raise AppError("last_admin", status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    # Keyed off the NEW role, not the old one: division leadership is held by
+    # anyone in ``_DIVISION_LEADER_ROLES``, so an admin or hr running a
+    # division never carries the ``manager`` code and an old-role check would
+    # let them keep the subtree scope (which reads Division.manager_id, not
+    # the role) while the UI claims they were reduced to own-data-only.
+    if role_code not in _DIVISION_LEADER_ROLES:
+        still_managing = (
+            await db.execute(
+                select(func.count(Division.id)).where(
+                    Division.tenant_id == tenant_id,
+                    or_(
+                        Division.manager_id == emp.id,
+                        Division.deputy_manager_id == emp.id,
+                    ),
+                )
+            )
+        ).scalar() or 0
+        if still_managing > 0:
+            raise AppError(
+                "still_division_manager",
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                count=still_managing,
+            )
+
+    stripped = sorted(tenant_role_codes)
     await db.execute(
         user_roles.delete().where(
             user_roles.c.user_id == emp.user_id,
-            user_roles.c.role_id == manager_role.id,
+            user_roles.c.role_id.in_([current[c].id for c in stripped]),
         )
     )
-    # HRP-196: same baseline guarantee as the automatic downgrade — a
-    # manager-only user must not be left with an empty role list.
-    await ensure_baseline_employee_role(db, emp.user_id)
+    await db.execute(user_roles.insert().values(user_id=emp.user_id, role_id=role.id))
+    await _create_event(
+        db,
+        emp.id,
+        "role_changed",
+        f"Role changed to {role.name}",
+        date.today(),
+        old_value={"roles": stripped},
+        new_value={"roles": [role_code]},
+    )
     await db.commit()
     logger.info(
-        "employee.role_downgraded",
+        "employee.role_changed",
         extra={
-            "event": "employee.role_downgraded",
+            "event": "employee.role_changed",
             "tenant_id": str(tenant_id),
             "user_id": str(emp.user_id),
             "employee_id": str(emp.id),
-            "from_role": "manager",
+            "from_roles": stripped,
+            "to_role": role_code,
         },
     )
-    return {"employee_id": emp.id, "user_id": emp.user_id, "downgraded": True}
+    return {
+        "employee_id": emp.id,
+        "user_id": emp.user_id,
+        "role_code": role_code,
+        "changed": True,
+    }
 
 
 # --- Events ---
@@ -1305,9 +1562,7 @@ async def create_compensation(
     # fields land as ISO strings in JSONB — mirrors update_compensation
     # (line 1302) and protects against the same "datetime is not JSON
     # serializable" 500 once the model picks up new fields.
-    new_value = data.model_dump(
-        include={"type", "amount", "currency"}, mode="json"
-    )
+    new_value = data.model_dump(include={"type", "amount", "currency"}, mode="json")
     await _create_event(
         db,
         employee_id,

@@ -28,7 +28,7 @@ const tabs = [
     href: "/recruitment/audit-log",
     labelKey: "tabAudit",
     testId: "recruitment-tab-audit",
-    // GET /recruitment/audit-log is admin|hrd-gated on the backend.
+    // GET /recruitment/audit-log is admin|hr-gated on the backend.
     auditRoles: true,
   },
   {
@@ -46,7 +46,7 @@ export function RecruitmentTabs() {
   const adminTier = isAdmin || isPlatformAdmin;
   const visibleTabs = tabs.filter((tab) => {
     if (tab.adminOnly) return adminTier;
-    if (tab.auditRoles) return adminTier || roles.includes("hrd");
+    if (tab.auditRoles) return adminTier || roles.includes("hr");
     return true;
   });
   return (

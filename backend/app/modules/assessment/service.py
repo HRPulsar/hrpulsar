@@ -3995,6 +3995,15 @@ async def add_cpa_participant(
     if not c or c.tenant_id != tenant_id:
         raise AppError("cpa_not_found", status.HTTP_404_NOT_FOUND)
 
+    # HRP-638 review: ``user_id`` arrives in the body and was never checked
+    # against the tenant, so a participant could be added from another
+    # workspace — and being a participant is what ``record_answer`` accepts.
+    from app.modules.auth.models import User as _User
+
+    member = await db.get(_User, data.user_id)
+    if member is None or member.tenant_id != tenant_id:
+        raise AppError("user_not_found", status.HTTP_404_NOT_FOUND)
+
     p = CPAParticipant(cpa_id=cpa_id, user_id=data.user_id, role=data.role)
     db.add(p)
     await db.commit()
@@ -4003,17 +4012,30 @@ async def add_cpa_participant(
 
 
 async def get_cpa_analytics(
-    db: AsyncSession, tenant_id: uuid.UUID, cpa_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cpa_id: uuid.UUID,
+    visible_employee_ids: set[uuid.UUID] | None,
 ) -> dict:
+    """HRP-641 review: the payload is a named per-employee ranking, so it
+    is scoped by assessee like ``compare_cpa_rounds``. Who owns the CPA
+    round itself is still HRP-640's question; this only applies the rule
+    the assessments already carry. ``None`` = no restriction, an empty
+    set = nothing."""
     c = await db.get(CPA, cpa_id)
     if not c or c.tenant_id != tenant_id:
         raise AppError("cpa_not_found", status.HTTP_404_NOT_FOUND)
 
+    scope = (
+        []
+        if visible_employee_ids is None
+        else [Assessment.employee_id.in_(visible_employee_ids)]
+    )
     # Get all assessments for this CPA
     result = await db.execute(
         select(Assessment)
         .options(selectinload(Assessment.results), selectinload(Assessment.status))
-        .where(Assessment.cpa_id == cpa_id)
+        .where(Assessment.cpa_id == cpa_id, *scope)
     )
     assessments = result.scalars().all()
 
@@ -4234,10 +4256,17 @@ async def list_external_reviewers(
 
 
 async def delete_external_reviewer(
-    db: AsyncSession, tenant_id: uuid.UUID, reviewer_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    assessment_id: uuid.UUID,
+    reviewer_id: uuid.UUID,
 ) -> dict:
+    # HRP-638: the reviewer must hang off the assessment named in the path.
+    # Without this the route's scope guard means nothing — it fences
+    # ``assessment_id``, and a caller could pair their own assessment with a
+    # reviewer id belonging to somebody else's.
     er = await db.get(ExternalReviewer, reviewer_id)
-    if not er or er.tenant_id != tenant_id:
+    if not er or er.tenant_id != tenant_id or er.assessment_id != assessment_id:
         raise AppError("external_reviewer_not_found", status.HTTP_404_NOT_FOUND)
 
     # Also remove participant

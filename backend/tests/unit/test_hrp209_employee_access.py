@@ -115,7 +115,7 @@ async def test_employee_sees_only_cards_they_candidate_on(
         db,
         tenant.id,
         SearchRequest(),
-        published_only=True,
+        scope=None,
         assignee_employee_id=emp.id,
         candidate_only=True,
     )
@@ -153,7 +153,7 @@ async def test_employee_does_not_see_draft_unless_appointed(
         db,
         tenant.id,
         SearchRequest(),
-        published_only=True,
+        scope=None,
         assignee_employee_id=emp.id,
         candidate_only=True,
     )

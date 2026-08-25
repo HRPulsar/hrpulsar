@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.21.0] - 2026-08-25
+
+### Added
+- Recruiter and hiring manager roles can finally be invited; HR no longer grants admin (HRP-618)
+- An admin sets a colleague's role from their employee card, with guards against changing their own role, demoting the last admin, or demoting a sitting division head (HRP-620)
+- The employee list shows a Role column and filters by role; the employee card shows the role as a badge (HRP-621)
+- Employee directory: rank-and-file staff can look up any colleague's name, job title and department, with grades shown only when the workspace opts in (HRP-623)
+- "My profile" opens the user's own employee card from the header menu and the dashboard (HRP-624)
+- Demo workspace now shows the whole role model — HR, recruiters and a hiring manager alongside managers and employees
+- Read-only Roles page in the Admin area: every role of the workspace, what it can do, and how many people hold it, with the count opening the matching employee list (HRP-634, HRP-642)
+- Dashboard tiles and findings open the employee, plan and assessment lists already filtered to the people they counted; the employee list gains an Issues column and filter, and finding names link to the person's card (HRP-638)
+
+### Changed
+- Demo workspaces are staffed in the deployment language: a German demo shows German employee names and emails instead of an English cast (HRP-647)
+
+### Fixed
+- The public demo throttles each visitor separately again: behind a reverse proxy every visitor shared one hourly bucket, so five demo starts closed the demo for everyone (HRP-645)
+- A throttled caller can no longer keep its own block alive by retrying, and can no longer pick its own throttle bucket with an `X-Forwarded-For` header (HRP-645)
+- Dashboard figures and finding names are scoped to the reader: a division manager no longer sees counts and colleagues from divisions they cannot open (HRP-638)
+- Demo development plans carry statuses from the transition model: a finished plan no longer counted as an open, overdue one on the dashboard (HRP-638)
+- Applied list filters are now marked with the accent colour — a chosen value used to look like the name of the filter beside it (HRP-643)
+- Recruitment reads are role-gated: candidates, resumes, interviews, reports and recruitment settings are no longer readable by any authenticated member of the workspace (HRP-615)
+- Employee card reads (profile, events, competences, education, work history, courses) now follow the same scope as writes — own card, division subtree, or admin (HRP-616)
+- Division managers read hiring for their own department only: a vacancy is visible when it sits in their managed subtree, names them as hiring manager, or was created by them, and its candidates, resumes, interviews and reports follow (HRP-629)
+- Division managers create, edit and calibrate assessments and development plans for their own subtree only, AI plan drafting included — the mutating routes never checked whose employee the id belonged to (HRP-638)
+- Talent board: a division manager publishes, edits, closes and staffs their own department's cards only, and no longer reads other departments' drafts (HRP-639)
+- Interview transcription gains AssemblyAI and Yandex SpeechKit alongside Deepgram and Whisper; every configured key joins one fallback chain — AssemblyAI, Deepgram, SpeechKit, Whisper — and the workspace's own keys go first (HRP-646)
+- Recordings transcribed by a provider without speaker separation are split into interviewer and candidate turns from the transcript, so the analysis no longer scores a candidate on the interviewer's own words (HRP-646)
+- Interview recordings are reduced to their audio track before transcription: a video interview no longer reaches the provider as a half-gigabyte file, and a fallback provider's request-size limit stops being a dead end (HRP-646)
+- A recording above a transcription provider's request-size limit is split into overlapping parts and stitched back into one transcript instead of being turned away (HRP-646)
+- Interview transcription survives a provider that says no: a refused key, a missing credential half, a recording the provider will not take — each hands the interview to the next configured provider instead of failing it (HRP-644, HRP-646)
+- Recordings are transcribed in the workspace's content language, or in the language the provider detects, instead of always English (HRP-644)
+- Interview audio is sent to the transcription provider as bytes, so storage no longer has to be reachable from the provider's network (HRP-644)
+- Analytics figures and the assessment export cover the reader's own subtree: a division manager no longer aggregates or downloads the whole company, background exports included (HRP-641)
+- Competence, indicator, material, answer-scale and specialization catalogues are edited by admins and HR only; positions stay with the division manager, scoped to their own subtree (HRP-631)
+- The `hr` role now exists for real: role gates naming it (and the phantom `hrd`) silently behaved as admin-only (HRP-617)
+- Every account carries at least the baseline employee role — demo-seeded and bulk-imported users had none at all (HRP-619)
+- The sidebar and the company page no longer offer controls the role cannot use: hiring and talent market are hidden from rank-and-file employees, and tenant edit, import and division actions are admin/manager-only (HRP-622)
+- Opening a candidate who has no linked person record no longer fails with a server error (HRP-625)
+- Employee list filters follow the order of the columns they sit above
+- Position and specialization employee lists no longer hand hire dates, employment status, grades and HR alerts to every member of the workspace (HRP-633)
+
 ## [1.20.0] - 2026-08-20
 
 ### Added

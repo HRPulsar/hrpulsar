@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FALLBACK_ROLE_CODE,
+  resolveAssignableRoleCode,
   resolveDisplayRoleCode,
   resolveRoleLabel,
 } from "@/lib/user-role-label";
@@ -89,10 +90,26 @@ describe("resolveRoleLabel (HRP-196)", () => {
     );
   });
 
-  it("prettifies codes that have no catalog key", () => {
-    expect(resolveRoleLabel(["hiring_manager"], translate)).toBe(
-      "hiring manager",
+  it("keeps platform_admin out of the assignable code (HRP-621)", () => {
+    // The role select only offers tenant roles, so the platform code must
+    // not become its value — the card would then show no current role and
+    // hide the tenant role the select actually changes.
+    expect(resolveAssignableRoleCode(["platform_admin", "manager"])).toBe(
+      "manager",
     );
+    expect(resolveAssignableRoleCode(["platform_admin"])).toBe("employee");
+    expect(resolveAssignableRoleCode(["admin"])).toBe("admin");
+  });
+
+  it("translates the seeded recruitment roles (HRP-621)", () => {
+    expect(resolveRoleLabel(["recruiter"], translate)).toBe("t:roleRecruiter");
+    expect(resolveRoleLabel(["hiring_manager"], translate)).toBe(
+      "t:roleHiringManager",
+    );
+  });
+
+  it("prettifies codes that have no catalog key", () => {
     expect(resolveRoleLabel(["mentor"], translate)).toBe("mentor");
+    expect(resolveRoleLabel(["team_lead"], translate)).toBe("team lead");
   });
 });

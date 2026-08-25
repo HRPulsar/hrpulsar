@@ -326,7 +326,10 @@ export default function PositionDetailPage() {
   const tc = useTranslations("common");
   const locale = useLocale();
   const { id } = useParams<{ id: string }>();
-  const { canManage } = usePermissions();
+  // HRP-631: a division head edits a position only inside their managed
+  // subtree; `can_manage` comes off the position itself, since the role
+  // alone would render controls that 403.
+  const { canManage: canManageByRole, canViewHrData } = usePermissions();
   const [state, setState] = useState<DetailState>(initialState);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -453,6 +456,7 @@ export default function PositionDetailPage() {
   }
 
   const { position, matrix, employees } = state;
+  const canManage = canManageByRole && position.can_manage !== false;
   // HRP-54: when we send the operator to the specialization matrix from a
   // position page, tag the URL so the destination renders a "Back to
   // position" affordance instead of dropping the user into a deep section
@@ -1094,6 +1098,7 @@ export default function PositionDetailPage() {
               <EmployeeList
                 employees={employees as EmployeeListItem[]}
                 testIdPrefix="position-detail-employees-row"
+                hrColumns={canViewHrData}
               />
             </div>
           )}

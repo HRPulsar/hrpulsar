@@ -192,3 +192,24 @@ async def test_clone_seed_localizes_content_de(
     for code, locale in rows:
         expected = "de" if code in de_codes else "en"
         assert locale == expected, f"template {code} pinned to {locale}"
+
+    # Employee names are display text too — a German demo is staffed by
+    # Germans. The email follows the name (it is a column on /employees),
+    # which is exactly what could strand the "view as employee" persona:
+    # ``switch_demo_view`` resolves NAME_POOL idx 2 through the same
+    # ``localized_name_pool`` the seed wrote with.
+    from app.modules.auth.models import User as AuthUser
+    from app.modules.demo.seed_data_employees import localized_name_pool
+    from app.modules.demo.service import DEMO_EMPLOYEE_PERSONA_INDEX
+
+    persona_email = localized_name_pool()[DEMO_EMPLOYEE_PERSONA_INDEX][2]
+    assert persona_email == "christian.merten@demo.example.com"
+    persona = (
+        await db.execute(
+            select(AuthUser).where(
+                AuthUser.tenant_id == tenant.id,
+                AuthUser.email == persona_email,
+            )
+        )
+    ).scalar_one()
+    assert (persona.first_name, persona.last_name) == ("Christian", "Merten")

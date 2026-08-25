@@ -223,7 +223,6 @@ BARE_HTTPEXCEPTION_ALLOWLIST = {
     "app/modules/auth/service.py": 2,
     "app/modules/competence/router.py": 2,
     "app/modules/demo/router.py": 1,
-    "app/modules/employee/service.py": 2,
     "app/modules/recruitment/manager_assessment_router.py": 1,
     "app/modules/recruitment/resume_analysis_service.py": 1,
     "app/modules/recruitment/routers/e2e_seed.py": 11,

@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1033,11 +1033,16 @@ async def list_vacancies(
     search: str | None = None,
     include_archived: bool = False,
     archived_only: bool = False,
+    scope_filter: ColumnElement[bool] | None = None,
 ) -> tuple[list[dict], int]:
     """List vacancies with optional status filter and search by title.
 
     ``archived_only`` returns only soft-deleted rows (`archived_at IS NOT
     NULL`). ``include_archived=False`` (default) hides them.
+
+    ``scope_filter`` narrows the list to the vacancies the caller may see
+    (HRP-629): ``None`` means no restriction — see
+    ``recruitment.scope.list_scope_filter``.
     """
     query = (
         select(Vacancy)
@@ -1049,6 +1054,10 @@ async def list_vacancies(
         .where(Vacancy.tenant_id == tenant_id)
     )
     count_query = select(func.count(Vacancy.id)).where(Vacancy.tenant_id == tenant_id)
+
+    if scope_filter is not None:
+        query = query.where(scope_filter)
+        count_query = count_query.where(scope_filter)
 
     if archived_only:
         query = query.where(Vacancy.archived_at.is_not(None))
@@ -1543,7 +1552,9 @@ async def delete_stage(
         raise AppError("vacancy_stage_not_found", status.HTTP_404_NOT_FOUND)
 
     if stage.tenant_id is None:
-        raise AppError("vacancy_stage_system_delete_forbidden", status.HTTP_403_FORBIDDEN)
+        raise AppError(
+            "vacancy_stage_system_delete_forbidden", status.HTTP_403_FORBIDDEN
+        )
     if stage.tenant_id != tenant_id:
         raise AppError("vacancy_stage_not_found", status.HTTP_404_NOT_FOUND)
 

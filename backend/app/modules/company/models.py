@@ -83,6 +83,13 @@ class Tenant(BaseModel):
         DateTime(timezone=True), nullable=True
     )
 
+    # HRP-623: show the grade on directory cards colleagues can open. Off by
+    # default — some tenants read grade as compensation data, so it is a
+    # tenant decision rather than a product one.
+    directory_show_grades: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     divisions: Mapped[list["Division"]] = relationship(back_populates="tenant")
     activity_fields: Mapped[list["CompanyActivityField"]] = relationship(
         back_populates="tenant", cascade="all, delete-orphan"

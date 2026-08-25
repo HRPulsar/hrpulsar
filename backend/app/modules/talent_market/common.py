@@ -355,8 +355,14 @@ async def _dispatch_lifecycle_emails(
             )
 
 
-def _card_to_read(c: TalentCard, *, reacted_by_me: bool = False) -> dict:
+def _card_to_read(
+    c: TalentCard, *, reacted_by_me: bool = False, can_manage: bool = True
+) -> dict:
+    # HRP-639: ``can_manage`` defaults to True because most callers are
+    # mutation responses — the caller just proved they may manage the card.
+    # The two read paths compute it from the caller's scope.
     return {
+        "can_manage": can_manage,
         "id": c.id,
         "title": c.title,
         "description": c.description,
@@ -395,6 +401,7 @@ def _card_to_detail(
     breakdown_by_emp: dict[uuid.UUID, dict] | None = None,
     viewer_employee_id: uuid.UUID | None = None,
     reacted_by_me: bool = False,
+    can_manage: bool = True,
 ) -> dict:
     """Card detail with embedded candidates.
 
@@ -411,7 +418,7 @@ def _card_to_detail(
     fields falsy / null — kept that way so background callers don't pay
     the cost of computing it.
     """
-    data = _card_to_read(c, reacted_by_me=reacted_by_me)
+    data = _card_to_read(c, reacted_by_me=reacted_by_me, can_manage=can_manage)
     data["specializations"] = [
         {
             "id": s.id,

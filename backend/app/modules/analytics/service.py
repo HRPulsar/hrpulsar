@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import status
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from sqlalchemy import Row, func, select
+from sqlalchemy import ColumnElement, Row, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, exception_summary
@@ -42,19 +42,41 @@ from app.modules.auth.models import User
 from app.modules.company.models import Division, SpecializationDivision
 from app.modules.competence.models import Competence
 from app.modules.dictionary.models import DictionaryItem
+from app.modules.employee import issues
 from app.modules.employee.models import Compensation, Employee
 from app.modules.grade_system.models import GradeCompetenceLink, GradeSpecialization
 
 logger = logging.getLogger(__name__)
 
 
-async def assessment_stats(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
+def _assessee_scope(
+    visible_employee_ids: set[uuid.UUID] | None,
+) -> list[ColumnElement[bool]]:
+    """The scope predicate for a query that reaches ``Assessment`` (HRP-641).
+
+    ``None`` means no restriction (admin / hr). An empty set means the
+    caller manages nobody and must get an empty report — which is why this
+    returns a list to splat rather than being written as ``if ids:`` at
+    each call site. That shortcut is what turns "sees nothing" into "sees
+    everything".
+    """
+    if visible_employee_ids is None:
+        return []
+    return [Assessment.employee_id.in_(visible_employee_ids)]
+
+
+async def assessment_stats(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    visible_employee_ids: set[uuid.UUID] | None,
+) -> dict:
+    scope = _assessee_scope(visible_employee_ids)
 
     # Count by status
     result = await db.execute(
         select(AssessmentStatus.code, func.count(Assessment.id))
         .join(Assessment, Assessment.status_id == AssessmentStatus.id)
-        .where(Assessment.tenant_id == tenant_id)
+        .where(Assessment.tenant_id == tenant_id, *scope)
         .group_by(AssessmentStatus.code)
     )
     by_status: dict[str, int] = dict(result.all())  # type: ignore[arg-type]
@@ -65,7 +87,7 @@ async def assessment_stats(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
     avg_result = await db.execute(
         select(func.avg(AssessmentResult.avg_score))
         .join(Assessment, Assessment.id == AssessmentResult.assessment_id)
-        .where(Assessment.tenant_id == tenant_id)
+        .where(Assessment.tenant_id == tenant_id, *scope)
     )
     avg_score = avg_result.scalar()
 
@@ -76,16 +98,25 @@ async def assessment_stats(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
     }
 
 
-async def pdp_stats(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
+async def pdp_stats(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    visible_employee_ids: set[uuid.UUID] | None,
+) -> dict:
+    scope = (
+        []
+        if visible_employee_ids is None
+        else [PDP.employee_id.in_(visible_employee_ids)]
+    )
     result = await db.execute(
         select(PDP.status, func.count(PDP.id))
-        .where(PDP.tenant_id == tenant_id)
+        .where(PDP.tenant_id == tenant_id, *scope)
         .group_by(PDP.status)
     )
     by_status: dict[str, int] = dict(result.all())  # type: ignore[arg-type]
 
     avg_result = await db.execute(
-        select(func.avg(PDP.total_progress)).where(PDP.tenant_id == tenant_id)
+        select(func.avg(PDP.total_progress)).where(PDP.tenant_id == tenant_id, *scope)
     )
     avg_progress = avg_result.scalar()
 
@@ -171,12 +202,14 @@ async def compensation_stats(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
 
 
 async def export_assessments_xlsx(
-    db: AsyncSession, tenant_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    visible_employee_ids: set[uuid.UUID] | None,
 ) -> StreamingResponse:
 
     result = await db.execute(
         select(Assessment)
-        .where(Assessment.tenant_id == tenant_id)
+        .where(Assessment.tenant_id == tenant_id, *_assessee_scope(visible_employee_ids))
         .order_by(Assessment.created_at.desc())
     )
     assessments = result.scalars().all()
@@ -353,9 +386,19 @@ async def division_specialization_matrix(
 
 
 async def compare_cpa_rounds(
-    db: AsyncSession, tenant_id: uuid.UUID, cpa_id_1: uuid.UUID, cpa_id_2: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cpa_id_1: uuid.UUID,
+    cpa_id_2: uuid.UUID,
+    visible_employee_ids: set[uuid.UUID] | None,
 ) -> dict:
-    """Compare two CPA rounds: per-employee score changes."""
+    """Compare two CPA rounds: per-employee score changes.
+
+    HRP-641: the comparison is a per-employee score table, so it is scoped
+    by assessee like every other assessment read. Who owns the CPA round
+    itself is a separate, still-open question (HRP-640).
+    """
+    scope = _assessee_scope(visible_employee_ids)
 
     async def _cpa_scores(cpa_id: uuid.UUID) -> dict:
         result = await db.execute(
@@ -364,7 +407,11 @@ async def compare_cpa_rounds(
                 func.avg(AssessmentResult.avg_score).label("avg_score"),
             )
             .join(AssessmentResult, AssessmentResult.assessment_id == Assessment.id)
-            .where(Assessment.cpa_id == cpa_id, Assessment.tenant_id == tenant_id)
+            .where(
+                Assessment.cpa_id == cpa_id,
+                Assessment.tenant_id == tenant_id,
+                *scope,
+            )
             .group_by(Assessment.employee_id)
         )
         return {str(emp_id): round(float(avg), 2) for emp_id, avg in result.all()}
@@ -373,8 +420,20 @@ async def compare_cpa_rounds(
     scores_2 = await _cpa_scores(cpa_id_2)
 
     # Get CPA titles
-    cpa1 = await db.get(CPA, cpa_id_1)
-    cpa2 = await db.get(CPA, cpa_id_2)
+    # The scores are tenant-filtered above; the titles were not.
+    rounds = (
+        (
+            await db.execute(
+                select(CPA).where(
+                    CPA.id.in_({cpa_id_1, cpa_id_2}), CPA.tenant_id == tenant_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_id = {c.id: c for c in rounds}
+    cpa1, cpa2 = by_id.get(cpa_id_1), by_id.get(cpa_id_2)
 
     all_employees = set(scores_1.keys()) | set(scores_2.keys())
 
@@ -451,17 +510,18 @@ async def pdp_progress_timeline(
 # develop → close) plus rule-based findings that each carry a next action.
 # ---------------------------------------------------------------------------
 
-DEV_LOOP_STALE_DAYS = 180
-DEV_LOOP_STUCK_REVIEW_DAYS = 14
-DEV_LOOP_CLOSED_WINDOW_DAYS = 90
-DEV_LOOP_DEFAULT_PASSING = 75
+# HRP-638: the cohort maths moved to ``employee.issues`` — the employee
+# list filters by the very same sets, so a tile's number and the list it
+# links to cannot drift apart. Re-exported under the historical names
+# because ``my_loop`` and the unit tests read them from here.
+DEV_LOOP_STALE_DAYS = issues.STALE_DAYS
+DEV_LOOP_STUCK_REVIEW_DAYS = issues.STUCK_REVIEW_DAYS
+DEV_LOOP_CLOSED_WINDOW_DAYS = issues.CLOSED_WINDOW_DAYS
+DEV_LOOP_DEFAULT_PASSING = issues.DEFAULT_PASSING
 _FINDING_EMPLOYEE_LIMIT = 5
 
-
-def _passing_bar(passing_score: int | None) -> int:
-    # Identity check, not truthiness: 0 is a legitimate stored bar
-    # ("no bar") and must not silently become the default 75.
-    return DEV_LOOP_DEFAULT_PASSING if passing_score is None else passing_score
+_passing_bar = issues.passing_bar
+_closed_against_previous = issues.closed_against_previous
 
 
 def _employee_display(emp: Employee) -> dict:
@@ -480,235 +540,70 @@ async def _active_done_results(
     """Active employees, the tenant's done assessments (newest first) and
     per-competence results for the done assessments of active employees.
 
-    Shared between the company ``dev_loop`` and the personal ``my_loop``
-    (ponytail: reduced in Python — a couple of rows per employee, fine at
-    dashboard scale).
+    Thin wrapper over ``employee.issues`` kept for ``my_loop``, which needs
+    the raw rows rather than the derived cohorts.
     """
-    active_employees = (
-        (
-            await db.execute(
-                select(Employee).where(
-                    Employee.tenant_id == tenant_id, Employee.status == "active"
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    active_by_id = {e.id: e for e in active_employees}
-
-    done_rows = (
-        await db.execute(
-            select(
-                Assessment.id,
-                Assessment.employee_id,
-                Assessment.finished_at,
-                Assessment.passing_score,
-            )
-            .join(AssessmentStatus, AssessmentStatus.id == Assessment.status_id)
-            .where(Assessment.tenant_id == tenant_id, AssessmentStatus.code == "done")
-            .order_by(
-                Assessment.finished_at.desc().nulls_last(), Assessment.id.desc()
-            )
-        )
-    ).all()
-
-    # Join instead of expanding done ids into an IN list: the id set is the
-    # tenant's whole assessment history, and one bind param per id caps out
-    # at asyncpg's 65535 limit long before a big tenant does.
-    results_by_assessment: dict[uuid.UUID, list[Row]] = {}
-    result_rows = (
-        await db.execute(
-            select(
-                AssessmentResult.assessment_id,
-                AssessmentResult.competence_id,
-                AssessmentResult.percent,
-            )
-            .join(Assessment, Assessment.id == AssessmentResult.assessment_id)
-            .join(AssessmentStatus, AssessmentStatus.id == Assessment.status_id)
-            .join(Employee, Employee.id == Assessment.employee_id)
-            .where(
-                Assessment.tenant_id == tenant_id,
-                AssessmentStatus.code == "done",
-                Employee.status == "active",
-                AssessmentResult.percent.is_not(None),
-            )
-        )
-    ).all()
-    for res in result_rows:
-        results_by_assessment.setdefault(res.assessment_id, []).append(res)
-    return active_by_id, done_rows, results_by_assessment
+    facts = await issues.collect_issue_facts(db, tenant_id)
+    return facts.active_by_id, facts.done_rows, facts.results_by_assessment
 
 
-def _latest_done_by_employee(
-    done_rows: Sequence[Row], employee_ids: dict | set
-) -> dict[uuid.UUID, Row]:
-    """First (newest) done row per employee, restricted to ``employee_ids``."""
-    latest: dict[uuid.UUID, Row] = {}
-    for row in done_rows:
-        if row.employee_id in employee_ids and row.employee_id not in latest:
-            latest[row.employee_id] = row
-    return latest
+_latest_done_by_employee = issues.latest_done_by_employee
 
 
-def _closed_against_previous(
-    passed_now: set[uuid.UUID],
-    earlier: Sequence[Row],
-    results_by_assessment: dict[uuid.UUID, list[Row]],
-) -> set[uuid.UUID]:
-    """Competences confirmed closed by the latest assessment.
-
-    ``earlier`` is newest-first; per competence only its most recent
-    earlier result is compared — a below-the-bar score further back that
-    was already re-confirmed does not count again.
-    """
-    closed: set[uuid.UUID] = set()
-    seen: set[uuid.UUID] = set()
-    for prev in earlier:
-        prev_bar = _passing_bar(prev.passing_score)
-        for res in results_by_assessment.get(prev.id, []):
-            if res.competence_id in seen:
-                continue
-            seen.add(res.competence_id)
-            if res.percent < prev_bar and res.competence_id in passed_now:
-                closed.add(res.competence_id)
-    return closed
-
-
-async def dev_loop(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
+async def dev_loop(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    visible_employee_ids: set[uuid.UUID] | None,
+) -> dict:
     """Development-loop stages + actionable findings for the dashboard.
 
     Returns machine codes only — all user-facing text is rendered by the
     frontend i18n layer. ``data_version`` fingerprints the derived state
     so the AI-summary cache can detect "same data, same summary".
     """
-    now = datetime.now(UTC)
-    stale_cutoff = now - timedelta(days=DEV_LOOP_STALE_DAYS)
-    stuck_cutoff = now - timedelta(days=DEV_LOOP_STUCK_REVIEW_DAYS)
-    closed_cutoff = now - timedelta(days=DEV_LOOP_CLOSED_WINDOW_DAYS)
-
-    active_by_id, done_rows, results_by_assessment = await _active_done_results(
-        db, tenant_id
+    facts = await issues.collect_issue_facts(
+        db, tenant_id, visible_employee_ids=visible_employee_ids
     )
-    total_active = len(active_by_id)
-
-    latest_done = _latest_done_by_employee(done_rows, active_by_id)
-
-    assessed_recent = {
-        emp_id
-        for emp_id, row in latest_done.items()
-        if row.finished_at is not None and row.finished_at >= stale_cutoff
-    }
-
-    # Gaps: results below the bar in the employee's latest done assessment.
-    gap_employees: set[uuid.UUID] = set()
-    gap_competences = 0
-    for emp_id, row in latest_done.items():
-        bar = _passing_bar(row.passing_score)
-        for res in results_by_assessment.get(row.id, []):
-            if res.percent < bar:
-                gap_employees.add(emp_id)
-                gap_competences += 1
-
-    # Confirmed closures: competence below the bar in the IMMEDIATELY
-    # preceding result and at/above the bar in the latest assessment,
-    # counted when the closing (latest) assessment finished inside the
-    # 90-day window. Only the adjacent-previous result counts — otherwise
-    # a gap closed years ago would be re-counted on every re-assessment
-    # and the Closed tile would grow monotonically (review finding).
-    done_by_employee: dict[uuid.UUID, list[Row]] = {}
-    for row in done_rows:
-        if row.employee_id in active_by_id:
-            done_by_employee.setdefault(row.employee_id, []).append(row)
-    gaps_closed = 0
-    for emp_id, latest in latest_done.items():
-        if latest.finished_at is None or latest.finished_at < closed_cutoff:
-            continue
-        latest_bar = _passing_bar(latest.passing_score)
-        passed_now = {
-            res.competence_id
-            for res in results_by_assessment.get(latest.id, [])
-            if res.percent >= latest_bar
-        }
-        earlier = [r for r in done_by_employee[emp_id] if r.id != latest.id]
-        gaps_closed += len(
-            _closed_against_previous(passed_now, earlier, results_by_assessment)
-        )
-
-    pdp_rows = (
-        await db.execute(
-            select(
-                PDP.employee_id,
-                PDP.status,
-                PDP.deadline,
-                PDP.updated_at,
-                PDP.finished_at,
-            ).where(PDP.tenant_id == tenant_id)
-        )
-    ).all()
-    open_pdp_employees = {
-        r.employee_id for r in pdp_rows if r.status not in PDP_FINALIZED_STATUSES
-    }
-    open_pdp_count = sum(1 for r in pdp_rows if r.status not in PDP_FINALIZED_STATUSES)
-    overdue_employees = {
-        r.employee_id
-        for r in pdp_rows
-        if r.status not in PDP_FINALIZED_STATUSES
-        and r.deadline is not None
-        and r.deadline < now
-    }
-    stuck_employees = {
-        r.employee_id
-        for r in pdp_rows
-        if r.status in {"review", "returned"} and r.updated_at < stuck_cutoff
-    }
-    plans_done_on_time = sum(
-        1
-        for r in pdp_rows
-        if r.status == "done"
-        and r.finished_at is not None
-        and r.finished_at >= closed_cutoff
-        and r.deadline is not None
-        and r.finished_at <= r.deadline
-    )
-
-    gaps_without_plan = gap_employees - open_pdp_employees
-    uncovered = total_active - len(assessed_recent)
+    cohorts = issues.issue_cohorts(facts)
+    total_active = facts.total_active
+    uncovered = len(cohorts["assessment_stale"])
 
     def _employees_for(ids: set[uuid.UUID]) -> list[dict]:
-        picked = [active_by_id[i] for i in ids if i in active_by_id]
+        picked = [facts.active_by_id[i] for i in ids if i in facts.active_by_id]
         picked.sort(key=lambda e: (e.user.last_name if e.user else "", str(e.id)))
         return [_employee_display(e) for e in picked[:_FINDING_EMPLOYEE_LIMIT]]
 
+    # Each finding's href carries the filter that reproduces its own count —
+    # the list the user lands on holds exactly the people the number counted.
     findings: list[dict] = []
-    if gaps_without_plan:
+    if cohorts["gaps_without_plan"]:
         findings.append(
             {
                 "code": "gaps_without_plan",
                 "severity": "alert",
-                "count": len(gaps_without_plan),
-                "employees": _employees_for(gaps_without_plan),
-                "href": "/development",
+                "count": len(cohorts["gaps_without_plan"]),
+                "employees": _employees_for(cohorts["gaps_without_plan"]),
+                "href": "/employees?issue=gaps_without_plan",
             }
         )
-    if overdue_employees:
+    if facts.overdue_employees:
         findings.append(
             {
                 "code": "pdp_overdue",
                 "severity": "alert",
-                "count": len(overdue_employees),
-                "employees": _employees_for(overdue_employees),
-                "href": "/development",
+                "count": len(facts.overdue_employees),
+                "employees": _employees_for(facts.overdue_employees),
+                "href": "/development?flag=overdue",
             }
         )
-    if stuck_employees:
+    if facts.stuck_employees:
         findings.append(
             {
                 "code": "pdp_stuck_review",
                 "severity": "warn",
-                "count": len(stuck_employees),
-                "employees": _employees_for(stuck_employees),
-                "href": "/development",
+                "count": len(facts.stuck_employees),
+                "employees": _employees_for(facts.stuck_employees),
+                "href": "/development?flag=stuck_review",
             }
         )
     if total_active > 0 and uncovered > 0:
@@ -717,33 +612,35 @@ async def dev_loop(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
                 "code": "assessment_coverage",
                 "severity": "info",
                 "count": uncovered,
-                "employees": [],
-                "href": "/assessments",
+                "employees": _employees_for(cohorts["assessment_stale"]),
+                "href": "/employees?issue=assessment_stale",
             }
         )
 
     payload = {
         "stages": {
             "assessed": {
-                "covered": len(assessed_recent),
+                "covered": len(facts.assessed_recent),
                 "total_active": total_active,
                 "percent": (
-                    round(len(assessed_recent) / total_active * 100)
+                    round(len(facts.assessed_recent) / total_active * 100)
                     if total_active
                     else 0
                 ),
             },
             "gaps": {
-                "employees": len(gap_employees),
-                "competences": gap_competences,
+                "employees": len(facts.gap_employees),
+                "competences": facts.gap_competences,
             },
             "developing": {
-                "open_pdps": open_pdp_count,
-                "gap_employees_with_plan": len(gap_employees & open_pdp_employees),
+                "open_pdps": facts.open_pdp_count,
+                "gap_employees_with_plan": len(
+                    facts.gap_employees & facts.open_pdp_employees
+                ),
             },
             "closed": {
-                "gaps_closed_90d": gaps_closed,
-                "plans_done_on_time_90d": plans_done_on_time,
+                "gaps_closed_90d": facts.gaps_closed,
+                "plans_done_on_time_90d": facts.plans_done_on_time,
             },
         },
         "findings": findings,
@@ -890,6 +787,7 @@ async def dev_loop_ai_summary(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
     *,
+    visible_employee_ids: set[uuid.UUID] | None,
     client_fingerprint: str | None = None,
 ) -> dict:
     """Cache dispatcher: one generation per distinct loop state.
@@ -900,11 +798,18 @@ async def dev_loop_ai_summary(
     cache hit skips the whole aggregation pass; the text then matches
     the exact state the user is looking at. Redis being down degrades
     to plain generation (fail open).
+
+    HRP-638: the key is per caller now that the loop is read-scoped. The
+    fingerprint alone would already separate two managers' summaries, but
+    ``client_fingerprint`` is attacker-supplied — without the user in the
+    key, a guessed fingerprint would serve another scope's text.
     """
     language = await _tenant_content_language(db, tenant_id)
     if client_fingerprint:
         cached = await _summary_cache_get(
-            _ai_summary_cache_key(tenant_id, language, client_fingerprint),
+            _ai_summary_cache_key(
+                tenant_id, language, client_fingerprint, user_id=user_id
+            ),
             "dev-loop",
         )
         if cached:
@@ -914,9 +819,9 @@ async def dev_loop_ai_summary(
                 "data_version": client_fingerprint,
             }
 
-    payload = await dev_loop(db, tenant_id)
+    payload = await dev_loop(db, tenant_id, visible_employee_ids)
     fingerprint = payload["data_version"]
-    key = _ai_summary_cache_key(tenant_id, language, fingerprint)
+    key = _ai_summary_cache_key(tenant_id, language, fingerprint, user_id=user_id)
 
     cached = await _summary_cache_get(key, "dev-loop")
     if cached:

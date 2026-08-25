@@ -21,10 +21,22 @@ from app.modules.talent_market.schemas import (
     TalentCardCreate,
     TalentCardUpdate,
 )
+from app.modules.talent_market.scope import TalentScope
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # --------------- helpers ---------------
+
+
+def _board_scope(employee_id: uuid.UUID | None = None) -> TalentScope:
+    """A viewer who manages nothing and authored nothing — the board rule
+    reduces to "published, plus the cards I'm a candidate on"."""
+    return TalentScope(
+        unrestricted=False,
+        division_ids=(),
+        user_id=uuid.uuid4(),
+        employee_id=employee_id,
+    )
 
 
 def _card_create(suffix: str | None = None) -> TalentCardCreate:
@@ -115,7 +127,9 @@ class TestCreateCard:
 
 class TestSearchCards:
     async def test_search_empty(self, db: AsyncSession, tenant):
-        items, total = await service.search_cards(db, tenant.id, SearchRequest())
+        items, total = await service.search_cards(
+            db, tenant.id, SearchRequest(), scope=None
+        )
         assert items == []
         assert total == 0
 
@@ -124,7 +138,9 @@ class TestSearchCards:
         await service.create_card(db, tenant.id, user.id, _card_create(s))
         await service.create_card(db, tenant.id, user.id, _card_create(s + "b"))
 
-        items, total = await service.search_cards(db, tenant.id, SearchRequest())
+        items, total = await service.search_cards(
+            db, tenant.id, SearchRequest(), scope=None
+        )
         assert total >= 2
         assert len(items) >= 2
 
@@ -137,10 +153,10 @@ class TestSearchCards:
         )
 
         vacancies, _ = await service.search_cards(
-            db, tenant.id, SearchRequest(card_type="vacancy")
+            db, tenant.id, SearchRequest(card_type="vacancy"), scope=None
         )
         projects, _ = await service.search_cards(
-            db, tenant.id, SearchRequest(card_type="project")
+            db, tenant.id, SearchRequest(card_type="project"), scope=None
         )
 
         assert all(c["card_type"] == "vacancy" for c in vacancies)
@@ -153,7 +169,7 @@ class TestSearchCards:
         await service.publish_card(db, tenant.id, card["id"])
 
         published, _ = await service.search_cards(
-            db, tenant.id, SearchRequest(status="published")
+            db, tenant.id, SearchRequest(status="published"), scope=None
         )
         assert any(c["id"] == card["id"] for c in published)
 
@@ -162,10 +178,10 @@ class TestSearchCards:
             await service.create_card(db, tenant.id, user.id, _card_create(f"pg{i}"))
 
         page1, total = await service.search_cards(
-            db, tenant.id, SearchRequest(skip=0, limit=2)
+            db, tenant.id, SearchRequest(skip=0, limit=2), scope=None
         )
         page2, _ = await service.search_cards(
-            db, tenant.id, SearchRequest(skip=2, limit=2)
+            db, tenant.id, SearchRequest(skip=2, limit=2), scope=None
         )
 
         assert len(page1) == 2
@@ -176,7 +192,9 @@ class TestSearchCards:
     async def test_tenant_isolation(self, db: AsyncSession, tenant, user):
         await service.create_card(db, tenant.id, user.id, _card_create())
         other_tenant_id = uuid.uuid4()
-        items, total = await service.search_cards(db, other_tenant_id, SearchRequest())
+        items, total = await service.search_cards(
+            db, other_tenant_id, SearchRequest(), scope=None
+        )
         assert total == 0
 
     async def test_published_only_hides_drafts(
@@ -189,7 +207,7 @@ class TestSearchCards:
         await service.publish_card(db, tenant.id, pub["id"])
 
         items, _ = await service.search_cards(
-            db, tenant.id, SearchRequest(), published_only=True
+            db, tenant.id, SearchRequest(), scope=_board_scope()
         )
         ids = {c["id"] for c in items}
         assert pub["id"] in ids
@@ -207,8 +225,7 @@ class TestSearchCards:
             db,
             tenant.id,
             SearchRequest(),
-            published_only=True,
-            assignee_employee_id=employee.id,
+            scope=_board_scope(employee.id),
         )
         ids = {c["id"] for c in items}
         assert draft["id"] in ids
@@ -224,8 +241,7 @@ class TestSearchCards:
             db,
             tenant.id,
             SearchRequest(),
-            published_only=True,
-            assignee_employee_id=other_employee_id,
+            scope=_board_scope(other_employee_id),
         )
         assert draft["id"] not in {c["id"] for c in items}
 

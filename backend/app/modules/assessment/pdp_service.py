@@ -163,6 +163,7 @@ def _pdp_to_read(p: PDP, reviewer_name: str | None = None) -> dict:
         "finished_at": p.finished_at,
         "tenant_id": p.tenant_id,
         "created_at": p.created_at,
+        "updated_at": p.updated_at,
     }
 
 

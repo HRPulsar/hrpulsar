@@ -43,7 +43,9 @@ from app.modules.assessment.models import (
     PDPItem,
 )
 from app.modules.auth.models import User
+from app.modules.auth.roles import ensure_baseline_employee_role, grant_role
 from app.modules.company.models import Division, Tenant
+from app.modules.company.service import sync_role_on_assign
 from app.modules.competence.models import (
     Competence,
     CompetenceGroup,
@@ -81,9 +83,8 @@ from app.modules.demo.seed_data_competences import (
 )
 from app.modules.demo.seed_data_employees import (
     EMPLOYEE_ASSIGNMENTS,
-    NAME_POOL,
-    email_for,
     hire_days_back,
+    localized_name_pool,
 )
 from app.modules.demo.seed_data_exams import MASS_EXAMS
 from app.modules.demo.seed_data_misc import (
@@ -656,10 +657,9 @@ async def _seed_employees(
     # hash is purely there to satisfy the NOT NULL column.
     shared_demo_password_hash = hash_password(secrets.token_urlsafe(32))
 
-    for idx, (assignment, (first, last)) in enumerate(
-        zip(EMPLOYEE_ASSIGNMENTS, NAME_POOL, strict=True)
+    for idx, (assignment, (first, last, email)) in enumerate(
+        zip(EMPLOYEE_ASSIGNMENTS, localized_name_pool(), strict=True)
     ):
-        email = email_for(first, last)
         existing_user = (
             await db.execute(
                 select(User).where(
@@ -683,6 +683,10 @@ async def _seed_employees(
             )
             db.add(user)
             await db.flush()
+        # HRP-619: seeded users used to end up with no role at all, so the
+        # demo's own "switch to an employee" persona had roles == [] and
+        # every role-gated surface behaved as if the account was broken.
+        await ensure_baseline_employee_role(db, user.id)
         ctx.employee_users.append(user)
 
         existing_emp = (
@@ -731,6 +735,21 @@ async def _seed_employees(
             division.manager_id = employee.id
         elif role == "division_deputy" and division.deputy_manager_id is None:
             division.deputy_manager_id = employee.id
+        else:
+            continue
+        # Same upgrade the division editor performs when leadership is
+        # assigned through the UI (HRP-196) — a demo division head without
+        # the manager role sees none of the team surfaces.
+        await sync_role_on_assign(db, tenant_id, employee.id)
+
+    # ── Grant the remaining system roles ────────────────────────────────
+    # After the leadership pass on purpose: `sync_role_on_assign` skips a
+    # user who already holds a manager-or-higher role, so granting `hr`
+    # first would quietly cost the People head their `manager` row.
+    for assignment, employee in zip(EMPLOYEE_ASSIGNMENTS, ctx.employees, strict=True):
+        code = assignment.get("rbac_role")
+        if code:
+            await grant_role(db, employee.user_id, code)
 
     # HRP-303: the Engineering parent division has no direct headcount
     # (sub-divisions hold all eng employees), so the sub-division heads

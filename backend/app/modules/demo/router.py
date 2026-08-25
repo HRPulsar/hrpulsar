@@ -73,6 +73,8 @@ async def start_demo_session(
         turnstile_token=payload.turnstile_token,
         remote_ip=_client_ip(request),
         user_agent=request.headers.get("user-agent"),
+        accept_language=request.headers.get("accept-language"),
+        browser_timezone=payload.timezone,
         existing_token=_bearer_token(authorization),
     )
 

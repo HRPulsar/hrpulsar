@@ -89,9 +89,10 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
     Steps:
     1. Mark ``interviews.transcription_status='processing'``.
     2. Resolve a tenant-scoped TranscriptionProvider (Whisper / Deepgram).
-    3. Build a presigned URL for the uploaded media file and call the
-       provider; PII filter is applied to the resulting transcript and
-       per-segment text before they are persisted.
+    3. Pull the uploaded media onto the worker, reduce it to mono 16 kHz
+       audio with ffmpeg (HRP-646) and call the provider; PII filter is
+       applied to the resulting transcript and per-segment text before
+       they are persisted.
     4. Replace any prior segments and store full transcript + duration +
        provider name on the Interview row.
     5. Mark ``transcription_status='completed'``. On any failure, write
@@ -101,7 +102,7 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
     import asyncio
     import uuid
 
-    from sqlalchemy import create_engine, delete
+    from sqlalchemy import create_engine, delete, select
     from sqlalchemy.orm import Session
 
     from app.config import settings
@@ -112,7 +113,8 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
         InterviewSegment,
     )
     from app.modules.recruitment.transcription_service import (
-        get_transcription_provider_sync,
+        get_transcription_chain_sync,
+        transcribe_with_chain,
     )
     from app.modules.storage.models import File
 
@@ -213,18 +215,13 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 db.commit()
                 return {"status": "failed", "error": "File record missing"}
 
-            provider = get_transcription_provider_sync(db, uuid.UUID(tenant_id))
+            providers = get_transcription_chain_sync(db, uuid.UUID(tenant_id))
 
-            from app.modules.recruitment.transcription_service import (
-                OpenAIWhisperProvider,
-            )
-
-            # Whisper downloads the media itself from inside the worker, so
-            # its URL must be signed for the internal endpoint; Deepgram
-            # fetches from its own cloud and needs the public one.
-            is_whisper = isinstance(provider, OpenAIWhisperProvider)
+            # Every provider downloads the media from inside the worker,
+            # so the URL is always signed for the internal endpoint — the
+            # bucket never has to be reachable from a provider's cloud.
             audio_url = get_presigned_url(
-                file_record.path, expires_in=3600, internal=is_whisper
+                file_record.path, expires_in=3600, internal=True
             )
             if not audio_url:
                 interview.transcription_status = "failed"
@@ -235,27 +232,71 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                     "error": "Object storage unavailable",
                 }
 
-            # Pre-flight Whisper's 25 MB size cap so we never even start
-            # the download for an oversized recording — the client should
-            # have used Deepgram instead.
-            if (
-                is_whisper
-                and (file_record.size or 0) > OpenAIWhisperProvider.WHISPER_MAX_BYTES
-            ):
+            # HRP-628: the interview is in whatever language it was
+            # conducted in. Follow the tenant's content_language when it
+            # has one and let the provider detect otherwise — the previous
+            # hardcoded "en" transcribed Russian interviews as gibberish.
+            from app.modules.ai_settings.models import TenantAISettings
+
+            language = db.execute(
+                select(TenantAISettings.content_language).where(
+                    TenantAISettings.tenant_id == uuid.UUID(tenant_id)
+                )
+            ).scalar_one_or_none()
+
+            # HRP-646: a 500 MB screen recording is not what a
+            # transcription API should be fed. ffmpeg drops the video track
+            # and re-encodes the audio to mono 16 kHz, which is what makes
+            # the size-capped providers in the chain usable on a real
+            # hour-long interview. Where ffmpeg is missing or cannot demux
+            # the container, the original file goes out untouched as before.
+            import os
+            import tempfile
+
+            from app.modules.recruitment import media_prep
+
+            with tempfile.TemporaryDirectory(prefix="hrp-interview-") as workdir:
+                source = media_prep.fetch_to_file(
+                    audio_url, os.path.join(workdir, "source.bin")
+                )
+                audio_path = (
+                    media_prep.extract_audio(
+                        source,
+                        os.path.join(workdir, f"interview{media_prep.AUDIO_SUFFIX}"),
+                    )
+                    or source
+                )
+                result, last_error = asyncio.run(
+                    transcribe_with_chain(
+                        providers,
+                        audio_path,
+                        language=language,
+                    )
+                )
+            if result is None:
                 interview.transcription_status = "failed"
                 interview.transcription_error = (
-                    "Recording exceeds Whisper API 25 MB limit; configure "
-                    "Deepgram for tenant or pre-split the audio"
+                    f"No transcription provider succeeded: {last_error}"
                 )
                 db.commit()
-                return {
-                    "status": "failed",
-                    "error": "Whisper 25 MB limit exceeded",
-                }
+                return {"status": "failed", "error": last_error}
 
-            result = asyncio.run(
-                provider.transcribe(audio_url, language="en", diarization=True)
-            )
+            # HRP-646: a provider without diarization (Whisper) returns the
+            # whole interview as one voice, and the analysis then scores
+            # competences unable to tell the candidate's words from the
+            # question that prompted them. Recover the roles with an LLM
+            # pass; if it cannot, the single-speaker transcript stands.
+            if result.segments and len({s.speaker for s in result.segments}) < 2:
+                from app.modules.recruitment.speaker_roles import label_speakers_sync
+
+                relabelled = label_speakers_sync(
+                    db,
+                    uuid.UUID(tenant_id),
+                    result.segments,
+                    language=language,
+                )
+                if relabelled:
+                    result.segments = relabelled
 
             db.execute(
                 delete(InterviewSegment).where(

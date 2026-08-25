@@ -71,7 +71,7 @@ class TestCardOrdering:
         self, db: AsyncSession, tenant, cards_across_statuses
     ) -> None:
         items, total = await service.search_cards(
-            db, tenant.id, SearchRequest(limit=50)
+            db, tenant.id, SearchRequest(limit=50), scope=None
         )
         # All six cards land in the response.
         assert total == 6

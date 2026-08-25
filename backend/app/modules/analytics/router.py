@@ -4,9 +4,11 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access_scope import get_visible_employee_ids
 from app.core.schemas import TaskAccepted
 from app.database import get_db
 from app.modules.analytics import service
+from app.modules.assessment.scope import pdp_status_scope
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
 
@@ -25,7 +27,9 @@ async def assessment_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
-    return await service.assessment_stats(db, current_user.tenant_id)
+    return await service.assessment_stats(
+        db, current_user.tenant_id, await get_visible_employee_ids(db, current_user)
+    )
 
 
 @router.get("/analytics/pdp")
@@ -33,7 +37,9 @@ async def pdp_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
-    return await service.pdp_stats(db, current_user.tenant_id)
+    return await service.pdp_stats(
+        db, current_user.tenant_id, await get_visible_employee_ids(db, current_user)
+    )
 
 
 @router.get("/analytics/dev-loop")
@@ -41,7 +47,16 @@ async def dev_loop(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
-    return await service.dev_loop(db, current_user.tenant_id)
+    # HRP-638: the loop used to aggregate the whole tenant for every
+    # manager — counts and finding names included — while /employees
+    # honoured the read scope. Same scope on both sides now, so a tile's
+    # number matches the list it links to and nobody reads a division
+    # they cannot open.
+    return await service.dev_loop(
+        db,
+        current_user.tenant_id,
+        await get_visible_employee_ids(db, current_user),
+    )
 
 
 @router.post("/analytics/dev-loop/ai-summary")
@@ -55,6 +70,7 @@ async def dev_loop_ai_summary(
         db,
         current_user.tenant_id,
         current_user.id,
+        visible_employee_ids=await get_visible_employee_ids(db, current_user),
         client_fingerprint=body.data_version if body else None,
     )
 
@@ -115,7 +131,11 @@ async def cpa_comparison(
     current_user: User = Depends(require_role("admin", "manager")),
 ):
     return await service.compare_cpa_rounds(
-        db, current_user.tenant_id, cpa_id_1, cpa_id_2
+        db,
+        current_user.tenant_id,
+        cpa_id_1,
+        cpa_id_2,
+        await get_visible_employee_ids(db, current_user),
     )
 
 
@@ -124,6 +144,7 @@ async def pdp_progress(
     pdp_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _scope: None = Depends(pdp_status_scope),
 ):
     return await service.pdp_progress_timeline(db, current_user.tenant_id, pdp_id)
 
@@ -133,20 +154,28 @@ async def export_assessments(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
-    return await service.export_assessments_xlsx(db, current_user.tenant_id)
+    return await service.export_assessments_xlsx(
+        db, current_user.tenant_id, await get_visible_employee_ids(db, current_user)
+    )
 
 
 @router.post("/analytics/export/assessments/async", response_model=TaskAccepted)
 async def export_assessments_async(
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
     """Queue XLSX report generation as background task. Returns task_id for polling."""
     from app.core.task_enqueue import enqueue_task
     from app.modules.analytics.tasks import export_assessments_task
 
+    # HRP-641: the scope travels in the task arguments. Resolving it inside
+    # the worker would mean resolving it for the tenant, not for whoever
+    # asked — the whole point of the fence.
+    visible = await get_visible_employee_ids(db, current_user)
     result = enqueue_task(
         export_assessments_task,
         str(current_user.tenant_id),
+        None if visible is None else sorted(str(i) for i in visible),
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         module="analytics",

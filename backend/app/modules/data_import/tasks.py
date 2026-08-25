@@ -37,6 +37,7 @@ def run_import_task(
     from app.core.security import hash_password
     from app.database import make_sync_engine
     from app.modules.auth.models import User
+    from app.modules.auth.roles import ensure_baseline_employee_role_sync
     from app.modules.data_import.models import ImportJob
     from app.modules.dictionary.models import DictionaryItem
     from app.modules.employee.models import Course, Education, Employee, WorkExperience
@@ -106,6 +107,10 @@ def run_import_task(
                             )
                             db.add(existing)
                             db.flush()
+                            # HRP-619: an imported account with no role at
+                            # all renders a blank role everywhere and
+                            # confuses every role gate.
+                            ensure_baseline_employee_role_sync(db, existing.id)
 
                         emp = db.execute(
                             select(Employee).where(

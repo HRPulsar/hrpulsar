@@ -153,7 +153,11 @@ test.describe("Invitations — INV3 (optimistic update + rollback)", () => {
     const targetRole = originalRole === "manager" ? "admin" : "manager";
 
     await roleTrigger.click();
-    await page.getByRole("option", { name: new RegExp(targetRole, "i") }).click();
+    // Anchored: since HRP-618 the select also offers "Hiring manager", which
+    // an unanchored /manager/i matches just as well as "Manager".
+    await page
+      .getByRole("option", { name: new RegExp(`^${targetRole}$`, "i") })
+      .click();
 
     // Toast surfaces the error (sonner renders into [data-sonner-toaster]).
     await expect(

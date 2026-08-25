@@ -27,7 +27,7 @@ router = APIRouter(tags=["recruitment"])
 @router.get("/recruitment/onboarding", response_model=OnboardingState)
 async def get_onboarding(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hr", "hrd")),
+    current_user: User = Depends(require_role("admin", "recruiter", "hr")),
 ):
     return await onboarding_service.get_state(db, current_user.tenant_id)
 
@@ -35,7 +35,7 @@ async def get_onboarding(
 @router.post("/recruitment/onboarding/dismiss", response_model=OnboardingState)
 async def dismiss_onboarding(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hr", "hrd")),
+    current_user: User = Depends(require_role("admin", "recruiter", "hr")),
 ):
     return await onboarding_service.dismiss(db, current_user.tenant_id)
 

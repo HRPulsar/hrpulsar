@@ -149,7 +149,7 @@ export default function CandidateDetailPage() {
   const isHiringManager =
     (user?.roles ?? []).includes("hiring_manager") &&
     !(user?.roles ?? []).some((r) =>
-      ["admin", "recruiter", "hr", "hrd"].includes(r),
+      ["admin", "recruiter", "hr"].includes(r),
     );
 
   useEffect(() => {

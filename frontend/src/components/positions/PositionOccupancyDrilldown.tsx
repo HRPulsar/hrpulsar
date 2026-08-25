@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   Dialog,
   DialogContent,
@@ -65,6 +66,7 @@ export function PositionOccupancyDrilldown({
   position,
 }: PositionOccupancyDrilldownProps) {
   const t = useTranslations("company");
+  const { canViewHrData } = usePermissions();
   const [employees, setEmployees] = useState<EmployeeListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,6 +147,7 @@ export function PositionOccupancyDrilldown({
             <EmployeeList
               employees={employees}
               testIdPrefix="positions-drilldown-row"
+              hrColumns={canViewHrData}
             />
           )}
         </div>

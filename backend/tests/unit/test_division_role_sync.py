@@ -506,16 +506,16 @@ class TestHrp196BaselineRoleAfterDowngrade:
         ).all()
         assert len(rows) == 1
 
-    async def test_manual_downgrade_endpoint_keeps_employee_role(
-        self, db: AsyncSession, tenant, manager_role, employee_role
+    async def test_manual_set_role_endpoint_keeps_employee_role(
+        self, db: AsyncSession, tenant, user, manager_role, employee_role
     ):
         from app.modules.employee import service as employee_service
 
         u = await _make_user(db, tenant, manager_role)
         emp = await _make_employee(db, tenant, u)
 
-        result = await employee_service.downgrade_employee_role(
-            db, tenant.id, emp.id
+        result = await employee_service.set_employee_role(
+            db, tenant.id, emp.id, "employee", user
         )
-        assert result["downgraded"] is True
+        assert result["changed"] is True
         assert await _user_codes(db, u.id) == {"employee"}

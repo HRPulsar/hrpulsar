@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import status
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -29,6 +29,7 @@ from app.modules.recruitment.models import (
     ConsolidatedReport,
     HumanAssessment,
     Interview,
+    Vacancy,
     VacancyProfile,
 )
 from app.modules.recruitment.schemas import (
@@ -170,11 +171,20 @@ async def list_reports(
     status_filter: str | None = None,
     skip: int = 0,
     limit: int = 50,
+    scope_filter: ColumnElement[bool] | None = None,
 ) -> tuple[list[dict], int]:
     query = select(ConsolidatedReport).where(ConsolidatedReport.tenant_id == tenant_id)
     count_query = select(func.count(ConsolidatedReport.id)).where(
         ConsolidatedReport.tenant_id == tenant_id
     )
+    # HRP-629: a report is about one vacancy, so it inherits its scope.
+    if scope_filter is not None:
+        query = query.join(Vacancy, Vacancy.id == ConsolidatedReport.vacancy_id).where(
+            scope_filter
+        )
+        count_query = count_query.join(
+            Vacancy, Vacancy.id == ConsolidatedReport.vacancy_id
+        ).where(scope_filter)
     if vacancy_id is not None:
         query = query.where(ConsolidatedReport.vacancy_id == vacancy_id)
         count_query = count_query.where(ConsolidatedReport.vacancy_id == vacancy_id)
@@ -198,9 +208,9 @@ async def list_reports(
     items = [
         _report_export_to_read(
             r,
-            requested_by_name=user_names.get(r.generated_by)
-            if r.generated_by
-            else None,
+            requested_by_name=(
+                user_names.get(r.generated_by) if r.generated_by else None
+            ),
         )
         for r in rows
     ]

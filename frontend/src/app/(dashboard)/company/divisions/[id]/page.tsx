@@ -95,7 +95,7 @@ export default function DivisionDetailPage() {
   const t = useTranslations("company");
   const tc = useTranslations("common");
   const { id } = useParams<{ id: string }>();
-  const { canManage } = usePermissions();
+  const { canManage, canViewHrData } = usePermissions();
   const [division, setDivision] = useState<Division | null>(null);
   const [allDivisions, setAllDivisions] = useState<Division[]>([]);
   const [allEmployees, setAllEmployees] = useState<Employee[]>([]);
@@ -356,7 +356,9 @@ export default function DivisionDetailPage() {
     if (!target) return;
     setDowngrading(true);
     try {
-      await api.post(`/employees/${target.employee_id}/downgrade-role`, {});
+      await api.put(`/employees/${target.employee_id}/role`, {
+        role_code: "employee",
+      });
       toast.success(
         target.user_name
           ? t("toastDowngradedNamed", { name: target.user_name })
@@ -433,7 +435,11 @@ export default function DivisionDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Specializations */}
+      {/* Specializations — HRP-623: the tiles count employees by
+          specialization, a field the directory schema does not carry, so
+          for a rank-and-file caller every tile would read 0 while the
+          table below lists the whole department. */}
+      {canViewHrData && (
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
@@ -479,6 +485,7 @@ export default function DivisionDetailPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Employees list */}
       <Card>
@@ -518,6 +525,8 @@ export default function DivisionDetailPage() {
                   {t("includeSubDivisions")}
                 </label>
               ) : null}
+              {canViewHrData && (
+              <>
               {/* HRP-58: Position filter — dropdown, options derived from
                   the loaded employees so the picker never offers a value
                   that yields zero rows. The explicit children inside
@@ -618,6 +627,8 @@ export default function DivisionDetailPage() {
                   ))}
                 </SelectContent>
               </Select>
+              </>
+              )}
               {/* HRP-174: Add employee — opens a contextual modal so HR
                   can add existing or create a new employee without
                   leaving the division detail page. */}
@@ -764,6 +775,7 @@ export default function DivisionDetailPage() {
               <EmployeeList
                 employees={filteredEmployees as unknown as EmployeeListItem[]}
                 testIdPrefix="division-detail-employees-row"
+                hrColumns={canViewHrData}
               />
             </div>
           )}

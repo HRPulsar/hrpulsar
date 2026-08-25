@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
@@ -47,6 +47,7 @@ import Link from "next/link";
 import { Info, MoreHorizontal, Plus, Search, X } from "lucide-react";
 import { isPastDeadline, todayLocalISO } from "@/lib/deadline";
 import {
+  PDP_FLAGS,
   hasActivePdpFilters,
   matchesPdpFilters,
   sortPdpsForList,
@@ -99,8 +100,28 @@ export default function DevelopmentPage() {
 
   // Filters — HRP-147: mirror Assessments filter bar (search + multi-status).
   // Type filter is dropped per spec: PDPs do not carry a type.
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterStatuses, setFilterStatuses] = useState<string[]>([]);
+  // HRP-638: the dashboard links here with the finding it counted
+  // (``?flag=overdue``), so the filters seed from the URL and mirror back
+  // into it — same contract as the employee list.
+  const searchParams = useSearchParams();
+  const initialFilters = useMemo(
+    () => {
+      const params = new URLSearchParams(searchParams.toString());
+      return {
+        q: params.get("q") ?? "",
+        statuses: params.getAll("status").filter(Boolean),
+        flags: params.getAll("flag").filter(Boolean),
+      };
+    },
+    // read once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const [searchQuery, setSearchQuery] = useState(initialFilters.q);
+  const [filterStatuses, setFilterStatuses] = useState<string[]>(
+    initialFilters.statuses,
+  );
+  const [filterFlags, setFilterFlags] = useState<string[]>(initialFilters.flags);
 
   const { canManage } = usePermissions();
 
@@ -122,6 +143,20 @@ export default function DevelopmentPage() {
   }
 
   useEffect(() => { load(); }, []);
+
+  // Mirror the filters back into the URL so the view is linkable and a
+  // reload keeps it. ``replace`` — filtering is not a navigation step.
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (searchQuery) params.set("q", searchQuery);
+    for (const value of filterStatuses) params.append("status", value);
+    for (const value of filterFlags) params.append("flag", value);
+    const qs = params.toString();
+    if (qs !== searchParams.toString()) {
+      router.replace(qs ? `/development?${qs}` : "/development", { scroll: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, filterStatuses, filterFlags]);
 
   // Monotonic token: a slow response for a previously selected
   // specialization must not overwrite the options of the current one.
@@ -258,7 +293,7 @@ export default function DevelopmentPage() {
 
   if (loading) return <div className="py-12 text-center text-muted-foreground">{tc("loading")}</div>;
 
-  const filters = { searchQuery, filterStatuses };
+  const filters = { searchQuery, filterStatuses, filterFlags };
   // HRP-222: list order — active first (by Created desc), then Done by
   // ``finished_at``, then Cancelled by ``finished_at``.
   const filtered = sortPdpsForList(pdps.filter((p) => matchesPdpFilters(p, filters)));
@@ -304,12 +339,20 @@ export default function DevelopmentPage() {
           placeholder={t("allStatuses")}
           className="w-40"
         />
+        <MultiSelectFilter
+          data-testid="development-multi-flags"
+          options={PDP_FLAGS.map((f) => ({ value: f, label: t(`flag_${f}`) }))}
+          value={filterFlags}
+          onChange={setFilterFlags}
+          placeholder={t("allFlags")}
+          className="w-44"
+        />
         {filtersActive && (
           <Button
             data-testid="development-btn-clear-filters"
             variant="ghost"
             size="sm"
-            onClick={() => { setSearchQuery(""); setFilterStatuses([]); }}
+            onClick={() => { setSearchQuery(""); setFilterStatuses([]); setFilterFlags([]); }}
           >
             <X className="mr-1 h-3 w-3" />
             {t("clear")}

@@ -11,13 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     audit_service,
     gdpr_service,
     settings_service,
 )
+from app.modules.recruitment.routers.common import RECRUITMENT_VIEWER_ROLES
 from app.modules.recruitment.settings_schemas import (
     BrandingRead,
     BrandingUpdate,
@@ -46,18 +47,19 @@ router = APIRouter(tags=["recruitment-settings"])
 
 # ─── Scales ─────────────────────────────────────────────────────────
 #
-# list_scales / get_active_scale are intentionally gated only by
-# ``get_current_user`` (no ``require_role``) because every recruitment
-# UI that renders a score — interview-analysis page, candidate cards,
-# review forms — must read the active scale regardless of the viewer's
-# role. Mutating endpoints below still require admin. The corresponding
-# entries in ``BILLING_EXEMPT`` carry the same justification.
+# list_scales / get_active_scale are readable by every recruitment role,
+# not just admins: each UI that renders a score — interview-analysis page,
+# candidate cards, review forms — must read the active scale whatever the
+# viewer's role. HRP-615 narrowed that from "any authenticated user" to
+# ``RECRUITMENT_VIEWER_ROLES``; the surfaces that need these are all inside
+# recruitment. Mutating endpoints below still require admin. The
+# corresponding entries in ``BILLING_EXEMPT`` carry the same justification.
 
 
 @router.get("/recruitment/settings/scales", response_model=list[ScaleConfigRead])
 async def list_scales(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
 ):
     return await settings_service.list_scales(db, current_user.tenant_id)
 
@@ -68,7 +70,7 @@ async def list_scales(
 )
 async def get_active_scale(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
 ):
     return await settings_service.get_active_scale(db, current_user.tenant_id)
 
@@ -341,13 +343,14 @@ async def delete_transcription_provider(
 @router.get("/recruitment/settings/ui")
 async def get_ui_settings(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
 ):
-    """HRP-205 REDO: read-only tenant UI flags for any authenticated user.
+    """HRP-205 REDO: read-only tenant UI flags for the recruitment roles.
 
-    Deliberately NOT behind ``require_role`` — hiring managers use
-    ``hm_questions_above_resume`` to reorder candidate-page sections,
-    and the branding hub endpoint is closed to them.
+    Wider than the branding hub, which is closed to hiring managers —
+    they need ``hm_questions_above_resume`` to reorder candidate-page
+    sections. HRP-615 narrowed "any authenticated user" to
+    ``RECRUITMENT_VIEWER_ROLES``, which still covers them.
     """
     return await settings_service.get_ui_settings(db, current_user.tenant_id)
 
@@ -355,7 +358,7 @@ async def get_ui_settings(
 @router.get("/recruitment/settings/branding", response_model=BrandingRead)
 async def get_branding(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hrd")),
+    current_user: User = Depends(require_role("admin", "recruiter", "hr")),
 ):
     return await settings_service.get_branding(db, current_user.tenant_id)
 
@@ -387,7 +390,7 @@ async def update_branding(
 @router.get("/recruitment/settings/retention", response_model=RetentionRead)
 async def get_retention(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hrd")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await settings_service.get_retention(db, current_user.tenant_id)
 
@@ -420,7 +423,7 @@ async def update_retention(
 async def get_matrix_settings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(
-        require_role("admin", "recruiter", "hrd", "hr", "hiring_manager")
+        require_role("admin", "recruiter", "hr", "hiring_manager")
     ),
 ):
     """Read-only view of the divergence threshold used by Compact matrix.
@@ -467,7 +470,7 @@ async def update_matrix_settings(
 
 @router.get("/recruitment/settings/roles", response_model=list[RecruitmentRoleRead])
 async def list_roles(
-    current_user: User = Depends(require_role("admin", "hrd")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return settings_service.list_roles()
 
@@ -486,7 +489,7 @@ async def list_audit_events(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hrd")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     items, total = await audit_service.list_events(
         db,
@@ -515,7 +518,7 @@ async def gdpr_export(
     data: GDPRExportRequestCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hrd")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     req = await gdpr_service.gdpr_export(
         db, current_user.tenant_id, current_user.id, data
@@ -543,7 +546,7 @@ async def gdpr_erase(
     data: GDPREraseRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hrd")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     if not data.confirm:
         raise AppError(
@@ -582,7 +585,7 @@ async def list_gdpr_requests(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hrd")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     rows = await gdpr_service.list_export_requests(
         db,

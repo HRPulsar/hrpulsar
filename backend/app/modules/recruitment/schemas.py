@@ -238,9 +238,22 @@ class CandidateUpdate(BaseModel):
 
 
 class CandidateRead(BaseModel):
+    """HRP-625: a candidate does not need a ``Person`` row.
+
+    ``Candidate.person_id`` has been nullable since HRP-181 REDO — every
+    manually added, bulk-imported or demo-seeded candidate has none — but
+    the schema kept both fields required, so serialising one answered 500.
+    The canonical display fields the service has always emitted are
+    declared here too: without them the response carried no name at all
+    once ``person`` went missing.
+    """
+
     id: uuid.UUID
-    person_id: uuid.UUID
-    person: PersonRead
+    person_id: uuid.UUID | None = None
+    person: PersonRead | None = None
+    full_name: str
+    email: str | None = None
+    phone: str | None = None
     source: str | None = None
     notes: str | None = None
     resumes_count: int = 0

@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { flattenTree } from "@/lib/utils";
 import { dictionaryItemLabel } from "@/lib/reference-labels";
+import { ASSIGNABLE_ROLE_CODES, resolveRoleLabel } from "@/lib/user-role-label";
 import type {
   AssessmentList,
   DictionaryItem,
@@ -63,8 +64,9 @@ import { employeeStatusLabel } from "@/components/employees/employee-status";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "sonner";
 import Link from "next/link";
-import { CheckCircle, MoreHorizontal, Pencil, Plus, Search, Trash2, Upload, X } from "lucide-react";
+import { CheckCircle, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { FILTERABLE_ISSUE_CODES, ISSUE_TONE } from "@/lib/employee-issues";
 
 const PAGE_SIZE = 20;
 
@@ -83,6 +85,10 @@ const FILTER_KEYS = [
   "position_id",
   "specialization_id",
   "grade_id",
+  "role",
+  // HRP-638: what the dashboard links in with — "show me the people behind
+  // that number". Same key on the URL and on the API.
+  "issue",
 ] as const;
 
 type FilterKey = (typeof FILTER_KEYS)[number];
@@ -95,6 +101,8 @@ const emptyFilters: Filters = {
   position_id: [],
   specialization_id: [],
   grade_id: [],
+  role: [],
+  issue: [],
 };
 
 interface DivisionScopeItem {
@@ -148,12 +156,16 @@ function buildBackendQuery(
   page: number,
   filters: Filters,
   search: string,
+  withAlerts: boolean,
 ): URLSearchParams {
   const params = new URLSearchParams();
   params.set("skip", String((page - 1) * PAGE_SIZE));
   params.set("limit", String(PAGE_SIZE));
   const trimmed = search.trim();
   if (trimmed) params.set("q", trimmed);
+  // Costs an assessment + plan scan over the page, so only ask when there
+  // is a column to render it in. The directory schema drops it anyway.
+  if (withAlerts) params.set("with_alerts", "true");
   for (const key of FILTER_KEYS) {
     for (const v of filters[key]) params.append(key, v);
   }
@@ -164,6 +176,7 @@ export default function EmployeesPage() {
   const t = useTranslations("employees");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
+  const tRole = useTranslations("sidebar");
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -209,7 +222,7 @@ export default function EmployeesPage() {
 
   const [saving, setSaving] = useState(false);
 
-  const { canManage } = usePermissions();
+  const { canManage, canViewHrData } = usePermissions();
 
   // HRP-120: search is debounced and can fire overlapping requests. Track
   // the latest call with a monotonic token so an older response can't
@@ -217,10 +230,10 @@ export default function EmployeesPage() {
   const loadRequestId = useRef(0);
 
   const loadEmployees = useCallback(
-    async (p: number, f: Filters, search: string) => {
+    async (p: number, f: Filters, search: string, withAlerts: boolean) => {
       const requestId = ++loadRequestId.current;
       try {
-        const params = buildBackendQuery(p, f, search);
+        const params = buildBackendQuery(p, f, search, withAlerts);
         const empData = await api.get<EmployeeList>(`/employees?${params}`);
         if (loadRequestId.current !== requestId) return;
         setEmployees(empData.items);
@@ -270,8 +283,8 @@ export default function EmployeesPage() {
   }, [loadMeta]);
 
   useEffect(() => {
-    loadEmployees(page, filters, debouncedSearch);
-  }, [page, filters, debouncedSearch, loadEmployees]);
+    loadEmployees(page, filters, debouncedSearch, canViewHrData);
+  }, [page, filters, debouncedSearch, canViewHrData, loadEmployees]);
 
   // HRP-120: debounce the search input so typing doesn't fire a request per
   // keystroke; resetting to page 1 keeps results aligned with the query.
@@ -317,6 +330,15 @@ export default function EmployeesPage() {
     [t],
   );
 
+  const issueFilterOptions = useMemo(
+    () =>
+      FILTERABLE_ISSUE_CODES.map((code) => ({
+        value: code,
+        label: t(`issue_${code}`),
+      })),
+    [t],
+  );
+
   const positionFilterOptions = useMemo(
     () =>
       positions
@@ -358,6 +380,15 @@ export default function EmployeesPage() {
     setPage(1);
   }
 
+  const roleFilterOptions = useMemo(
+    () =>
+      ASSIGNABLE_ROLE_CODES.map((code) => ({
+        value: code,
+        label: resolveRoleLabel([code], tRole),
+      })),
+    [tRole],
+  );
+
   const hasFilters =
     Boolean(searchQuery) ||
     FILTER_KEYS.some((k) => filters[k].length > 0);
@@ -384,7 +415,7 @@ export default function EmployeesPage() {
       toast.success(t("toastCreated"));
       setCreateOpen(false);
       setCreateForm(emptyCreateForm);
-      await loadEmployees(page, filters, debouncedSearch);
+      await loadEmployees(page, filters, debouncedSearch, canViewHrData);
     } catch (err) {
       setCreateError(
         parseFormError(err, ["user_id", "position_id", "division_id", "hire_date"]),
@@ -410,7 +441,7 @@ export default function EmployeesPage() {
       last_name: lastName,
       division_id: emp.division_id || "",
       position_id: emp.position_id || "",
-      status: emp.status,
+      status: emp.status ?? "",
     });
     setEditingId(emp.id);
     setEditError(EMPTY_FORM_ERROR);
@@ -436,7 +467,7 @@ export default function EmployeesPage() {
       });
       toast.success(t("toastUpdated"));
       setEditOpen(false);
-      await loadEmployees(page, filters, debouncedSearch);
+      await loadEmployees(page, filters, debouncedSearch, canViewHrData);
     } catch (err) {
       setEditError(parseFormError(err));
     } finally {
@@ -456,7 +487,7 @@ export default function EmployeesPage() {
       await api.delete(`/employees/${deletingEmp.id}`);
       toast.success(t("toastDeleted"));
       setDeleteOpen(false);
-      await loadEmployees(page, filters, debouncedSearch);
+      await loadEmployees(page, filters, debouncedSearch, canViewHrData);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("toastDeleteFailed"));
     } finally {
@@ -497,8 +528,16 @@ export default function EmployeesPage() {
         )}
       </div>
 
-      {/* Filters */}
+      {/* Filters. Ordered like the table columns underneath — Division,
+          Position, Specialization · Grade (two pickers, one column), Role,
+          Status — because the row sits right above the header and reads as
+          if each control belonged to the column below it. The funnel keeps
+          it from reading as a header row in the first place. */}
       <div className="flex flex-wrap items-center gap-3">
+        <SlidersHorizontal
+          aria-hidden
+          className="h-4 w-4 shrink-0 text-muted-foreground"
+        />
         <div className="relative flex-1 min-w-48">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -518,14 +557,6 @@ export default function EmployeesPage() {
           className="w-44"
         />
         <MultiSelectFilter
-          data-testid="employees-multi-statuses"
-          options={statusFilterOptions}
-          value={filters.status}
-          onChange={(next) => updateFilter("status", next)}
-          placeholder={t("filterStatuses")}
-          className="w-36"
-        />
-        <MultiSelectFilter
           data-testid="employees-multi-positions"
           options={positionFilterOptions}
           value={filters.position_id}
@@ -533,6 +564,7 @@ export default function EmployeesPage() {
           placeholder={t("filterPositions")}
           className="w-44"
         />
+        {canViewHrData && (
         <MultiSelectFilter
           data-testid="employees-multi-specializations"
           options={specializationFilterOptions}
@@ -541,6 +573,8 @@ export default function EmployeesPage() {
           placeholder={t("filterSpecializations")}
           className="w-44"
         />
+        )}
+        {canViewHrData && (
         <MultiSelectFilter
           data-testid="employees-multi-grades"
           options={gradeFilterOptions}
@@ -549,6 +583,37 @@ export default function EmployeesPage() {
           placeholder={t("filterGrades")}
           className="w-36"
         />
+        )}
+        {canViewHrData && (
+        <MultiSelectFilter
+          data-testid="employees-filter-role"
+          options={roleFilterOptions}
+          value={filters.role}
+          onChange={(next) => updateFilter("role", next)}
+          placeholder={t("filterRoles")}
+          className="w-40"
+        />
+        )}
+        {canViewHrData && (
+        <MultiSelectFilter
+          data-testid="employees-multi-statuses"
+          options={statusFilterOptions}
+          value={filters.status}
+          onChange={(next) => updateFilter("status", next)}
+          placeholder={t("filterStatuses")}
+          className="w-36"
+        />
+        )}
+        {canViewHrData && (
+        <MultiSelectFilter
+          data-testid="employees-multi-issues"
+          options={issueFilterOptions}
+          value={filters.issue}
+          onChange={(next) => updateFilter("issue", next)}
+          placeholder={t("filterIssues")}
+          className="w-44"
+        />
+        )}
         {hasFilters && (
           <Button data-testid="employees-btn-clear-filters" variant="ghost" size="sm" onClick={clearFilters}>
             <X className="mr-1 h-3 w-3" />
@@ -571,7 +636,14 @@ export default function EmployeesPage() {
                   <TableHead>{t("division")}</TableHead>
                   <TableHead>{t("position")}</TableHead>
                   <TableHead>{t("specializationGrade")}</TableHead>
-                  <TableHead>{t("status")}</TableHead>
+                  {/* HRP-623: rank-and-file get the directory schema, which
+                      carries neither role nor status — the columns would
+                      render empty for them. */}
+                  {canViewHrData && <TableHead>{t("role")}</TableHead>}
+                  {canViewHrData && <TableHead>{t("status")}</TableHead>}
+                  {/* HRP-638: what is wrong with this person — the question
+                      the dashboard sends the user here to answer. */}
+                  {canViewHrData && <TableHead>{t("issues")}</TableHead>}
                   {canManage && <TableHead className="w-10" />}
                 </TableRow>
               </TableHeader>
@@ -616,14 +688,43 @@ export default function EmployeesPage() {
                     >
                       {formatSpecGrade(emp.specialization_title, emp.grade_title)}
                     </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant="secondary"
-                        className={statusColors[emp.status] || ""}
+                    {canViewHrData && (
+                      <TableCell
+                        data-testid={`employees-row-${emp.id}-role`}
+                        className="text-muted-foreground"
                       >
-                        {employeeStatusLabel(t, emp.status)}
-                      </Badge>
-                    </TableCell>
+                        {resolveRoleLabel(emp.roles, tRole)}
+                      </TableCell>
+                    )}
+                    {canViewHrData && (
+                      <TableCell>
+                        <Badge
+                          variant="secondary"
+                          className={statusColors[emp.status ?? ""] || ""}
+                        >
+                          {employeeStatusLabel(t, emp.status)}
+                        </Badge>
+                      </TableCell>
+                    )}
+                    {canViewHrData && (
+                      <TableCell data-testid={`employees-row-${emp.id}-issues`}>
+                        {emp.issues && emp.issues.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {emp.issues.map((issue) => (
+                              <Badge
+                                key={issue.code}
+                                variant="outline"
+                                className={ISSUE_TONE[issue.code]}
+                              >
+                                {t(`issue_${issue.code}`)}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">{"—"}</span>
+                        )}
+                      </TableCell>
+                    )}
                     {canManage && (
                       <TableCell>
                         <DropdownMenu>

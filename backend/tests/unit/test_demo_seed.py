@@ -105,6 +105,36 @@ async def test_clone_seed_populates_expected_counts(db: AsyncSession, tenant, us
 
 
 @pytest.mark.asyncio
+async def test_seeded_candidate_cards_serialise(db: AsyncSession, tenant, user):
+    """HRP-625: every seeded candidate answers 200, none of them has a Person.
+
+    ``CandidateRead`` required ``person_id`` / ``person``, which the demo
+    seed deliberately leaves NULL (HRP-276 keeps tenant-less Person rows out
+    of the sandbox) — so opening any demo candidate answered 500.
+    """
+    from app.modules.recruitment import candidate_service
+    from app.modules.recruitment.schemas import CandidateRead
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    seeded = (
+        (await db.execute(select(Candidate).where(Candidate.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
+    assert seeded, "demo seed produced no candidates"
+    for candidate in seeded:
+        payload = CandidateRead.model_validate(
+            await candidate_service.get_candidate(db, tenant.id, candidate.id)
+        )
+        assert payload.person is None
+        assert payload.person_id is None
+        assert payload.full_name
+
+
+@pytest.mark.asyncio
 async def test_clone_seed_marks_interviews_completed_with_analysis(
     db: AsyncSession, tenant, user
 ):
@@ -996,7 +1026,7 @@ async def test_seeded_tenant_tells_the_dev_loop_story(
     await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
     await db.commit()
 
-    payload = await dev_loop(db, tenant.id)
+    payload = await dev_loop(db, tenant.id, None)
     findings = {f["code"]: f for f in payload["findings"]}
 
     # Storyline A: sales team below the bar with no development plan.

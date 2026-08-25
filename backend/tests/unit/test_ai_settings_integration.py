@@ -329,7 +329,7 @@ class TestSyncHandlersForwardSettings:
             return []
 
         with patch.object(llm_client, "generate_json", new=fake_generate_json):
-            await ai_service.generate_positions(db, tenant.id, None)
+            await ai_service.generate_positions(db, tenant.id, None, None)
 
         assert captured["tenant_settings"] is not None
         assert captured["tenant_settings"].tenant_id == tenant.id

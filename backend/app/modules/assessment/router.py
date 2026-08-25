@@ -66,6 +66,14 @@ from app.modules.assessment.schemas import (
     SpecializationOption,
     StatusChange,
 )
+from app.modules.assessment.scope import (
+    assert_assessee_in_scope,
+    assert_assessees_in_scope,
+    assessment_group_scope,
+    assessment_scope,
+    pdp_scope,
+    pdp_status_scope,
+)
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
 
@@ -81,6 +89,7 @@ async def create_assessment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
+    await assert_assessee_in_scope(db, current_user, data.employee_id)
     return await service.create_assessment(
         db, current_user.tenant_id, current_user.id, data
     )
@@ -136,6 +145,7 @@ async def change_status(
     data: StatusChange,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.change_status(
         db, current_user.tenant_id, assessment_id, data.status_code
@@ -148,6 +158,7 @@ async def update_assessment(
     data: AssessmentUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     # Honour PATCH semantics: only forward fields the client actually sent.
     # `data.ended_at = None` means "clear deadline"; absence means "leave it".
@@ -174,6 +185,7 @@ async def add_participant(
     data: ParticipantAdd,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.add_participant(
         db, current_user.tenant_id, assessment_id, data
@@ -193,6 +205,7 @@ async def add_competences(
     data: _LegacyCompetenceIds,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.add_competences(
         db, current_user.tenant_id, assessment_id, data.competence_ids
@@ -205,6 +218,7 @@ async def set_assessment_criteria(
     data: CriteriaUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.set_assessment_criteria(
         db, current_user.tenant_id, assessment_id, data
@@ -219,6 +233,7 @@ async def set_group_criteria(
     data: CriteriaUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_group_scope),
 ):
     return await service.set_group_criteria(db, current_user.tenant_id, group_id, data)
 
@@ -345,6 +360,7 @@ async def calibrate(
     data: CalibrateRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.calibrate(
         db, current_user.tenant_id, assessment_id, data.results
@@ -362,6 +378,7 @@ async def start_calibration(
     assessment_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.start_calibration(
         db, current_user.tenant_id, assessment_id
@@ -377,6 +394,7 @@ async def save_calibration(
     data: CalibrateTotalsRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.save_calibration(
         db, current_user.tenant_id, assessment_id, data.totals
@@ -391,6 +409,7 @@ async def cancel_calibration(
     assessment_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.cancel_calibration(
         db, current_user.tenant_id, assessment_id
@@ -412,7 +431,7 @@ async def list_scales(
 async def create_answer_scale(
     data: AnswerScaleCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.create_answer_scale(db, current_user.tenant_id, data)
 
@@ -431,7 +450,7 @@ async def update_answer_scale(
     scale_id: uuid.UUID,
     data: AnswerScaleUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.update_answer_scale(db, current_user.tenant_id, scale_id, data)
 
@@ -440,7 +459,7 @@ async def update_answer_scale(
 async def delete_answer_scale(
     scale_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.delete_answer_scale(db, current_user.tenant_id, scale_id)
 
@@ -451,6 +470,7 @@ async def set_assessment_scale(
     data: ScaleAssign,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.set_assessment_scale(
         db, current_user.tenant_id, assessment_id, data.scale_id
@@ -463,6 +483,7 @@ async def set_group_scale(
     data: ScaleAssign,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_group_scope),
 ):
     return await service.set_group_scale(
         db, current_user.tenant_id, group_id, data.scale_id
@@ -482,6 +503,7 @@ async def create_mass_assessment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
+    await assert_assessees_in_scope(db, current_user, data.employee_ids)
     return await service.create_mass_assessment(
         db, current_user.tenant_id, current_user.id, data
     )
@@ -586,6 +608,7 @@ async def update_assessment_group(
     data: AssessmentGroupUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_group_scope),
 ):
     return await service.update_assessment_group(
         db, current_user.tenant_id, group_id, title=data.title
@@ -601,6 +624,7 @@ async def bulk_change_status(
     data: BulkStatusChange,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_group_scope),
 ):
     return await service.bulk_change_status(
         db, current_user.tenant_id, group_id, data.status_code
@@ -664,7 +688,14 @@ async def get_cpa_analytics(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
-    return await service.get_cpa_analytics(db, current_user.tenant_id, cpa_id)
+    from app.core.access_scope import get_visible_employee_ids
+
+    return await service.get_cpa_analytics(
+        db,
+        current_user.tenant_id,
+        cpa_id,
+        await get_visible_employee_ids(db, current_user),
+    )
 
 
 class CPACopyRequest(BaseModel):
@@ -698,6 +729,7 @@ async def create_external_reviewer(
     data: ExternalReviewerCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.create_external_reviewer(
         db, current_user.tenant_id, assessment_id, data.name, data.email, data.role
@@ -712,6 +744,7 @@ async def list_external_reviewers(
     assessment_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.list_external_reviewers(
         db, current_user.tenant_id, assessment_id
@@ -727,9 +760,10 @@ async def delete_external_reviewer(
     reviewer_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(assessment_scope),
 ):
     return await service.delete_external_reviewer(
-        db, current_user.tenant_id, reviewer_id
+        db, current_user.tenant_id, assessment_id, reviewer_id
     )
 
 
@@ -764,6 +798,7 @@ async def create_pdp(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
+    await assert_assessee_in_scope(db, current_user, data.employee_id)
     return await pdp_service.create_pdp(
         db, current_user.tenant_id, current_user.id, data
     )
@@ -819,6 +854,7 @@ async def update_pdp(
     data: PDPUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.update_pdp(db, current_user.tenant_id, pdp_id, data)
 
@@ -829,6 +865,7 @@ async def change_pdp_status(
     data: StatusChange,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _scope: None = Depends(pdp_status_scope),
 ):
     # HRP-19: the plan owner needs a single transition path — submit for
     # review — out of sent / in_progress / returned. Admins / managers keep
@@ -893,6 +930,7 @@ async def add_pdp_item(
     data: PDPItemCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.add_item(db, current_user.tenant_id, pdp_id, data)
 
@@ -904,6 +942,7 @@ async def update_pdp_item(
     data: PDPItemUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.update_item(
         db, current_user.tenant_id, pdp_id, item_id, data
@@ -916,6 +955,7 @@ async def delete_pdp_item(
     item_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(pdp_scope),
 ):
     await pdp_service.delete_item(db, current_user.tenant_id, pdp_id, item_id)
     return None
@@ -927,6 +967,7 @@ async def reorder_pdp_items(
     data: PDPItemReorder,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.reorder_items(
         db, current_user.tenant_id, pdp_id, data.ordered_ids
@@ -969,6 +1010,7 @@ async def add_pdp_material(
     data: PDPMaterialCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.add_material(
         db, current_user.tenant_id, pdp_id, item_id, data
@@ -986,6 +1028,7 @@ async def update_pdp_material(
     data: PDPMaterialUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.update_material(
         db, current_user.tenant_id, pdp_id, item_id, material_id, data
@@ -1002,6 +1045,7 @@ async def delete_pdp_material(
     material_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(pdp_scope),
 ):
     await pdp_service.delete_material(
         db, current_user.tenant_id, pdp_id, item_id, material_id
@@ -1015,6 +1059,7 @@ async def add_pdp_comment(
     data: PDPCommentCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _scope: None = Depends(pdp_status_scope),
 ):
     return await pdp_service.add_comment(
         db, current_user.tenant_id, pdp_id, current_user.id, data
@@ -1029,6 +1074,7 @@ async def list_pdp_versions(
     pdp_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _scope: None = Depends(pdp_status_scope),
 ):
     return await pdp_service.list_versions(db, current_user.tenant_id, pdp_id)
 
@@ -1039,6 +1085,7 @@ async def get_pdp_version(
     version_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _scope: None = Depends(pdp_status_scope),
 ):
     return await pdp_service.get_version(db, current_user.tenant_id, pdp_id, version_id)
 
@@ -1049,6 +1096,7 @@ async def restore_pdp_version(
     version_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.restore_version(
         db, current_user.tenant_id, pdp_id, version_id

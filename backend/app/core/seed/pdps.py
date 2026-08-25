@@ -26,7 +26,7 @@ async def seed_pdps(ctx: SeedContext) -> None:
         assessment_id=a1.id,
         author_id=ctx.admin_user.id,
         reviewer_id=ctx.users[0].id,
-        status="active",
+        status="in_progress",
         total_progress=40,
         specialization_id=ctx.specializations["Backend Developer"].id,
         grade_id=ctx.grades["Senior"].id,
@@ -174,13 +174,18 @@ async def seed_pdps(ctx: SeedContext) -> None:
         employee_id=ctx.employees[3].id,
         author_id=ctx.users[1].id,
         reviewer_id=ctx.users[0].id,
-        status="completed",
+        status="done",
         total_progress=100,
         specialization_id=ctx.specializations["Backend Developer"].id,
         grade_id=ctx.grades["Middle"].id,
         deadline=past_dt(5),
         started_at=past_dt(60),
-        finished_at=past_dt(5),
+        # Finished a week INSIDE the deadline, not on the same ``past_dt``
+        # call: two calls a few microseconds apart made ``finished_at``
+        # later than ``deadline``, so the only on-time plan in the demo
+        # failed the ``finished_at <= deadline`` test and the dashboard's
+        # Closed tile always read "0 plans done on time".
+        finished_at=past_dt(12),
     )
     ctx.db.add(pdp3)
     await ctx.db.flush()

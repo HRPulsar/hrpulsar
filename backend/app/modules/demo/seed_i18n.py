@@ -271,10 +271,29 @@ def localized_structures() -> list[Any]:
     ]
 
 
+def employee_identity_strings() -> set[str]:
+    """Employee full names and emails, translated as whole strings.
+
+    ``NAME_POOL`` is a list of tuples rather than a fixture dict, so it
+    never passes through :func:`localize`; the catalog localizes it via
+    :func:`app.modules.demo.seed_data_employees.localized_name_pool`
+    instead. Both halves land in the coverage guard so a locale cannot
+    ship a Russian demo staffed by Carlos Mendez.
+    """
+    from app.modules.demo.seed_data_employees import NAME_POOL, email_for
+
+    out: set[str] = set()
+    for first, last in NAME_POOL:
+        out.add(f"{first} {last}")
+        out.add(email_for(first, last))
+    return out
+
+
 def collect_translatable_strings() -> set[str]:
     """All display strings a locale catalog must cover."""
     out: set[str] = set()
     for structure in localized_structures():
         _collect(structure, out)
     out.update(EXTRA_STRINGS)
+    out |= employee_identity_strings()
     return out

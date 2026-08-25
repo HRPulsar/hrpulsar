@@ -163,6 +163,10 @@ class RoleRead(BaseModel):
     is_system: bool
     tenant_id: uuid.UUID | None
     permissions: list[str] = []
+    # HRP-634: how many users of the tenant hold this role. Only the list
+    # endpoint counts — single-role responses answer ``null`` rather than a
+    # confident 0 they never computed.
+    user_count: int | None = None
 
     model_config = {"from_attributes": True}
 

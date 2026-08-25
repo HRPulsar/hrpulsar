@@ -16,11 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     service,
 )
+from app.modules.recruitment.routers.common import RECRUITMENT_VIEWER_ROLES
 from app.modules.recruitment.schemas import (
     AbortUploadRequest,
     AIAnalysisEnqueueRequest,
@@ -44,6 +45,11 @@ from app.modules.recruitment.schemas import (
     TopupEligibilityResponse,
     TranscriptUpdate,
     UploadChunkAck,
+)
+from app.modules.recruitment.scope import (
+    candidate_vacancy_scope,
+    cv_scope,
+    interview_scope,
 )
 
 router = APIRouter(tags=["recruitment"])
@@ -87,7 +93,8 @@ async def list_cv_interviews(
     cv_id: uuid.UUID,
     include_archived: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(cv_scope),
 ):
     return await service.list_interviews(
         db,
@@ -102,7 +109,8 @@ async def list_cv_interviews(
 async def get_interview(
     interview_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(interview_scope),
 ):
     return await service.get_interview(
         db,
@@ -203,6 +211,7 @@ async def head_interview_upload(
     upload_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter")),
+    _scope: None = Depends(interview_scope),
 ):
     """TUS-style HEAD: returns ``Upload-Offset`` and ``Upload-Length``.
 
@@ -326,7 +335,8 @@ async def complete_interview_upload(
 async def get_interview_media_url(
     interview_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(interview_scope),
 ):
     """Presigned GET URL for the interview's media file (audio preferred)."""
     role = service.resolve_user_role(current_user)
@@ -349,7 +359,8 @@ async def get_interview_file_signed_url(
     interview_id: uuid.UUID,
     expires_in: int = Query(300, ge=60, le=3600),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(interview_scope),
 ):
     """HRP-202 explicit signed-URL endpoint with caller-tunable TTL.
 
@@ -622,6 +633,7 @@ async def list_ai_analyses(
     candidate_vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter")),
+    _scope: None = Depends(candidate_vacancy_scope),
 ):
     from app.modules.recruitment import resume_analysis_service
 
@@ -662,6 +674,7 @@ async def get_topup_eligibility(
     candidate_vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter")),
+    _scope: None = Depends(candidate_vacancy_scope),
 ):
     from app.modules.recruitment import resume_analysis_service
 

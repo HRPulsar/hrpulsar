@@ -1,5 +1,10 @@
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens, createDivision } from "./helpers";
+import {
+  createDivision,
+  provisionTenantMember,
+  registerUser,
+  setAuthTokens,
+} from "./helpers";
 
 test.describe("Company page", () => {
   let accessToken: string;
@@ -165,5 +170,57 @@ test.describe("Division CRUD", () => {
     await expect(
       page.getByTestId("confirm-dialog-btn-cancel"),
     ).toBeVisible({ timeout: 10000 });
+  });
+});
+
+/**
+ * HRP-622 — the admin-only controls on /company (tenant edit, import, the
+ * per-division action menu) used to render for everyone; the form opened
+ * and the save came back 403.
+ */
+test.describe("Company page permission gates (HRP-622)", () => {
+  test("an employee sees the org chart without any action control", async ({
+    page,
+  }) => {
+    const admin = await registerUser(page);
+    const opts = { page, accessToken: admin.accessToken };
+    const division = await createDivision(opts, `Gated ${Date.now()}`);
+    const member = await provisionTenantMember(opts, {
+      roleCode: "employee",
+      divisionId: division.id,
+      firstName: "Gated",
+      lastName: "Employee",
+    });
+
+    await setAuthTokens(page, member.accessToken, member.refreshToken);
+    await page.goto("/company");
+    await expect(page.getByTestId("company-divisions-card")).toBeVisible({
+      timeout: 15000,
+    });
+
+    await expect(page.getByTestId("company-btn-edit")).toHaveCount(0);
+    await expect(page.getByTestId("company-btn-import")).toHaveCount(0);
+    await expect(
+      page.getByTestId(`company-division-${division.id}-actions`),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("company-divisions-btn-add")).toHaveCount(0);
+  });
+
+  test("an admin keeps all of them", async ({ page }) => {
+    const admin = await registerUser(page);
+    const division = await createDivision(
+      { page, accessToken: admin.accessToken },
+      `Gated ${Date.now()}`,
+    );
+
+    await setAuthTokens(page, admin.accessToken, admin.refreshToken);
+    await page.goto("/company");
+    await expect(page.getByTestId("company-btn-edit")).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page.getByTestId("company-btn-import")).toBeVisible();
+    await expect(
+      page.getByTestId(`company-division-${division.id}-actions`),
+    ).toHaveCount(1);
   });
 });

@@ -121,3 +121,75 @@ describe("hasActivePdpFilters (HRP-147)", () => {
     ).toBe(true);
   });
 });
+
+// HRP-638: the dashboard's plan findings are not statuses. These predicates
+// are what makes "7 overdue plans" open a list holding exactly 7 rows.
+describe("attention flags (HRP-638)", () => {
+  const NOW = Date.parse("2026-08-23T12:00:00Z");
+  const daysAgo = (n: number) =>
+    new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString();
+
+  function match(pdp: PDP, flags: string[]) {
+    return matchesPdpFilters(
+      pdp,
+      { searchQuery: "", filterStatuses: [], filterFlags: flags },
+      NOW,
+    );
+  }
+
+  it("overdue picks an open plan past its deadline", () => {
+    const pdp = makePdp({ status: "in_progress", deadline: daysAgo(1) });
+    expect(match(pdp, ["overdue"])).toBe(true);
+  });
+
+  it("overdue ignores a plan with no deadline", () => {
+    expect(match(makePdp({ deadline: null }), ["overdue"])).toBe(false);
+  });
+
+  it("overdue ignores a finished plan, however late it was", () => {
+    const pdp = makePdp({ status: "done", deadline: daysAgo(30) });
+    expect(match(pdp, ["overdue"])).toBe(false);
+  });
+
+  it("stuck_review needs both the status and the age", () => {
+    const stale = makePdp({ status: "review", updated_at: daysAgo(15) });
+    const fresh = makePdp({ status: "review", updated_at: daysAgo(3) });
+    const busy = makePdp({ status: "in_progress", updated_at: daysAgo(90) });
+    expect(match(stale, ["stuck_review"])).toBe(true);
+    expect(match(fresh, ["stuck_review"])).toBe(false);
+    expect(match(busy, ["stuck_review"])).toBe(false);
+  });
+
+  it("stuck_review counts a returned plan too", () => {
+    const pdp = makePdp({ status: "returned", updated_at: daysAgo(20) });
+    expect(match(pdp, ["stuck_review"])).toBe(true);
+  });
+
+  it("falls back to created_at when the row carries no updated_at", () => {
+    const pdp = makePdp({
+      status: "review",
+      updated_at: null,
+      created_at: daysAgo(40),
+    });
+    expect(match(pdp, ["stuck_review"])).toBe(true);
+  });
+
+  it("several flags OR together", () => {
+    const overdue = makePdp({ status: "in_progress", deadline: daysAgo(2) });
+    expect(match(overdue, ["overdue", "stuck_review"])).toBe(true);
+  });
+
+  it("an unknown flag matches nothing rather than everything", () => {
+    expect(match(makePdp(), ["not_a_flag"])).toBe(false);
+  });
+
+  it("counts as an active filter for the Clear button", () => {
+    expect(
+      hasActivePdpFilters({
+        searchQuery: "",
+        filterStatuses: [],
+        filterFlags: ["overdue"],
+      }),
+    ).toBe(true);
+  });
+});

@@ -548,13 +548,15 @@ class TestPositionDrilldown:
         created = await service.create_position(
             db, tenant.id, PositionCreate(title="Empty Pos")
         )
-        items = await service.list_position_employees(db, tenant.id, created["id"])
+        items = await service.list_position_employees(
+            db, tenant.id, created["id"], visible_employee_ids=None
+        )
         assert items == []
 
     async def test_list_position_employees_returns_assigned(self, db, tenant, employee):
         # employee fixture has position_id set
         items = await service.list_position_employees(
-            db, tenant.id, employee.position_id
+            db, tenant.id, employee.position_id, visible_employee_ids=None
         )
         assert len(items) == 1
         assert items[0]["id"] == employee.id
@@ -562,7 +564,9 @@ class TestPositionDrilldown:
 
     async def test_list_position_employees_not_found(self, db, tenant):
         with pytest.raises(HTTPException) as exc:
-            await service.list_position_employees(db, tenant.id, uuid.uuid4())
+            await service.list_position_employees(
+                db, tenant.id, uuid.uuid4(), visible_employee_ids=None
+            )
         assert exc.value.status_code == 404
 
     async def test_list_position_employees_tenant_isolation(self, db, tenant, employee):
@@ -574,7 +578,9 @@ class TestPositionDrilldown:
         await db.refresh(other)
 
         with pytest.raises(HTTPException) as exc:
-            await service.list_position_employees(db, other.id, employee.position_id)
+            await service.list_position_employees(
+                db, other.id, employee.position_id, visible_employee_ids=None
+            )
         assert exc.value.status_code == 404
 
     async def test_list_position_employees_includes_division_and_spec(
@@ -606,7 +612,7 @@ class TestPositionDrilldown:
         db.expunge_all()
 
         items = await service.list_position_employees(
-            db, tenant.id, employee.position_id
+            db, tenant.id, employee.position_id, visible_employee_ids=None
         )
         assert len(items) == 1
         row = items[0]

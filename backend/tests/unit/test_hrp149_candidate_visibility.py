@@ -132,11 +132,13 @@ class TestCanViewProfile:
         # Candidate A in the subtree (child division), B outside.
         emp_in = await _make_employee(db, tenant.id, division_id=child.id)
         emp_out = await _make_employee(db, tenant.id, division_id=outside.id)
+        # HRP-639: the card has to sit in the manager's subtree for them to
+        # open it at all — a division-less draft belongs to its author.
         card = await service.create_card(
             db,
             tenant.id,
             user.id,
-            TalentCardCreate(title="C", card_type="vacancy"),
+            TalentCardCreate(title="C", card_type="vacancy", division_id=root.id),
         )
         await service.add_candidate(
             db, tenant.id, card["id"], CandidateAdd(employee_id=emp_in.id)

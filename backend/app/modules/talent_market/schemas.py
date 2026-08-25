@@ -94,6 +94,10 @@ class TalentCardRead(BaseModel):
     # on this card. Stamps the "Reacted" chip on the card preview tile.
     # Always False for viewers that aren't candidates.
     reacted_by_me: bool = False
+    # HRP-639: whether this viewer may mutate the card. False on a
+    # published card belonging to another department — the board shows it,
+    # the action menu must not.
+    can_manage: bool = True
     model_config = {"from_attributes": True}
 
 

@@ -21,6 +21,8 @@ class TenantRead(BaseModel):
     onboarding_completed: bool = False
     # i18n (F0): tenant-default interface locale; None → deployment default.
     default_locale: str | None = None
+    # HRP-623: whether colleagues see the grade on a directory card.
+    directory_show_grades: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -47,6 +49,8 @@ class CompanyProfileUpdate(BaseModel):
     # Interface locale from AVAILABLE_LOCALES (validated in the service);
     # written by the onboarding "Language" step and company settings.
     default_locale: str | None = Field(default=None, max_length=10)
+    # HRP-623: admin-only toggle for grades on directory cards.
+    directory_show_grades: bool | None = None
 
 
 class CompanyProfileRead(TenantRead):

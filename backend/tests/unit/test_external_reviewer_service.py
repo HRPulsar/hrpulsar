@@ -118,7 +118,9 @@ class TestDeleteExternalReviewer:
         created = await service.create_external_reviewer(
             db, tenant.id, a.id, name="To Delete", email=None
         )
-        deleted = await service.delete_external_reviewer(db, tenant.id, created["id"])
+        deleted = await service.delete_external_reviewer(
+            db, tenant.id, a.id, created["id"]
+        )
         assert deleted["id"] == created["id"]
 
         results = await service.list_external_reviewers(db, tenant.id, a.id)
@@ -126,7 +128,28 @@ class TestDeleteExternalReviewer:
 
     async def test_delete_not_found(self, db: AsyncSession, tenant):
         with pytest.raises(HTTPException) as exc:
-            await service.delete_external_reviewer(db, tenant.id, uuid.uuid4())
+            await service.delete_external_reviewer(
+                db, tenant.id, uuid.uuid4(), uuid.uuid4()
+            )
+        assert exc.value.status_code == 404
+
+    async def test_delete_rejects_reviewer_of_another_assessment(
+        self, db: AsyncSession, employee, tenant, assessment_statuses, assessment_types
+    ):
+        """HRP-638: the path's assessment must own the reviewer."""
+        own = await _create_assessment(
+            db, tenant, employee, assessment_statuses, assessment_types
+        )
+        other = await _create_assessment(
+            db, tenant, employee, assessment_statuses, assessment_types
+        )
+        created = await service.create_external_reviewer(
+            db, tenant.id, other.id, name="Foreign", email=None
+        )
+        with pytest.raises(HTTPException) as exc:
+            await service.delete_external_reviewer(
+                db, tenant.id, own.id, created["id"]
+            )
         assert exc.value.status_code == 404
 
 

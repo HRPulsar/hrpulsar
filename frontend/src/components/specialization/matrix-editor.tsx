@@ -58,6 +58,12 @@ type Props = {
   activeSessionsMap?: Map<string, ActiveAiSession[]>;
   /** HRP-93 Part 2: open the drawer for a specific session id. */
   onOpenActiveSession?: (sessionId: string) => void;
+  /**
+   * HRP-631: the matrix is workspace-wide and readable by everyone who
+   * builds assessments on it, but writing it moved to admin / HR. Read-only
+   * keeps the grid and drops every affordance whose save would 403.
+   */
+  readOnly?: boolean;
 };
 
 function bulkToState(bulk: MatrixBulk): MatrixState {
@@ -105,6 +111,7 @@ export function MatrixEditor({
   onGradesChanged,
   activeSessionsMap,
   onOpenActiveSession,
+  readOnly = false,
 }: Props) {
   const t = useTranslations("company");
   const grades = useMemo(() => gradesFromMeta(gradeMeta), [gradeMeta]);
@@ -333,15 +340,17 @@ export function MatrixEditor({
   return (
     <div className="space-y-4" data-testid="matrix-editor">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Button
-          data-testid="matrix-add-competence-btn"
-          size="sm"
-          variant="outline"
-          onClick={() => setAddDialogOpen(true)}
-        >
-          <Plus className="mr-1 h-3.5 w-3.5" />
-          {t("addCompetences")}
-        </Button>
+        {!readOnly && (
+          <Button
+            data-testid="matrix-add-competence-btn"
+            size="sm"
+            variant="outline"
+            onClick={() => setAddDialogOpen(true)}
+          >
+            <Plus className="mr-1 h-3.5 w-3.5" />
+            {t("addCompetences")}
+          </Button>
+        )}
         <span className="text-xs text-muted-foreground">
           {t("matrixCounts", {
             competences: currentCompetences.length,
@@ -537,25 +546,27 @@ export function MatrixEditor({
                               levelId,
                             })
                           }
-                          disabled={saving}
+                          disabled={saving || readOnly}
                         />
                       </td>
                     );
                   })}
                   <td className="px-2 py-2 text-right">
-                    <button
-                      type="button"
-                      data-testid={`matrix-row-${comp.id}-btn-remove`}
-                      aria-label={t("removeCompetenceFromMatrix", {
-                        competence: comp.title,
-                      })}
-                      title={t("removeCompetenceFromMatrixTitle")}
-                      className="rounded p-1 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                      onClick={() => setPendingRemoveCompId(comp.id)}
-                      disabled={saving}
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        data-testid={`matrix-row-${comp.id}-btn-remove`}
+                        aria-label={t("removeCompetenceFromMatrix", {
+                          competence: comp.title,
+                        })}
+                        title={t("removeCompetenceFromMatrixTitle")}
+                        className="rounded p-1 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                        onClick={() => setPendingRemoveCompId(comp.id)}
+                        disabled={saving}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
                   </td>
                 </tr>
                 );
@@ -567,7 +578,7 @@ export function MatrixEditor({
       )}
 
       <UnsavedChangesBar
-        hasChanges={hasChanges}
+        hasChanges={hasChanges && !readOnly}
         saving={saving}
         onSave={handleSave}
         onCancel={handleCancel}

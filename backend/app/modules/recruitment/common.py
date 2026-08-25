@@ -145,7 +145,7 @@ async def _get_applicable_stages(
 
 _HM_ROLES = {"hiring_manager"}
 
-_FULL_ROLES = {"admin", "recruiter", "hr", "hrd"}
+_FULL_ROLES = {"admin", "recruiter", "hr"}
 
 
 def candidate_display_name(
@@ -178,14 +178,14 @@ def resolve_user_role(user) -> str | None:
     field. Read paths in the recruitment services accept a single role
     string; this
     helper centralises the "which role wins" decision so admin/recruiter/
-    hrd/hr land on the full payload before hiring_manager is checked.
+    hr land on the full payload before hiring_manager is checked.
     Returns ``None`` for users with none of the recruitment roles — the
     role filter then strips the AI payload (defence in depth on top of
     ``require_role``).
     """
 
     codes = {r.code for r in (getattr(user, "roles", None) or [])}
-    for full_role in ("admin", "recruiter", "hrd", "hr"):
+    for full_role in ("admin", "recruiter", "hr"):
         if full_role in codes:
             return full_role
     if "hiring_manager" in codes:

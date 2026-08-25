@@ -320,19 +320,25 @@ async def list_employees(
     spec_id: uuid.UUID,
     *,
     with_alerts: bool = False,
+    visible_employee_ids: set[uuid.UUID] | None,
 ) -> list[dict]:
     """HRP-57 §3.1: employees in any Position of this specialization.
 
     Reuses the unified employee row shape (see `PositionEmployeeRead`) so the
     Specialization detail tab can render the same component as the Position
-    detail page and the headcount drill-down.
+    detail page and the headcount drill-down — HRP-633 included, so
+    ``visible_employee_ids`` means exactly what it means there.
     """
     from app.modules.employee.alerts import (
         ALERT_LABELS,
         AlertCode,
         compute_employee_alerts_bulk,
     )
-    from app.modules.employee.service import _resolve_emp_avatars_bulk
+    from app.modules.employee.service import (
+        _resolve_emp_avatars_bulk,
+        apply_directory_scope,
+        is_row_in_read_scope,
+    )
 
     await _get_specialization(db, tenant_id, spec_id)
 
@@ -353,7 +359,18 @@ async def list_employees(
                         selectinload(Position.grade),
                     ),
                 )
-                .order_by(Employee.hire_date.desc())
+                # HRP-633: see `list_position_employees` — hire-date order
+                # leaks the hire date to a caller who gets trimmed rows.
+                .order_by(
+                    *(
+                        (Employee.hire_date.desc(),)
+                        if visible_employee_ids is None
+                        # Seeded rows share a created_at to the microsecond, so the
+                        # id tiebreaker is what makes this an order at all — the
+                        # employee directory carries the same pair.
+                        else (Employee.created_at.desc(), Employee.id)
+                    )
+                )
             )
         )
         .scalars()
@@ -362,8 +379,9 @@ async def list_employees(
     employees = list(rows)
 
     alerts_map: dict[uuid.UUID, AlertCode | None] = {}
-    if with_alerts:
-        alerts_map = await compute_employee_alerts_bulk(db, tenant_id, employees)
+    full_rows = [e for e in employees if is_row_in_read_scope(e.id, visible_employee_ids)]
+    if with_alerts and full_rows:
+        alerts_map = await compute_employee_alerts_bulk(db, tenant_id, full_rows)
 
     avatars = await _resolve_emp_avatars_bulk(db, employees)
 
@@ -399,7 +417,7 @@ async def list_employees(
                 ),
             }
         )
-    return items
+    return await apply_directory_scope(db, tenant_id, items, visible_employee_ids)
 
 
 async def get_matrix(

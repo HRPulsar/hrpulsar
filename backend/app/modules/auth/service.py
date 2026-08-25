@@ -898,13 +898,34 @@ async def reset_password(db: AsyncSession, token: str, new_password: str) -> Non
 # --- Roles ---
 
 
-async def list_roles(db: AsyncSession, tenant_id: uuid.UUID) -> list[Role]:
+async def list_roles(db: AsyncSession, tenant_id: uuid.UUID) -> list[tuple[Role, int]]:
+    """Roles visible to the tenant, each paired with its holder count.
+
+    HRP-634: ``user_roles`` carries no tenant column, so the tenant filter
+    lives on the user side. Counting here rather than off ``/employees``
+    matters: ``GET /employees?role=employee`` means "holds only the
+    baseline", which is not the same question.
+
+    HRP-642: deliberately *not* filtered by ``User.is_active``. The count
+    is a link into the employee list, and that list has no notion of
+    account activity — a counter that quietly applied one would send the
+    reader to a different number than it showed. Employment status lives
+    on ``Employee.status`` and is a separate axis the list does filter.
+    """
     result = await db.execute(
         select(Role)
         .options(selectinload(Role.permissions))
         .where(or_(Role.tenant_id == tenant_id, Role.is_system == True))  # noqa: E712
     )
-    return list(result.scalars().all())
+    roles = list(result.scalars().all())
+    rows = await db.execute(
+        select(user_roles.c.role_id, func.count())
+        .join(User, User.id == user_roles.c.user_id)
+        .where(User.tenant_id == tenant_id)
+        .group_by(user_roles.c.role_id)
+    )
+    counts: dict[uuid.UUID, int] = {row[0]: row[1] for row in rows}
+    return [(role, counts.get(role.id, 0)) for role in roles]
 
 
 async def create_role(db: AsyncSession, tenant_id: uuid.UUID, data: RoleCreate) -> Role:
@@ -959,11 +980,17 @@ INVITATION_EXPIRE_DAYS = 7
 
 
 # Per-tier inviter permissions. Managers can only invite employees;
-# admin/hr can invite their own tier or below. Enterprise merges extra
+# admin invites any tier, hr everything below admin (HRP-618 — granting
+# admin was an escalation without a reason). Enterprise merges extra
 # tiers (e.g. the platform-admin tier) via the rbac_hooks seam.
+#
+# Mirrored by ``INVITE_ALLOWED`` in the invitations page; the shapes are
+# pinned together by frontend/src/__tests__/invite-tiers-parity.test.ts.
 _INVITE_ALLOWED: dict[str, frozenset[str]] = {
-    "admin": frozenset({"admin", "hr", "manager", "employee"}),
-    "hr": frozenset({"admin", "hr", "manager", "employee"}),
+    "admin": frozenset(
+        {"admin", "hr", "manager", "recruiter", "hiring_manager", "employee"}
+    ),
+    "hr": frozenset({"hr", "manager", "recruiter", "hiring_manager", "employee"}),
     "manager": frozenset({"employee"}),
 }
 

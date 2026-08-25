@@ -53,12 +53,16 @@ import { MoreHorizontal, Pencil, Plus, Trash2, Upload } from "lucide-react";
 function DivisionNode({
   division,
   depth = 0,
+  canManage,
   onEdit,
   onDelete,
   onAddChild,
 }: {
   division: Division;
   depth?: number;
+  // HRP-622: every action in the menu is admin/manager-gated server-side,
+  // so a rank-and-file employee only got as far as the 403.
+  canManage: boolean;
   onEdit: (d: Division) => void;
   onDelete: (d: Division) => void;
   onAddChild: (parentId: string) => void;
@@ -109,35 +113,38 @@ function DivisionNode({
             {division.description}
           </span>
         )}
-        <DropdownMenu>
-          <DropdownMenuTrigger data-testid={`company-division-${division.id}-actions`} render={<Button variant="ghost" size="icon-xs" className="opacity-0 group-hover:opacity-100 transition-opacity" />}>
-            <MoreHorizontal className="h-4 w-4" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem data-testid={`company-division-${division.id}-btn-add-child`} onClick={() => onAddChild(division.id)}>
-              <Plus className="mr-2 h-4 w-4" />
-              {t("addChild")}
-            </DropdownMenuItem>
-            <DropdownMenuItem data-testid={`company-division-${division.id}-btn-edit`} onClick={() => onEdit(division)}>
-              <Pencil className="mr-2 h-4 w-4" />
-              {t("edit")}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              data-testid={`company-division-${division.id}-btn-delete`}
-              variant="destructive"
-              onClick={() => onDelete(division)}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              {tc("delete")}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {canManage && (
+          <DropdownMenu>
+            <DropdownMenuTrigger data-testid={`company-division-${division.id}-actions`} render={<Button variant="ghost" size="icon-xs" className="opacity-0 group-hover:opacity-100 transition-opacity" />}>
+              <MoreHorizontal className="h-4 w-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem data-testid={`company-division-${division.id}-btn-add-child`} onClick={() => onAddChild(division.id)}>
+                <Plus className="mr-2 h-4 w-4" />
+                {t("addChild")}
+              </DropdownMenuItem>
+              <DropdownMenuItem data-testid={`company-division-${division.id}-btn-edit`} onClick={() => onEdit(division)}>
+                <Pencil className="mr-2 h-4 w-4" />
+                {t("edit")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                data-testid={`company-division-${division.id}-btn-delete`}
+                variant="destructive"
+                onClick={() => onDelete(division)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                {tc("delete")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
       {division.children.map((child) => (
         <DivisionNode
           key={child.id}
           division={child}
           depth={depth + 1}
+          canManage={canManage}
           onEdit={onEdit}
           onDelete={onDelete}
           onAddChild={onAddChild}
@@ -213,7 +220,7 @@ export default function CompanyPage() {
 
   const [saving, setSaving] = useState(false);
 
-  const { canManage } = usePermissions();
+  const { canManage, isAdmin } = usePermissions();
 
   async function load() {
     const [tRes, dRes, empRes] = await Promise.allSettled([
@@ -343,7 +350,9 @@ export default function CompanyPage() {
     if (!target) return;
     setDowngrading(true);
     try {
-      await api.post(`/employees/${target.employee_id}/downgrade-role`, {});
+      await api.put(`/employees/${target.employee_id}/role`, {
+        role_code: "employee",
+      });
       toast.success(
         target.user_name
           ? t("toastDowngradedNamed", { name: target.user_name })
@@ -404,10 +413,12 @@ export default function CompanyPage() {
           <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
           <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
-        <Button variant="outline" size="sm" render={<Link href="/settings/import" />}>
-          <Upload className="mr-1 h-4 w-4" />
-          {t("import")}
-        </Button>
+        {isAdmin && (
+          <Button data-testid="company-btn-import" variant="outline" size="sm" render={<Link href="/settings/import" />}>
+            <Upload className="mr-1 h-4 w-4" />
+            {t("import")}
+          </Button>
+        )}
       </div>
 
       <CompanyTabs />
@@ -416,9 +427,11 @@ export default function CompanyPage() {
         <Card data-testid="company-card-info">
           <CardHeader className="flex-row items-center justify-between">
             <CardTitle data-testid="company-name">{tenant.name}</CardTitle>
-            <Button data-testid="company-btn-edit" variant="ghost" size="icon-sm" onClick={openEditTenant}>
-              <Pencil className="h-4 w-4" />
-            </Button>
+            {isAdmin && (
+              <Button data-testid="company-btn-edit" variant="ghost" size="icon-sm" onClick={openEditTenant}>
+                <Pencil className="h-4 w-4" />
+              </Button>
+            )}
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
             <p>{t("slugLabel", { slug: tenant.slug })}</p>
@@ -448,6 +461,7 @@ export default function CompanyPage() {
                 <DivisionNode
                   key={div.id}
                   division={div}
+                  canManage={canManage}
                   onEdit={openEditDivision}
                   onDelete={openDeleteDivision}
                   onAddChild={(parentId) => openCreateDivision(parentId)}

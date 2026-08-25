@@ -27,6 +27,12 @@ from app.modules.talent_market.schemas import (
     TalentCardRead,
     TalentCardUpdate,
 )
+from app.modules.talent_market.scope import (
+    TalentScope,
+    assert_division_in_scope,
+    card_scope,
+    talent_scope,
+)
 
 router = APIRouter(tags=["talent-market"])
 
@@ -36,7 +42,9 @@ async def create_card(
     data: TalentCardCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    scope: TalentScope = Depends(talent_scope),
 ):
+    assert_division_in_scope(scope, data.division_id)
     return await service.create_card(db, current_user.tenant_id, current_user.id, data)
 
 
@@ -45,48 +53,32 @@ async def search_cards(
     data: SearchRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    scope: TalentScope = Depends(talent_scope),
 ):
-    from app.core.access_scope import (
-        ADMIN_ROLE_CODES,
-        get_current_employee,
-        get_managed_division_ids,
-        is_employee_only,
-    )
+    from app.core.access_scope import is_employee_only
 
-    is_admin = any(r.code in ADMIN_ROLE_CODES for r in current_user.roles)
-    published_only = False
-    assignee_employee_id: uuid.UUID | None = None
     # HRP-209: employees see only cards they're a candidate on (and the
-    # backend filters Draft to appointed-only inside the service). For
-    # managers / admins the original "published + your division" scope
-    # still applies.
-    candidate_only = False
-    # HRP-213: every viewer that carries an Employee row gets per-card
-    # `reacted_by_me` so the Reacted chip can render on previews even
-    # for admins (admins are sometimes employees too).
-    viewer_emp = await get_current_employee(db, current_user)
-    viewer_employee_id = viewer_emp.id if viewer_emp is not None else None
-    if not is_admin:
-        managed = (
-            await get_managed_division_ids(
-                db, current_user.tenant_id, viewer_emp.id
-            )
-            if viewer_emp
-            else []
-        )
-        published_only = not managed
-        if published_only and viewer_emp is not None:
-            assignee_employee_id = viewer_emp.id
-            if is_employee_only(current_user):
-                candidate_only = True
+    # backend filters Draft to appointed-only inside the service).
+    # HRP-639: everyone else below admin / hr now has a scope too — the
+    # board's published cards plus their own department's and the ones
+    # they authored. Before this, a division head with a subtree got no
+    # filter at all and read every department's drafts.
+    candidate_only = (
+        is_employee_only(current_user)
+        and not scope.division_ids
+        and scope.employee_id is not None
+    )
     items, total = await service.search_cards(
         db,
         current_user.tenant_id,
         data,
-        published_only=published_only,
-        assignee_employee_id=assignee_employee_id,
+        scope=scope,
+        assignee_employee_id=scope.employee_id,
         candidate_only=candidate_only,
-        viewer_employee_id=viewer_employee_id,
+        # HRP-213: every viewer that carries an Employee row gets per-card
+        # `reacted_by_me` so the Reacted chip can render on previews even
+        # for admins (admins are sometimes employees too).
+        viewer_employee_id=scope.employee_id,
     )
     return {"items": items, "total": total}
 
@@ -110,7 +102,10 @@ async def update_card(
     data: TalentCardUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
+    scope: TalentScope = Depends(talent_scope),
 ):
+    assert_division_in_scope(scope, data.division_id)
     return await service.update_card(db, current_user.tenant_id, card_id, data)
 
 
@@ -128,6 +123,7 @@ async def publish_card(
     card_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     return await service.publish_card(db, current_user.tenant_id, card_id)
 
@@ -137,6 +133,7 @@ async def complete_card(
     card_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     """HRP-150: terminal transition Published → Completed."""
     return await service.complete_card(db, current_user.tenant_id, card_id)
@@ -147,6 +144,7 @@ async def cancel_card(
     card_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     """HRP-150: terminal transition Draft|Published → Cancelled."""
     return await service.cancel_card(db, current_user.tenant_id, card_id)
@@ -162,6 +160,7 @@ async def add_requirement(
     data: RequirementCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     return await service.add_requirement(db, current_user.tenant_id, card_id, data)
 
@@ -179,6 +178,7 @@ async def add_required_specialization(
     data: RequiredSpecializationCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     return await service.add_required_specialization(
         db, current_user.tenant_id, card_id, data
@@ -195,6 +195,7 @@ async def update_required_specialization(
     data: RequiredSpecializationUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     return await service.update_required_specialization(
         db, current_user.tenant_id, card_id, link_id, data
@@ -210,6 +211,7 @@ async def delete_required_specialization(
     link_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     await service.delete_required_specialization(
         db, current_user.tenant_id, card_id, link_id
@@ -229,6 +231,7 @@ async def add_required_competences(
     data: RequiredCompetenceBulkCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     return await service.add_required_competences(
         db, current_user.tenant_id, card_id, data
@@ -245,6 +248,7 @@ async def update_required_competence(
     data: RequiredCompetenceUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     return await service.update_required_competence(
         db, current_user.tenant_id, card_id, link_id, data
@@ -260,6 +264,7 @@ async def delete_required_competence(
     link_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     await service.delete_required_competence(
         db, current_user.tenant_id, card_id, link_id
@@ -275,6 +280,7 @@ async def list_candidate_pool(
     include_attached: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     """HRP-95: feed the Add/Change candidate picker dialog.
 
@@ -331,6 +337,7 @@ async def add_candidate(
     data: CandidateAdd,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     return await service.add_candidate(db, current_user.tenant_id, card_id, data)
 
@@ -345,6 +352,7 @@ async def add_candidates_bulk(
     data: CandidateBulkAdd,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     """HRP-95: attach a batch of employees from the picker dialog in one call."""
     return await service.add_candidates_bulk(db, current_user.tenant_id, card_id, data)
@@ -359,6 +367,7 @@ async def appoint_candidate(
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     return await service.appoint_candidate(
         db, current_user.tenant_id, card_id, candidate_id
@@ -374,6 +383,7 @@ async def delete_candidate(
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     """HRP-95: remove a TalentCandidate row from the card. Called by the
     Change-candidates picker for each employee unchecked on Save."""
@@ -387,6 +397,7 @@ async def recompute_card(
     card_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
 ):
     """HRP-242: rerun the Candidates auto-pool for the card.
 

@@ -37,6 +37,7 @@ from app.modules.assessment.models import (
     PDPItem,
     PDPItemMaterial,
 )
+from app.modules.assessment.pdp_service import PDP_STATUS_TRANSITIONS
 from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Division, SpecializationDivision, Tenant
 from app.modules.competence.models import (
@@ -457,6 +458,17 @@ async def test_populate_tenant_full_demo_counts(
     item_ids = select(PDPItem.id).where(PDPItem.pdp_id.in_(pdp_ids))
     assert await _count(db, PDPItemMaterial, PDPItemMaterial.item_id.in_(item_ids)) == 5
     assert await _count(db, PDPComment, PDPComment.pdp_id.in_(pdp_ids)) == 2
+    # The seed used to invent ``active`` / ``completed``, which are not in
+    # the transition model: a plan carrying one can never be transitioned
+    # again, and ``done``-only finalisation made a finished plan count as
+    # an open overdue one on the dashboard. Pin the statuses to the model.
+    seeded_statuses = set(
+        (await db.execute(select(PDP.status).where(PDP.tenant_id == T))).scalars().all()
+    )
+    assert seeded_statuses <= set(PDP_STATUS_TRANSITIONS), (
+        f"seed created PDP statuses outside the transition model: "
+        f"{sorted(seeded_statuses - set(PDP_STATUS_TRANSITIONS))}"
+    )
 
     # --- step 7: mass exam ---
     assert await _count(db, MassExam, MassExam.tenant_id == T) == 1

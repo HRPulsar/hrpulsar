@@ -140,6 +140,12 @@ export interface Position {
   salary_currency: string | null;
   vacancy_count: number | null;
   matrix_configured: boolean;
+  /**
+   * HRP-631: whether this viewer may edit the position. False outside a
+   * division head's managed subtree — the catalogue is readable
+   * workspace-wide, the edit controls are not.
+   */
+  can_manage?: boolean;
   created_at: string;
 }
 
@@ -183,8 +189,25 @@ export type EmployeeAlertCode =
   | "assessment_pending"
   | "pdp_pending_review";
 
+// HRP-638: development-loop problems, computed from the latest assessment
+// and the open plans. Distinct from the hygiene codes above: several can
+// fire at once, and ``GET /employees?issue=`` filters by them.
+export type EmployeeLoopIssueCode =
+  | "competence_gap"
+  | "gaps_without_plan"
+  | "pdp_overdue"
+  | "pdp_stuck_review"
+  | "assessment_stale";
+
+export type EmployeeIssueCode = EmployeeAlertCode | EmployeeLoopIssueCode;
+
 export interface EmployeeAlert {
   code: EmployeeAlertCode;
+  label: string;
+}
+
+export interface EmployeeIssue {
+  code: EmployeeIssueCode;
   label: string;
 }
 
@@ -198,8 +221,10 @@ export interface Employee {
   specialization_title: string | null;
   grade_id: string | null;
   grade_title: string | null;
-  hire_date: string;
-  status: string;
+  // HRP-623: absent on a directory row — a colleague's card carries no HR
+  // process data. Present on every row an admin / HR / manager receives.
+  hire_date?: string;
+  status?: string;
   // HRP-246: stamped on every ``status`` mutation; nullable for rows
   // that pre-date the migration.
   status_changed_at?: string | null;
@@ -213,6 +238,11 @@ export interface Employee {
   division_name: string | null;
   avatar_url?: string | null;
   alert?: EmployeeAlert | null;
+  // HRP-638: every problem the row has, most urgent first. Only sent when
+  // the caller asked for ``with_alerts``.
+  issues?: EmployeeIssue[];
+  // HRP-621: role codes of the underlying user, sorted.
+  roles?: string[];
 }
 
 export interface EmployeeList {
@@ -373,6 +403,8 @@ export interface Role {
   is_system: boolean;
   tenant_id: string | null;
   permissions: string[];
+  /** HRP-634: active holders in the tenant; `null` unless it came from `GET /roles`. */
+  user_count: number | null;
 }
 
 export interface DictionaryItem {
@@ -681,6 +713,12 @@ export interface TalentCard {
   last_matched_at?: string | null;
   /** HRP-213: True when the viewing employee has already reacted on this card. */
   reacted_by_me?: boolean;
+  /**
+   * HRP-639: whether this viewer may mutate the card. False on a published
+   * card belonging to another department — the board shows it, the actions
+   * must not. Optional so an older payload keeps the role gate alone.
+   */
+  can_manage?: boolean;
 }
 
 export interface PDP {
@@ -703,6 +741,8 @@ export interface PDP {
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
+  // HRP-638: drives the "stuck in review" filter on the Development list.
+  updated_at?: string | null;
 }
 
 // Answer scales

@@ -74,6 +74,10 @@ class PositionRead(BaseModel):
     # HRP-57 E8: True iff the (spec, grade) pair has at least one
     # GradeCompetenceLink. Drives the "⚠ Matrix not configured" banner.
     matrix_configured: bool = False
+    # HRP-631: whether this viewer may edit the position. False outside a
+    # division head's managed subtree — the catalogue is readable
+    # workspace-wide, the edit controls are not.
+    can_manage: bool = True
     created_at: datetime
 
     model_config = {"from_attributes": True}

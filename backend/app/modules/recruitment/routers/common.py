@@ -35,3 +35,33 @@ def resolve_page_params(
 # the FULL request path, so every distinct {token} value would get its own
 # fresh bucket and token grinding would never be throttled (review [26]).
 recruitment_public_limiter = Limiter(key_func=get_remote_address, key_style="endpoint")
+
+
+# Who deals with hiring at all. Reading recruitment is not a company-wide
+# surface: candidate PII, resumes and interview transcripts live behind it,
+# so every GET here is gated by role rather than by bare authentication
+# (HRP-615).
+#
+# ``manager`` is on the list because managers sit on hiring rounds:
+# ``ELIGIBLE_EVALUATOR_ROLES`` (manager_assessment_service) admits them, and
+# the round endpoints there are already ``require_role("admin", "recruiter",
+# "manager")``.
+#
+# This tuple is deliberately a wide door — ``company.service`` grants
+# ``manager`` to every division head automatically. It is not the whole
+# answer: which *particular* vacancy a caller may read is decided
+# separately by ``recruitment.scope`` (HRP-629), which narrows everyone
+# outside ``FULL_RECRUITMENT_ROLES`` to their own division. Roles say
+# "may you be in recruitment", scope says "is this one yours".
+#
+# ``platform_admin`` mirrors ``ADMIN_ROLE_CODES``: ``require_role`` compares
+# literals and never consults ``rbac_hooks``, so an operator-level account
+# would otherwise 403 on the rounds it is eligible to evaluate.
+RECRUITMENT_VIEWER_ROLES = (
+    "admin",
+    "platform_admin",
+    "hr",
+    "recruiter",
+    "hiring_manager",
+    "manager",
+)

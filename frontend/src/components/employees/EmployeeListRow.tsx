@@ -62,10 +62,24 @@ const ALERT_CLASS: Record<EmployeeAlertCode, string> = {
 const GRID_TEMPLATE =
   "minmax(180px,1.2fr) minmax(180px,1.4fr) minmax(140px,1fr) 120px minmax(140px,1fr) 100px 120px";
 
+// HRP-623: the directory schema carries no specialization, status or hire
+// date, so rendering those columns for a rank-and-file caller means four
+// permanently empty cells. Same order, minus the fields that never arrive.
+//
+// Order: Name | Position | Grade | Division
+const DIRECTORY_GRID_TEMPLATE =
+  "minmax(180px,1.2fr) minmax(180px,1.4fr) 120px minmax(140px,1fr)";
+
 export interface EmployeeListRowProps {
   employee: EmployeeListItem;
   href?: string;
   testIdPrefix?: string;
+  /**
+   * HRP-623: render the HR-only columns (specialization, status, hire
+   * date). Off for callers the API answers in the directory schema —
+   * those fields are absent from the payload, not merely empty.
+   */
+  hrColumns?: boolean;
 }
 
 export interface EmployeeListProps {
@@ -81,6 +95,8 @@ export interface EmployeeListProps {
    * embed rows inside a sheet without their own visual table.
    */
   hideHeader?: boolean;
+  /** See `EmployeeListRowProps.hrColumns`. */
+  hrColumns?: boolean;
   className?: string;
 }
 
@@ -157,8 +173,10 @@ function CellText({ value, className, testId }: CellTextProps) {
  */
 export function EmployeeListHeader({
   testIdPrefix = "employee-list-row",
+  hrColumns = true,
 }: {
   testIdPrefix?: string;
+  hrColumns?: boolean;
 }) {
   const t = useTranslations("employees");
   const cellClass = "text-xs font-medium uppercase tracking-wide text-muted-foreground";
@@ -167,7 +185,11 @@ export function EmployeeListHeader({
       role="row"
       data-testid={`${testIdPrefix}-header`}
       className="sticky top-0 z-10 grid items-center gap-3 border-b bg-muted/30 px-3 py-2 text-left backdrop-blur"
-      style={{ gridTemplateColumns: GRID_TEMPLATE }}
+      style={{
+        gridTemplateColumns: hrColumns
+          ? GRID_TEMPLATE
+          : DIRECTORY_GRID_TEMPLATE,
+      }}
     >
       <span
         role="columnheader"
@@ -183,13 +205,15 @@ export function EmployeeListHeader({
       >
         {t("position")}
       </span>
-      <span
-        role="columnheader"
-        data-testid={`${testIdPrefix}-column-specialization`}
-        className={cellClass}
-      >
-        {t("specialization")}
-      </span>
+      {hrColumns && (
+        <span
+          role="columnheader"
+          data-testid={`${testIdPrefix}-column-specialization`}
+          className={cellClass}
+        >
+          {t("specialization")}
+        </span>
+      )}
       <span
         role="columnheader"
         data-testid={`${testIdPrefix}-column-grade`}
@@ -204,20 +228,24 @@ export function EmployeeListHeader({
       >
         {t("division")}
       </span>
-      <span
-        role="columnheader"
-        data-testid={`${testIdPrefix}-column-status`}
-        className={cellClass}
-      >
-        {t("status")}
-      </span>
-      <span
-        role="columnheader"
-        data-testid={`${testIdPrefix}-column-hire_date`}
-        className={cn(cellClass, "text-right")}
-      >
-        {t("hireDateColumn")}
-      </span>
+      {hrColumns && (
+        <span
+          role="columnheader"
+          data-testid={`${testIdPrefix}-column-status`}
+          className={cellClass}
+        >
+          {t("status")}
+        </span>
+      )}
+      {hrColumns && (
+        <span
+          role="columnheader"
+          data-testid={`${testIdPrefix}-column-hire_date`}
+          className={cn(cellClass, "text-right")}
+        >
+          {t("hireDateColumn")}
+        </span>
+      )}
     </li>
   );
 }
@@ -238,6 +266,7 @@ export function EmployeeListRow({
   employee,
   href,
   testIdPrefix = "employee-list-row",
+  hrColumns = true,
 }: EmployeeListRowProps) {
   const t = useTranslations("employees");
   const displayName =
@@ -258,7 +287,11 @@ export function EmployeeListRow({
       // HRP-175: shared stable testid so cross-page assertions can match
       // any rendering of the row regardless of context-specific prefix.
       className="grid items-center gap-3 border-b px-3 py-2 last:border-b-0 hover:bg-muted/20"
-      style={{ gridTemplateColumns: GRID_TEMPLATE }}
+      style={{
+        gridTemplateColumns: hrColumns
+          ? GRID_TEMPLATE
+          : DIRECTORY_GRID_TEMPLATE,
+      }}
     >
       {/* Mirror the canonical testid so cross-context selectors can pick
           up the same row regardless of testIdPrefix. */}
@@ -306,13 +339,15 @@ export function EmployeeListRow({
           className="text-muted-foreground"
         />
       </div>
-      <div className="min-w-0" role="cell">
-        <CellText
-          value={employee.specialization_title ?? null}
-          testId={`${testIdPrefix}-${employee.id}-specialization`}
-          className="text-muted-foreground"
-        />
-      </div>
+      {hrColumns && (
+        <div className="min-w-0" role="cell">
+          <CellText
+            value={employee.specialization_title ?? null}
+            testId={`${testIdPrefix}-${employee.id}-specialization`}
+            className="text-muted-foreground"
+          />
+        </div>
+      )}
       <div className="min-w-0" role="cell">
         {employee.grade_title ? (
           <Badge
@@ -349,35 +384,39 @@ export function EmployeeListRow({
           />
         )}
       </div>
-      <div role="cell">
-        {employee.status ? (
-          <Badge
-            data-testid={`${testIdPrefix}-${employee.id}-status`}
-            variant="secondary"
-            className={cn(
-              "w-fit shrink-0 capitalize",
-              statusBadgeClass(employee.status),
-            )}
-          >
-            {employeeStatusLabel(t, employee.status)}
-          </Badge>
-        ) : (
+      {hrColumns && (
+        <div role="cell">
+          {employee.status ? (
+            <Badge
+              data-testid={`${testIdPrefix}-${employee.id}-status`}
+              variant="secondary"
+              className={cn(
+                "w-fit shrink-0 capitalize",
+                statusBadgeClass(employee.status),
+              )}
+            >
+              {employeeStatusLabel(t, employee.status)}
+            </Badge>
+          ) : (
+            <span
+              data-testid={`${testIdPrefix}-${employee.id}-status`}
+              className="text-sm text-muted-foreground"
+            >
+              —
+            </span>
+          )}
+        </div>
+      )}
+      {hrColumns && (
+        <div className="text-right" role="cell">
           <span
-            data-testid={`${testIdPrefix}-${employee.id}-status`}
-            className="text-sm text-muted-foreground"
+            data-testid={`${testIdPrefix}-${employee.id}-hire-date`}
+            className="text-sm text-muted-foreground tabular-nums"
           >
-            —
+            {hireDate ?? "—"}
           </span>
-        )}
-      </div>
-      <div className="text-right" role="cell">
-        <span
-          data-testid={`${testIdPrefix}-${employee.id}-hire-date`}
-          className="text-sm text-muted-foreground tabular-nums"
-        >
-          {hireDate ?? "—"}
-        </span>
-      </div>
+        </div>
+      )}
     </li>
   );
 }
@@ -392,6 +431,7 @@ export function EmployeeList({
   testIdPrefix = "employee-list-row",
   rowHref,
   hideHeader = false,
+  hrColumns = true,
   className,
 }: EmployeeListProps) {
   return (
@@ -404,13 +444,19 @@ export function EmployeeList({
         // the same grid template at every breakpoint.
         className={cn("min-w-full overflow-x-auto", className)}
       >
-        {hideHeader ? null : <EmployeeListHeader testIdPrefix={testIdPrefix} />}
+        {hideHeader ? null : (
+          <EmployeeListHeader
+            testIdPrefix={testIdPrefix}
+            hrColumns={hrColumns}
+          />
+        )}
         {employees.map((emp) => (
           <EmployeeListRow
             key={emp.id}
             employee={emp}
             href={rowHref?.(emp)}
             testIdPrefix={testIdPrefix}
+            hrColumns={hrColumns}
           />
         ))}
       </ul>

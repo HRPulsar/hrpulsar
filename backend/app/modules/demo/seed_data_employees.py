@@ -76,6 +76,11 @@ NAME_POOL: list[tuple[str, str]] = [
 #   ``"division_deputy"`` — this employee becomes Division.deputy_manager_id.
 #   ``None`` — regular contributor.
 #
+# ``rbac_role`` (optional) grants a seeded system role on top of the
+# ``employee`` baseline, so the demo shows the role model it ships with
+# instead of two values. Division heads pick ``manager`` up from the
+# leadership wiring, so it is never spelled out here.
+#
 # Headcount distribution:
 #   eng-backend     : 6
 #   eng-platform    : 5
@@ -95,7 +100,10 @@ EMPLOYEE_ASSIGNMENTS: list[dict] = [
     # 2 — Carlos Mendez — Backend L3 Senior
     {"division_key": "eng-backend", "position_key": "p-be-l3", "status": "active", "manager_role": None},
     # 3 — Daria Volkova — Backend L3 Senior
-    {"division_key": "eng-backend", "position_key": "p-be-l3", "status": "active", "manager_role": None},
+    # Runs the hiring loop for the open backend roles. Deliberately not a
+    # division head: `manager` outranks `hiring_manager` in the display
+    # ladder, so tagging a head would hide the role the demo is showing.
+    {"division_key": "eng-backend", "position_key": "p-be-l3", "status": "active", "manager_role": None, "rbac_role": "hiring_manager"},
     # 4 — Ethan Williams — Backend L2 Middle
     {"division_key": "eng-backend", "position_key": "p-be-l2", "status": "active", "manager_role": None},
     # 5 — Fatima Al-Rashid — Backend L1 Junior (recent hire)
@@ -145,15 +153,15 @@ EMPLOYEE_ASSIGNMENTS: list[dict] = [
     # 27 — Bianca Rossi — Product Designer
     {"division_key": "design", "position_key": "p-designer-mid", "status": "active", "manager_role": None},
     # 28 — Cameron Brown — People Partner (division_head People)
-    {"division_key": "people", "position_key": "p-people-partner", "status": "active", "manager_role": "division_head"},
+    {"division_key": "people", "position_key": "p-people-partner", "status": "active", "manager_role": "division_head", "rbac_role": "hr"},
     # 29 — Diana Ovsyannikova — People Partner
-    {"division_key": "people", "position_key": "p-people-partner", "status": "active", "manager_role": "division_deputy"},
+    {"division_key": "people", "position_key": "p-people-partner", "status": "active", "manager_role": "division_deputy", "rbac_role": "hr"},
     # 30 — Emil Krause — Recruiter
-    {"division_key": "people", "position_key": "p-recruiter", "status": "active", "manager_role": None},
+    {"division_key": "people", "position_key": "p-recruiter", "status": "active", "manager_role": None, "rbac_role": "recruiter"},
     # 31 — Farah Khoury — Recruiter
-    {"division_key": "people", "position_key": "p-recruiter", "status": "active", "manager_role": None},
+    {"division_key": "people", "position_key": "p-recruiter", "status": "active", "manager_role": None, "rbac_role": "recruiter"},
     # 32 — Greg Murphy — Recruiter (inactive — former teammate)
-    {"division_key": "people", "position_key": "p-recruiter", "status": "inactive", "manager_role": None},
+    {"division_key": "people", "position_key": "p-recruiter", "status": "inactive", "manager_role": None, "rbac_role": "recruiter"},
     # 33 — Hannah Adler — Account Executive (division_head GTM)
     {"division_key": "gtm", "position_key": "p-ae", "status": "active", "manager_role": "division_head"},
     # 34 — Igor Sokolov — Account Executive
@@ -199,3 +207,33 @@ def email_for(first: str, last: str) -> str:
         f"{first}.{last}".replace("'", "").replace(" ", "").lower()
         + f"@{EMPLOYEE_EMAIL_DOMAIN}"
     )
+
+
+def localized_name_pool(locale: str | None = None) -> list[tuple[str, str, str]]:
+    """``(first, last, email)`` per pool entry for the active seed locale.
+
+    Employee names are display text: a white-label install running its
+    demo in ru/de shows visitors people whose names read as local, not a
+    Latin cast with translated job titles. The catalog carries the full
+    name (``"Carlos Mendez"`` → the locale's own cast) and the email as
+    a second entry — /employees renders the email in its own column, so
+    it has to follow the name, and an explicit catalog entry keeps it
+    ASCII and unique without a transliteration table. A locale with no
+    entry falls through to the English pool, so the seed can never break
+    on a translation gap.
+    """
+    from app.modules.demo.seed_i18n import translate
+
+    pool: list[tuple[str, str, str]] = []
+    for first, last in NAME_POOL:
+        localized_first, _, localized_last = translate(
+            f"{first} {last}", locale
+        ).partition(" ")
+        pool.append(
+            (
+                localized_first,
+                localized_last or last,
+                translate(email_for(first, last), locale),
+            )
+        )
+    return pool

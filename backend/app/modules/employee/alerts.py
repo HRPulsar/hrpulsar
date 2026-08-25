@@ -94,12 +94,32 @@ async def compute_employee_alerts_bulk(
     *,
     now: datetime | None = None,
 ) -> dict[uuid.UUID, AlertCode | None]:
-    """Resolve alerts for a list of employees with at most three DB round-trips.
+    """Resolve the single highest-priority alert per employee.
 
-    All rows that contribute to an alert are filtered by ``tenant_id`` as
-    defence-in-depth so a mixed-tenant cohort can never leak rows across
-    tenants. Returns a dict ``{employee_id: alert_code | None}``; missing keys
-    can be treated as "no alert".
+    Returns a dict ``{employee_id: alert_code | None}``; missing keys can be
+    treated as "no alert".
+    """
+    every = await compute_employee_alerts_bulk_all(db, tenant_id, employees, now=now)
+    return {emp_id: (codes[0] if codes else None) for emp_id, codes in every.items()}
+
+
+async def compute_employee_alerts_bulk_all(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    employees: list[Employee],
+    *,
+    now: datetime | None = None,
+) -> dict[uuid.UUID, list[AlertCode]]:
+    """Every alert that fires per employee, in ``ALERT_PRIORITY`` order.
+
+    Three DB round-trips regardless of cohort size. All rows that contribute
+    to an alert are filtered by ``tenant_id`` as defence-in-depth so a
+    mixed-tenant cohort can never leak rows across tenants.
+
+    HRP-638: the employee list shows every problem a row has, so the scan
+    collects them all; ``compute_employee_alerts_bulk`` narrows that back to
+    the top one for the single-badge callers (position and specialization
+    drill-downs), whose contract is unchanged.
     """
     if not employees:
         return {}
@@ -109,7 +129,7 @@ async def compute_employee_alerts_bulk(
     # the priority scan — same defence-in-depth principle as the SQL filters.
     cohort = [e for e in employees if e.tenant_id == tenant_id]
     if not cohort:
-        return {e.id: None for e in employees}
+        return {e.id: [] for e in employees}
     employee_ids = [e.id for e in cohort]
 
     # --- Round-trip 1: employees with overdue assessments. ---
@@ -152,29 +172,27 @@ async def compute_employee_alerts_bulk(
     )
     pdp_ids: set[uuid.UUID] = {row[0] for row in pdp_rows.all()}
 
-    result: dict[uuid.UUID, AlertCode | None] = {}
+    result: dict[uuid.UUID, list[AlertCode]] = {}
     for emp in employees:
         if emp.tenant_id != tenant_id:
             # Off-tenant employees never get an alert — they were excluded
             # from the SQL filters above, so we can't reason about their state.
-            result[emp.id] = None
+            result[emp.id] = []
             continue
+        codes: list[AlertCode] = []
         if _user_inactive(emp):
-            result[emp.id] = "user_inactive"
-            continue
+            codes.append("user_inactive")
         if is_incomplete(emp):
-            result[emp.id] = "profile_incomplete"
-            continue
+            codes.append("profile_incomplete")
         if emp.id in overdue_ids:
-            result[emp.id] = "assessment_overdue"
-            continue
+            codes.append("assessment_overdue")
         if emp.id in pending_ids:
-            result[emp.id] = "assessment_pending"
-            continue
+            codes.append("assessment_pending")
         if emp.id in pdp_ids:
-            result[emp.id] = "pdp_pending_review"
-            continue
-        result[emp.id] = None
+            codes.append("pdp_pending_review")
+        # Appended in ALERT_PRIORITY order above, so the list is already
+        # sorted and its head is what the single-alert callers expect.
+        result[emp.id] = codes
 
     return result
 

@@ -11,10 +11,11 @@ from fastapi import (
     Request,
 )
 from fastapi.responses import Response
+from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     analytics_service,
@@ -22,7 +23,10 @@ from app.modules.recruitment import (
     service,
     share_service,
 )
-from app.modules.recruitment.routers.common import recruitment_public_limiter
+from app.modules.recruitment.routers.common import (
+    RECRUITMENT_VIEWER_ROLES,
+    recruitment_public_limiter,
+)
 from app.modules.recruitment.schemas import (
     AnalyticsSummary,
     ComparisonRadar,
@@ -35,6 +39,13 @@ from app.modules.recruitment.schemas import (
     ReportSharePublicView,
     ReportShareRead,
     VacancyAnalytics,
+)
+from app.modules.recruitment.scope import (
+    export_scope,
+    list_scope_filter,
+    report_scope,
+    vacancy_query_scope,
+    vacancy_scope,
 )
 
 router = APIRouter(tags=["recruitment"])
@@ -53,7 +64,7 @@ async def generate_vacancy_report(
     data: ReportGenerateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hr", "hrd")),
+    current_user: User = Depends(require_role("admin", "recruiter", "hr")),
 ):
     """Enqueue an XLSX consolidated report for the given vacancy."""
 
@@ -89,7 +100,8 @@ async def list_vacancy_reports(
     limit: int = Query(50, ge=1, le=100),
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     items, total = await service.list_reports(
         db,
@@ -109,7 +121,9 @@ async def list_all_reports(
     vacancy_id: uuid.UUID | None = None,
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    scope_filter: ColumnElement[bool] | None = Depends(list_scope_filter),
+    _query_scope: None = Depends(vacancy_query_scope),
 ):
     items, total = await service.list_reports(
         db,
@@ -118,6 +132,7 @@ async def list_all_reports(
         status_filter=status,
         skip=skip,
         limit=limit,
+        scope_filter=scope_filter,
     )
     return {"items": items, "total": total}
 
@@ -126,7 +141,8 @@ async def list_all_reports(
 async def get_report(
     export_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(export_scope),
 ):
     return await service.get_report(db, current_user.tenant_id, export_id)
 
@@ -148,7 +164,8 @@ async def delete_report(
 async def get_report_preview(
     export_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(export_scope),
 ):
     """Inline XLSX preview — every sheet rendered as a JSON cell matrix."""
     return await service.get_report_preview(db, current_user.tenant_id, export_id)
@@ -165,7 +182,8 @@ async def compare_vacancy_candidates(
     vacancy_id: uuid.UUID,
     candidate_ids: list[uuid.UUID] = Query(..., alias="candidate_ids"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     role = service.resolve_user_role(current_user)
     return await service.compare_candidates(
@@ -210,6 +228,7 @@ async def list_report_shares(
     report_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter")),
+    _scope: None = Depends(report_scope),
 ):
     return await share_service.list_shares(db, current_user.tenant_id, report_id)
 
@@ -254,7 +273,8 @@ async def open_shared_report(
 async def get_vacancy_analytics(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     return await analytics_service.vacancy_analytics(
         db, current_user.tenant_id, vacancy_id
@@ -267,7 +287,7 @@ async def get_vacancy_analytics(
 )
 async def get_recruitment_summary(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr", "hrd", "recruiter")),
+    current_user: User = Depends(require_role("admin", "hr", "recruiter")),
 ):
     return await analytics_service.recruitment_summary(db, current_user.tenant_id)
 
@@ -280,7 +300,8 @@ async def get_comparison_radar(
     vacancy_id: uuid.UUID,
     candidate_ids: list[uuid.UUID] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     return await analytics_service.comparison_radar(
         db, current_user.tenant_id, vacancy_id, candidate_ids

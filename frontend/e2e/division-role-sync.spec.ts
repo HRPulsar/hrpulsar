@@ -119,10 +119,13 @@ test.describe("EMP3 division role sync", () => {
     expect(updated.pending_role_downgrade.length).toBe(1);
     expect(updated.pending_role_downgrade[0].employee_id).toBe(alice.employeeId);
 
-    // 3. Hit the downgrade endpoint and verify role removed.
-    const downgrade = await page.request.post(
-      `${API_BASE}/employees/${alice.employeeId}/downgrade-role`,
-      { headers: { Authorization: `Bearer ${admin.accessToken}` } },
+    // 3. Hit the set-role endpoint (HRP-620) and verify role removed.
+    const downgrade = await page.request.put(
+      `${API_BASE}/employees/${alice.employeeId}/role`,
+      {
+        headers: { Authorization: `Bearer ${admin.accessToken}` },
+        data: { role_code: "employee" },
+      },
     );
     expect(downgrade.ok()).toBeTruthy();
 

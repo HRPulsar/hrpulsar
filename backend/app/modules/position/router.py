@@ -3,9 +3,11 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access_scope import get_visible_employee_ids
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
+from app.modules.employee.schemas import EmployeeDirectoryRead
 from app.modules.position import service
 from app.modules.position.schemas import (
     PositionBulkAction,
@@ -19,6 +21,12 @@ from app.modules.position.schemas import (
     PositionStatusUpdate,
     PositionUpdate,
 )
+from app.modules.position.scope import (
+    assert_division_in_scope,
+    assert_positions_in_scope,
+    managed_divisions,
+    position_scope,
+)
 
 router = APIRouter(tags=["positions"])
 
@@ -28,7 +36,9 @@ async def create_position(
     data: PositionCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    allowed: tuple[uuid.UUID, ...] | None = Depends(managed_divisions),
 ):
+    assert_division_in_scope(allowed, data.division_id)
     return await service.create_position(db, current_user.tenant_id, data)
 
 
@@ -37,7 +47,9 @@ async def bulk_action_positions(
     data: PositionBulkAction,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    allowed: tuple[uuid.UUID, ...] | None = Depends(managed_divisions),
 ):
+    await assert_positions_in_scope(db, current_user, data.ids, allowed)
     return await service.bulk_action_positions(db, current_user.tenant_id, data)
 
 
@@ -71,6 +83,7 @@ async def list_positions(
     ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    allowed: tuple[uuid.UUID, ...] | None = Depends(managed_divisions),
 ):
     items, total = await service.list_positions(
         db,
@@ -86,6 +99,7 @@ async def list_positions(
         lifecycle_status=lifecycle_status,
         has_vacancies=has_vacancies,
         matrix_unconfigured=matrix_unconfigured,
+        managed_division_ids=allowed,
     )
     return {"items": items, "total": total}
 
@@ -95,8 +109,9 @@ async def get_position(
     position_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    allowed: tuple[uuid.UUID, ...] | None = Depends(managed_divisions),
 ):
-    return await service.get_position(db, current_user.tenant_id, position_id)
+    return await service.get_position(db, current_user.tenant_id, position_id, allowed)
 
 
 @router.put("/positions/{position_id}", response_model=PositionRead)
@@ -105,7 +120,13 @@ async def update_position(
     data: PositionUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(position_scope),
+    allowed: tuple[uuid.UUID, ...] | None = Depends(managed_divisions),
 ):
+    # The target division is fenced as well, so a position cannot be moved
+    # out of the subtree that let the caller edit it in the first place.
+    if "division_id" in data.model_fields_set:
+        assert_division_in_scope(allowed, data.division_id)
     return await service.update_position(db, current_user.tenant_id, position_id, data)
 
 
@@ -118,9 +139,15 @@ async def delete_position(
     await service.delete_position(db, current_user.tenant_id, position_id)
 
 
+# HRP-633: the gate stays `get_current_user` — the list itself is public to
+# the workspace, the same way the employee directory is. What changes is the
+# row: anyone whose full HR card the caller may not open comes back in the
+# directory shape, so `?with_alerts=true` over every position can no longer
+# reconstruct the HR roster. Same boundary as `GET /employees/{id}`, applied
+# per row, which is why the response mixes the two schemas.
 @router.get(
     "/positions/{position_id}/employees",
-    response_model=list[PositionEmployeeRead],
+    response_model=list[PositionEmployeeRead | EmployeeDirectoryRead],
 )
 async def list_position_employees(
     position_id: uuid.UUID,
@@ -133,6 +160,7 @@ async def list_position_employees(
         current_user.tenant_id,
         position_id,
         with_alerts=with_alerts,
+        visible_employee_ids=await get_visible_employee_ids(db, current_user),
     )
 
 
@@ -183,6 +211,7 @@ async def set_position_status(
     data: PositionStatusUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(position_scope),
 ):
     return await service.set_position_status(
         db, current_user.tenant_id, position_id, data.lifecycle_status
@@ -203,5 +232,6 @@ async def deactivate_position(
     position_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(position_scope),
 ):
     return await service.deactivate_position(db, current_user.tenant_id, position_id)

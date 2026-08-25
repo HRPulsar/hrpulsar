@@ -600,22 +600,18 @@ export async function provisionTenantMember(
   const data = await accept.json();
 
   // The invitation auto-creates an employee row only when division_id OR
-  // position_id is set. Look it up by user_id.
+  // position_id is set. Ask the member's own card for its id: since HRP-623
+  // the employee list answers a rank-and-file member in the directory shape,
+  // which carries no `user_id` to match on — the row is there, it just cannot
+  // be recognised. `/employees/me` is the entry point HRP-624 added for
+  // exactly this question and answers 404 when there is no row.
   let employeeId: string | null = null;
   if (divisionId || params.positionId) {
-    const empResp = await opts.page.request.get(
-      `${API_BASE}/employees?limit=100`,
-      {
-        headers: { Authorization: `Bearer ${data.access_token}` },
-      },
-    );
+    const empResp = await opts.page.request.get(`${API_BASE}/employees/me`, {
+      headers: { Authorization: `Bearer ${data.access_token}` },
+    });
     if (empResp.ok()) {
-      const empData = await empResp.json();
-      // Member sees only own row under the new scope rule.
-      const own = empData.items.find(
-        (e: { user_id: string; id: string }) => e.user_id === data.user.id,
-      );
-      employeeId = own?.id ?? null;
+      employeeId = ((await empResp.json()) as { id: string }).id ?? null;
     }
   }
 

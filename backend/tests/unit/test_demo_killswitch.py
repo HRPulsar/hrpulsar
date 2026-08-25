@@ -214,7 +214,7 @@ async def test_transcribe_killswitch_uses_bundled_transcript(
         )
 
     monkeypatch.setattr(
-        "app.modules.recruitment.transcription_service.get_transcription_provider_sync",
+        "app.modules.recruitment.transcription_service.get_transcription_chain_sync",
         _explode,
     )
 
@@ -265,7 +265,7 @@ async def test_transcribe_killswitch_wipes_stale_segments(
         )
 
     monkeypatch.setattr(
-        "app.modules.recruitment.transcription_service.get_transcription_provider_sync",
+        "app.modules.recruitment.transcription_service.get_transcription_chain_sync",
         _explode,
     )
 

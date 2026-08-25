@@ -166,11 +166,23 @@ def generate_positions_task(
     self,
     tenant_id_str: str,
     user_id_str: str | None,
+    division_ids: list[str] | None,
     cost: float | None = None,
 ) -> list[dict]:
-    """Run generate_positions in the background. Returns the persisted drafts."""
+    """Run generate_positions in the background. Returns the persisted drafts.
+
+    ``division_ids`` is the caller's managed subtree, resolved in the
+    request and carried here (HRP-631): ``None`` means no restriction.
+    Deliberately without a default — resolving it inside the worker would
+    resolve it for the tenant rather than for whoever asked, and a
+    message queued by the previous release should fail loudly rather than
+    quietly draft positions across the workspace.
+    """
     tenant_id = uuid.UUID(tenant_id_str)
     user_id = uuid.UUID(user_id_str) if user_id_str else None
+    allowed = (
+        None if division_ids is None else tuple(uuid.UUID(d) for d in division_ids)
+    )
 
     async def _run(session_factory: async_sessionmaker[AsyncSession]) -> list[dict]:
         from app.modules.ai import prompts, service
@@ -182,7 +194,7 @@ def generate_positions_task(
         )
 
         async with session_factory() as db:
-            ctx = await service._collect_context_for_positions(db, tenant_id)
+            ctx = await service._collect_context_for_positions(db, tenant_id, allowed)
             await db.commit()  # release the advisory lock before the LLM call
 
         result = await _generate_json_with_retries(
@@ -201,7 +213,7 @@ def generate_positions_task(
             # released the previous transaction. _persist_positions only
             # uses lookup maps + adds/updates rows; the advisory lock is
             # taken inside _collect to serialize concurrent runs.
-            ctx2 = await service._collect_context_for_positions(db, tenant_id)
+            ctx2 = await service._collect_context_for_positions(db, tenant_id, allowed)
             created = await service._persist_positions(
                 db,
                 tenant_id,
@@ -211,6 +223,7 @@ def generate_positions_task(
                 spec_map=ctx2["spec_map"],
                 grade_map=ctx2["grade_map"],
                 div_map=ctx2["div_map"],
+                allowed_division_ids=allowed,
             )
             await billing_hooks.consume_action(
                 db,

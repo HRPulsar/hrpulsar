@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePermissions } from "@/hooks/use-permissions";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -133,6 +134,7 @@ const emptyMaterialForm: MaterialForm = {
 
 export default function CompetenceDetailPage() {
   const t = useTranslations("competences");
+  const { canManageCatalogues } = usePermissions();
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const { id } = useParams<{ id: string }>();
@@ -260,7 +262,10 @@ export default function CompetenceDetailPage() {
   }, [searchParams, activeSession, id, router]);
 
   const isOrigin = detail?.is_origin ?? false;
-  const canEditMeta = !isOrigin;
+  // HRP-631: the competence catalogue is workspace-wide, so editing it is
+  // admin / HR. Origin rows stay read-only for everyone. Managers keep the
+  // page — they build assessments on it — without the edit affordances.
+  const canEditMeta = !isOrigin && canManageCatalogues;
 
   // HRP-102: the matrix cell link puts `?from=matrix&specialization_id=…`
   // on the URL. We thread that spec id into (a) the breadcrumb (Back to

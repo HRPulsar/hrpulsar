@@ -304,7 +304,7 @@ class TestRoles:
     async def test_list_roles(self, db: AsyncSession, tenant, admin_role):
         roles = await service.list_roles(db, tenant.id)
         assert len(roles) >= 1
-        codes = [r.code for r in roles]
+        codes = [role.code for role, _count in roles]
         assert "admin" in codes
 
     async def test_create_custom_role(self, db: AsyncSession, tenant):

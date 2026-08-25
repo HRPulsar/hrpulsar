@@ -18,8 +18,16 @@ logger = logging.getLogger(__name__)
 
 
 @celery.task(bind=True, max_retries=1, default_retry_delay=30)
-def export_assessments_task(self, tenant_id: str) -> dict:
-    """Generate assessments XLSX report in background, upload to S3."""
+def export_assessments_task(self, tenant_id: str, employee_ids: list[str] | None):
+    """Generate assessments XLSX report in background, upload to S3.
+
+    ``employee_ids`` is the caller's scope, resolved in the request and
+    carried here (HRP-641): ``None`` means no restriction, an empty list
+    means the caller manages nobody and gets an empty sheet. Deliberately
+    without a default — "unscoped" is not a safe thing to fall back to,
+    and a message queued by the previous release should fail loudly
+    rather than quietly export the workspace.
+    """
     import io
     import uuid
 
@@ -36,10 +44,15 @@ def export_assessments_task(self, tenant_id: str) -> dict:
     try:
         with Session(engine) as db:
             tid = uuid.UUID(tenant_id)
+            scope = (
+                []
+                if employee_ids is None
+                else [Assessment.employee_id.in_([uuid.UUID(i) for i in employee_ids])]
+            )
             assessments = (
                 db.execute(
                     select(Assessment)
-                    .where(Assessment.tenant_id == tid)
+                    .where(Assessment.tenant_id == tid, *scope)
                     .order_by(Assessment.created_at.desc())
                 )
                 .scalars()

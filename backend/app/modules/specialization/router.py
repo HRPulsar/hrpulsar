@@ -7,9 +7,11 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access_scope import get_visible_employee_ids
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
+from app.modules.employee.schemas import EmployeeDirectoryRead
 from app.modules.position.schemas import PositionEmployeeRead
 from app.modules.specialization import service
 from app.modules.specialization.schemas import (
@@ -70,7 +72,7 @@ async def add_grades(
     spec_id: uuid.UUID,
     data: GradesBulkAdd,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.add_grades(
         db, current_user.tenant_id, spec_id, data.grade_ids
@@ -85,7 +87,7 @@ async def reorder_grades(
     spec_id: uuid.UUID,
     data: GradesReorder,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.reorder_grades(
         db,
@@ -104,7 +106,7 @@ async def patch_grade(
     grade_id: uuid.UUID,
     data: GradePatch,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.patch_grade(
         db,
@@ -123,7 +125,7 @@ async def delete_grade(
     spec_id: uuid.UUID,
     grade_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     await service.delete_grade(db, current_user.tenant_id, spec_id, grade_id)
 
@@ -145,7 +147,7 @@ async def list_specialization_positions(
 # row shape as `/positions/{id}/employees` so the same UI component renders.
 @router.get(
     "/specializations/{spec_id}/employees",
-    response_model=list[PositionEmployeeRead],
+    response_model=list[PositionEmployeeRead | EmployeeDirectoryRead],
 )
 async def list_specialization_employees(
     spec_id: uuid.UUID,
@@ -153,11 +155,14 @@ async def list_specialization_employees(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # HRP-633: same trimming as the position drill-down — the two routes
+    # share the row shape, so they have to share the boundary too.
     return await service.list_employees(
         db,
         current_user.tenant_id,
         spec_id,
         with_alerts=with_alerts,
+        visible_employee_ids=await get_visible_employee_ids(db, current_user),
     )
 
 
@@ -183,7 +188,7 @@ async def upsert_matrix(
     grade_id: uuid.UUID,
     data: MatrixUpsert,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.upsert_matrix(
         db,
@@ -209,7 +214,7 @@ async def upsert_matrix_bulk(
     spec_id: uuid.UUID,
     data: MatrixBulkUpsert,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.upsert_matrix_bulk(
         db,

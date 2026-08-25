@@ -34,8 +34,25 @@ export const SYSTEM_ROLE_KEYS: Record<string, string> = {
   admin: "roleAdmin",
   hr: "roleHr",
   manager: "roleManager",
+  recruiter: "roleRecruiter",
+  hiring_manager: "roleHiringManager",
   employee: "roleEmployee",
 };
+
+/**
+ * HRP-620/621: roles a tenant admin can hand out, strongest first — the
+ * options of the employee role select and the role filter. Mirrors the
+ * seeded system roles minus `platform_admin`, which is granted
+ * platform-side and is rejected by `PUT /employees/{id}/role`.
+ */
+export const ASSIGNABLE_ROLE_CODES = [
+  "admin",
+  "hr",
+  "manager",
+  "recruiter",
+  "hiring_manager",
+  "employee",
+] as const;
 
 /**
  * Pick the one role code to display, in three tiers:
@@ -55,6 +72,24 @@ export function resolveDisplayRoleCode(
   }
   const other = roles.find((code) => code && code !== FALLBACK_ROLE_CODE);
   return other || FALLBACK_ROLE_CODE;
+}
+
+/**
+ * The role the tenant's own role select is about — same ladder, with
+ * `platform_admin` taken out.
+ *
+ * That code outranks everything in `ROLE_PRECEDENCE` but is deliberately
+ * absent from `ASSIGNABLE_ROLE_CODES` (the API rejects it), so feeding the
+ * raw display code to the select gives it a value no option carries: the
+ * card of an enterprise platform admin would show no current role and hide
+ * the tenant role that the select actually changes.
+ */
+export function resolveAssignableRoleCode(
+  roles: readonly string[] | null | undefined,
+): string {
+  return resolveDisplayRoleCode(
+    (roles ?? []).filter((code) => code !== "platform_admin"),
+  );
 }
 
 /**

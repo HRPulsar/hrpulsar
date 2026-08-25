@@ -8,8 +8,10 @@ from app.core import billing_hooks
 from app.core.schemas import TaskAccepted
 from app.database import get_db
 from app.modules.ai import service
+from app.modules.assessment.scope import assert_assessment_in_scope
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
+from app.modules.position.scope import resolve_managed_divisions
 
 router = APIRouter(tags=["ai"])
 
@@ -66,7 +68,7 @@ async def generate_competences(
     response: Response,
     sync: bool = Query(False, description="Run synchronously (legacy clients)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     if sync:
         return await service.generate_competences(
@@ -109,7 +111,7 @@ async def generate_indicators(
     response: Response,
     sync: bool = Query(False, description="Run synchronously (legacy clients)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     if sync:
         return await service.generate_indicators(
@@ -152,6 +154,10 @@ async def suggest_pdp(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
+    # HRP-638: the plan is drafted for the assessment's assessee and paid
+    # for out of the tenant's credits, so the same subtree fence as the
+    # assessment routes applies before either branch spends anything.
+    await assert_assessment_in_scope(db, current_user, data.assessment_id)
     if sync:
         return await service.suggest_pdp(
             db, current_user.tenant_id, current_user.id, data.assessment_id
@@ -187,9 +193,14 @@ async def generate_positions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
+    # HRP-631: a division head may run the generator, but the drafts it
+    # writes land in their own subtree — the generator files each position
+    # under a division, and an unfenced run would put drafts (and its
+    # sweep of unregenerated ones) across the whole workspace.
+    allowed = await resolve_managed_divisions(db, current_user)
     if sync:
         return await service.generate_positions(
-            db, current_user.tenant_id, current_user.id
+            db, current_user.tenant_id, current_user.id, allowed
         )
     cost = await billing_hooks.resolve_cost(
         db, current_user.tenant_id, "ai.generate_positions"
@@ -204,6 +215,7 @@ async def generate_positions(
         generate_positions_task,
         str(current_user.tenant_id),
         str(current_user.id),
+        None if allowed is None else [str(d) for d in allowed],
         cost,
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,

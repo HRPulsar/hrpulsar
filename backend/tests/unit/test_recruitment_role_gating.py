@@ -48,9 +48,9 @@ def test_role_filter_returns_full_payload_for_recruiter():
     assert out is payload
 
 
-def test_role_filter_returns_full_payload_for_admin_hr_hrd():
+def test_role_filter_returns_full_payload_for_admin_hr():
     payload = _sample_payload()
-    for role in ["admin", "HR", "Hrd"]:
+    for role in ["admin", "HR", "hr"]:
         assert _role_filter_analysis(payload, role) is payload
 
 

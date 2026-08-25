@@ -124,7 +124,7 @@ class TestCPAEnhancements:
         self, db: AsyncSession, tenant, user, assessment_types
     ):
         cpa = await self._make_cpa(db, tenant, user, assessment_types)
-        analytics = await get_cpa_analytics(db, tenant.id, cpa["id"])
+        analytics = await get_cpa_analytics(db, tenant.id, cpa["id"], None)
 
         assert analytics["cpa_id"] == cpa["id"]
         assert analytics["total_assessments"] == 0
@@ -170,7 +170,7 @@ class TestCPAEnhancements:
         )
         await db.commit()
 
-        analytics = await get_cpa_analytics(db, tenant.id, cpa["id"])
+        analytics = await get_cpa_analytics(db, tenant.id, cpa["id"], None)
 
         assert analytics["total_assessments"] == 1
         assert analytics["completed_assessments"] == 1

@@ -29,6 +29,7 @@ const PROVIDERS = [
   { value: "whisper", labelKey: "sttProviderWhisper" },
   { value: "deepgram", labelKey: "sttProviderDeepgram" },
   { value: "assemblyai", labelKey: "sttProviderAssemblyai" },
+  { value: "yandex_speechkit", labelKey: "sttProviderYandex" },
   { value: "faster_whisper", labelKey: "sttProviderFasterWhisper" },
 ];
 
@@ -39,7 +40,11 @@ export default function STTProvidersPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ provider: "deepgram", api_key: "" });
+  const [draft, setDraft] = useState({
+    provider: "deepgram",
+    api_key: "",
+    folder_id: "",
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -66,9 +71,12 @@ export default function STTProvidersPage() {
         provider: draft.provider,
         api_key: draft.api_key || null,
         is_active: true,
+        // SpeechKit addresses the account by folder, so the key alone is
+        // not a credential.
+        settings: draft.folder_id ? { folder_id: draft.folder_id } : null,
       });
       toast.success(t("sttToastAdded"));
-      setDraft({ provider: "deepgram", api_key: "" });
+      setDraft({ provider: "deepgram", api_key: "", folder_id: "" });
       void load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("toastGenericError"));
@@ -161,6 +169,23 @@ export default function STTProvidersPage() {
                 data-testid="stt-input-key"
               />
             </div>
+            {draft.provider === "yandex_speechkit" ? (
+              <div className="space-y-1">
+                <Label htmlFor="stt-folder">{t("sttFolderIdLabel")}</Label>
+                <Input
+                  id="stt-folder"
+                  value={draft.folder_id}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, folder_id: e.target.value }))
+                  }
+                  placeholder="b1g…"
+                  data-testid="stt-input-folder"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t("sttFolderIdHint")}
+                </p>
+              </div>
+            ) : null}
           </div>
           <div className="flex justify-end">
             <Button

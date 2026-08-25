@@ -391,7 +391,7 @@ async def dev_seed_origin_group(
 # --- Roles ---
 
 
-def _role_to_dict(role):
+def _role_to_dict(role, user_count: int | None = None):
     return {
         "id": role.id,
         "name": role.name,
@@ -400,6 +400,7 @@ def _role_to_dict(role):
         "is_system": role.is_system,
         "tenant_id": role.tenant_id,
         "permissions": [p.codename for p in role.permissions],
+        "user_count": user_count,
     }
 
 
@@ -409,7 +410,7 @@ async def list_roles(
     current_user: User = Depends(require_role("admin")),
 ):
     roles = await service.list_roles(db, current_user.tenant_id)
-    return [_role_to_dict(r) for r in roles]
+    return [_role_to_dict(r, count) for r, count in roles]
 
 
 @router.post("/roles", response_model=RoleRead, status_code=201)

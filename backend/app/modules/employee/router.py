@@ -3,10 +3,22 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access_scope import (
+    assert_employee_read_scope,
+    get_current_employee,
+    is_employee_in_read_scope,
+    is_employee_only,
+)
+from app.core.errors import AppError
 from app.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import (
+    get_current_user,
+    require_admin,
+    require_role,
+)
 from app.modules.auth.models import User
 from app.modules.employee import service
+from app.modules.employee.issues import IssueCode
 from app.modules.employee.schemas import (
     AvailableUser,
     CompensationCreate,
@@ -20,10 +32,13 @@ from app.modules.employee.schemas import (
     EducationUpdate,
     EmployeeCompetenceOverview,
     EmployeeCreate,
+    EmployeeDirectoryList,
+    EmployeeDirectoryRead,
     EmployeeEventCreate,
     EmployeeEventRead,
     EmployeeList,
     EmployeeRead,
+    EmployeeRoleUpdate,
     EmployeeUpdate,
     PreviousEmploymentCreate,
     PreviousEmploymentRead,
@@ -36,6 +51,22 @@ from app.modules.employee.schemas import (
 router = APIRouter(tags=["employees"])
 
 
+async def read_scope_user(
+    employee_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """``get_current_user`` plus "may you read this card at all" (HRP-616).
+
+    Reads under ``/employees/{employee_id}`` used to be gated by bare
+    authentication, so any colleague could pull a full card — competences,
+    events, education, employment history — by guessing nothing more than
+    the URL.
+    """
+    await assert_employee_read_scope(db, current_user, employee_id)
+    return current_user
+
+
 @router.post("/employees", response_model=EmployeeRead, status_code=201)
 async def create_employee(
     data: EmployeeCreate,
@@ -45,7 +76,7 @@ async def create_employee(
     return await service.create_employee(db, current_user.tenant_id, data)
 
 
-@router.get("/employees", response_model=EmployeeList)
+@router.get("/employees", response_model=EmployeeList | EmployeeDirectoryList)
 async def list_employees(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
@@ -59,14 +90,41 @@ async def list_employees(
     specialization_id: list[uuid.UUID] | None = Query(default=None),
     position_id: list[uuid.UUID] | None = Query(default=None),
     grade_id: list[uuid.UUID] | None = Query(default=None),
+    # HRP-621: filter by the role code(s) of the underlying user.
+    role: list[str] | None = Query(default=None),
     unassigned_only: bool = Query(default=False),
     with_alerts: bool = Query(default=False),
+    # HRP-638: the dashboard links here with the cohort it just counted.
+    issue: list[IssueCode] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     from app.core.access_scope import get_visible_employee_ids
 
-    visible_ids = await get_visible_employee_ids(db, current_user)
+    # HRP-623: rank-and-file get the whole company in the directory schema —
+    # the point of a directory is finding a colleague, so the read scope that
+    # HRP-616 put on the card does not apply to the list. Admin / HR /
+    # manager keep the full rows their own scope allows.
+    directory = is_employee_only(current_user)
+    visible_ids = (
+        None if directory else await get_visible_employee_ids(db, current_user)
+    )
+    if directory:
+        # Trimming the columns is not enough: a predicate on a field the
+        # directory hides answers the same question the field would.
+        # ``?status=terminated`` or ``?role=admin`` over the whole tenant
+        # hands back exactly the roster the schema is meant to withhold,
+        # and ``?grade_id=`` walks around ``directory_show_grades``. Only
+        # the filters over fields the directory actually shows survive.
+        status = None
+        role = None
+        specialization_id = None
+        grade_id = None
+        unassigned_only = False
+        with_alerts = False
+        # Development-loop problems are HR data about a colleague, and the
+        # filter answers the same question the badge would.
+        issue = None
     items, total = await service.list_employees(
         db,
         current_user.tenant_id,
@@ -78,11 +136,15 @@ async def list_employees(
         specialization_id=specialization_id,
         position_id=position_id,
         grade_id=grade_id,
+        role=role,
         unassigned_only=unassigned_only,
         with_alerts=with_alerts,
         q=q,
         include_sub_divisions=include_sub_divisions,
+        issue=issue,
     )
+    if directory:
+        items = await service.directory_rows(db, current_user.tenant_id, items)
     return {"items": items, "total": total}
 
 
@@ -94,13 +156,43 @@ async def list_available_users(
     return await service.list_available_users(db, current_user.tenant_id)
 
 
-@router.get("/employees/{employee_id}", response_model=EmployeeRead)
+# Registered before ``/employees/{employee_id}``: the other order makes
+# FastAPI try to parse "me" as a UUID and answer 422.
+@router.get("/employees/me", response_model=EmployeeRead)
+async def get_own_employee(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """HRP-624: own card without the UI having to learn its employee id.
+
+    A workspace owner who was never given an ``Employee`` row is an ordinary
+    case, not a crash: the 404 carries ``employee_profile_not_found`` so the
+    UI can say so instead of rendering a broken card.
+    """
+    emp = await get_current_employee(db, current_user)
+    if emp is None:
+        raise AppError("employee_profile_not_found", 404)
+    return await service.get_employee(db, current_user.tenant_id, emp.id)
+
+
+@router.get(
+    "/employees/{employee_id}", response_model=EmployeeRead | EmployeeDirectoryRead
+)
 async def get_employee(
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await service.get_employee(db, current_user.tenant_id, employee_id)
+    """HRP-623: the card itself is open to the whole tenant, the schema is not.
+
+    Callers inside the HRP-616 read scope (own card, admin / HR, a manager's
+    subtree) keep the full record; everyone else gets the directory row.
+    Sub-resources stay behind ``read_scope_user``.
+    """
+    row = await service.get_employee(db, current_user.tenant_id, employee_id)
+    if await is_employee_in_read_scope(db, current_user, employee_id):
+        return row
+    return (await service.directory_rows(db, current_user.tenant_id, [row]))[0]
 
 
 @router.put("/employees/{employee_id}", response_model=EmployeeRead)
@@ -126,14 +218,18 @@ async def delete_employee(
     )
 
 
-@router.post("/employees/{employee_id}/downgrade-role")
-async def downgrade_role(
+@router.put("/employees/{employee_id}/role")
+async def set_role(
     employee_id: uuid.UUID,
+    data: EmployeeRoleUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr", "platform_admin")),
+    # ``require_admin`` rather than ``require_role("admin", ...)``: granting
+    # roles is the one surface where the enterprise platform role must come
+    # along, and it resolves that through the rbac_hooks seam.
+    current_user: User = Depends(require_admin()),
 ):
-    return await service.downgrade_employee_role(
-        db, current_user.tenant_id, employee_id
+    return await service.set_employee_role(
+        db, current_user.tenant_id, employee_id, data.role_code, current_user
     )
 
 
@@ -145,7 +241,7 @@ async def list_events(
     employee_id: uuid.UUID,
     type: str | None = Query(default=None, alias="type"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(read_scope_user),
 ):
     return await service.list_events(db, current_user.tenant_id, employee_id, type)
 
@@ -178,7 +274,7 @@ async def create_event(
 async def get_employee_competences(
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(read_scope_user),
 ):
     return await service.get_competence_overview(
         db, current_user.tenant_id, employee_id
@@ -197,7 +293,7 @@ async def get_employee_competences(
 async def get_competence_overview(
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(read_scope_user),
 ):
     return await service.get_competence_overview(
         db, current_user.tenant_id, employee_id
@@ -216,7 +312,7 @@ async def get_competence_overview(
 async def list_work_experiences(
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(read_scope_user),
 ):
     return await service.list_work_experiences(db, current_user.tenant_id, employee_id)
 
@@ -280,7 +376,7 @@ async def delete_work_experience(
 async def list_previous_employments(
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(read_scope_user),
 ):
     return await service.list_previous_employments(
         db, current_user.tenant_id, employee_id
@@ -346,7 +442,7 @@ async def delete_previous_employment(
 async def list_education(
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(read_scope_user),
 ):
     return await service.list_education(db, current_user.tenant_id, employee_id)
 
@@ -413,7 +509,7 @@ async def delete_education(
 async def list_courses(
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(read_scope_user),
 ):
     return await service.list_courses(db, current_user.tenant_id, employee_id)
 

@@ -232,7 +232,9 @@ class TestSpecializationEmployeesHRP70:
 
     async def test_empty_when_spec_has_no_positions(self, db, tenant):
         spec = await _make_spec(db, tenant.id, "Lonely")
-        result = await service.list_employees(db, tenant.id, spec["id"])
+        result = await service.list_employees(
+            db, tenant.id, spec["id"], visible_employee_ids=None
+        )
         assert result == []
 
     async def test_returns_only_employees_of_this_spec(
@@ -290,7 +292,9 @@ class TestSpecializationEmployeesHRP70:
             )
         await db.commit()
 
-        result = await service.list_employees(db, tenant.id, spec_a["id"])
+        result = await service.list_employees(
+            db, tenant.id, spec_a["id"], visible_employee_ids=None
+        )
         assert len(result) == 2
         for row in result:
             assert row["specialization_title"] == "SpecA"
@@ -298,7 +302,9 @@ class TestSpecializationEmployeesHRP70:
 
     async def test_404_on_unknown_specialization(self, db, tenant):
         with pytest.raises(HTTPException) as exc:
-            await service.list_employees(db, tenant.id, uuid.uuid4())
+            await service.list_employees(
+                db, tenant.id, uuid.uuid4(), visible_employee_ids=None
+            )
         assert exc.value.status_code == 404
 
     async def test_cross_tenant_isolation(self, db, tenant):
@@ -316,7 +322,9 @@ class TestSpecializationEmployeesHRP70:
         await db.refresh(tenant_b)
 
         with pytest.raises(HTTPException) as exc:
-            await service.list_employees(db, tenant_b.id, spec_a["id"])
+            await service.list_employees(
+                db, tenant_b.id, spec_a["id"], visible_employee_ids=None
+            )
         assert exc.value.status_code == 404
 
 

@@ -84,7 +84,7 @@ EVENT_TEMPLATE: dict[str, str] = {
 # Roles that receive fan-out notifications for events without an explicit
 # user recipient (e.g. consent signed when the requester is gone, AI task
 # failures that need admin attention).
-_ADMIN_ROLES = ("admin", "recruiter", "hr", "hrd")
+_ADMIN_ROLES = ("admin", "recruiter", "hr")
 
 
 def _coerce_uuid(value: Any) -> uuid.UUID | None:
@@ -705,7 +705,7 @@ def notify_sync(
     in-app rows written.
 
     When ``fallback_admins`` is True and no recipients are supplied, the
-    tenant's admin/recruiter/hr/hrd users receive the notification —
+    tenant's admin/recruiter/hr users receive the notification —
     used for AI-task-failed events without a known initiator.
     """
     template_code = EVENT_TEMPLATE.get(event)

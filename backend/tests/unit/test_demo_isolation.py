@@ -332,8 +332,8 @@ async def test_analytics_assessment_stats_excludes_other_tenant(
     db: AsyncSession, worlds
 ):
     paid, demo = worlds
-    stats_paid = await analytics_service.assessment_stats(db, paid.tenant.id)
-    stats_demo = await analytics_service.assessment_stats(db, demo.tenant.id)
+    stats_paid = await analytics_service.assessment_stats(db, paid.tenant.id, None)
+    stats_demo = await analytics_service.assessment_stats(db, demo.tenant.id, None)
     # Each tenant has exactly its own one assessment, regardless of which
     # bucket the other tenant lives in.
     assert stats_paid["total"] == 1
@@ -547,13 +547,13 @@ async def test_talent_market_search_cards_excludes_other_tenant(
     paid, demo = worlds
     req = SearchRequest()
     items_paid, total_paid = await talent_market_service.search_cards(
-        db, paid.tenant.id, req
+        db, paid.tenant.id, req, scope=None
     )
     assert total_paid == 1
     assert {row["id"] for row in items_paid} == {paid.talent_card.id}
 
     items_demo, total_demo = await talent_market_service.search_cards(
-        db, demo.tenant.id, req
+        db, demo.tenant.id, req, scope=None
     )
     assert total_demo == 1
     assert {row["id"] for row in items_demo} == {demo.talent_card.id}

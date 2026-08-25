@@ -124,6 +124,11 @@ export default function PositionsPage() {
   }
 
   const { canManage } = usePermissions();
+  // HRP-631: creating is a role question — a manager files the new position
+  // under one of their own divisions. Editing an existing one is a row
+  // question: outside the managed subtree it 403s, so the controls follow
+  // the row's `can_manage` rather than the role alone.
+  const canEdit = (pos: Position) => canManage && pos.can_manage !== false;
   const router = useRouter();
   // HRP-33 REDO: highlight rows whose specialization currently has an
   // active AI matrix session, so the operator can spot in-flight work
@@ -671,7 +676,7 @@ export default function PositionsPage() {
                       >
                         {pos.specialization_title}
                       </Link>
-                    ) : canManage ? (
+                    ) : canEdit(pos) ? (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -699,7 +704,7 @@ export default function PositionsPage() {
                       ) : (
                         pos.grade_title
                       )
-                    ) : canManage ? (
+                    ) : canEdit(pos) ? (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -762,7 +767,7 @@ export default function PositionsPage() {
                 </Badge>
               </TableCell>
               <TableCell>
-                {canManage && (
+                {canEdit(pos) && (
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       render={<Button variant="ghost" size="icon-xs" />}

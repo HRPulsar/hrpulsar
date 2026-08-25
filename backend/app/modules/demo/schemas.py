@@ -22,6 +22,17 @@ class DemoStartRequest(BaseModel):
         description="Cloudflare Turnstile token. Required when the server is "
         "configured with DEMO_TURNSTILE_SECRET.",
     )
+    # Intl.DateTimeFormat().resolvedOptions().timeZone. Untrusted input on
+    # a public endpoint that only ever lands in a Slack field, so it is
+    # bounded to the IANA shape here rather than resolved against the tz
+    # database — a zone name we don't know yet is still worth showing.
+    timezone: str | None = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+){0,2}$",
+        description="IANA time zone reported by the visitor's browser. "
+        "Optional — the session is provisioned either way.",
+    )
 
 
 class DemoStartResponse(BaseModel):

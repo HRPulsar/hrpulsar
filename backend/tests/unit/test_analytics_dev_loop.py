@@ -181,7 +181,7 @@ def _finding(payload: dict, code: str) -> dict | None:
 
 @pytest.mark.asyncio
 async def test_empty_tenant_returns_zeroes(db: AsyncSession, tenant):
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["assessed"] == {
         "covered": 0,
         "total_active": 0,
@@ -199,7 +199,7 @@ async def test_gap_below_bar_without_plan(
     emp = await _make_employee(db, tenant, last_name="Gapman")
     await _make_done_assessment(db, tenant, emp, status_done, type_self, percent=60)
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
 
     assert payload["stages"]["assessed"]["covered"] == 1
     assert payload["stages"]["gaps"] == {"employees": 1, "competences": 1}
@@ -217,7 +217,7 @@ async def test_result_at_the_bar_is_not_a_gap(
     emp = await _make_employee(db, tenant)
     await _make_done_assessment(db, tenant, emp, status_done, type_self, percent=75)
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["gaps"] == {"employees": 0, "competences": 0}
     assert _finding(payload, "gaps_without_plan") is None
 
@@ -231,7 +231,7 @@ async def test_gap_with_open_pdp_not_flagged(
     db.add(_pdp(tenant, emp, status="in_progress"))
     await db.commit()
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert _finding(payload, "gaps_without_plan") is None
     assert payload["stages"]["developing"]["gap_employees_with_plan"] == 1
     assert payload["stages"]["developing"]["open_pdps"] == 1
@@ -250,7 +250,7 @@ async def test_pdp_overdue_flagged(db: AsyncSession, tenant):
     )
     await db.commit()
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     finding = _finding(payload, "pdp_overdue")
     assert finding is not None
     assert finding["count"] == 1
@@ -264,7 +264,7 @@ async def test_pdp_stuck_in_review_flagged(db: AsyncSession, tenant):
     db.add(_pdp(tenant, emp, status="review", updated_at=stale))
     await db.commit()
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     finding = _finding(payload, "pdp_stuck_review")
     assert finding is not None
     assert finding["count"] == 1
@@ -281,7 +281,7 @@ async def test_stale_assessment_counts_as_uncovered(
     )
     await _make_employee(db, tenant)  # never assessed
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["assessed"]["covered"] == 0
     finding = _finding(payload, "assessment_coverage")
     assert finding is not None
@@ -316,7 +316,7 @@ async def test_gap_closed_by_reassessment(
         competence=comp,
     )
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["closed"]["gaps_closed_90d"] == 1
     # the fresh result sits above the bar — no current gap either
     assert payload["stages"]["gaps"] == {"employees": 0, "competences": 0}
@@ -350,7 +350,7 @@ async def test_closure_outside_window_not_counted(
         competence=comp,
     )
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["closed"]["gaps_closed_90d"] == 0
 
 
@@ -390,7 +390,7 @@ async def test_plans_done_on_time_in_closed_window(db: AsyncSession, tenant):
     )
     await db.commit()
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["closed"]["plans_done_on_time_90d"] == 1
 
 
@@ -438,8 +438,12 @@ async def test_ai_summary_generated_once_per_data_state(
 
     monkeypatch.setattr(analytics_service, "generate_dev_loop_summary", _fake_generate)
 
-    first = await analytics_service.dev_loop_ai_summary(db, tenant.id, _CALLER)
-    second = await analytics_service.dev_loop_ai_summary(db, tenant.id, _CALLER)
+    first = await analytics_service.dev_loop_ai_summary(
+        db, tenant.id, _CALLER, visible_employee_ids=None
+    )
+    second = await analytics_service.dev_loop_ai_summary(
+        db, tenant.id, _CALLER, visible_employee_ids=None
+    )
 
     assert first == {
         "summary": "summary text",
@@ -463,9 +467,13 @@ async def test_ai_summary_regenerates_when_data_changes(
 
     monkeypatch.setattr(analytics_service, "generate_dev_loop_summary", _fake_generate)
 
-    first = await analytics_service.dev_loop_ai_summary(db, tenant.id, _CALLER)
+    first = await analytics_service.dev_loop_ai_summary(
+        db, tenant.id, _CALLER, visible_employee_ids=None
+    )
     await _make_employee(db, tenant)  # loop state changes → new fingerprint
-    second = await analytics_service.dev_loop_ai_summary(db, tenant.id, _CALLER)
+    second = await analytics_service.dev_loop_ai_summary(
+        db, tenant.id, _CALLER, visible_employee_ids=None
+    )
 
     assert first["data_version"] != second["data_version"]
     assert second["cached"] is False
@@ -488,7 +496,9 @@ async def test_ai_summary_fails_open_without_redis(
 
     monkeypatch.setattr(analytics_service, "generate_dev_loop_summary", _fake_generate)
 
-    result = await analytics_service.dev_loop_ai_summary(db, tenant.id, _CALLER)
+    result = await analytics_service.dev_loop_ai_summary(
+        db, tenant.id, _CALLER, visible_employee_ids=None
+    )
     assert result["summary"] == "no-cache summary"
     assert result["cached"] is False
 
@@ -547,7 +557,9 @@ async def test_my_loop_stale_and_survey_pending(
     )
     in_progress = result.scalar_one_or_none()
     if not in_progress:
-        in_progress = AssessmentStatus(code="in_progress", title="In progress", sequence=3)
+        in_progress = AssessmentStatus(
+            code="in_progress", title="In progress", sequence=3
+        )
         db.add(in_progress)
         await db.flush()
     a = Assessment(
@@ -582,12 +594,24 @@ async def test_my_loop_personal_closure_and_strengths(
     emp = await _make_employee(db, tenant)
     comp = await _make_competence(db, tenant)
     await _make_done_assessment(
-        db, tenant, emp, status_done, type_self,
-        percent=60, finished_days_ago=80, competence=comp,
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=60,
+        finished_days_ago=80,
+        competence=comp,
     )
     await _make_done_assessment(
-        db, tenant, emp, status_done, type_self,
-        percent=85, finished_days_ago=3, competence=comp,
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=85,
+        finished_days_ago=3,
+        competence=comp,
     )
 
     payload = await analytics_service.my_loop(db, tenant.id, emp.user_id)
@@ -608,7 +632,7 @@ async def test_zero_passing_bar_is_respected(
         db, tenant, emp, status_done, type_self, percent=40, passing_score=0
     )
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["gaps"] == {"employees": 0, "competences": 0}
     assert _finding(payload, "gaps_without_plan") is None
 
@@ -645,18 +669,26 @@ async def test_my_loop_growth_next_grade(
     )
 
     suffix = uuid.uuid4().hex[:6]
-    spec = DictionaryItem(type="specialization", title=f"Backend {suffix}", tenant_id=tenant.id)
+    spec = DictionaryItem(
+        type="specialization", title=f"Backend {suffix}", tenant_id=tenant.id
+    )
     junior = DictionaryItem(type="grade", title=f"Junior {suffix}", tenant_id=tenant.id)
     senior = DictionaryItem(type="grade", title=f"Senior {suffix}", tenant_id=tenant.id)
     db.add_all([spec, junior, senior])
     await db.flush()
     gs_junior = GradeSpecialization(
-        tenant_id=tenant.id, grade_id=junior.id, specialization_id=spec.id,
-        sort_index=0, salary_currency="EUR",
+        tenant_id=tenant.id,
+        grade_id=junior.id,
+        specialization_id=spec.id,
+        sort_index=0,
+        salary_currency="EUR",
     )
     gs_senior = GradeSpecialization(
-        tenant_id=tenant.id, grade_id=senior.id, specialization_id=spec.id,
-        sort_index=1, salary_currency="EUR",
+        tenant_id=tenant.id,
+        grade_id=senior.id,
+        specialization_id=spec.id,
+        sort_index=1,
+        salary_currency="EUR",
     )
     db.add_all([gs_junior, gs_senior])
     await db.flush()
@@ -664,21 +696,25 @@ async def test_my_loop_growth_next_grade(
     missing_comp = await _make_competence(db, tenant)
     db.add(level)
     await db.flush()
-    db.add_all([
-        GradeCompetenceLink(
-            grade_specialization_id=gs_senior.id,
-            competence_id=comp.id,
-            skill_level_id=level.id,
-        ),
-        GradeCompetenceLink(
-            grade_specialization_id=gs_senior.id,
-            competence_id=missing_comp.id,
-            skill_level_id=level.id,
-        ),
-    ])
+    db.add_all(
+        [
+            GradeCompetenceLink(
+                grade_specialization_id=gs_senior.id,
+                competence_id=comp.id,
+                skill_level_id=level.id,
+            ),
+            GradeCompetenceLink(
+                grade_specialization_id=gs_senior.id,
+                competence_id=missing_comp.id,
+                skill_level_id=level.id,
+            ),
+        ]
+    )
     position = Position(
-        tenant_id=tenant.id, title=f"Backend Junior {suffix}",
-        specialization_id=spec.id, grade_id=junior.id,
+        tenant_id=tenant.id,
+        title=f"Backend Junior {suffix}",
+        specialization_id=spec.id,
+        grade_id=junior.id,
     )
     db.add(position)
     await db.flush()
@@ -739,21 +775,39 @@ async def test_reclosure_not_recounted_on_next_assessment(
     emp = await _make_employee(db, tenant)
     comp = await _make_competence(db, tenant)
     await _make_done_assessment(
-        db, tenant, emp, status_done, type_self,
-        percent=60, finished_days_ago=300, competence=comp,
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=60,
+        finished_days_ago=300,
+        competence=comp,
     )
     # the closure happened here — outside the 90-day window
     await _make_done_assessment(
-        db, tenant, emp, status_done, type_self,
-        percent=85, finished_days_ago=100, competence=comp,
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=85,
+        finished_days_ago=100,
+        competence=comp,
     )
     # fresh assessment keeps the competence above the bar
     await _make_done_assessment(
-        db, tenant, emp, status_done, type_self,
-        percent=90, finished_days_ago=3, competence=comp,
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=90,
+        finished_days_ago=3,
+        competence=comp,
     )
 
-    payload = await analytics_service.dev_loop(db, tenant.id)
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["closed"]["gaps_closed_90d"] == 0
 
     personal = await analytics_service.my_loop(db, tenant.id, emp.user_id)
@@ -843,17 +897,23 @@ async def test_ai_summary_daily_budget_blocks_generation(
 
     monkeypatch.setattr(analytics_service, "generate_dev_loop_summary", _fake_generate)
 
-    first = await analytics_service.dev_loop_ai_summary(db, tenant.id, _CALLER)
+    first = await analytics_service.dev_loop_ai_summary(
+        db, tenant.id, _CALLER, visible_employee_ids=None
+    )
     assert first["cached"] is False
 
     # cached repeat is free and unlimited
-    second = await analytics_service.dev_loop_ai_summary(db, tenant.id, _CALLER)
+    second = await analytics_service.dev_loop_ai_summary(
+        db, tenant.id, _CALLER, visible_employee_ids=None
+    )
     assert second["cached"] is True
 
     # a new data state past the cap is refused
     await _make_employee(db, tenant)
     with pytest.raises(AppError) as exc:
-        await analytics_service.dev_loop_ai_summary(db, tenant.id, _CALLER)
+        await analytics_service.dev_loop_ai_summary(
+            db, tenant.id, _CALLER, visible_employee_ids=None
+        )
     assert exc.value.status_code == 429
     assert exc.value.code == "ai_summary_rate_limited"
 
@@ -877,15 +937,21 @@ async def test_ai_summary_per_user_budget_partition(
     monkeypatch.setattr(analytics_service, "generate_dev_loop_summary", _fake_generate)
 
     user_a, user_b = uuid.uuid4(), uuid.uuid4()
-    first = await analytics_service.dev_loop_ai_summary(db, tenant.id, user_a)
+    first = await analytics_service.dev_loop_ai_summary(
+        db, tenant.id, user_a, visible_employee_ids=None
+    )
     assert first["cached"] is False
 
     await _make_employee(db, tenant)  # new data state → cache miss
     with pytest.raises(AppError) as exc:
-        await analytics_service.dev_loop_ai_summary(db, tenant.id, user_a)
+        await analytics_service.dev_loop_ai_summary(
+            db, tenant.id, user_a, visible_employee_ids=None
+        )
     assert exc.value.status_code == 429
 
-    result = await analytics_service.dev_loop_ai_summary(db, tenant.id, user_b)
+    result = await analytics_service.dev_loop_ai_summary(
+        db, tenant.id, user_b, visible_employee_ids=None
+    )
     assert result["cached"] is False
 
 
@@ -897,15 +963,75 @@ async def test_ai_summary_client_fingerprint_skips_aggregation(
         return "text"
 
     monkeypatch.setattr(analytics_service, "generate_dev_loop_summary", _fake_generate)
-    first = await analytics_service.dev_loop_ai_summary(db, tenant.id, _CALLER)
+    first = await analytics_service.dev_loop_ai_summary(
+        db, tenant.id, _CALLER, visible_employee_ids=None
+    )
 
-    async def _boom(db_, tenant_id):
+    async def _boom(db_, tenant_id, visible_employee_ids):
         raise AssertionError("cache hit on the client fingerprint must skip dev_loop")
 
     monkeypatch.setattr(analytics_service, "dev_loop", _boom)
     res = await analytics_service.dev_loop_ai_summary(
-        db, tenant.id, _CALLER, client_fingerprint=first["data_version"]
+        db,
+        tenant.id,
+        _CALLER,
+        visible_employee_ids=None,
+        client_fingerprint=first["data_version"],
     )
     assert res["cached"] is True
     assert res["summary"] == "text"
     assert res["data_version"] == first["data_version"]
+
+
+# ---------------------------------------------------------------------------
+# Read scope (HRP-638)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_loop_counts_only_the_visible_employees(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    """A manager's tiles must count their own people, not the whole tenant.
+
+    Before HRP-638 the loop filtered by tenant alone, so a division manager
+    saw company-wide numbers — and finding names from divisions they cannot
+    open — while /employees honoured their scope.
+    """
+    mine = await _make_employee(db, tenant, last_name="Mine")
+    theirs = await _make_employee(db, tenant, last_name="Theirs")
+    for emp in (mine, theirs):
+        await _make_done_assessment(db, tenant, emp, status_done, type_self, percent=50)
+
+    payload = await analytics_service.dev_loop(db, tenant.id, {mine.id})
+
+    assert payload["stages"]["assessed"]["total_active"] == 1
+    assert payload["stages"]["gaps"]["employees"] == 1
+    finding = _finding(payload, "gaps_without_plan")
+    assert [e["name"] for e in finding["employees"]] == ["Jane Mine"]
+
+
+@pytest.mark.asyncio
+async def test_empty_scope_reports_an_empty_loop(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    emp = await _make_employee(db, tenant)
+    await _make_done_assessment(db, tenant, emp, status_done, type_self, percent=50)
+
+    payload = await analytics_service.dev_loop(db, tenant.id, set())
+
+    assert payload["stages"]["assessed"]["total_active"] == 0
+    assert payload["findings"] == []
+
+
+@pytest.mark.asyncio
+async def test_coverage_finding_names_the_unassessed(db: AsyncSession, tenant):
+    """The finding links to a filtered list, so it carries the names too."""
+    await _make_employee(db, tenant, last_name="Unseen")
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
+
+    finding = _finding(payload, "assessment_coverage")
+    assert finding["count"] == 1
+    assert [e["name"] for e in finding["employees"]] == ["Jane Unseen"]
+    assert finding["href"] == "/employees?issue=assessment_stale"

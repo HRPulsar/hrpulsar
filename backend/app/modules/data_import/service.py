@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError
 from app.core.security import hash_password
 from app.modules.auth.models import User
+from app.modules.auth.roles import ensure_baseline_employee_role
 from app.modules.data_import.models import ImportJob
 from app.modules.dictionary.models import DictionaryItem
 from app.modules.employee.models import Course, Education, Employee, WorkExperience
@@ -129,6 +130,9 @@ async def _import_employees(
                 )
                 db.add(user)
                 await db.flush()
+                # HRP-619: an imported account with no role at all renders
+                # a blank role everywhere and confuses every role gate.
+                await ensure_baseline_employee_role(db, user.id)
 
             # Create employee if not exists
             existing_emp = await db.execute(

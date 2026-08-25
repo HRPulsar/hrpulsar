@@ -152,7 +152,7 @@ class LLMProviderRead(BaseModel):
 # ─── Transcription provider config ──────────────────────────────────
 
 TranscriptionProviderName = Literal[
-    "whisper", "deepgram", "assemblyai", "faster_whisper"
+    "whisper", "deepgram", "assemblyai", "yandex_speechkit", "faster_whisper"
 ]
 
 

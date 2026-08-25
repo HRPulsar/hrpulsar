@@ -458,7 +458,11 @@ export default function TalentMarketPage() {
                         collapsed to Change-status submenu + Delete.
                         HRP-209: hidden for plain Employees — they can't
                         change status or delete cards. */}
-                    {canManage && !TERMINAL_STATUSES.has(card.status) && (
+                    {/* HRP-639: the board shows other departments' published
+                        cards; their action menu belongs to their own division.
+                        `can_manage` comes off the card, the role gate alone
+                        would render a menu that 403s. */}
+                    {canManage && card.can_manage !== false && !TERMINAL_STATUSES.has(card.status) && (
                       <DropdownMenu>
                         <DropdownMenuTrigger
                           render={

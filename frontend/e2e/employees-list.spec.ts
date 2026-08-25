@@ -53,14 +53,18 @@ test.describe("Employees list (EMP4)", () => {
     expect(headerTexts).toContain("Status");
     expect(headerTexts).not.toContain("Hire date");
 
-    // Order: Name | Division | Position | Specialization · Grade | Status
+    // Order, as an admin sees it: Role joined with HRP-621, Issues with
+    // HRP-638. Both are HR columns — a rank-and-file viewer gets the
+    // directory shape, which carries neither.
     const visibleHeaders = headerTexts.filter((t) => t.length > 0);
     expect(visibleHeaders).toEqual([
       "Name",
       "Division",
       "Position",
       "Specialization · Grade",
+      "Role",
       "Status",
+      "Issues",
     ]);
 
     const specGradeCell = page.getByTestId(
@@ -279,5 +283,56 @@ test.describe("Employees list (EMP4)", () => {
     await expect(
       page.getByTestId(`employees-multi-divisions-option-${otherDiv.id}`),
     ).toHaveCount(0);
+  });
+  // HRP-638: the dashboard links here with the cohort it counted. A freshly
+  // registered workspace has nobody assessed, so every active member is
+  // ``assessment_stale`` — enough to prove the round trip: the deep link
+  // seeds the filter, the request carries it, and the row explains itself.
+  test("issue deep link filters the list and labels the rows", async ({
+    page,
+  }) => {
+    const admin = await registerUser(page);
+    const opts = { page, accessToken: admin.accessToken };
+
+    const div = await createDivision(opts, "Issue-Div");
+    const pos = await createPosition(opts, `Issue-Pos-${Date.now()}`);
+    const member = await provisionTenantMember(opts, {
+      roleCode: "employee",
+      divisionId: div.id,
+      positionId: pos.id,
+    });
+    expect(member.employeeId).not.toBeNull();
+
+    await setAuthTokens(page, admin.accessToken, admin.refreshToken);
+    await page.goto("/employees?issue=assessment_stale");
+
+    const row = page.getByTestId(`employees-row-${member.employeeId}`);
+    await expect(row).toBeVisible({ timeout: 15000 });
+
+    // The badge names the problem — the second half of the complaint that
+    // started this: a filtered list that does not say what is wrong. Asserted
+    // as "not the empty placeholder" rather than on a label, so the spec
+    // survives the locale CI happens to run in.
+    const issues = page.getByTestId(
+      `employees-row-${member.employeeId}-issues`,
+    );
+    await expect(issues).toBeVisible();
+    await expect(issues).not.toHaveText("—");
+
+    // And the filter chip is visibly on, so the reader knows the list is
+    // narrowed and can clear it.
+    await expect(page.getByTestId("employees-btn-clear-filters")).toBeVisible();
+  });
+
+  test("issue filter survives a reload through the URL", async ({ page }) => {
+    const admin = await registerUser(page);
+    await setAuthTokens(page, admin.accessToken, admin.refreshToken);
+
+    await page.goto("/employees?issue=assessment_stale");
+    await expect(page.getByTestId("employees-multi-issues")).toBeVisible({
+      timeout: 15000,
+    });
+    await page.reload();
+    await expect(page).toHaveURL(/issue=assessment_stale/);
   });
 });

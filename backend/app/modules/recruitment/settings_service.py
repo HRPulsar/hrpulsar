@@ -408,7 +408,7 @@ async def get_ui_settings(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
 
     The flags live in the same ``tenant.recruitment_branding`` raw dict
     the settings hub already manages (written via the branding ``extra``
-    passthrough), but the branding endpoint itself is admin/recruiter/hrd
+    passthrough), but the branding endpoint itself is admin/recruiter/hr
     only — hiring managers need this read-only slice to reorder their
     candidate-page sections.
     """
@@ -619,24 +619,16 @@ RECRUITMENT_ROLES: list[dict] = [
     {
         "code": "hr",
         "name": "HR",
-        "description": "Read-only across the recruitment pipeline plus reports",
+        "description": (
+            "Read-only across the recruitment pipeline, reports, "
+            "audit log and GDPR requests"
+        ),
         "permissions": [
             {
                 "code": "recruitment.*.read",
                 "description": "Read-only recruitment access",
             },
             {"code": "recruitment.report.create", "description": "Generate reports"},
-        ],
-    },
-    {
-        "code": "hrd",
-        "name": "HR Director",
-        "description": "Compliance / audit oversight across the org",
-        "permissions": [
-            {
-                "code": "recruitment.*.read",
-                "description": "Read-only recruitment access",
-            },
             {"code": "recruitment.audit.read", "description": "Read audit log"},
             {"code": "recruitment.gdpr.read", "description": "Read GDPR requests"},
         ],

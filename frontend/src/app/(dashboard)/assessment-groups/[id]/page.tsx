@@ -61,7 +61,7 @@ export default function AssessmentGroupPage() {
   const t = useTranslations("assessments");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
-  const { canManage } = usePermissions();
+  const { canManage, canManageCatalogues } = usePermissions();
   const [group, setGroup] = useState<AssessmentGroupDetail | null>(null);
   const [recommendations, setRecommendations] = useState<
     Record<string, { grade_id: string | null; grade_title: string | null; passed: boolean }>
@@ -470,7 +470,10 @@ export default function AssessmentGroupPage() {
         onOpenChange={setScaleOpen}
         currentScaleId={group.scale_id}
         onSave={saveScale}
-        canManage={canManage}
+        // HRP-631: the prop gates the scale catalogue's own create /
+        // edit / delete, which moved to admin / HR. Picking a scale for
+        // this group is still the manager's.
+        canManage={canManageCatalogues}
         testIdPrefix="group-scale"
       />
     </div>

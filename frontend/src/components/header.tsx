@@ -61,6 +61,7 @@ const SEGMENT_KEYS: Record<string, string> = {
   gdpr: "gdpr",
   "llm-providers": "llmProviders",
   matrix: "matrix",
+  me: "myProfile",
   new: "new",
   positions: "positions",
   retention: "retention",
@@ -161,6 +162,9 @@ export function Header() {
               <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
             </div>
             <DropdownMenuSeparator />
+            <DropdownMenuItem render={<Link href="/employees/me" />} className="cursor-pointer" data-testid="header-menu-my-profile">
+              {tNav("myProfile")}
+            </DropdownMenuItem>
             <DropdownMenuItem render={<Link href="/settings/profile" />} className="cursor-pointer" data-testid="header-menu-settings">
               {t("settings")}
             </DropdownMenuItem>

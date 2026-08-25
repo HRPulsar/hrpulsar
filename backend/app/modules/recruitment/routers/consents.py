@@ -12,12 +12,15 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     service,
 )
-from app.modules.recruitment.routers.common import recruitment_public_limiter
+from app.modules.recruitment.routers.common import (
+    RECRUITMENT_VIEWER_ROLES,
+    recruitment_public_limiter,
+)
 from app.modules.recruitment.schemas import (
     ConsentRequestRead,
     ConsentSendRequest,
@@ -26,6 +29,9 @@ from app.modules.recruitment.schemas import (
     ConsentTemplateRead,
     ConsentTemplateUpdate,
     ConsentTokenView,
+)
+from app.modules.recruitment.scope import (
+    candidate_scope,
 )
 
 router = APIRouter(tags=["recruitment"])
@@ -54,9 +60,7 @@ async def create_consent_template(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin")),
 ):
-    return await service.create_consent_template(
-        db, current_user.tenant_id, data
-    )
+    return await service.create_consent_template(db, current_user.tenant_id, data)
 
 
 @router.put(
@@ -80,12 +84,11 @@ async def update_consent_template(
 async def get_latest_consent(
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(candidate_scope),
 ):
     """Most recent consent request for the candidate (or null)."""
-    return await service.get_latest_consent(
-        db, current_user.tenant_id, candidate_id
-    )
+    return await service.get_latest_consent(db, current_user.tenant_id, candidate_id)
 
 
 @router.post(
@@ -131,11 +134,7 @@ async def sign_consent(
 ):
     """Public endpoint — record candidate consent signature."""
 
-    client_ip = (
-        request.client.host
-        if request.client and request.client.host
-        else None
-    )
+    client_ip = request.client.host if request.client and request.client.host else None
     user_agent = request.headers.get("user-agent")
     return await service.sign_consent(
         db,

@@ -22,7 +22,8 @@ A central record for every person in the company: position, division, hire date,
 A filterable directory of everyone in the workspace.
 
 - Columns: name and email, division, position, specialization and grade, status
-- Multi-select filters for divisions, statuses, positions, specializations, and grades. Selections persist in the URL, so a filtered view can be bookmarked or shared
+- Multi-select filters for divisions, statuses, positions, specializations, grades, and issues. Selections persist in the URL, so a filtered view can be bookmarked or shared
+- An Issues column names what is wrong with each person — no active account, incomplete profile, overdue or stalled assessment, competence gap with no development plan, overdue plan, no assessment in the last six months — and the Issues filter narrows the list to one of them
 - Search runs on the server and matches first name, last name, full name, and email across all pages
 - Managers see only the divisions they manage in the filter; admins and HR see the full tree
 - An edit dialog changes name, position, division, and status in one step, with the usual scope guards
@@ -214,7 +215,9 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Uploads are chunked and resumable: pause, resume, retry, and continue after a browser reload
 - The interview's recording type follows the file that is uploaded; when it contradicts the type chosen at scheduling, the recruiter is asked to confirm the switch first
 - Consent capture with magic-link signing runs before any upload
-- Transcription through pluggable providers, including Whisper and Deepgram with speaker separation; an in-app player covers audio and video with speed control and keyboard shortcuts
+- Transcription through pluggable providers — Deepgram, Whisper, AssemblyAI and Yandex SpeechKit, three of them with speaker separation; the recording is transcribed in the tenant's content language, or in the language the provider detects when none is set, and every configured key joins one fallback chain, so a provider that refuses the request passes the interview to the next one instead of failing it; an in-app player covers audio and video with speed control and keyboard shortcuts
+- The recording is prepared before it is sent out: the video track is dropped and the audio re-encoded, so an hour of interview travels as a few megabytes instead of half a gigabyte, and a recording still above a provider's request-size limit is split into overlapping parts and stitched back into one transcript
+- When the provider that transcribed the interview does not separate speakers, the turns are split into interviewer and candidate from the transcript itself, so the analysis still knows whose words it is scoring
 - The analysis pipeline reports data completeness, competence scores, blind spots, process findings, red flags, and a verdict
 - Two modes: resume-only (a fast pre-screen that never returns "recommended") and full (interview-anchored, with citations from the transcript). A prior resume-only run upgrades to full for the price difference
 - Progress renders stage by stage with a cancel option; resume citations click through to the matching resume section
@@ -236,7 +239,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 ### Recruitment Settings
 
 - A single settings hub for scales, AI and speech-to-text providers, branding, retention, roles, and templates
-- Bring your own keys for LLM and transcription providers (Anthropic, OpenAI, Gemini, Azure, Yandex, GigaChat, Whisper, Deepgram, AssemblyAI, faster-whisper); keys are encrypted at rest and never returned in full
+- Bring your own keys for LLM and transcription providers (Anthropic, OpenAI, Gemini, Azure, Yandex, GigaChat, Whisper, Deepgram, AssemblyAI, Yandex SpeechKit, faster-whisper); keys are encrypted at rest and never returned in full
 - Retention windows per data type with a warning on legally short values
 
 ### Audit & Compliance
@@ -461,10 +464,22 @@ Per-workspace configuration that applies to every AI call.
 
 ### Roles & Access Control
 
-- Three built-in roles: **Admin** (full access), **Manager** (team assessments, plans, and data), **Employee** (own profile and assigned tasks)
+- Built-in roles: **Admin** (full access), **HR** (people operations across the workspace), **Manager** (team assessments, plans, and data), **Recruiter** and **Hiring manager** (hiring), **Employee** (own profile and assigned tasks)
+- Every account carries a role — **Employee** is the baseline nobody drops below — and an admin changes a colleague's role from their card; the role is shown in the employee list and can be filtered on
+- Guard rails on the change: you cannot change your own role, demote the last administrator of the workspace, or take **Manager** away from someone who still leads a division. Each change is recorded on the employee's timeline
+- Who may invite whom follows the same ladder: admins invite any role, HR everything below admin, managers only employees
 - The same scope rules apply across every list in the product: admins see the workspace, managers see their subtree, employees see their own records
-- The Admin area (dictionaries, invitations, data import, AI settings) is reserved for admins: the whole sidebar group is hidden for everyone else, and opening one of its links directly shows an error and returns the user to the dashboard
+- The sidebar only offers what the role can actually open: hiring and the talent market stay out of a rank-and-file employee's menu, and the controls on the company page appear for the roles the API accepts
+- A read-only **Roles** page in the Admin area lists every role of the workspace with what it can actually do and how many people hold it — the descriptions follow the gates the product enforces, not a permission table nothing reads. The count opens the employee list filtered by that role
+- The Admin area (dictionaries, invitations, data import, roles, AI settings) is reserved for admins: the whole sidebar group is hidden for everyone else, and opening one of its links directly shows an error and returns the user to the dashboard
 - Every action in the Admin area is admin-only on the API too, so a hidden section is never merely hidden (reference data stays readable across the product, as the rest of the app depends on it)
+- Reading is scoped as tightly as writing: hiring data (candidates, resumes, interviews, reports) is reserved for the roles that do hiring, and the sections under an employee card — competences, timeline, education, employment history, compensation — open only for the person themselves, their division manager, and admins
+- Everyone can still look a colleague up: the employee list is a company directory for rank-and-file staff, showing name, job title and department with no HR data attached. Grades appear there only if the workspace switches them on
+- The same holds wherever else a list of people appears — the employees on a position or a specialization, and the headcount drill-down: colleagues see the directory columns there too, not hire dates, employment status or HR alerts
+- "My profile" in the header menu and on the dashboard opens the person's own card in full — the directory view is only what colleagues see of each other
+- Inside hiring, a division manager sees their own department: a vacancy opens for them when it belongs to a division they manage, names them as its hiring manager, or was created by them — and candidates, resumes, interviews and reports inherit that same boundary. Admins, HR and recruiters keep the whole workspace
+- Writing follows the same boundary as reading: a division manager creates and edits assessments and development plans for their own people, publishes and staffs their own department's talent cards, and sees analytics and assessment exports that cover their subtree rather than the company
+- The shared catalogues — competences, indicators, materials, answer scales, and a specialization's grade ladder and matrices — are workspace-wide, so editing them belongs to admins and HR. Everyone else keeps reading and using them; positions are the exception, staying with the division manager for their own subtree
 
 ### Product Feedback
 
@@ -589,6 +604,8 @@ A first-login wizard for newly registered organizations.
 
 - A management dashboard built around the development loop — assess, find gaps, develop, close: four clickable stages show assessment coverage, employees scoring below their grade bar, open development plans, and gaps confirmed closed by a re-assessment in the last quarter
 - An action queue that turns detected problems into next steps: employees below the bar with no development plan, overdue plans, plans stuck in review, and falling assessment coverage — each row deep-links into the module that fixes it
+- Every tile and queue row opens the list already filtered to the people it counted, so the number on the dashboard and the rows on the page always match; the names listed under a finding link straight to the person's card
+- Dashboard figures follow the reader's scope: a division manager sees their own subtree, not the whole company
 - A personal dashboard for employees: my loop stages (latest assessment, my gaps, my active plan, confirmed closures), a personal to-do queue (pending surveys, returned or overdue plans, gaps without a plan), strengths with rare-skill highlights, growth direction to the next grade, and an assessment-score sparkline
 - An on-demand AI summary of the loop state — one click explains what is going on and what to do first; employees get a coach-style personal summary on their own dashboard (cached per data state)
 - Active assessment cycle progress at a glance

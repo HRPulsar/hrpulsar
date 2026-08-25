@@ -1,0 +1,318 @@
+"""HRP-629: a division head reads hiring for their own division only.
+
+HRP-615 stopped rank-and-file employees from reading candidate PII, but
+left ``manager`` reading the whole workspace — and ``company.service``
+hands that role to every division head automatically. Hiring for a
+neighbouring department is now closed: a vacancy is visible when it sits
+in the caller's managed subtree, names them as hiring manager, or was
+created by them.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import date, datetime, timezone
+
+import pytest_asyncio
+from app.core.security import create_access_token, hash_password
+from app.modules.auth.models import Role, User, user_roles
+from app.modules.company.models import Division
+from app.modules.employee.models import Employee
+from app.modules.recruitment.models import (
+    Candidate,
+    CandidateFile,
+    CandidateVacancy,
+    ConsolidatedReport,
+    Interview,
+    Vacancy,
+)
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+
+async def _user(db: AsyncSession, tenant, code: str) -> User:
+    result = await db.execute(select(Role).where(Role.code == code))
+    role = result.scalars().first()
+    if role is None:
+        role = Role(name=code.title(), code=code, is_system=True)
+        db.add(role)
+        await db.commit()
+        await db.refresh(role)
+    u = User(
+        email=f"{code}-{uuid.uuid4().hex[:8]}@test.com",
+        password_hash=hash_password("x"),
+        first_name=code,
+        last_name="X",
+        tenant_id=tenant.id,
+        email_verified_at=datetime.now(timezone.utc),
+    )
+    db.add(u)
+    await db.commit()
+    await db.refresh(u)
+    await db.execute(user_roles.insert().values(user_id=u.id, role_id=role.id))
+    await db.commit()
+    db.expunge(u)
+    result = await db.execute(
+        select(User).options(selectinload(User.roles)).where(User.id == u.id)
+    )
+    return result.scalar_one()
+
+
+def _headers(u: User) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {create_access_token(str(u.id), str(u.tenant_id))}"
+    }
+
+
+@pytest_asyncio.fixture
+async def hiring(db: AsyncSession, tenant):
+    """Two divisions, one vacancy each, one candidate each.
+
+    ``mine`` is managed by the manager; ``theirs`` is a neighbouring
+    department they have nothing to do with.
+    """
+    mgr_user = await _user(db, tenant, "manager")
+    rec_user = await _user(db, tenant, "recruiter")
+
+    mgr_emp = Employee(
+        user_id=mgr_user.id, tenant_id=tenant.id, hire_date=date(2024, 1, 1)
+    )
+    db.add(mgr_emp)
+    await db.commit()
+    await db.refresh(mgr_emp)
+
+    mine = Division(
+        tenant_id=tenant.id, name=f"Mine {uuid.uuid4().hex[:4]}", manager_id=mgr_emp.id
+    )
+    theirs = Division(tenant_id=tenant.id, name=f"Theirs {uuid.uuid4().hex[:4]}")
+    db.add_all([mine, theirs])
+    await db.commit()
+    await db.refresh(mine)
+    await db.refresh(theirs)
+
+    out: dict = {"mgr_user": mgr_user, "rec_user": rec_user, "mgr_emp": mgr_emp}
+    for key, division in (("mine", mine), ("theirs", theirs)):
+        vac = Vacancy(
+            tenant_id=tenant.id,
+            title=f"{key} role {uuid.uuid4().hex[:4]}",
+            division_id=division.id,
+            owner_id=rec_user.id,
+        )
+        db.add(vac)
+        await db.commit()
+        await db.refresh(vac)
+        cand = Candidate(
+            tenant_id=tenant.id,
+            full_name=f"{key} candidate",
+            email=f"{key}-{uuid.uuid4().hex[:6]}@example.com",
+        )
+        db.add(cand)
+        await db.commit()
+        await db.refresh(cand)
+        cv = CandidateVacancy(
+            tenant_id=tenant.id, candidate_id=cand.id, vacancy_id=vac.id
+        )
+        db.add(cv)
+        await db.commit()
+        await db.refresh(cv)
+        out[f"{key}_vacancy"] = vac
+        out[f"{key}_candidate"] = cand
+        out[f"{key}_cv"] = cv
+    return out
+
+
+class TestManagerHiringScope:
+    async def test_manager_reads_own_division_vacancy(
+        self, client: AsyncClient, hiring
+    ):
+        h = _headers(hiring["mgr_user"])
+        for path in (
+            f"/api/recruitment/vacancies/{hiring['mine_vacancy'].id}",
+            f"/api/recruitment/vacancies/{hiring['mine_vacancy'].id}/candidates",
+            f"/api/recruitment/candidates/{hiring['mine_candidate'].id}/resumes",
+            f"/api/recruitment/candidate-vacancies/{hiring['mine_cv'].id}",
+        ):
+            resp = await client.get(path, headers=h)
+            assert resp.status_code == 200, f"{path} -> {resp.status_code} {resp.text}"
+
+    async def test_manager_refused_on_a_neighbouring_division(
+        self, client: AsyncClient, hiring
+    ):
+        h = _headers(hiring["mgr_user"])
+        for path in (
+            f"/api/recruitment/vacancies/{hiring['theirs_vacancy'].id}",
+            f"/api/recruitment/vacancies/{hiring['theirs_vacancy'].id}/candidates",
+            f"/api/recruitment/vacancies/{hiring['theirs_vacancy'].id}/reports",
+            f"/api/recruitment/candidates/{hiring['theirs_candidate'].id}",
+            f"/api/recruitment/candidates/{hiring['theirs_candidate'].id}/resumes",
+            f"/api/recruitment/candidates/{hiring['theirs_candidate'].id}/card",
+            f"/api/recruitment/candidate-vacancies/{hiring['theirs_cv'].id}",
+        ):
+            resp = await client.get(path, headers=h)
+            assert resp.status_code == 403, f"{path} -> {resp.status_code}"
+
+    async def test_lists_only_show_the_managed_division(
+        self, client: AsyncClient, hiring
+    ):
+        h = _headers(hiring["mgr_user"])
+        vacancies = (await client.get("/api/recruitment/vacancies", headers=h)).json()
+        assert [v["id"] for v in vacancies["items"]] == [str(hiring["mine_vacancy"].id)]
+        assert vacancies["total"] == 1
+
+        candidates = (await client.get("/api/recruitment/candidates", headers=h)).json()
+        assert [c["id"] for c in candidates["items"]] == [
+            str(hiring["mine_candidate"].id)
+        ]
+        assert candidates["total"] == 1
+
+    async def test_recruiter_still_sees_the_whole_workspace(
+        self, client: AsyncClient, hiring
+    ):
+        h = _headers(hiring["rec_user"])
+        resp = await client.get(
+            f"/api/recruitment/vacancies/{hiring['theirs_vacancy'].id}", headers=h
+        )
+        assert resp.status_code == 200
+        listing = (await client.get("/api/recruitment/vacancies", headers=h)).json()
+        ids = {v["id"] for v in listing["items"]}
+        assert {str(hiring["mine_vacancy"].id), str(hiring["theirs_vacancy"].id)} <= ids
+
+    async def test_named_hiring_manager_reaches_another_division(
+        self, db: AsyncSession, client: AsyncClient, hiring
+    ):
+        theirs = hiring["theirs_vacancy"]
+        theirs.hiring_manager_id = hiring["mgr_user"].id
+        await db.commit()
+        resp = await client.get(
+            f"/api/recruitment/vacancies/{theirs.id}",
+            headers=_headers(hiring["mgr_user"]),
+        )
+        assert resp.status_code == 200
+
+    async def test_creator_keeps_a_vacancy_with_no_division(
+        self, db: AsyncSession, client: AsyncClient, tenant, hiring
+    ):
+        orphan = Vacancy(
+            tenant_id=tenant.id,
+            title=f"Orphan {uuid.uuid4().hex[:4]}",
+            owner_id=hiring["mgr_user"].id,
+        )
+        db.add(orphan)
+        await db.commit()
+        await db.refresh(orphan)
+        resp = await client.get(
+            f"/api/recruitment/vacancies/{orphan.id}",
+            headers=_headers(hiring["mgr_user"]),
+        )
+        assert resp.status_code == 200
+
+    async def test_hiring_manager_is_scoped_like_a_manager(
+        self, db: AsyncSession, client: AsyncClient, tenant, hiring
+    ):
+        """The role is not grantable yet (HRP-618), but the rule is the same."""
+        hm = await _user(db, tenant, "hiring_manager")
+        h = _headers(hm)
+        theirs = await client.get(
+            f"/api/recruitment/vacancies/{hiring['theirs_vacancy'].id}", headers=h
+        )
+        assert theirs.status_code == 403
+
+        hiring["theirs_vacancy"].hiring_manager_id = hm.id
+        await db.commit()
+        named = await client.get(
+            f"/api/recruitment/vacancies/{hiring['theirs_vacancy'].id}", headers=h
+        )
+        assert named.status_code == 200
+
+    async def test_resume_interview_and_report_follow_the_vacancy(
+        self, db: AsyncSession, client: AsyncClient, tenant, hiring
+    ):
+        """The three heaviest payloads, one per resolver that had no test."""
+        resume = CandidateFile(
+            tenant_id=tenant.id,
+            candidate_id=hiring["theirs_candidate"].id,
+            file_type="resume",
+            original_filename="cv.pdf",
+            mime_type="application/pdf",
+            file_size=1024,
+        )
+        interview = Interview(
+            tenant_id=tenant.id, candidate_vacancy_id=hiring["theirs_cv"].id
+        )
+        report = ConsolidatedReport(
+            tenant_id=tenant.id, vacancy_id=hiring["theirs_vacancy"].id
+        )
+        db.add_all([resume, interview, report])
+        await db.commit()
+        for row in (resume, interview, report):
+            await db.refresh(row)
+
+        h = _headers(hiring["mgr_user"])
+        for path in (
+            f"/api/recruitment/resumes/{resume.id}/download",
+            f"/api/recruitment/interviews/{interview.id}",
+            f"/api/recruitment/interviews/{interview.id}/media-url",
+            f"/api/recruitment/reports/{report.id}",
+            f"/api/recruitment/reports/{report.id}/preview",
+        ):
+            resp = await client.get(path, headers=h)
+            assert resp.status_code == 403, f"{path} -> {resp.status_code}"
+
+        # ...and the recruiter, who is unrestricted, is not blocked by them.
+        rec = _headers(hiring["rec_user"])
+        resp = await client.get(f"/api/recruitment/reports/{report.id}", headers=rec)
+        assert resp.status_code != 403
+
+    async def test_narrowing_a_list_to_a_foreign_vacancy_is_refused(
+        self, client: AsyncClient, hiring
+    ):
+        """``?vacancy_id=`` is a way in too — the roster it filters to is
+        exactly what the scope hides."""
+        h = _headers(hiring["mgr_user"])
+        for path in (
+            f"/api/recruitment/candidates?vacancy_id={hiring['theirs_vacancy'].id}",
+            f"/api/recruitment/reports?vacancy_id={hiring['theirs_vacancy'].id}",
+        ):
+            resp = await client.get(path, headers=h)
+            assert resp.status_code == 403, f"{path} -> {resp.status_code}"
+
+        own = await client.get(
+            f"/api/recruitment/candidates?vacancy_id={hiring['mine_vacancy'].id}",
+            headers=h,
+        )
+        assert own.status_code == 200
+
+    async def test_an_application_to_another_division_stays_hidden(
+        self, db: AsyncSession, client: AsyncClient, hiring
+    ):
+        """One candidate, two applications — the manager sees only theirs."""
+        extra = CandidateVacancy(
+            tenant_id=hiring["mine_vacancy"].tenant_id,
+            candidate_id=hiring["mine_candidate"].id,
+            vacancy_id=hiring["theirs_vacancy"].id,
+        )
+        db.add(extra)
+        await db.commit()
+
+        h = _headers(hiring["mgr_user"])
+        card = (
+            await client.get(
+                f"/api/recruitment/candidates/{hiring['mine_candidate'].id}/card",
+                headers=h,
+            )
+        ).json()
+        assert [a["vacancy_id"] for a in card["vacancy_applications"]] == [
+            str(hiring["mine_vacancy"].id)
+        ]
+
+        links = (
+            await client.get(
+                f"/api/recruitment/candidates/{hiring['mine_candidate'].id}/vacancies",
+                headers=h,
+            )
+        ).json()
+        assert [link["vacancy_id"] for link in links] == [
+            str(hiring["mine_vacancy"].id)
+        ]

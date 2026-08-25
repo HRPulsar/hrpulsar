@@ -6,15 +6,52 @@
 // The "type" filter from Assessments is intentionally dropped — PDPs do
 // not carry a type code.
 
+import { isPastDeadline } from "@/lib/deadline";
 import type { PDP } from "@/lib/types";
+
+// HRP-638: the dashboard's plan findings are not statuses — "overdue" and
+// "stuck in review" are derived from the deadline and how long the plan has
+// sat still. They arrive as ``?flag=`` so a finding can link to exactly the
+// rows it counted.
+export const PDP_FLAGS = ["overdue", "stuck_review"] as const;
+
+export type PdpFlag = (typeof PDP_FLAGS)[number];
+
+// Mirrors DEV_LOOP_STUCK_REVIEW_DAYS in backend/app/modules/employee/issues.py.
+export const STUCK_REVIEW_DAYS = 14;
+
+const STUCK_STATUSES = ["review", "returned"];
 
 export interface PdpFilters {
   searchQuery: string;
   filterStatuses: readonly string[];
+  filterFlags?: readonly string[];
 }
 
-export function matchesPdpFilters(pdp: PDP, filters: PdpFilters): boolean {
-  const { searchQuery, filterStatuses } = filters;
+function isOverdue(pdp: PDP): boolean {
+  // A finished plan past its deadline is history, not a thing to chase —
+  // same rule the backend cohort uses.
+  if (isTerminalStatus(pdp.status)) return false;
+  return !!pdp.deadline && isPastDeadline(pdp.deadline);
+}
+
+function isTerminalStatus(status: string): boolean {
+  return status === "done" || status === "cancelled";
+}
+
+function isStuckInReview(pdp: PDP, now: number): boolean {
+  if (!STUCK_STATUSES.includes(pdp.status)) return false;
+  const touched = Date.parse(pdp.updated_at ?? pdp.created_at);
+  if (!Number.isFinite(touched)) return false;
+  return now - touched > STUCK_REVIEW_DAYS * 24 * 60 * 60 * 1000;
+}
+
+export function matchesPdpFilters(
+  pdp: PDP,
+  filters: PdpFilters,
+  now: number = Date.now(),
+): boolean {
+  const { searchQuery, filterStatuses, filterFlags = [] } = filters;
   if (searchQuery) {
     const needle = searchQuery.toLowerCase();
     if (!(pdp.title || "").toLowerCase().includes(needle)) return false;
@@ -22,11 +59,26 @@ export function matchesPdpFilters(pdp: PDP, filters: PdpFilters): boolean {
   if (filterStatuses.length > 0 && !filterStatuses.includes(pdp.status)) {
     return false;
   }
+  // Flags OR together, like the status multi-select above them.
+  if (filterFlags.length > 0) {
+    const hit = filterFlags.some((flag) =>
+      flag === "overdue"
+        ? isOverdue(pdp)
+        : flag === "stuck_review"
+          ? isStuckInReview(pdp, now)
+          : false,
+    );
+    if (!hit) return false;
+  }
   return true;
 }
 
 export function hasActivePdpFilters(filters: PdpFilters): boolean {
-  return filters.searchQuery.length > 0 || filters.filterStatuses.length > 0;
+  return (
+    filters.searchQuery.length > 0 ||
+    filters.filterStatuses.length > 0 ||
+    (filters.filterFlags?.length ?? 0) > 0
+  );
 }
 
 // HRP-222: list pages render plans in three buckets — active (anything

@@ -272,3 +272,36 @@ async def test_throttle_fails_closed_when_redis_unavailable(
         headers={"X-Forwarded-For": "203.0.113.99"},
     )
     assert resp.status_code == 503, resp.text
+
+
+@pytest.mark.asyncio
+async def test_blocked_attempts_do_not_extend_the_window(
+    client: AsyncClient,
+    admin_role,
+    enable_demo,
+    monkeypatch,
+    redis_cleanup: list[str],
+):
+    """HRP-645: the TTL is anchored at bucket creation and never re-armed.
+
+    Pre-fix EXPIRE ran on every call, blocked ones included, so each
+    retry pushed the caller's own reset an hour further. With a demo
+    button on a live landing page the bucket never aged out and the
+    throttle, once tripped, stayed tripped.
+    """
+    monkeypatch.setattr(settings, "demo_rate_limit_per_ip_per_hour", 1)
+
+    ip = "203.0.113.60"
+    key = f"demo:rl:{ip}"
+    redis_cleanup.append(key)
+
+    assert await _start_with_ip(client, ip) == 201
+
+    r = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        # Stand in for a window that is almost over.
+        await r.expire(key, 30)
+        assert await _start_with_ip(client, ip) == 429
+        assert await r.ttl(key) <= 30, "a refused request must not re-arm the TTL"
+    finally:
+        await r.aclose()

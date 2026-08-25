@@ -30,7 +30,14 @@ def _position_to_read(
     pos: Position,
     employee_count: int = 0,
     extras: _PositionExtras | None = None,
+    *,
+    can_manage: bool = True,
 ) -> dict:
+    # HRP-631: ``can_manage`` is a display hint — it keeps the UI from
+    # offering an edit that ``position_scope`` would refuse. The fence
+    # itself lives on the mutating routes; this defaults to True because
+    # most callers here are mutation responses, where the caller has just
+    # proved they may edit the row.
     extras = extras or {}
     headcount = pos.headcount
     if headcount is None:
@@ -83,6 +90,7 @@ def _position_to_read(
         "matrix_configured": bool(extras.get("matrix_configured", False)),
         "specializations": specializations,
         "grades": grades,
+        "can_manage": can_manage,
         "created_at": pos.created_at,
     }
 
@@ -262,6 +270,7 @@ async def list_positions(
     lifecycle_status: str | None = None,
     has_vacancies: bool | None = None,
     matrix_unconfigured: bool | None = None,
+    managed_division_ids: tuple[uuid.UUID, ...] | None = None,
 ) -> tuple[list[dict], int]:
     query = select(Position).where(Position.tenant_id == tenant_id)
     count_query = select(func.count(Position.id)).where(Position.tenant_id == tenant_id)
@@ -359,21 +368,40 @@ async def list_positions(
     counts = await _get_employee_counts_bulk(db, tenant_id, [p.id for p in positions])
     extras_map = await _get_position_profile_extras_bulk(db, tenant_id, list(positions))
     items = [
-        _position_to_read(pos, counts.get(pos.id, 0), extras_map.get(pos.id, {}))
+        _position_to_read(
+            pos,
+            counts.get(pos.id, 0),
+            extras_map.get(pos.id, {}),
+            can_manage=_manages(pos, managed_division_ids),
+        )
         for pos in positions
     ]
     return items, total
 
 
 async def get_position(
-    db: AsyncSession, tenant_id: uuid.UUID, position_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    position_id: uuid.UUID,
+    managed_division_ids: tuple[uuid.UUID, ...] | None = None,
 ) -> dict:
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
         raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
     count = await _get_employee_count(db, tenant_id, pos.id)
     extras = await _get_position_extras(db, tenant_id, pos)
-    return _position_to_read(pos, count, extras)
+    return _position_to_read(
+        pos, count, extras, can_manage=_manages(pos, managed_division_ids)
+    )
+
+
+def _manages(
+    pos: Position, managed_division_ids: tuple[uuid.UUID, ...] | None
+) -> bool:
+    """Python twin of ``position.scope``'s SQL check, for a row in hand."""
+    if managed_division_ids is None:
+        return True
+    return pos.division_id is not None and pos.division_id in managed_division_ids
 
 
 def _is_lifecycle_only_update(updates: dict) -> bool:
@@ -624,16 +652,30 @@ async def list_position_employees(
     position_id: uuid.UUID,
     *,
     with_alerts: bool = False,
+    visible_employee_ids: set[uuid.UUID] | None,
 ) -> list[dict]:
     """Drill-down: employees assigned to this position.
 
     POS6 extends the original POS0 list with optional alert codes.
+
+    HRP-633: the list stays whole — hiding people would break the company
+    page — but a row the caller may not read the HR card of comes back in
+    the directory shape. ``visible_employee_ids`` is
+    ``get_visible_employee_ids`` output: ``None`` means no restriction
+    (admin / hr), anything else is the exact set whose full row this caller
+    is entitled to. Deliberately without a default — unscoped is the
+    dangerous value, so a caller has to say it out loud rather than inherit
+    it by forgetting the argument.
     """
     pos = await db.get(Position, position_id)
     if not pos or pos.tenant_id != tenant_id:
         raise AppError("position_not_found", status.HTTP_404_NOT_FOUND)
 
-    from app.modules.employee.service import _resolve_emp_avatars_bulk
+    from app.modules.employee.service import (
+        _resolve_emp_avatars_bulk,
+        apply_directory_scope,
+        is_row_in_read_scope,
+    )
 
     result = await db.execute(
         select(Employee)
@@ -645,13 +687,29 @@ async def list_position_employees(
             selectinload(Employee.user),
             selectinload(Employee.division),
         )
-        .order_by(Employee.hire_date.desc())
+        # HRP-633: hire-date order is itself the hire date. A caller who
+        # only gets trimmed rows would still read the seniority ranking off
+        # the list, so a restricted caller gets the directory's own stable
+        # order instead.
+        .order_by(
+            *(
+                (Employee.hire_date.desc(),)
+                if visible_employee_ids is None
+                # Seeded rows share a created_at to the microsecond, so the
+                # id tiebreaker is what makes this an order at all — the
+                # employee directory carries the same pair.
+                else (Employee.created_at.desc(), Employee.id)
+            )
+        )
     )
     employees = list(result.scalars().all())
 
     alerts_map: dict[uuid.UUID, AlertCode | None] = {}
-    if with_alerts:
-        alerts_map = await compute_employee_alerts_bulk(db, tenant_id, employees)
+    full_rows = [e for e in employees if is_row_in_read_scope(e.id, visible_employee_ids)]
+    if with_alerts and full_rows:
+        # Alerts belong to the full row only — never computed for someone
+        # the caller will not see them for.
+        alerts_map = await compute_employee_alerts_bulk(db, tenant_id, full_rows)
 
     avatars = await _resolve_emp_avatars_bulk(db, employees)
 
@@ -686,7 +744,7 @@ async def list_position_employees(
                 "alert": _employee_alert_payload(alerts_map.get(emp.id)),
             }
         )
-    return items
+    return await apply_directory_scope(db, tenant_id, items, visible_employee_ids)
 
 
 async def get_position_competence_matrix(

@@ -17,13 +17,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     question_service,
     service,
 )
-from app.modules.recruitment.routers.common import recruitment_public_limiter
+from app.modules.recruitment.routers.common import (
+    RECRUITMENT_VIEWER_ROLES,
+    recruitment_public_limiter,
+)
 from app.modules.recruitment.schemas import (
     AssessmentRevertRequest,
     AssessmentScoreCreate,
@@ -43,6 +46,14 @@ from app.modules.recruitment.schemas import (
     QuestionUpdate2,
     VacancyQuestionsRead,
 )
+from app.modules.recruitment.scope import (
+    candidate_scope,
+    candidate_vacancy_query_scope,
+    candidate_vacancy_scope,
+    cv_scope,
+    vacancy_query_scope,
+    vacancy_scope,
+)
 
 router = APIRouter(tags=["recruitment"])
 
@@ -58,7 +69,9 @@ async def list_questions(
     candidate_id: uuid.UUID,
     vacancy_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(candidate_scope),
+    _query_scope: None = Depends(vacancy_query_scope),
 ):
     return await service.list_questions(
         db, current_user.tenant_id, candidate_id, vacancy_id=vacancy_id
@@ -215,7 +228,8 @@ async def update_assessment(
 async def list_assessments(
     cv_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(cv_scope),
 ):
     return await service.list_assessments(db, current_user.tenant_id, cv_id)
 
@@ -235,8 +249,10 @@ async def list_assessment_history(
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(
-        require_role("admin", "recruiter", "hrd", "hr", "hiring_manager")
+        require_role("admin", "recruiter", "hr", "hiring_manager")
     ),
+    _scope: None = Depends(vacancy_scope),
+    _query_scope: None = Depends(candidate_vacancy_query_scope),
 ):
     """Versions-panel timeline — vacancy-scoped audit of assessment edits."""
     items, total = await service.list_assessment_history(
@@ -317,7 +333,8 @@ async def create_invite(
 async def list_invites(
     cv_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(cv_scope),
 ):
     return await service.list_invites(db, current_user.tenant_id, cv_id)
 
@@ -379,7 +396,8 @@ async def record_invite_assessment(
 async def get_canvas(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     return await service.get_canvas(db, current_user.tenant_id, vacancy_id)
 
@@ -396,8 +414,9 @@ async def get_assessment_matrix(
     ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(
-        require_role("admin", "recruiter", "hrd", "hr", "hiring_manager")
+        require_role("admin", "recruiter", "hr", "hiring_manager")
     ),
+    _scope: None = Depends(vacancy_scope),
 ):
     """Aggregated matrix for the Assessments tab and the % match column.
 
@@ -421,8 +440,9 @@ async def export_assessment_matrix_xlsx(
     round: str = Query(default="latest"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(
-        require_role("admin", "recruiter", "hrd", "hr", "hiring_manager")
+        require_role("admin", "recruiter", "hr", "hiring_manager")
     ),
+    _scope: None = Depends(vacancy_scope),
 ):
     """HRP-510 — the fullscreen canvas' XLSX export.
 
@@ -459,8 +479,10 @@ async def get_assessment_matrix_cell_detail(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(
-        require_role("admin", "recruiter", "hrd", "hr", "hiring_manager")
+        require_role("admin", "recruiter", "hr", "hiring_manager")
     ),
+    _scope: None = Depends(vacancy_scope),
+    _cv_scope: None = Depends(candidate_vacancy_scope),
 ):
     """Footer-info drill-down for a single Compact matrix cell."""
     return await service.get_assessment_matrix_cell_detail(
@@ -483,7 +505,9 @@ async def list_candidate_question_sets(
     candidate_id: uuid.UUID,
     vacancy_id: uuid.UUID | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(candidate_scope),
+    _query_scope: None = Depends(vacancy_query_scope),
 ):
     return await question_service.list_question_sets(
         db, current_user.tenant_id, candidate_id, vacancy_id=vacancy_id
@@ -504,8 +528,9 @@ async def list_vacancy_question_sets(
     # vacancy's whole roster (names + the questions prepared for them),
     # so it must not be enumerable by any authenticated employee.
     current_user: User = Depends(
-        require_role("admin", "recruiter", "hrd", "hr", "hiring_manager")
+        require_role("admin", "recruiter", "hr", "hiring_manager")
     ),
+    _scope: None = Depends(vacancy_scope),
 ):
     """HRP-504: every candidate's latest question set for this vacancy,
     plus the vacancy competences, for the Questions tab filters."""
@@ -519,7 +544,7 @@ async def list_vacancy_question_sets(
     response_model=QuestionSetRead,
 )
 async def get_question_set_sample(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
 ):
     """Static preview shown when credits < generation threshold.
 

@@ -123,7 +123,7 @@ async def test_assessment_stats_paid_tenant_excludes_demo_data(
         db, is_demo=True, status=status_done, a_type=type_self
     )
 
-    stats = await analytics_service.assessment_stats(db, paid_tenant.id)
+    stats = await analytics_service.assessment_stats(db, paid_tenant.id, None)
     # Paid tenant has exactly its own one assessment, not the demo's
     assert stats["total"] == 1
     assert stats["by_status"].get("done") == 1
@@ -140,7 +140,7 @@ async def test_assessment_stats_demo_tenant_excludes_paid_data(
         db, is_demo=True, status=status_done, a_type=type_self
     )
 
-    stats = await analytics_service.assessment_stats(db, demo_tenant.id)
+    stats = await analytics_service.assessment_stats(db, demo_tenant.id, None)
     assert stats["total"] == 1
     assert stats["by_status"].get("done") == 1
 
@@ -153,6 +153,6 @@ async def test_assessment_stats_unknown_tenant_returns_empty(
     await _make_tenant_with_assessment(
         db, is_demo=False, status=status_done, a_type=type_self
     )
-    stats = await analytics_service.assessment_stats(db, uuid.uuid4())
+    stats = await analytics_service.assessment_stats(db, uuid.uuid4(), None)
     assert stats["total"] == 0
     assert stats["by_status"] == {}

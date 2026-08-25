@@ -129,7 +129,7 @@ export default function AssessmentDetailPage() {
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const { user: currentUser } = useAuth();
-  const { canManage, roles } = usePermissions();
+  const { canManage, canManageCatalogues, roles } = usePermissions();
   // HRP-154: Platform admin sits outside `canManage` (which only covers
   // admin + manager), but the Detailed results block is meant to be
   // visible to them too — backend RBAC already enforces this; the gate
@@ -1952,9 +1952,13 @@ export default function AssessmentDetailPage() {
                         >
                           {t("preview")}
                         </DropdownMenuItem>
+                        {/* HRP-631: the answer-scale catalogue is
+                            workspace-wide, so editing it is admin / HR —
+                            picking one for this assessment stays with the
+                            manager. */}
                         {!s.is_default && (
                           <>
-                            {canManage && (
+                            {canManageCatalogues && (
                               <DropdownMenuItem
                                 onClick={() => openScaleEditor(s)}
                                 data-testid={`assessment-scale-modal-item-${s.id}-menu-edit`}
@@ -1962,7 +1966,7 @@ export default function AssessmentDetailPage() {
                                 {t("edit")}
                               </DropdownMenuItem>
                             )}
-                            {canManage && (
+                            {canManageCatalogues && (
                               <DropdownMenuItem
                                 variant="destructive"
                                 onClick={() => requestScaleDelete(s.id)}
@@ -1979,7 +1983,7 @@ export default function AssessmentDetailPage() {
                 ))}
             </RadioGroup>
           )}
-          {canManage && (
+          {canManageCatalogues && (
             <Button
               variant="outline"
               size="sm"

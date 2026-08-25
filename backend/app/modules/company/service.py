@@ -96,7 +96,7 @@ def _dedupe_upgrades(upgrades: list[dict]) -> list[dict]:
 
     The same person can sit as both Manager and Deputy Manager of one
     division — we only want one "promoted to Manager" toast on the
-    client even though `_sync_role_on_assign` is called twice.
+    client even though `sync_role_on_assign` is called twice.
     """
     seen: set[uuid.UUID] = set()
     out: list[dict] = []
@@ -136,7 +136,7 @@ async def _employee_user_id(
     return emp.user_id if emp else None
 
 
-async def _sync_role_on_assign(
+async def sync_role_on_assign(
     db: AsyncSession, tenant_id: uuid.UUID, employee_id: uuid.UUID | None
 ) -> dict | None:
     """Add `manager` role to the assigned user if they only have `employee`.
@@ -316,7 +316,7 @@ async def create_division(
 
     upgrades: list[dict] = []
     for emp_id in (data.manager_id, data.deputy_manager_id):
-        result = await _sync_role_on_assign(db, tenant_id, emp_id)
+        result = await sync_role_on_assign(db, tenant_id, emp_id)
         if result is not None:
             upgrades.append(result)
 
@@ -453,11 +453,11 @@ async def update_division(
 
     upgrades: list[dict] = []
     if "manager_id" in updates:
-        result = await _sync_role_on_assign(db, tenant_id, updates["manager_id"])
+        result = await sync_role_on_assign(db, tenant_id, updates["manager_id"])
         if result is not None:
             upgrades.append(result)
     if "deputy_manager_id" in updates:
-        result = await _sync_role_on_assign(db, tenant_id, updates["deputy_manager_id"])
+        result = await sync_role_on_assign(db, tenant_id, updates["deputy_manager_id"])
         if result is not None:
             upgrades.append(result)
 
@@ -624,6 +624,7 @@ async def get_company_profile(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
         "logo_file_id": tenant.logo_file_id,
         "logo_url": logo_url,
         "default_locale": tenant.default_locale,
+        "directory_show_grades": tenant.directory_show_grades,
         "created_at": tenant.created_at,
         "activity_fields": fields,
     }

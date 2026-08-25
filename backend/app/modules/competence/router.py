@@ -63,7 +63,7 @@ async def get_competence_tree(
 async def create_group(
     data: CompetenceGroupCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.create_group(
         db, current_user.tenant_id, data, actor_id=current_user.id
@@ -75,7 +75,7 @@ async def update_group(
     group_id: uuid.UUID,
     data: CompetenceGroupUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.update_group(
         db, current_user.tenant_id, group_id, data, actor_id=current_user.id
@@ -119,7 +119,7 @@ async def get_group_usage(
 async def activate_group(
     group_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.activate_group(
         db, current_user.tenant_id, group_id, actor_id=current_user.id
@@ -132,7 +132,7 @@ async def activate_group(
 async def deactivate_group(
     group_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.deactivate_group(
         db, current_user.tenant_id, group_id, actor_id=current_user.id
@@ -145,7 +145,7 @@ async def move_group(
     new_parent_id: uuid.UUID | None = Body(None),
     new_sort_index: int = Body(0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.move_group(
         db,
@@ -164,7 +164,7 @@ async def move_group(
 async def create_competence(
     data: CompetenceCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.create_competence(
         db, current_user.tenant_id, data, actor_id=current_user.id
@@ -180,7 +180,7 @@ async def bulk_create_competences(
     group_id: uuid.UUID,
     data: CompetenceBulkCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     """HRP-108: add several competences to a group in one shot."""
     return await service.bulk_create_competences(
@@ -215,7 +215,7 @@ async def update_competence(
     competence_id: uuid.UUID,
     data: CompetenceUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.update_competence(
         db, current_user.tenant_id, competence_id, data, actor_id=current_user.id
@@ -257,7 +257,7 @@ async def get_competence_usage(
 async def publish_competence(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.publish_competence(
         db, current_user.tenant_id, competence_id, actor_id=current_user.id
@@ -268,7 +268,7 @@ async def publish_competence(
 async def unpublish_competence(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.unpublish_competence(
         db, current_user.tenant_id, competence_id, actor_id=current_user.id
@@ -279,7 +279,7 @@ async def unpublish_competence(
 async def activate_competence(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.activate_competence(
         db, current_user.tenant_id, competence_id, actor_id=current_user.id
@@ -290,7 +290,7 @@ async def activate_competence(
 async def deactivate_competence(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.deactivate_competence(
         db, current_user.tenant_id, competence_id, actor_id=current_user.id
@@ -303,7 +303,7 @@ async def move_competence(
     new_group_id: uuid.UUID = Body(..., embed=True),
     new_sort_index: int = Body(0, embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await service.move_competence(
         db,
@@ -402,7 +402,7 @@ async def create_indicator(
     competence_id: uuid.UUID,
     data: IndicatorCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     ind = await service.create_indicator(
         db, current_user.tenant_id, competence_id, data, actor_id=current_user.id
@@ -429,7 +429,7 @@ async def bulk_create_indicators(
     competence_id: uuid.UUID,
     body: IndicatorBulkCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     """HRP-49: persist multiple indicators in one call."""
     created = await service.create_indicators_bulk(
@@ -447,7 +447,7 @@ async def update_indicator(
     indicator_id: uuid.UUID,
     data: IndicatorUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     ind = await service.update_indicator(
         db, current_user.tenant_id, indicator_id, data, actor_id=current_user.id
@@ -489,7 +489,7 @@ async def get_indicator_usage(
 async def activate_indicator(
     indicator_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     ind = await service.activate_indicator(
         db, current_user.tenant_id, indicator_id, actor_id=current_user.id
@@ -501,7 +501,7 @@ async def activate_indicator(
 async def deactivate_indicator(
     indicator_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     ind = await service.deactivate_indicator(
         db, current_user.tenant_id, indicator_id, actor_id=current_user.id
@@ -515,7 +515,7 @@ async def move_indicator(
     new_skill_level_id: uuid.UUID = Body(..., embed=True),
     new_sort_index: int = Body(0, embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     ind = await service.move_indicator(
         db,
@@ -564,7 +564,7 @@ async def create_material(
     competence_id: uuid.UUID,
     data: MaterialCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     mat = await service.create_material(
         db, current_user.tenant_id, competence_id, data, actor_id=current_user.id
@@ -591,7 +591,7 @@ async def bulk_create_materials(
     competence_id: uuid.UUID,
     body: MaterialBulkCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     """HRP-51: persist multiple materials in one call (AI-review confirm).
 
@@ -649,7 +649,7 @@ class MaterialAIGenerateRequest(BaseModel):
 async def materials_context_options(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     """HRP-51 review: drives the materials Generate dialog's context picker.
 
@@ -678,7 +678,7 @@ async def ai_generate_materials(
     competence_id: uuid.UUID,
     body: MaterialAIGenerateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     """HRP-51: generate learning-material suggestions per skill level via LLM.
 
@@ -710,7 +710,7 @@ async def update_material(
     material_id: uuid.UUID,
     data: MaterialUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     mat = await service.update_material(
         db, current_user.tenant_id, material_id, data, actor_id=current_user.id
@@ -743,7 +743,7 @@ async def get_material_usage(
 async def activate_material(
     material_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     mat = await service.activate_material(
         db, current_user.tenant_id, material_id, actor_id=current_user.id
@@ -755,7 +755,7 @@ async def activate_material(
 async def deactivate_material(
     material_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     mat = await service.deactivate_material(
         db, current_user.tenant_id, material_id, actor_id=current_user.id
@@ -769,7 +769,7 @@ async def move_material(
     new_skill_level_id: uuid.UUID = Body(..., embed=True),
     new_sort_index: int = Body(0, embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     mat = await service.move_material(
         db,
@@ -863,7 +863,7 @@ async def create_material_override(
     competence_id: uuid.UUID,
     data: MaterialOverrideCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     return await material_overrides.add_material_override(
         db,
@@ -883,7 +883,7 @@ async def delete_material_override(
     competence_id: uuid.UUID,
     override_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     await material_overrides.remove_material_override(
         db, current_user.tenant_id, competence_id, override_id
@@ -901,7 +901,7 @@ async def get_competence_audit_log(
     competence_id: uuid.UUID,
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "hr")),
 ):
     """Recent audit-log entries that touched this competence directly."""
     result = await db.execute(

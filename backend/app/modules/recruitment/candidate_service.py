@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import UploadFile, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -41,6 +41,7 @@ from app.modules.recruitment.models import (
     Candidate,
     CandidateFile,
     CandidateVacancy,
+    Vacancy,
     VacancyStage,
 )
 from app.modules.recruitment.schemas import (
@@ -213,8 +214,12 @@ async def list_candidates(
     limit: int = 25,
     search: str | None = None,
     vacancy_id: uuid.UUID | None = None,
+    scope_filter: ColumnElement[bool] | None = None,
 ) -> tuple[list[dict], int]:
     """List candidates.
+
+    ``scope_filter`` (HRP-629) keeps only candidates attached to at least
+    one vacancy the caller may see; ``None`` means no restriction.
 
     HRP-181 REDO: ``person_id`` is now nullable — externally-sourced
     candidates (manual add + bulk-upload finalize) have no linked Person
@@ -241,6 +246,17 @@ async def list_candidates(
         count_query = count_query.join(
             CandidateVacancy, CandidateVacancy.candidate_id == Candidate.id
         ).where(CandidateVacancy.vacancy_id == vacancy_id)
+
+    if scope_filter is not None:
+        in_scope = (
+            select(1)
+            .select_from(CandidateVacancy)
+            .join(Vacancy, Vacancy.id == CandidateVacancy.vacancy_id)
+            .where(CandidateVacancy.candidate_id == Candidate.id, scope_filter)
+            .exists()
+        )
+        query = query.where(in_scope)
+        count_query = count_query.where(in_scope)
 
     if search:
         like = f"%{search}%"
@@ -711,11 +727,19 @@ async def get_resume_download_url(
 
 
 async def list_candidate_vacancies(
-    db: AsyncSession, tenant_id: uuid.UUID, candidate_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    scope_filter: ColumnElement[bool] | None = None,
 ) -> list[dict]:
-    """List candidate-vacancy links for a single candidate."""
+    """List candidate-vacancy links for a single candidate.
+
+    ``scope_filter`` (HRP-629) hides applications to vacancies outside the
+    caller's scope: reaching the candidate through one division's vacancy
+    must not reveal that they also applied to another division's.
+    """
     await _get_candidate(db, tenant_id, candidate_id)
-    result = await db.execute(
+    query = (
         select(CandidateVacancy)
         .options(
             selectinload(CandidateVacancy.candidate).selectinload(Candidate.person),
@@ -726,8 +750,12 @@ async def list_candidate_vacancies(
             CandidateVacancy.candidate_id == candidate_id,
             CandidateVacancy.tenant_id == tenant_id,
         )
-        .order_by(CandidateVacancy.created_at.desc())
     )
+    if scope_filter is not None:
+        query = query.join(Vacancy, Vacancy.id == CandidateVacancy.vacancy_id).where(
+            scope_filter
+        )
+    result = await db.execute(query.order_by(CandidateVacancy.created_at.desc()))
     return [_cv_to_read(cv) for cv in result.scalars().unique().all()]
 
 
@@ -1566,7 +1594,10 @@ async def delete_candidate_vacancy(
 
 
 async def get_candidate_full_card(
-    db: AsyncSession, tenant_id: uuid.UUID, candidate_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    scope_filter: ColumnElement[bool] | None = None,
 ) -> dict:
     """Return the canonical candidate card payload.
 
@@ -1577,21 +1608,25 @@ async def get_candidate_full_card(
     """
     candidate = await _load_canonical_candidate(db, tenant_id, candidate_id)
 
-    cv_rows = (
-        (
-            await db.execute(
-                select(CandidateVacancy)
-                .options(
-                    selectinload(CandidateVacancy.vacancy),
-                    selectinload(CandidateVacancy.stage),
-                )
-                .where(
-                    CandidateVacancy.candidate_id == candidate_id,
-                    CandidateVacancy.tenant_id == tenant_id,
-                )
-                .order_by(CandidateVacancy.added_at.desc())
-            )
+    cv_query = (
+        select(CandidateVacancy)
+        .options(
+            selectinload(CandidateVacancy.vacancy),
+            selectinload(CandidateVacancy.stage),
         )
+        .where(
+            CandidateVacancy.candidate_id == candidate_id,
+            CandidateVacancy.tenant_id == tenant_id,
+        )
+    )
+    # HRP-629: same reason as list_candidate_vacancies — applications to
+    # other divisions' vacancies stay hidden.
+    if scope_filter is not None:
+        cv_query = cv_query.join(
+            Vacancy, Vacancy.id == CandidateVacancy.vacancy_id
+        ).where(scope_filter)
+    cv_rows = (
+        (await db.execute(cv_query.order_by(CandidateVacancy.added_at.desc())))
         .scalars()
         .unique()
         .all()

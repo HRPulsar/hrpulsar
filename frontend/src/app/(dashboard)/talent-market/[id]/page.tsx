@@ -399,7 +399,12 @@ export default function TalentCardDetailPage() {
   // affordances and drawer arrows for the Employee role. The viewer
   // can manage when they're admin / manager (full read+write); plain
   // employees only see the Candidates table without write controls.
-  const { canManage } = usePermissions();
+  const { canManage: canManageByRole } = usePermissions();
+  // HRP-639: the role is only half the answer. A division head reaches
+  // another department's card when it is published — the board is meant to
+  // be readable — but every write on it 403s, so the buttons come off the
+  // card's own `can_manage` rather than the role alone.
+  const canManage = canManageByRole && card?.can_manage !== false;
 
   // Dictionaries used by both Requirement blocks. Loaded once on mount.
   const [specializations, setSpecializations] = useState<DictionaryItem[]>([]);

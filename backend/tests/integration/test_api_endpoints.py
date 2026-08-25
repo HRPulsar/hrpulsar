@@ -693,6 +693,105 @@ class TestAuthForgotResetPassword:
         codes = [r["code"] for r in roles]
         assert "admin" in codes
 
+    async def test_list_roles_counts_holders_of_this_tenant_only(
+        self, auth_client: AsyncClient, db: AsyncSession, admin_role
+    ):
+        """HRP-634: the holder count powers the Roles page.
+
+        ``user_roles`` has no tenant column, so the tenant filter has to
+        ride on ``User.tenant_id``. The foreign admin below is what makes
+        that assertion real — without one planted here the test passes
+        with the filter deleted.
+        """
+        from app.core.security import hash_password
+        from app.modules.auth.models import User, user_roles
+        from app.modules.company.models import Tenant
+
+        other = Tenant(
+            name=f"Other Corp {uuid.uuid4().hex[:6]}",
+            slug=f"other-{uuid.uuid4().hex[:8]}",
+        )
+        db.add(other)
+        await db.commit()
+        outsider = User(
+            email=f"outsider-{uuid.uuid4().hex[:8]}@test.com",
+            password_hash=hash_password("testpass123"),
+            first_name="Out",
+            last_name="Sider",
+            tenant_id=other.id,
+        )
+        db.add(outsider)
+        await db.commit()
+        await db.execute(
+            user_roles.insert().values(user_id=outsider.id, role_id=admin_role.id)
+        )
+        await db.commit()
+
+        code = f"unheld_{uuid.uuid4().hex[:6]}"
+        created = await auth_client.post(
+            "/api/roles", json={"name": "Unheld Role", "code": code}
+        )
+        assert created.status_code == 201
+
+        resp = await auth_client.get("/api/roles")
+        assert resp.status_code == 200
+        counts = {r["code"]: r["user_count"] for r in resp.json()}
+        assert counts["admin"] == 1
+        assert counts[code] == 0
+
+    async def test_role_count_matches_the_list_it_links_to(
+        self, auth_client: AsyncClient, db: AsyncSession, tenant, admin_role, employee
+    ):
+        """HRP-642: the count is a link into `GET /employees?role=`.
+
+        The two used to be computed differently — the count dropped
+        deactivated accounts, the list knows nothing about account
+        activity — so clicking "2" landed on three rows. Whatever else
+        changes, these two numbers answer the same question now.
+
+        The baseline `employee` code is deliberately not covered: there
+        `?role=` means "holds *only* the baseline", which is a different
+        question, and the page links that row to the unfiltered list.
+        """
+        from app.core.security import hash_password
+        from app.modules.auth.models import User, user_roles
+        from app.modules.employee.models import Employee
+
+        # A second admin whose account is deactivated — the exact row the
+        # count used to skip while the list kept returning it. It cannot be
+        # the caller: deactivating them invalidates their own token.
+        other = User(
+            email=f"deactivated-{uuid.uuid4().hex[:8]}@test.com",
+            password_hash=hash_password("testpass123"),
+            first_name="De",
+            last_name="Activated",
+            tenant_id=tenant.id,
+            is_active=False,
+        )
+        db.add(other)
+        await db.commit()
+        db.add(
+            Employee(
+                user_id=other.id,
+                tenant_id=tenant.id,
+                position_id=employee.position_id,
+                position_title="Employee",
+                hire_date=employee.hire_date,
+            )
+        )
+        await db.execute(
+            user_roles.insert().values(user_id=other.id, role_id=admin_role.id)
+        )
+        await db.commit()
+
+        roles = await auth_client.get("/api/roles")
+        assert roles.status_code == 200
+        count = next(r["user_count"] for r in roles.json() if r["code"] == "admin")
+
+        listed = await auth_client.get("/api/employees?limit=200&role=admin")
+        assert listed.status_code == 200
+        assert count == listed.json()["total"] == 2
+
     async def test_create_role(self, auth_client: AsyncClient):
         code = f"role_{uuid.uuid4().hex[:6]}"
         resp = await auth_client.post(

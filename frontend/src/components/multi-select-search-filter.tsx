@@ -6,6 +6,7 @@ import { Check, ChevronDown } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
+import { ACTIVE_FILTER_TRIGGER } from "@/components/multi-select-filter";
 import { cn } from "@/lib/utils";
 
 export interface MultiSelectSearchOption {
@@ -85,7 +86,9 @@ export function MultiSelectSearchFilter({
           size="sm"
           className={cn(
             "justify-between font-normal",
-            value.length === 0 && "text-muted-foreground",
+            value.length === 0
+              ? "text-muted-foreground"
+              : ACTIVE_FILTER_TRIGGER,
             className,
           )}
           data-testid={testId}

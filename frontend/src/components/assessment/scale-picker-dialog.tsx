@@ -42,7 +42,11 @@ interface ScalePickerDialogProps {
   currentScaleId: string | null;
   /** Persist the picked scale (or null to unassign). */
   onSave: (scaleId: string | null) => Promise<void>;
-  /** Show inline create/edit/delete affordances. */
+  /**
+   * Show inline create/edit/delete affordances for the scale catalogue
+   * itself. HRP-631 moved those mutations to admin / HR, so callers
+   * pass `canManageCatalogues`, not the role's `canManage`.
+   */
   canManage?: boolean;
   /** Test-id prefix for the picker dialog and its items. */
   testIdPrefix?: string;

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useFormatter, useTranslations } from "next-intl";
 import {
@@ -153,11 +153,15 @@ interface LoopStageSpec {
   series?: number[];
 }
 
+// HRP-638: every tile links to the list filtered down to the people it
+// counted. A tile that opens the unfiltered roster makes the reader hunt
+// for the ones the number was about.
 function buildStages(stages: DevLoopStages, t: Translate): LoopStageSpec[] {
   return [
     {
       key: "assessed",
-      href: "/assessments",
+      // The actionable half of "78% assessed" is the other 22%.
+      href: "/employees?issue=assessment_stale",
       value: `${stages.assessed.percent}%`,
       sub: t("stageAssessedSub", {
         covered: stages.assessed.covered,
@@ -167,7 +171,7 @@ function buildStages(stages: DevLoopStages, t: Translate): LoopStageSpec[] {
     },
     {
       key: "gaps",
-      href: "/employees",
+      href: "/employees?issue=competence_gap",
       value: String(stages.gaps.employees),
       sub: t("stageGapsSub", { count: stages.gaps.competences }),
       attention: stages.gaps.employees > 0,
@@ -194,7 +198,7 @@ function buildStages(stages: DevLoopStages, t: Translate): LoopStageSpec[] {
     },
     {
       key: "closed",
-      href: "/development",
+      href: "/development?status=done",
       value: String(stages.closed.gaps_closed_90d),
       sub: t("stageClosedSub", { count: stages.closed.plans_done_on_time_90d }),
       positive: stages.closed.gaps_closed_90d > 0,
@@ -302,11 +306,46 @@ function SeverityIcon({ severity }: { severity: DevLoopFinding["severity"] }) {
   return <Info className="h-3.5 w-3.5" />;
 }
 
-function findingSubline(finding: DevLoopFinding, t: Translate): string | null {
+// HRP-638: the names are the shortest path to the person — the payload has
+// carried their ids all along, so each one links straight to the card and
+// the "+N more" tail opens the same filtered list the CTA does.
+function FindingSubline({
+  finding,
+  t,
+}: {
+  finding: DevLoopFinding;
+  t: Translate;
+}) {
   if (finding.employees.length === 0) return null;
-  const names = finding.employees.map((e) => e.name).join(", ");
   const rest = finding.count - finding.employees.length;
-  return rest > 0 ? `${names} ${t("andMore", { count: rest })}` : names;
+  return (
+    <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+      {finding.employees.map((employee, index) => (
+        <Fragment key={employee.id}>
+          {index > 0 && ", "}
+          <Link
+            href={`/employees/${employee.id}`}
+            className="hover:text-foreground hover:underline"
+            data-testid={`dashboard-action-${finding.code}-employee`}
+          >
+            {employee.name}
+          </Link>
+        </Fragment>
+      ))}
+      {rest > 0 && (
+        <>
+          {" "}
+          <Link
+            href={finding.href}
+            className="hover:text-foreground hover:underline"
+            data-testid={`dashboard-action-${finding.code}-more`}
+          >
+            {t("andMore", { count: rest })}
+          </Link>
+        </>
+      )}
+    </div>
+  );
 }
 
 type AiState =
@@ -403,7 +442,6 @@ function ActionQueue({
       ) : (
         <ul className="divide-y divide-border">
           {findings.map((finding) => {
-            const subline = findingSubline(finding, t);
             return (
               <li
                 key={finding.code}
@@ -422,11 +460,7 @@ function ActionQueue({
                   <div className="text-[13px] font-medium">
                     {t(`finding_${finding.code}`, { count: finding.count })}
                   </div>
-                  {subline && (
-                    <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-                      {subline}
-                    </div>
-                  )}
+                  <FindingSubline finding={finding} t={t} />
                 </div>
                 <Button
                   size="sm"
@@ -484,7 +518,7 @@ function buildMyStages(
     },
     {
       key: "closed",
-      href: "/development",
+      href: "/development?status=done",
       value: String(closed.gaps_closed_90d),
       sub: t("myStageClosedSub"),
       positive: closed.gaps_closed_90d > 0,
@@ -709,6 +743,9 @@ function GrowthCard({ growth }: { growth: NonNullable<MyLoop["growth"]> }) {
 
 function MyDashboard({ loop }: { loop: MyLoop }) {
   const t = useTranslations("dashboard");
+  // HRP-624: reuses the header menu's label rather than minting a second key
+  // for the same words.
+  const tNav = useTranslations("sidebar");
   const format = useFormatter();
   const stages = buildMyStages(loop, t, (iso) =>
     format.dateTime(new Date(iso), { dateStyle: "medium" }),
@@ -721,6 +758,16 @@ function MyDashboard({ loop }: { loop: MyLoop }) {
         stages={stages}
         testidPrefix="dashboard-my-stage"
       />
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          variant="outline"
+          render={<Link href="/employees/me" />}
+          data-testid="dashboard-link-my-profile"
+        >
+          {tNav("myProfile")}
+        </Button>
+      </div>
       <MyActionQueue findings={loop.findings} dataVersion={loop.data_version} />
       <div className="grid gap-4 lg:grid-cols-2">
         <StrengthsCard strengths={loop.strengths} />

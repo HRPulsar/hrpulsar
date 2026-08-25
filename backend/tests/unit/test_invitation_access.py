@@ -230,6 +230,75 @@ class TestInvitationCreateStillFollowsHierarchy:
         )
         assert resp.status_code == 201
 
+    async def test_admin_can_invite_recruiter(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        user,
+        tenant,
+        admin_role,
+    ):
+        """HRP-618: recruiter/hiring_manager exist in ``roles`` but were not
+        grantable — every invite came back 403 ``role_above_inviter``."""
+        await _system_role(db, "recruiter", "Recruiter")
+        resp = await _as(client, user, tenant).post(
+            "/api/invitations",
+            json={
+                "email": f"invitee-{uuid.uuid4().hex[:6]}@test.com",
+                "name": "New Recruiter",
+                "role_code": "recruiter",
+            },
+        )
+        assert resp.status_code == 201
+
+    async def test_manager_cannot_invite_recruiter(
+        self, client: AsyncClient, db: AsyncSession, tenant, admin_role, manager_role
+    ):
+        await _system_role(db, "recruiter", "Recruiter")
+        mgr = await _user_with_role(db, tenant, manager_role, label="mgr")
+        resp = await _as(client, mgr, tenant).post(
+            "/api/invitations",
+            json={
+                "email": f"invitee-{uuid.uuid4().hex[:6]}@test.com",
+                "name": "New Recruiter",
+                "role_code": "recruiter",
+            },
+        )
+        assert resp.status_code == 403
+
+    async def test_hr_cannot_invite_admin(
+        self, client: AsyncClient, db: AsyncSession, tenant, admin_role
+    ):
+        """HRP-618: hr used to be able to mint admins — an escalation with
+        no product reason behind it."""
+        hr_role = await _system_role(db, "hr", "HR")
+        hr = await _user_with_role(db, tenant, hr_role, label="hr")
+        resp = await _as(client, hr, tenant).post(
+            "/api/invitations",
+            json={
+                "email": f"invitee-{uuid.uuid4().hex[:6]}@test.com",
+                "name": "New Admin",
+                "role_code": "admin",
+            },
+        )
+        assert resp.status_code == 403
+
+    async def test_hr_can_invite_recruiter(
+        self, client: AsyncClient, db: AsyncSession, tenant, admin_role
+    ):
+        hr_role = await _system_role(db, "hr", "HR")
+        await _system_role(db, "recruiter", "Recruiter")
+        hr = await _user_with_role(db, tenant, hr_role, label="hr")
+        resp = await _as(client, hr, tenant).post(
+            "/api/invitations",
+            json={
+                "email": f"invitee-{uuid.uuid4().hex[:6]}@test.com",
+                "name": "New Recruiter",
+                "role_code": "recruiter",
+            },
+        )
+        assert resp.status_code == 201
+
     async def test_manager_still_cannot_invite_admin(
         self, client: AsyncClient, db: AsyncSession, tenant, admin_role, manager_role
     ):

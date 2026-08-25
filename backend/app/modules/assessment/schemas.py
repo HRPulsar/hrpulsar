@@ -798,6 +798,9 @@ class PDPRead(BaseModel):
     finished_at: datetime | None
     tenant_id: uuid.UUID
     created_at: datetime
+    # HRP-638: how long the plan has sat still. The Development list derives
+    # the "stuck in review" filter from it, matching the dashboard finding.
+    updated_at: datetime | None = None
     model_config = {"from_attributes": True}
 
 

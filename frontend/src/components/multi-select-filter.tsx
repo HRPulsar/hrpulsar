@@ -12,6 +12,17 @@ import {
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+/** HRP-643: an applied filter used to differ from an empty one by text shade
+ * alone, so a chosen value read like the name of the filter beside it. The
+ * accent border and tint mark the ones actually narrowing the list; the hover
+ * and aria-expanded overrides keep the mark while the menu is open. Exported
+ * because the search-box twin of this component carries the same trigger.
+ */
+export const ACTIVE_FILTER_TRIGGER =
+  "border-brand/50 bg-brand/10 font-medium text-brand " +
+  "hover:border-brand/50 hover:bg-brand/15 hover:text-brand " +
+  "aria-expanded:bg-brand/15 aria-expanded:text-brand";
+
 export interface MultiSelectOption {
   value: string;
   label: string;
@@ -84,7 +95,9 @@ export function MultiSelectFilter({
             size="sm"
             className={cn(
               "justify-between font-normal",
-              value.length === 0 && "text-muted-foreground",
+              value.length === 0
+                ? "text-muted-foreground"
+                : ACTIVE_FILTER_TRIGGER,
               className,
             )}
           />

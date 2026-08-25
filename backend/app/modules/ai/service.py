@@ -145,12 +145,20 @@ async def suggest_pdp(
 async def _collect_context_for_positions(
     db: AsyncSession,
     tenant_id: uuid.UUID,
+    allowed_division_ids: tuple[uuid.UUID, ...] | None,
 ) -> dict:
     """Read all context the position-generation prompt needs.
 
     Acquires the per-tenant advisory xact-lock so concurrent generations
     don't race on the unique title constraint. Returns a dict with both
     the formatted prompt strings and the lookup maps used during persist.
+
+    HRP-631: ``allowed_division_ids`` is the caller's managed subtree
+    (``None`` for admin / hr). It narrows two things — the divisions the
+    prompt offers, so the model cannot name somebody else's, and the
+    existing drafts, because the persist step sweeps away every draft the
+    model did not regenerate and that sweep must not reach another
+    department's.
     """
     from app.modules.company.models import (
         CompanyActivityField,
@@ -210,8 +218,11 @@ async def _collect_context_for_positions(
     grades = ", ".join(g.title for g in grade_items) or "None"
     grade_map = {g.title.lower(): g.id for g in grade_items}
 
+    div_scope = (
+        [] if allowed_division_ids is None else [Division.id.in_(allowed_division_ids)]
+    )
     div_result = await db.execute(
-        select(Division).where(Division.tenant_id == tenant_id)
+        select(Division).where(Division.tenant_id == tenant_id, *div_scope)
     )
     div_items = div_result.scalars().all()
     divisions = ", ".join(d.name for d in div_items) or "None"
@@ -226,10 +237,16 @@ async def _collect_context_for_positions(
     existing = [p.title for p in pos_result.scalars().all()]
     existing_str = ", ".join(existing) if existing else "None"
 
+    draft_scope = (
+        []
+        if allowed_division_ids is None
+        else [Position.division_id.in_(allowed_division_ids)]
+    )
     drafts_result = await db.execute(
         select(Position).where(
             Position.tenant_id == tenant_id,
             Position.source == "ai_draft",
+            *draft_scope,
         )
     )
     existing_drafts = {p.title.lower(): p for p in drafts_result.scalars().all()}
@@ -256,6 +273,7 @@ async def _collect_context_for_positions(
         "spec_map": spec_map,
         "grade_map": grade_map,
         "div_map": div_map,
+        "allowed_division_ids": allowed_division_ids,
     }
 
 
@@ -269,8 +287,16 @@ async def _persist_positions(
     spec_map: dict,
     grade_map: dict,
     div_map: dict,
+    allowed_division_ids: tuple[uuid.UUID, ...] | None,
 ) -> list:
-    """Apply LLM-generated position items to the DB (upsert + sweep)."""
+    """Apply LLM-generated position items to the DB (upsert + sweep).
+
+    HRP-631: a restricted caller's drafts land in their own subtree or not
+    at all. ``div_map`` only holds their divisions, so an item naming
+    anything else resolves to no division — and a division-less position
+    is one nobody's subtree owns, which would leave the caller unable to
+    approve or edit what they just generated.
+    """
     from app.modules.position.models import Position
 
     created = []
@@ -293,6 +319,8 @@ async def _persist_positions(
         specialization_id = spec_map.get(spec_title.lower()) if spec_title else None
         grade_id = grade_map.get(grade_title.lower()) if grade_title else None
         division_id = div_map.get(div_name.lower()) if div_name else None
+        if allowed_division_ids is not None and division_id is None:
+            continue
 
         existing_draft = existing_drafts.get(key)
         if existing_draft is not None:
@@ -330,6 +358,7 @@ async def generate_positions(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     user_id: uuid.UUID | None,
+    allowed_division_ids: tuple[uuid.UUID, ...] | None,
 ) -> list[dict]:
     """Generate position suggestions based on company context.
 
@@ -339,7 +368,7 @@ async def generate_positions(
     callers; this remains for the legacy frontend until it's migrated.
     """
     tenant_settings = await ai_settings_service.get_or_default(db, tenant_id)
-    ctx = await _collect_context_for_positions(db, tenant_id)
+    ctx = await _collect_context_for_positions(db, tenant_id, allowed_division_ids)
 
     try:
         result = await llm_client.generate_json(
@@ -367,6 +396,7 @@ async def generate_positions(
         spec_map=ctx["spec_map"],
         grade_map=ctx["grade_map"],
         div_map=ctx["div_map"],
+        allowed_division_ids=ctx["allowed_division_ids"],
     )
 
     await db.commit()

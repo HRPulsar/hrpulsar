@@ -16,7 +16,7 @@ from app.core.security import hash_password
 from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Division
 from app.modules.dictionary.models import DictionaryItem
-from app.modules.employee import service
+from app.modules.employee import issues, service
 from app.modules.employee.models import Employee
 from app.modules.position.models import Position
 from sqlalchemy import select
@@ -32,6 +32,20 @@ async def manager_role(db: AsyncSession):
     role = result.scalar_one_or_none()
     if role is None:
         role = Role(name="Manager", code="manager", is_system=True)
+        db.add(role)
+        await db.commit()
+        await db.refresh(role)
+    return role
+
+
+@pytest_asyncio.fixture
+async def employee_role(db: AsyncSession):
+    result = await db.execute(
+        select(Role).where(Role.code == "employee", Role.is_system.is_(True))
+    )
+    role = result.scalars().first()
+    if role is None:
+        role = Role(name="Employee", code="employee", is_system=True)
         db.add(role)
         await db.commit()
         await db.refresh(role)
@@ -319,12 +333,65 @@ class TestListEmployeesMultiFilters:
         assert total == 2
 
 
+async def _employee_for(db: AsyncSession, tenant_id: uuid.UUID, user: User) -> Employee:
+    emp = Employee(
+        tenant_id=tenant_id,
+        user_id=user.id,
+        hire_date=date(2024, 1, 1),
+        status="active",
+    )
+    db.add(emp)
+    await db.commit()
+    await db.refresh(emp)
+    return emp
+
+
+class TestListEmployeesRoleFilter:
+    """HRP-621: `role=` filters on the user behind the employee.
+
+    ``employee`` is special: every account keeps that baseline role, so a
+    plain membership test would return the whole workspace while the Role
+    column (which shows the strongest role) said "Manager".
+    """
+
+    async def test_filters_by_a_strong_role(
+        self, db: AsyncSession, tenant, manager_role, employee_role
+    ):
+        mgr_user = await _mk_user(db, tenant.id, manager_role)
+        emp_user = await _mk_user(db, tenant.id, employee_role)
+        mgr = await _employee_for(db, tenant.id, mgr_user)
+        emp = await _employee_for(db, tenant.id, emp_user)
+
+        items, total = await service.list_employees(db, tenant.id, role=["manager"])
+
+        ids = {e["id"] for e in items}
+        assert mgr.id in ids
+        assert emp.id not in ids
+        assert total == len(items)
+
+    async def test_employee_filter_excludes_a_promoted_manager(
+        self, db: AsyncSession, tenant, manager_role, employee_role
+    ):
+        promoted = await _mk_user(db, tenant.id, employee_role)
+        await db.execute(
+            user_roles.insert().values(user_id=promoted.id, role_id=manager_role.id)
+        )
+        plain = await _mk_user(db, tenant.id, employee_role)
+        await db.commit()
+        promoted_emp = await _employee_for(db, tenant.id, promoted)
+        plain_emp = await _employee_for(db, tenant.id, plain)
+
+        items, _ = await service.list_employees(db, tenant.id, role=["employee"])
+
+        ids = {e["id"] for e in items}
+        assert plain_emp.id in ids
+        assert promoted_emp.id not in ids
+
+
 class TestListEmployeesSearch:
     """HRP-120: server-side `q` search must find employees across all pages."""
 
-    async def test_q_matches_first_name(
-        self, db: AsyncSession, tenant, filter_dataset
-    ):
+    async def test_q_matches_first_name(self, db: AsyncSession, tenant, filter_dataset):
         ds = filter_dataset
         target = ds["employees"]["e1"]
         # Refresh to load relationships consistently
@@ -374,9 +441,7 @@ class TestListEmployeesSearch:
         assert items == []
         assert total == 0
 
-    async def test_q_works_across_pages(
-        self, db: AsyncSession, tenant, filter_dataset
-    ):
+    async def test_q_works_across_pages(self, db: AsyncSession, tenant, filter_dataset):
         """The bug fix: a match on page 2 must be returned even when limit=1."""
         ds = filter_dataset
         target = ds["employees"]["e3"]
@@ -416,3 +481,85 @@ class TestListEmployeesSearch:
         assert total_empty == total_none == 4
         assert {e["id"] for e in items_empty} == {e["id"] for e in items_none}
         assert {e["id"] for e in items_ws} == {e["id"] for e in items_none}
+
+
+class TestListEmployeesIssueFilter:
+    """HRP-638: ``?issue=`` selects the cohort the dashboard just counted."""
+
+    async def test_stale_assessment_selects_the_never_assessed(
+        self, db: AsyncSession, tenant, filter_dataset
+    ):
+        ds = filter_dataset
+        items, total = await service.list_employees(
+            db, tenant.id, issue=["assessment_stale"]
+        )
+        ids = {e["id"] for e in items}
+        # Nobody in the dataset has an assessment, so every active row is stale
+        # and the terminated one stays out — the loop is about active people.
+        assert ds["employees"]["e1"].id in ids
+        assert total == sum(
+            1 for e in ds["employees"].values() if e.status == "active"
+        )
+
+    async def test_unknown_code_matches_nobody(
+        self, db: AsyncSession, tenant, filter_dataset
+    ):
+        items, total = await service.list_employees(
+            db, tenant.id, issue=["not_a_real_code"]
+        )
+        assert (items, total) == ([], 0)
+
+    async def test_several_codes_or_together(
+        self, db: AsyncSession, tenant, filter_dataset
+    ):
+        _, only_stale = await service.list_employees(
+            db, tenant.id, issue=["assessment_stale"]
+        )
+        _, with_gaps = await service.list_employees(
+            db, tenant.id, issue=["assessment_stale", "competence_gap"]
+        )
+        # No gaps exist in this dataset, so the union adds nobody — but it must
+        # not drop anyone either (OR, not AND).
+        assert with_gaps == only_stale
+
+    async def test_issue_filter_intersects_the_read_scope(
+        self, db: AsyncSession, tenant, filter_dataset
+    ):
+        ds = filter_dataset
+        target = ds["employees"]["e1"]
+        items, total = await service.list_employees(
+            db,
+            tenant.id,
+            visible_employee_ids={target.id},
+            issue=["assessment_stale"],
+        )
+        assert total == 1
+        assert items[0]["id"] == target.id
+
+    async def test_empty_scope_short_circuits(
+        self, db: AsyncSession, tenant, filter_dataset
+    ):
+        items, total = await service.list_employees(
+            db, tenant.id, visible_employee_ids=set(), issue=["assessment_stale"]
+        )
+        assert (items, total) == ([], 0)
+
+    async def test_with_alerts_renders_the_badges(
+        self, db: AsyncSession, tenant, filter_dataset
+    ):
+        ds = filter_dataset
+        items, _ = await service.list_employees(db, tenant.id, with_alerts=True)
+        row = next(e for e in items if e["id"] == ds["employees"]["e1"].id)
+        codes = [i["code"] for i in row["issues"]]
+        assert "assessment_stale" in codes
+        assert all(i["label"] for i in row["issues"])
+        # ``alert`` keeps its old contract: hygiene codes only, never a
+        # development-loop one.
+        if row["alert"]:
+            assert row["alert"]["code"] not in issues.ISSUE_CODES
+
+    async def test_issues_are_absent_without_the_flag(
+        self, db: AsyncSession, tenant, filter_dataset
+    ):
+        items, _ = await service.list_employees(db, tenant.id)
+        assert all(e["issues"] == [] for e in items)

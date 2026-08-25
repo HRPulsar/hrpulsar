@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.core.currency import installation_currency
+from app.modules.employee.alerts import AlertCode
+from app.modules.employee.issues import IssueCode
 
 
 def _ensure_past(value: date | None, field: str) -> date | None:
@@ -29,6 +31,7 @@ def _ensure_order(
 ) -> None:
     if start is not None and end is not None and start > end:
         raise ValueError(f"{start_field} must be on or before {end_field}")
+
 
 # --- Available users (for employee creation dropdown) ---
 
@@ -68,19 +71,43 @@ class EmployeeUpdate(BaseModel):
     last_name: str | None = Field(default=None, min_length=1, max_length=100)
 
 
-EmployeeAlertCodeLiteral = Literal[
-    "user_inactive",
-    "profile_incomplete",
-    "assessment_overdue",
-    "assessment_pending",
-    "pdp_pending_review",
-]
+class EmployeeRoleUpdate(BaseModel):
+    """HRP-620: body of ``PUT /employees/{id}/role``.
+
+    Validated against the seeded system roles in the service — the set is
+    data, not a literal, so a tenant that gains a role does not need a
+    schema change.
+    """
+
+    role_code: str = Field(min_length=1, max_length=50)
+
+
+# HRP-633: aliased, not re-spelled. A sixth code added to ``alerts.py``
+# alone used to raise ResponseValidationError; since the position routes
+# answer a union whose other member requires only ``id``, a row that fails
+# validation is now silently downgraded to the directory shape instead.
+EmployeeAlertCodeLiteral = AlertCode
 
 
 class EmployeeAlert(BaseModel):
     """Single alert payload returned alongside an employee record."""
 
     code: EmployeeAlertCodeLiteral
+    label: str
+
+
+class EmployeeIssue(BaseModel):
+    """HRP-638: one of possibly several problems the row has.
+
+    Separate from ``EmployeeAlert`` on purpose — ``alert`` is the single
+    highest-priority profile-hygiene flag its drill-down callers have always
+    read, while ``issues`` is the full list the employee list renders and the
+    ``?issue=`` filter selects on. Widening ``alert``'s code union instead
+    would let a development-loop code appear where those callers only ever
+    expect the five hygiene ones.
+    """
+
+    code: EmployeeAlertCodeLiteral | IssueCode
     label: str
 
 
@@ -104,6 +131,9 @@ class EmployeeRead(BaseModel):
     created_at: datetime
     user_email: str | None = None
     user_name: str | None = None
+    # HRP-621: role codes of the underlying user, sorted. The UI picks the
+    # one to display through ``resolveRoleLabel``.
+    roles: list[str] = []
     # HRP-246: stamped on the user's first successful login. Tenure KPI
     # tile uses it for "joined {first_login_at}"; falls back to
     # ``hire_date`` when null (never logged in).
@@ -111,12 +141,42 @@ class EmployeeRead(BaseModel):
     division_name: str | None = None
     avatar_url: str | None = None
     alert: EmployeeAlert | None = None
+    # HRP-638: every problem the row has, highest priority first. Populated
+    # only when the caller asks for ``with_alerts`` — resolving it costs the
+    # assessment and plan scan, which a plain roster read has no use for.
+    issues: list[EmployeeIssue] = []
 
     model_config = {"from_attributes": True}
 
 
 class EmployeeList(BaseModel):
     items: list[EmployeeRead]
+    total: int
+
+
+class EmployeeDirectoryRead(BaseModel):
+    """HRP-623: what a colleague sees — "find a coworker", nothing more.
+
+    Deliberately missing ``hire_date``, ``status``, ``roles``, ``alert``,
+    ``user_first_login_at`` and the specialization: those belong to the HR
+    process, not to a company directory. ``grade_title`` is filled only
+    when the tenant opted in via ``directory_show_grades``.
+    """
+
+    id: uuid.UUID
+    user_name: str | None = None
+    user_email: str | None = None
+    avatar_url: str | None = None
+    position_title: str | None = None
+    division_id: uuid.UUID | None = None
+    division_name: str | None = None
+    grade_title: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class EmployeeDirectoryList(BaseModel):
+    items: list[EmployeeDirectoryRead]
     total: int
 
 

@@ -65,3 +65,64 @@ test.describe("Demo persona switcher", () => {
     });
   });
 });
+
+test.describe("Demo employee persona surfaces", () => {
+  /**
+   * HRP-623 / HRP-624 / P4-2: what a rank-and-file employee is allowed to
+   * see once the directory is open — the whole company without HR data, a
+   * full own card reached from the header menu, and no editing surfaces.
+   */
+  test("directory, own card, no admin surfaces", async ({ page }) => {
+    const start = await page.request.post(`${API_BASE}/demo/start`, {
+      data: {},
+    });
+    test.skip(start.status() === 503, "demo sandbox disabled on this stack");
+    expect(start.ok(), `demo/start failed: ${start.status()}`).toBeTruthy();
+    const { access_token } = await start.json();
+
+    await page.goto("/login");
+    await page.evaluate((token: string) => {
+      localStorage.setItem("access_token", token);
+      localStorage.removeItem("refresh_token");
+      document.cookie = "has_token=1; path=/; SameSite=Lax";
+      document.cookie = "demo_session=1; path=/; SameSite=Lax";
+    }, access_token);
+
+    await page.goto("/dashboard");
+    await page.getByTestId("demo-banner-view-employee").click();
+    await expect(page.getByTestId("dashboard-my-stage-assessed")).toBeVisible({
+      timeout: 20000,
+    });
+
+    // Recruitment and the talent market are gated on roles the persona
+    // does not hold (HRP-622).
+    await expect(page.getByTestId("sidebar-link-recruitment")).toHaveCount(0);
+    await expect(page.getByTestId("sidebar-link-talent-market")).toHaveCount(0);
+
+    // The directory lists the whole company, without the HR columns.
+    await page.goto("/employees");
+    await expect(page.getByTestId("employees-table")).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(page.getByTestId("employees-filter-role")).toHaveCount(0);
+    await expect(page.getByTestId("employees-multi-statuses")).toHaveCount(0);
+    await expect(page.getByTestId("employees-btn-create")).toHaveCount(0);
+
+    // Own card, reached the way a user reaches it — full record, read-only.
+    await page.getByTestId("header-btn-user-menu").click();
+    await page.getByTestId("header-menu-my-profile").click();
+    await expect(page).toHaveURL(/\/employees\/[0-9a-f-]{36}$/, {
+      timeout: 20000,
+    });
+    await expect(page.getByTestId("employee-kpi-tenure")).toBeVisible();
+    await expect(page.getByTestId("employee-btn-edit")).toHaveCount(0);
+
+    // Company structure is readable, not editable.
+    await page.goto("/company");
+    await expect(page.getByTestId("company-card-info")).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(page.getByTestId("company-btn-edit")).toHaveCount(0);
+    await expect(page.getByTestId("company-divisions-btn-add")).toHaveCount(0);
+  });
+});

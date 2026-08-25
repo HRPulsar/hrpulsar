@@ -9,14 +9,14 @@ class TestAnalyticsService:
     async def test_assessment_stats(self, db: AsyncSession, tenant):
         from app.modules.analytics import service
 
-        stats = await service.assessment_stats(db, tenant.id)
+        stats = await service.assessment_stats(db, tenant.id, None)
         assert "total" in stats
         assert "by_status" in stats
 
     async def test_pdp_stats(self, db: AsyncSession, tenant):
         from app.modules.analytics import service
 
-        stats = await service.pdp_stats(db, tenant.id)
+        stats = await service.pdp_stats(db, tenant.id, None)
         assert "total" in stats
         assert "by_status" in stats
 

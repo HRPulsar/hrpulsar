@@ -14,15 +14,19 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import Response
+from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     service,
 )
-from app.modules.recruitment.routers.common import resolve_page_params
+from app.modules.recruitment.routers.common import (
+    RECRUITMENT_VIEWER_ROLES,
+    resolve_page_params,
+)
 from app.modules.recruitment.schemas import (
     HiringManagerOption,
     VacancyAttachmentRead,
@@ -40,6 +44,11 @@ from app.modules.recruitment.schemas import (
     VacancyStagesReplace,
     VacancyStageUpdate,
     VacancyUpdate,
+)
+from app.modules.recruitment.scope import (
+    list_scope_filter,
+    vacancy_query_scope,
+    vacancy_scope,
 )
 
 router = APIRouter(tags=["recruitment"])
@@ -69,7 +78,8 @@ async def list_vacancies(
     q: str | None = None,
     archived: Literal["only", "include", "exclude"] = "exclude",
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    scope_filter: ColumnElement[bool] | None = Depends(list_scope_filter),
 ):
     skip, limit = resolve_page_params(skip, limit, page, page_size)
     items, total = await service.list_vacancies(
@@ -81,6 +91,7 @@ async def list_vacancies(
         search=q,
         include_archived=archived == "include",
         archived_only=archived == "only",
+        scope_filter=scope_filter,
     )
     return {
         "items": items,
@@ -104,7 +115,8 @@ async def get_vacancy(
     vacancy_id: uuid.UUID,
     response: Response,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     vacancy = await service.get_vacancy(db, current_user.tenant_id, vacancy_id)
     response.headers["ETag"] = service.vacancy_etag(vacancy)
@@ -238,7 +250,8 @@ async def generate_profile(
 async def get_vacancy_profile(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     profile = await service.get_vacancy_profile(db, current_user.tenant_id, vacancy_id)
     if profile is None:
@@ -250,14 +263,16 @@ async def get_vacancy_profile(
 async def get_active_profile_session_route(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     """HRP-134: surface the latest non-terminal generation session so a
     returning user sees `Generating…` while the sync LLM call is still
     in flight, or the Review-for-save banner when it has finished.
 
-    HRP-235 REDO: the poll stays readable for every tenant member (it
-    drives the shared banner), but the parked, not-yet-approved
+    HRP-235 REDO: the poll stays readable for every recruitment role (it
+    drives the shared banner — HRP-615 narrowed "every tenant member" to
+    ``RECRUITMENT_VIEWER_ROLES``), but the parked, not-yet-approved
     ``profile_data`` is stripped unless the caller could actually open
     the review dialog (admin-tier or recruiter) — other roles only see
     ``has_pending_result``.
@@ -344,7 +359,8 @@ async def save_vacancy_profile(
 async def list_vacancy_competences(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     return await service.list_vacancy_competences(
         db, current_user.tenant_id, vacancy_id
@@ -376,7 +392,8 @@ async def set_vacancy_competences(
 async def list_vacancy_attachments(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     return await service.list_vacancy_attachments(
         db, current_user.tenant_id, vacancy_id
@@ -422,7 +439,8 @@ async def delete_vacancy_attachment(
 async def list_stages(
     vacancy_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _query_scope: None = Depends(vacancy_query_scope),
 ):
     return await service.list_stages(db, current_user.tenant_id, vacancy_id=vacancy_id)
 
@@ -477,7 +495,7 @@ async def create_vacancy_stage_override(
 )
 async def list_tenant_default_stages(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
 ):
     return await service.get_tenant_default_stages(db, current_user.tenant_id)
 
@@ -489,7 +507,8 @@ async def list_tenant_default_stages(
 async def list_effective_vacancy_stages(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
 ):
     return await service.get_effective_vacancy_stages(
         db, current_user.tenant_id, vacancy_id

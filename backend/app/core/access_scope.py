@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.modules.auth.models import User
-from app.modules.company.models import Division
+from app.modules.company.models import Division, Tenant
 from app.modules.employee.models import Employee
 
 ADMIN_ROLE_CODES = frozenset({"admin", "hr", "platform_admin"})
@@ -34,6 +34,21 @@ def is_employee_only(current_user: User) -> bool:
     Used to apply stricter visibility (e.g. hide Draft assessments — HRP-40).
     """
     return not _is_admin(current_user) and not _is_manager(current_user)
+
+
+async def directory_show_grades(db: AsyncSession, tenant_id: uuid.UUID) -> bool:
+    """HRP-623: whether a colleague may see someone else's grade.
+
+    Off by default, flipped on the company profile. Lives here rather than
+    in one module's service because three directory-shaped payloads read it
+    (the employee list, the position drill-down and the specialization tab)
+    and a second copy of the query is a second place to forget it.
+    """
+    return bool(
+        await db.scalar(
+            select(Tenant.directory_show_grades).where(Tenant.id == tenant_id)
+        )
+    )
 
 
 async def get_managed_division_ids(
@@ -126,6 +141,47 @@ async def get_visible_employee_ids(
         )
         visible.update(result.scalars().all())
     return visible
+
+
+async def is_employee_in_read_scope(
+    db: AsyncSession, current_user: User, employee_id: uuid.UUID
+) -> bool:
+    """Whether `current_user` may see the *full* HR card of `employee_id`.
+
+    - admin / hr / platform_admin → everything.
+    - manager → own card plus the managed division subtree.
+    - anyone else → their own card only.
+
+    HRP-623 turned the assert below into a predicate: the card route now
+    picks a schema instead of raising, while the sub-resources keep raising.
+    """
+    if _is_admin(current_user):
+        return True
+    visible = await get_visible_employee_ids(db, current_user)
+    return visible is None or employee_id in visible
+
+
+async def assert_employee_read_scope(
+    db: AsyncSession, current_user: User, employee_id: uuid.UUID
+) -> None:
+    """Raise 403 if `current_user` cannot read the card of `employee_id`.
+
+    Takes the id rather than the row — unlike ``assert_employee_write_scope``,
+    whose callers already hold one — because the read routers do not load the
+    ``Employee`` before answering.
+
+    HRP-616 deliberately closes this hard. HRP-623 reopens the *card itself*
+    to colleagues in a trimmed schema; the sub-resources (competences,
+    events, education, work history) stay behind this assert.
+    """
+    if await is_employee_in_read_scope(db, current_user, employee_id):
+        return
+    raise AppError(
+        "outside_division_scope",
+        status.HTTP_403_FORBIDDEN,
+        detail_extra={},
+        detail_code_key="error_code",
+    )
 
 
 async def assert_employee_write_scope(

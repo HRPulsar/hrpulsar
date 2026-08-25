@@ -1109,7 +1109,7 @@ class TestAIServiceGeneratePositions:
             new_callable=AsyncMock,
             return_value=llm_payload,
         ):
-            await ai_svc.generate_positions(db, tenant.id, uuid.uuid4())
+            await ai_svc.generate_positions(db, tenant.id, uuid.uuid4(), None)
 
         from sqlalchemy import select as _select
 
@@ -1150,7 +1150,7 @@ class TestAIServiceGeneratePositions:
                 {"title": "Junior Dev", "description": "ok"},
             ],
         ):
-            await ai_svc.generate_positions(db, tenant.id, uuid.uuid4())
+            await ai_svc.generate_positions(db, tenant.id, uuid.uuid4(), None)
 
         from sqlalchemy import select as _select
 

@@ -783,7 +783,10 @@ export default function CompetencesPage() {
 
   const [saving, setSaving] = useState(false);
 
-  const { canManage } = usePermissions();
+  // HRP-631: the competence catalogue has no owning column, so a
+  // division head cannot be scoped to a slice of it — editing is
+  // admin / HR on the API and the toolbar follows.
+  const { canManageCatalogues: canManage } = usePermissions();
 
   // AI generation (CR13). HRP-122 REDO #3: the page-level Generate button's
   // session snapshot used to be a bespoke useState updated only by a WS

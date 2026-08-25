@@ -91,6 +91,7 @@ async def test_react_stamps_response_at_and_marks_reacted_by_me(
         db,
         tenant.id,
         SearchRequest(),
+        scope=None,
         viewer_employee_id=emp.id,
     )
     matching = [c for c in cards if c["id"] == card_dict["id"]]
