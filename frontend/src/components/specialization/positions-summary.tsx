@@ -3,6 +3,7 @@
 import { useTranslations } from "next-intl";
 
 import type { DivisionPositionsBlock } from "@/lib/api/specializations";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   Table,
   TableBody,
@@ -28,6 +29,11 @@ export function PositionsSummary({
   blocks: DivisionPositionsBlock[];
 }) {
   const t = useTranslations("company");
+  const { canViewJobProfile } = usePermissions();
+  // HRP-637: the catalogue's "position -> grade" join under the
+  // specialization's own URL, so the column follows the same viewer/tenant
+  // rule as the catalogue rather than whatever this block happens to hold.
+  const showGrade = canViewJobProfile;
   if (blocks.length === 0) {
     return (
       <p
@@ -71,7 +77,7 @@ export function PositionsSummary({
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("position")}</TableHead>
-                  <TableHead>{t("grade")}</TableHead>
+                  {showGrade ? <TableHead>{t("grade")}</TableHead> : null}
                   <TableHead className="w-32 text-right">
                     {t("colAssignedPlan")}
                   </TableHead>
@@ -82,7 +88,9 @@ export function PositionsSummary({
                 {block.positions.map((pos) => (
                   <TableRow key={pos.id}>
                     <TableCell className="font-medium">{pos.title}</TableCell>
-                    <TableCell>{pos.grade_title ?? "—"}</TableCell>
+                    {showGrade ? (
+                      <TableCell>{pos.grade_title ?? "—"}</TableCell>
+                    ) : null}
                     <TableCell className="text-right">
                       {pos.assigned}/{pos.headcount ?? 0}
                     </TableCell>

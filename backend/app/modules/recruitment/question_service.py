@@ -40,6 +40,7 @@ from sqlalchemy.orm import selectinload
 from app.core.errors import AppError
 from app.modules.ai.llm_client import generate_json
 from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
+from app.modules.recruitment.analysis_language import resolve_analysis_language
 from app.modules.recruitment.common import (
     _get_vacancy,
     _publish_event,
@@ -728,7 +729,7 @@ async def _call_llm(
 ) -> GeneratedQuestionSet:
     prompt = build_question_set_prompt(
         vacancy_title=vacancy.title,
-        language=vacancy.language or "en",
+        language=await resolve_analysis_language(db, tenant_id, vacancy),
         profile_competences=profile_competences,
         resume_data=resume_data,
         previous_questions=previous_questions,

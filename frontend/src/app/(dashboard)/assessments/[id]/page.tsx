@@ -1654,6 +1654,17 @@ export default function AssessmentDetailPage() {
             </div>
           ) : (
             <div className="flex-1 space-y-5 overflow-y-auto pr-1">
+              {/* HRP-688: assessments sent before the "no indicators" guard
+                  existed can still open a questionnaire with nothing to
+                  answer. Say so instead of showing a bare Submit button. */}
+              {evalIndicators.length === 0 ? (
+                <p
+                  className="rounded-md border border-dashed py-6 text-center text-sm text-muted-foreground"
+                  data-testid="assessment-eval-empty"
+                >
+                  {t("evalNoIndicators")}
+                </p>
+              ) : null}
               {(() => {
                 const grouped = new Map<string, typeof evalIndicators>();
                 for (const ind of evalIndicators) {
@@ -1752,7 +1763,11 @@ export default function AssessmentDetailPage() {
             >
               {t("close")}
             </Button>
-            <Button onClick={submitEvaluation} disabled={saving || evalLoading}>
+            {/* HRP-688: nothing to submit when the questionnaire is empty. */}
+            <Button
+              onClick={submitEvaluation}
+              disabled={saving || evalLoading || evalIndicators.length === 0}
+            >
               {saving ? t("submitting") : t("submitAnswers")}
             </Button>
           </SheetFooter>

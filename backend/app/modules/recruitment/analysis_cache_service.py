@@ -27,6 +27,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from app.modules.recruitment.analysis_language import (
+    resolve_analysis_language,
+    resolve_analysis_language_sync,
+)
 from app.modules.recruitment.common import normalize_competence_id
 from app.modules.recruitment.models import (
     AIAssessment,
@@ -81,16 +85,19 @@ def compute_cache_key(
     profile_id: uuid.UUID | None,
     profile_version: int | None,
     vacancy_title: str | None = None,
-    vacancy_language: str | None = None,
+    analysis_language: str | None = None,
     candidate_vacancy_id: uuid.UUID | None = None,
     resume_file_id: uuid.UUID | None = None,
 ) -> str:
     """Stable hex digest for (transcript, profile, vacancy, candidate) tuple.
 
-    ``vacancy_title`` / ``vacancy_language`` are folded in because the
+    ``vacancy_title`` / ``analysis_language`` are folded in because the
     analysis prompt embeds both — editing either changes the LLM output
     even when the profile row itself is untouched, so they must
-    invalidate the cache.
+    invalidate the cache. ``analysis_language`` is the resolved output
+    language (HRP-628), not ``Vacancy.language``: flipping the tenant's
+    AI content language has to invalidate too, or the tenant keeps being
+    served the analysis written in the language they just moved off.
 
     ``candidate_vacancy_id`` / ``resume_file_id`` are folded in for the
     same reason: the prompt embeds the candidate's name and the parsed
@@ -109,7 +116,7 @@ def compute_cache_key(
     hasher.update(b"\x00")
     hasher.update((vacancy_title or "").encode("utf-8"))
     hasher.update(b"\x00")
-    hasher.update((vacancy_language or "").encode("utf-8"))
+    hasher.update((analysis_language or "").encode("utf-8"))
     hasher.update(b"\x00")
     hasher.update(str(candidate_vacancy_id or "").encode("utf-8"))
     hasher.update(b"\x00")
@@ -241,7 +248,7 @@ async def _load_vacancy_cache_inputs(
 ) -> (
     tuple[uuid.UUID | None, int | None, str | None, str | None, uuid.UUID | None] | None
 ):
-    """Async load: (profile_id, profile_version, vacancy_title, vacancy_language).
+    """Async load: (profile_id, profile_version, vacancy_title, analysis_language).
 
     Returns ``None`` when the interview has no candidate_vacancy link,
     no vacancy, or no vacancy profile — caller must treat this as a
@@ -258,7 +265,7 @@ async def _load_vacancy_cache_inputs(
 
     vacancy = await db.get(Vacancy, cv.vacancy_id)
     vacancy_title = getattr(vacancy, "title", None) if vacancy else None
-    vacancy_language = getattr(vacancy, "language", None) if vacancy else None
+    analysis_language = await resolve_analysis_language(db, tenant_id, vacancy)
 
     # Same "latest parsed resume" pick as the analysis task's prompt build.
     resume_file_id = (
@@ -283,7 +290,7 @@ async def _load_vacancy_cache_inputs(
     if row is None:
         return None
     profile_id, profile_version = row
-    return profile_id, profile_version, vacancy_title, vacancy_language, resume_file_id
+    return profile_id, profile_version, vacancy_title, analysis_language, resume_file_id
 
 
 def _load_vacancy_cache_inputs_sync(
@@ -304,7 +311,7 @@ def _load_vacancy_cache_inputs_sync(
 
     vacancy = db.get(Vacancy, cv.vacancy_id)
     vacancy_title = getattr(vacancy, "title", None) if vacancy else None
-    vacancy_language = getattr(vacancy, "language", None) if vacancy else None
+    analysis_language = resolve_analysis_language_sync(db, tenant_id, vacancy)
 
     # Same "latest parsed resume" pick as the analysis task's prompt build.
     resume_file_id = db.execute(
@@ -326,7 +333,7 @@ def _load_vacancy_cache_inputs_sync(
     if row is None:
         return None
     profile_id, profile_version = row
-    return profile_id, profile_version, vacancy_title, vacancy_language, resume_file_id
+    return profile_id, profile_version, vacancy_title, analysis_language, resume_file_id
 
 
 async def compute_cache_key_for_interview(
@@ -348,13 +355,13 @@ async def compute_cache_key_for_interview(
     inputs = await _load_vacancy_cache_inputs(db, tenant_id, interview)
     if inputs is None:
         return None
-    profile_id, profile_version, vacancy_title, vacancy_language, resume_id = inputs
+    profile_id, profile_version, vacancy_title, analysis_language, resume_id = inputs
     return compute_cache_key(
         interview.transcript,
         profile_id,
         profile_version,
         vacancy_title=vacancy_title,
-        vacancy_language=vacancy_language,
+        analysis_language=analysis_language,
         candidate_vacancy_id=interview.candidate_vacancy_id,
         resume_file_id=resume_id,
     )
@@ -431,13 +438,13 @@ def compute_cache_key_for_interview_sync(
     inputs = _load_vacancy_cache_inputs_sync(db, tenant_id, interview)
     if inputs is None:
         return None
-    profile_id, profile_version, vacancy_title, vacancy_language, resume_id = inputs
+    profile_id, profile_version, vacancy_title, analysis_language, resume_id = inputs
     return compute_cache_key(
         interview.transcript,
         profile_id,
         profile_version,
         vacancy_title=vacancy_title,
-        vacancy_language=vacancy_language,
+        analysis_language=analysis_language,
         candidate_vacancy_id=interview.candidate_vacancy_id,
         resume_file_id=resume_id,
     )

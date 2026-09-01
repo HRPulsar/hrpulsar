@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.errors import AppError
-from app.core.redis import redis_client
+from app.core.redis import bump_counter
 from app.core.security import (
     create_demo_access_token,
     decode_token,
@@ -34,15 +34,12 @@ from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Tenant
 from app.modules.demo.seed import clone_seed_into_demo_tenant
 from app.modules.demo.turnstile import verify_turnstile_token
+from app.modules.demo.utils import DEMO_ADMIN_EMAIL_DOMAIN
 
 logger = logging.getLogger(__name__)
 
 # Where a fresh (or resumed) demo session lands.
 DEMO_REDIRECT_URL = "/dashboard"
-
-# The throw-away demo admin's email domain (see ``_create_demo_user``);
-# ``switch_demo_view`` finds the admin persona by it.
-DEMO_ADMIN_EMAIL_DOMAIN = "demo.hrpulsar.local"
 
 # The employee persona for the demo "View as" switcher: Carlos Mendez
 # (NAME_POOL idx 2, renamed per locale by ``localized_name_pool``) — his
@@ -69,36 +66,21 @@ async def _enforce_rate_limit(remote_ip: str | None) -> None:
     would mean a single Redis flake lifts the demo's only application-
     level brake against scripted abuse.
 
-    Implementation note: the TTL is written by the same ``pipeline()``
-    that creates the bucket, so we can't crash between them and leave
-    the IP key TTL-less. The earlier naive INCR-then-EXPIRE shape could
-    permanently lock out an IP after a worker OOM between the two
-    round-trips.
-
-    The window is anchored at bucket creation and never extended
-    (HRP-645): re-arming the TTL on every call — blocked calls included
-    — let a throttled caller push its own reset an hour further with
-    each retry, so a demo button on a live landing page kept the bucket
-    alive indefinitely. ``SET ... EX NX`` + ``INCR`` rather than
-    ``EXPIRE ... NX`` because the fleet's system Redis is not
-    guaranteed to be 7.x, and an unsupported flag would surface as the
-    fail-closed 503 below.
+    Implementation note: the atomic pipeline and the window anchored at
+    bucket creation (HRP-645) now live in ``core.redis.bump_counter``,
+    which is where the reasoning for that shape is written down. Only the
+    cap and the fail-closed policy are this module's business.
     """
     if remote_ip is None or settings.demo_rate_limit_per_ip_per_hour <= 0:
         return
 
     try:
-        async with redis_client() as client:
-            key = f"demo:rl:{remote_ip}"
-            async with client.pipeline(transaction=True) as pipe:
-                pipe.set(key, 0, ex=3600, nx=True)
-                pipe.incr(key)
-                _, count = await pipe.execute()
-            if count > settings.demo_rate_limit_per_ip_per_hour:
-                raise AppError(
-                    "demo_rate_limited",
-                    status.HTTP_429_TOO_MANY_REQUESTS,
-                )
+        count = await bump_counter(f"demo:rl:{remote_ip}", 3600)
+        if count > settings.demo_rate_limit_per_ip_per_hour:
+            raise AppError(
+                "demo_rate_limited",
+                status.HTTP_429_TOO_MANY_REQUESTS,
+            )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001

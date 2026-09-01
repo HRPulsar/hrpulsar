@@ -9,8 +9,7 @@ always stores the raw ``0..1`` mean.
 
 ``compute_normalized_ai_score`` rebases that raw value onto the tenant's
 active ``ScaleConfig.max_value`` so it can sit next to ``manager_score``
-(which lives on the tenant assessment scale) and feed
-``compute_score_divergence``:
+(which lives on the tenant assessment scale):
 
 * Tenant with scale ``1..10`` and ``raw=0.5`` → ``5.0``
 * Tenant with scale ``0..5`` and ``raw=0.8`` → ``4.0``

@@ -17,7 +17,16 @@ export type MaterialTypeOption = {
   icon: LucideIcon;
 };
 
-export const MATERIAL_FORMATS: MaterialFormatOption[] = [
+/**
+ * Every value the shared `format` column can carry, with its label.
+ *
+ * The vocabulary and the pick-lists are separate concerns (HRP-653): the
+ * competence card and the development plan offer different subsets of the
+ * same column, and `PDPItemMaterial.format` is copied verbatim from
+ * `Material.format`, so both screens have to be able to label a value
+ * neither of them offers.
+ */
+export const MATERIAL_FORMAT_LABELS: MaterialFormatOption[] = [
   { value: "documentation", labelKey: "materialFormatDocumentation" },
   { value: "video", labelKey: "materialFormatVideo" },
   { value: "article", labelKey: "materialFormatArticle" },
@@ -33,9 +42,19 @@ export const MATERIAL_FORMATS: MaterialFormatOption[] = [
   { value: "mentorship", labelKey: "materialFormatMentorship" },
   { value: "training", labelKey: "materialFormatTraining" },
   { value: "exercise", labelKey: "materialFormatExercise" },
+  // Offered by the development plan's dialog, not by the competence
+  // card — labelled here, kept out of MATERIAL_FORMATS below.
+  { value: "practice", labelKey: "materialFormatPractice" },
   { value: "simulator", labelKey: "materialFormatSimulator" },
   { value: "other", labelKey: "materialFormatOther" },
 ];
+
+/**
+ * The formats the competence card offers. Unchanged set — the plan's own
+ * shorter list lives in `lib/enum-labels`.
+ */
+export const MATERIAL_FORMATS: MaterialFormatOption[] =
+  MATERIAL_FORMAT_LABELS.filter((f) => f.value !== "practice");
 
 export const MATERIAL_TYPES: MaterialTypeOption[] = [
   { value: "theoretical", labelKey: "materialTypeTheoretical", icon: BookOpen },
@@ -50,7 +69,9 @@ export function materialFormatKey(
   value: string | null | undefined,
 ): string | null {
   if (!value) return null;
-  return MATERIAL_FORMATS.find((f) => f.value === value)?.labelKey ?? null;
+  return (
+    MATERIAL_FORMAT_LABELS.find((f) => f.value === value)?.labelKey ?? null
+  );
 }
 
 /** Translated format label with a raw-value fallback for unknown formats. */

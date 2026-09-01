@@ -126,20 +126,62 @@ async def _validate_spec_grade(
     return pair
 
 
+async def _pair_competence_keys(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    specialization_id: uuid.UUID,
+    grade_id: uuid.UUID | None,
+) -> list[tuple[uuid.UUID, uuid.UUID | None]]:
+    """(competence, skill level) keys a configured (spec, grade) pair implies.
+
+    Empty when the pair isn't configured in the grade ladder — the card
+    can carry such a row (the ladder may have changed underneath it), it
+    simply implies nothing.
+    """
+    pair = (
+        await db.execute(
+            select(GradeSpecialization)
+            .where(
+                GradeSpecialization.tenant_id == tenant_id,
+                GradeSpecialization.specialization_id == specialization_id,
+                GradeSpecialization.grade_id == grade_id,
+            )
+            .options(selectinload(GradeSpecialization.competence_links))
+        )
+    ).scalar_one_or_none()
+    if pair is None:
+        return []
+    return [(link.competence_id, link.skill_level_id) for link in pair.competence_links]
+
+
 async def _recompute_required_competences(
-    db: AsyncSession, tenant_id: uuid.UUID, card_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    card_id: uuid.UUID,
+    *,
+    dropped: tuple[uuid.UUID, uuid.UUID | None] | None = None,
 ) -> None:
-    """HRP-171: rebuild the Required Competences block from the union of
-    competence links across the card's current Required Specializations.
+    """HRP-171: keep Required Competences in step with Required Specializations.
 
-    Any manual edits the recruiter made to the competences block are
-    discarded — the UI warns about this via the ConfirmDialog before any
-    spec mutation (add 2nd / edit / delete). Triggered on add, update
-    and delete so the block stays consistent whichever path was taken.
+    Adds every (competence, skill level) the card's current specs imply
+    through their configured ``GradeSpecialization`` links, and removes
+    what the ``dropped`` pair — the spec row the caller just deleted or
+    re-pointed — used to imply and no remaining spec still does.
 
-    Empty Required Specializations → empty Required Competences. Callers
-    that need the surrounding `_auto_populate_candidates` recompute must
-    invoke it themselves; this helper only owns the competence rebuild.
+    HRP-683: this used to be a full rebuild that deleted every row no
+    current pair implied, so any spec edit also wiped competences that
+    were never derived from a pair: the ones the recruiter picked by hand
+    (HRP-128) and the ones the recruitment bridge copies off a vacancy
+    (``post_vacancy_to_talent_market``). Deriving additively, and
+    deleting only what the changed pair owned, keeps both sources on the
+    card without a "who wrote this row" column. The ConfirmDialog copy
+    stays honest — competences are still recomputed from the specs.
+
+    Known ceiling: if the ``dropped`` pair has since been removed from
+    the ladder we can't tell what it contributed, so its competences stay
+    on the card for the recruiter to delete. Callers that need the
+    surrounding ``_auto_populate_candidates`` recompute must invoke it
+    themselves; this helper only owns the competence block.
     """
     spec_rows = list(
         (
@@ -155,21 +197,10 @@ async def _recompute_required_competences(
 
     desired: dict[tuple[uuid.UUID, uuid.UUID | None], None] = {}
     for spec in spec_rows:
-        pair = (
-            await db.execute(
-                select(GradeSpecialization)
-                .where(
-                    GradeSpecialization.tenant_id == tenant_id,
-                    GradeSpecialization.specialization_id == spec.specialization_id,
-                    GradeSpecialization.grade_id == spec.grade_id,
-                )
-                .options(selectinload(GradeSpecialization.competence_links))
-            )
-        ).scalar_one_or_none()
-        if pair is None:
-            continue
-        for link in pair.competence_links:
-            desired[(link.competence_id, link.skill_level_id)] = None
+        for key in await _pair_competence_keys(
+            db, tenant_id, spec.specialization_id, spec.grade_id
+        ):
+            desired[key] = None
 
     existing_rows = list(
         (
@@ -184,9 +215,11 @@ async def _recompute_required_competences(
     )
     existing_by_key = {(r.competence_id, r.skill_level_id): r for r in existing_rows}
 
-    for key, row in existing_by_key.items():
-        if key not in desired:
-            await db.delete(row)
+    if dropped is not None:
+        for key in await _pair_competence_keys(db, tenant_id, *dropped):
+            row = existing_by_key.get(key)
+            if row is not None and key not in desired:
+                await db.delete(row)
 
     for key in desired:
         if key in existing_by_key:
@@ -261,14 +294,16 @@ async def update_required_specialization(
         specialization_id=data.specialization_id,
         grade_id=data.grade_id,
     )
+    dropped = (row.specialization_id, row.grade_id)
     row.specialization_id = data.specialization_id
     row.grade_id = data.grade_id
     row.min_experience_years = data.min_experience_years
     await db.flush()
     # HRP-171 REDO 2.1: changing the (spec, grade) pair must also re-derive
     # Required Competences — recruiters are warned about the recompute via
-    # the ConfirmDialog before the PATCH lands here.
-    await _recompute_required_competences(db, tenant_id, card_id)
+    # the ConfirmDialog before the PATCH lands here. The old pair is what
+    # loses its competences (HRP-683); rows from other sources stay.
+    await _recompute_required_competences(db, tenant_id, card_id, dropped=dropped)
     await db.commit()
     await db.refresh(row)
     await _auto_populate_candidates(db, tenant_id, card_id)
@@ -290,10 +325,11 @@ async def delete_required_specialization(
     row = await db.get(TalentCardSpecialization, link_id)
     if not row or row.card_id != card_id:
         raise AppError("tm_specialization_link_not_found", status.HTTP_404_NOT_FOUND)
+    dropped = (row.specialization_id, row.grade_id)
     await db.delete(row)
     await db.flush()
     # HRP-171 REDO 2.2: dropping a spec drops its derived competences too.
-    await _recompute_required_competences(db, tenant_id, card_id)
+    await _recompute_required_competences(db, tenant_id, card_id, dropped=dropped)
     await db.commit()
     await _auto_populate_candidates(db, tenant_id, card_id)
 

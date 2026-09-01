@@ -52,6 +52,7 @@ from app.modules.assessment.models import (
     AssessmentStatus,
 )
 from app.modules.competence.models import Competence, SkillLevel
+from app.modules.employee.issues import DEFAULT_PASSING, passing_bar
 from app.modules.employee.models import Employee
 from app.modules.grade_system.models import GradeSpecialization
 from app.modules.position.models import Position
@@ -173,6 +174,10 @@ async def compute_competence_overview(
                     "target_level_id": top["skill_level_id"],
                     "target_level_title": top["skill_level_title"],
                     "target_level_sort": top["sort_index"],
+                    # HRP-660: the Competences tab marks a row as a gap, and
+                    # "gap" has to mean the same thing here as in issues.py —
+                    # below the bar of the assessment that produced the score.
+                    "passing_score": passing_bar(a.passing_score),
                     "rows": sorted_rows,
                 }
             )
@@ -243,6 +248,7 @@ async def compute_competence_overview(
                 "skill_level_title": sl.title if sl else "",
                 "skill_level_sort_index": req_sort,
                 "percent": percent,
+                "passing_score": chosen["passing_score"] if chosen else DEFAULT_PASSING,
                 "assessment_id": chosen["assessment_id"] if chosen else None,
                 "completed_at": chosen["completed_at"] if chosen else None,
                 "level_breakdown": breakdown_payload,
@@ -286,6 +292,7 @@ async def compute_competence_overview(
                 "skill_level_title": target_sl.title if target_sl else chosen["target_level_title"],
                 "skill_level_sort_index": best_sort,
                 "percent": percent,
+                "passing_score": chosen["passing_score"],
                 "assessment_id": chosen["assessment_id"],
                 "completed_at": chosen["completed_at"],
                 "level_breakdown": _breakdown_payload(chosen["rows"]),

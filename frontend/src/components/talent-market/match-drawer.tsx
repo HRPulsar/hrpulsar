@@ -9,9 +9,11 @@
 
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
+import Link from "next/link";
+import { toast } from "sonner";
 
 import { api } from "@/lib/api";
-import { BADGE_COLOR } from "@/lib/badge-tones";
+import { ALERT_TONE, BADGE_COLOR } from "@/lib/badge-tones";
 import { dictionaryItemLabel, skillLevelLabel } from "@/lib/reference-labels";
 import {
   Sheet,
@@ -21,6 +23,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 interface BreakdownCompetenceRow {
   competence_id: string;
@@ -32,6 +35,11 @@ interface BreakdownCompetenceRow {
   card_match_percent: number;
   actual_percent: number | null;
   qualifies: boolean;
+  // HRP-695: reference only — the best Done assessment of this competence
+  // at a level the matcher does not count. Set when actual_percent is null.
+  other_level_title?: string | null;
+  other_level_i18n_key?: string | null;
+  other_level_percent?: number | null;
 }
 
 interface BreakdownSpecRow {
@@ -64,6 +72,17 @@ export interface MatchDrawerProps {
   employeeName?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** HRP-665: the candidate row this drawer belongs to. Null for picker
+   * rows — an employee who is not attached to the card yet has no row to
+   * hang a development plan off. */
+  candidateId?: string | null;
+  /** Existing gap plan on that row, if one was already created. */
+  pdpId?: string | null;
+  /** Same write gate the Appoint button uses. */
+  canCreatePlan?: boolean;
+  /** Card title — names the plan built from this card's gaps. */
+  cardTitle?: string | null;
+  onPlanCreated?: (pdpId: string) => void;
 }
 
 // HRP-476: the wording lives in the `talentMarket` i18n namespace, so the
@@ -100,12 +119,18 @@ export function MatchDrawer({
   employeeName,
   open,
   onOpenChange,
+  candidateId = null,
+  pdpId = null,
+  canCreatePlan = false,
+  cardTitle = null,
+  onPlanCreated,
 }: MatchDrawerProps) {
   const t = useTranslations("talentMarket");
   const tRef = useTranslations("reference");
   const [data, setData] = useState<Breakdown | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [creatingPlan, setCreatingPlan] = useState(false);
 
   useEffect(() => {
     if (!open || !employeeId) {
@@ -142,6 +167,38 @@ export function MatchDrawer({
 
   const title = data?.employee_name ?? employeeName ?? t("drawerFallbackTitle");
 
+  // HRP-657: state the verdict in words instead of leaving the operator to
+  // read it off the chip colours. HRP-665: the same gap count drives the
+  // development plan, so both tickets answer "why" from one number.
+  const gaps = data ? data.competences.filter((row) => !row.qualifies) : [];
+  const specGaps = data
+    ? data.specializations.filter((row) => !row.qualifies)
+    : [];
+  const hasRequirements =
+    !!data && (data.competences.length > 0 || data.specializations.length > 0);
+  const matches = hasRequirements && gaps.length === 0 && specGaps.length === 0;
+
+  async function createPlan() {
+    if (!candidateId) return;
+    setCreatingPlan(true);
+    try {
+      const row = await api.post<{ pdp_id: string | null }>(
+        `/talent-market/${cardId}/candidates/${candidateId}/development-plan`,
+        {
+          title: t("planTitle", { card: cardTitle ?? title }).slice(0, 100),
+        },
+      );
+      toast.success(t("toastPlanCreated"));
+      if (row.pdp_id) onPlanCreated?.(row.pdp_id);
+    } catch (err: unknown) {
+      toast.error(
+        err instanceof Error ? err.message : t("toastPlanFailed"),
+      );
+    } finally {
+      setCreatingPlan(false);
+    }
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent data-testid="talent-market-match-drawer">
@@ -163,6 +220,53 @@ export function MatchDrawer({
           )}
           {error && (
             <p className="text-sm text-destructive">{error}</p>
+          )}
+
+          {/* HRP-657: the verdict in one sentence — matched, or exactly
+              how many required competencies sit below the card's bar. */}
+          {hasRequirements && (
+            <div
+              className={`rounded-md border p-3 text-sm ${
+                matches ? ALERT_TONE.green : ALERT_TONE.amber
+              }`}
+              data-testid="talent-market-match-drawer-verdict"
+            >
+              {matches
+                ? t("drawerVerdictMatch")
+                : gaps.length > 0
+                  ? t("drawerVerdictCompetenceGaps", {
+                      count: gaps.length,
+                      percent: data.card_match_percent,
+                    })
+                  : t("drawerVerdictExperienceGap")}
+            </div>
+          )}
+
+          {/* HRP-665: the plan is created where the gap is visible. An
+              existing plan links out instead of offering a second one. */}
+          {candidateId && pdpId && (
+            <Link
+              href={`/development/${pdpId}`}
+              className="inline-flex text-sm font-medium text-primary underline-offset-2 hover:underline"
+              data-testid="talent-market-match-drawer-plan-link"
+            >
+              {t("drawerOpenPlan")}
+            </Link>
+          )}
+          {candidateId && !pdpId && canCreatePlan && gaps.length > 0 && (
+            <div className="space-y-1">
+              <Button
+                size="sm"
+                onClick={() => void createPlan()}
+                disabled={creatingPlan}
+                data-testid="talent-market-match-drawer-create-plan"
+              >
+                {creatingPlan ? t("drawerCreatingPlan") : t("drawerCreatePlan")}
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                {t("drawerCreatePlanHint", { count: gaps.length })}
+              </p>
+            </div>
           )}
 
           {data && data.competences.length > 0 && (
@@ -208,6 +312,25 @@ export function MatchDrawer({
                             })}
                           </p>
                         )}
+                        {/* HRP-695: the competence was assessed, just not
+                            at the level this card requires. Stated as a
+                            reference line — it is not in the percent. */}
+                        {row.actual_percent === null &&
+                          row.other_level_title &&
+                          row.other_level_percent != null && (
+                            <p
+                              className="text-xs text-muted-foreground"
+                              data-testid="talent-market-match-drawer-other-level"
+                            >
+                              {t("matchAssessedAtOtherLevel", {
+                                level: skillLevelLabel(tRef, {
+                                  title: row.other_level_title,
+                                  i18n_key: row.other_level_i18n_key,
+                                }),
+                                percent: row.other_level_percent,
+                              })}
+                            </p>
+                          )}
                       </div>
                       <Badge
                         variant="secondary"
@@ -246,7 +369,9 @@ export function MatchDrawer({
                   }
                   return (
                     <li
-                      key={row.specialization_id}
+                      // A card may require the same specialization at two
+                      // grades (Lead and Senior) — the pair is the identity.
+                      key={`${row.specialization_id}-${row.grade_id ?? "any"}`}
                       className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm"
                       data-testid="talent-market-match-drawer-spec-row"
                     >

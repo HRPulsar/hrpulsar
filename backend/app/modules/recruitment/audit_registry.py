@@ -55,6 +55,11 @@ AUDITED: dict[str, list[tuple[str, str]]] = {
         ("delete_vacancy", "vacancy.delete"),
         # HRP-136 vacancy competences
         ("set_vacancy_competences", "vacancy.set_competences"),
+        # HRP-667: posting the requisition to the internal talent market.
+        # Audited on the vacancy rather than the card: the talent card
+        # keeps its own trail, this row records who decided to look
+        # inside and when.
+        ("post_vacancy_to_talent_market", "vacancy.post_to_talent_market"),
         # HRP-135 attachments
         ("upload_vacancy_attachment", "vacancy.upload_attachment"),
         ("delete_vacancy_attachment", "vacancy.delete_attachment"),
@@ -347,15 +352,26 @@ def _wrap_with_audit(func: Any, action: str) -> Any:
         except Exception:
             if db is not None and tenant_id is not None:
                 try:
-                    await audit_service.record_event(
-                        db,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                        action=action,
-                        entity_type=entity_type,
-                        entity_id=entity_id_from_args,
-                        payload_diff={"outcome": "raised"},
-                    )
+                    # The service raised mid-transaction, so the caller's
+                    # session still holds its pending partial writes.
+                    # ``record_event``'s commit would persist them (its
+                    # contract requires a clean session), and a rollback
+                    # here would expire objects the caller still reads.
+                    # The failure row therefore travels on its own session
+                    # — the same pattern as billing's
+                    # ``_record_failed_charge`` marker.
+                    from app.database import async_session
+
+                    async with async_session() as audit_db:
+                        await audit_service.record_event(
+                            audit_db,
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            action=action,
+                            entity_type=entity_type,
+                            entity_id=entity_id_from_args,
+                            payload_diff={"outcome": "raised"},
+                        )
                 except Exception:  # noqa: BLE001 — audit must not mask root cause
                     log.exception(
                         "audit_hook.failure_record_failed",

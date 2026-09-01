@@ -31,6 +31,7 @@ import type { ActiveAiSession } from "@/hooks/use-active-ai-sessions";
 import { activeAiSessionsKey } from "@/hooks/use-active-ai-sessions";
 import { coverageGapMessage, levelHueClass } from "@/lib/matrix-grading";
 import { cn } from "@/lib/utils";
+import { usePermissions } from "@/hooks/use-permissions";
 
 type Props = {
   specId: string;
@@ -92,6 +93,7 @@ export function SingleGradeList({
   const [removing, setRemoving] = useState(false);
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
 
+  const { canViewHrData } = usePermissions();
   const hasSalary = grade.salary_min != null || grade.salary_max != null;
   const salaryLabel = hasSalary
     ? `${grade.salary_min ?? "?"} – ${grade.salary_max ?? "?"} ${grade.salary_currency}`
@@ -177,7 +179,12 @@ export function SingleGradeList({
           <h3 className="text-base font-semibold tracking-tight">
             {gradeLabel ?? "—"}
           </h3>
-          {editingSalary ? (
+          {/* HRP-637: salary bands are compensation, not structure — admin
+              / hr / manager only, whatever `directory_show_grades`
+              says. The API drops them for everyone else, so without
+              this the pill would offer its "add salary" placeholder
+              to a viewer who can neither read nor set one. */}
+          {!canViewHrData ? null : editingSalary ? (
             <div
               data-testid={`matrix-single-grade-salary-edit-${grade.grade_id}`}
               className="flex flex-wrap items-center gap-1"

@@ -40,8 +40,10 @@ import {
 import {
   Tooltip, TooltipContent, TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Hint } from "@/components/ui/hint";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { usePermissions } from "@/hooks/use-permissions";
+import { readCreateDeepLink } from "@/lib/employee-actions";
 import { toast } from "sonner";
 import Link from "next/link";
 import { Info, MoreHorizontal, Plus, Search, X } from "lucide-react";
@@ -63,6 +65,7 @@ const emptyForm = {
 
 export default function DevelopmentPage() {
   const t = useTranslations("development");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const router = useRouter();
@@ -76,6 +79,9 @@ export default function DevelopmentPage() {
   const [loading, setLoading] = useState(true);
 
   const [createOpen, setCreateOpen] = useState(false);
+  // HRP-660: arrived from an employee card — land on the new plan
+  // afterwards instead of a list the user did not ask to see.
+  const [openedFromCard, setOpenedFromCard] = useState(false);
   const [form, setForm] = useState(emptyForm);
 
   // HRP-292: the dropdowns offer only active dictionary items; a value
@@ -192,21 +198,24 @@ export default function DevelopmentPage() {
     loadGradesForSpec(specId);
   }
 
-  async function handleEmployeeChange(employeeId: string) {
+  // HRP-660: split out of handleEmployeeChange so the employee card's deep
+  // link gets the same specialization/grade prefill without a second copy
+  // of it. Takes the row rather than an id: the deep link may name someone
+  // the dialog's own (one page deep) employee list does not hold.
+  async function prefillFromEmployee(emp: Employee) {
     setForm((prev) => ({
       ...prev,
-      employee_id: employeeId,
+      employee_id: emp.id,
       specialization_id: "",
       grade_id: "",
     }));
     void loadGradesForSpec("");
-    const emp = employees.find((e) => e.id === employeeId);
-    if (!emp?.position_id) return;
+    if (!emp.position_id) return;
     try {
       const pos = await api.get<Position>(`/positions/${emp.position_id}`);
       setForm((prev) => ({
         ...prev,
-        employee_id: employeeId,
+        employee_id: emp.id,
         specialization_id: pos.specialization_id ?? "",
         // A position grade without a specialization would sit invisible
         // behind the disabled select and leak into the POST — drop it.
@@ -234,6 +243,60 @@ export default function DevelopmentPage() {
     }
   }
 
+  async function handleEmployeeChange(employeeId: string) {
+    const emp = employees.find((e) => e.id === employeeId);
+    if (!emp) {
+      setForm((prev) => ({
+        ...prev,
+        employee_id: employeeId,
+        specialization_id: "",
+        grade_id: "",
+      }));
+      void loadGradesForSpec("");
+      return;
+    }
+    await prefillFromEmployee(emp);
+  }
+
+  // HRP-660: `/development?create=1&employee_id=<id>` — the employee card
+  // starts a plan here instead of growing its own copy of this dialog.
+  // Waits for the first load: `load()` replaces `employees` wholesale and
+  // would drop an employee fetched ahead of it.
+  const deepLinkEmployeeId = useMemo(
+    () => readCreateDeepLink(searchParams.toString()),
+    // read once on mount — the filter mirror below strips the params
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const deepLinkConsumed = useRef(false);
+
+  useEffect(() => {
+    if (loading || deepLinkConsumed.current) return;
+    if (!deepLinkEmployeeId || !canManage) return;
+    deepLinkConsumed.current = true;
+    void (async () => {
+      let emp = employees.find((e) => e.id === deepLinkEmployeeId);
+      if (!emp) {
+        try {
+          emp = await api.get<Employee>(`/employees/${deepLinkEmployeeId}`);
+        } catch {
+          toast.error(t("errorCreateFailed"));
+          return;
+        }
+        const fetched = emp;
+        setEmployees((prev) =>
+          prev.some((e) => e.id === fetched.id) ? prev : [...prev, fetched],
+        );
+      }
+      const name = emp.user_name?.trim() || emp.user_email || "";
+      setForm({ ...emptyForm, title: t("defaultTitleFor", { name }) });
+      setOpenedFromCard(true);
+      setCreateOpen(true);
+      await prefillFromEmployee(emp);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, deepLinkEmployeeId, canManage]);
+
   async function handleCreate() {
     if (!form.title.trim()) {
       toast.error(t("errorTitleRequired"));
@@ -249,7 +312,7 @@ export default function DevelopmentPage() {
     }
     setSaving(true);
     try {
-      await api.post("/pdp", {
+      const created = await api.post<PDP>("/pdp", {
         title: form.title.trim(),
         employee_id: form.employee_id,
         specialization_id: form.specialization_id || null,
@@ -260,6 +323,13 @@ export default function DevelopmentPage() {
       setCreateOpen(false);
       setForm(emptyForm);
       setSpecGrades([]);
+      if (openedFromCard) {
+        // The plan the card asked for, with its auto-generated items —
+        // not the list the user was only passing through.
+        setOpenedFromCard(false);
+        router.push(`/development/${created.id}`);
+        return;
+      }
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("errorCreateFailed"));
@@ -303,7 +373,13 @@ export default function DevelopmentPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight" data-testid="development-heading">{t("title")}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight" data-testid="development-heading">{t("title")}</h1>
+            <Hint
+              text={tSections("development.hint")}
+              data-testid="development-hint-title"
+            />
+          </div>
           {/* HRP-290: counter respects active filters (Assessments parity). */}
           <p className="text-sm text-muted-foreground" data-testid="development-count">{t("plansCount", { count: filtered.length })}</p>
         </div>
@@ -456,7 +532,15 @@ export default function DevelopmentPage() {
       )}
 
       {/* Create dialog */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog
+        open={createOpen}
+        onOpenChange={(val) => {
+          setCreateOpen(val);
+          // Closing drops the card provenance — the next plain Create must
+          // not inherit the deep link's "go to the plan afterwards".
+          if (!val) setOpenedFromCard(false);
+        }}
+      >
         <DialogContent>
           <DialogHeader><DialogTitle>{t("createTitle")}</DialogTitle></DialogHeader>
           <div className="space-y-4">

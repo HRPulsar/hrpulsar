@@ -298,8 +298,6 @@ class TestEnrichedList:
             status="new",
             manager_score=4.0,
             ai_score=0.5,  # canonical 0..1 raw (HRP-274)
-            # Divergence compares the tenant-scale normalized value:
-            # 4.0 vs 2.5 → delta 1.5 ≥ 1.0 threshold.
             ai_score_normalized=2.5,
         )
         db.add(cv)
@@ -312,7 +310,10 @@ class TestEnrichedList:
         row = items[0]
         assert row["last_position"] == "Staff Engineer"
         assert row["years_of_experience"] == 12
-        assert row["score_divergence"] is True
+        # HRP-662: divergence is per-competence only. This vacancy has
+        # no profile competences, so there is nothing to disagree about —
+        # the row-level flag no longer invents one from the two totals.
+        assert row["score_divergence"] is False
         assert row["manager_score"] == 4.0
         assert row["ai_score"] == 0.5
         assert row["ai_score_normalized"] == 2.5

@@ -19,17 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class TestOnboardingState:
-    async def test_initial_state_is_welcome(
-        self, db: AsyncSession, tenant
-    ):
+    async def test_initial_state_is_welcome(self, db: AsyncSession, tenant):
         state = await onboarding_service.get_state(db, tenant.id)
         assert state["step"] == "welcome"
         assert state["dismissed_at"] is None
         assert state["demo_seeded_at"] is None
 
-    async def test_step_advances_with_vacancy(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_step_advances_with_vacancy(self, db: AsyncSession, tenant, user):
         await service.create_vacancy(
             db,
             tenant.id,
@@ -39,35 +35,85 @@ class TestOnboardingState:
         state = await onboarding_service.get_state(db, tenant.id)
         assert state["step"] == "vacancy_created"
 
-    async def test_dismiss_persists_timestamp(
-        self, db: AsyncSession, tenant
-    ):
+    async def test_dismiss_persists_timestamp(self, db: AsyncSession, tenant):
         state = await onboarding_service.dismiss(db, tenant.id)
         assert state["dismissed_at"] is not None
 
 
 class TestDemoSeed:
-    async def test_seed_creates_demo_rows(
+    async def test_seed_writes_the_ai_assessment_rows_the_matrix_reads(
         self, db: AsyncSession, tenant, user
     ):
+        """HRP-598: the competence matrix and the candidate report read
+        AIAssessment rows, not ``analysis_data``.
+
+        The onboarding demo used to write only the JSON blob, so a brand
+        new tenant was shown a completed analysis whose matrix and report
+        were empty — the same defect the demo seed fixed for the hosted
+        sandbox by calling the shared row builder.
+        """
+        from app.modules.recruitment.common import normalize_competence_id
+        from app.modules.recruitment.models import AIAssessment
+
+        result = await onboarding_service.seed_demo(db, tenant.id, user.id)
+
+        rows = (
+            (
+                await db.execute(
+                    select(AIAssessment).where(
+                        AIAssessment.interview_id == result["interview_id"]
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert rows, "the seeded analysis must carry the rows the matrix reads"
+
+        expected = {
+            str(normalize_competence_id(ca["competence_id"]))
+            for ca in onboarding_service.DEMO_AI_ANALYSIS["competence_assessments"]
+        }
+        assert {str(r.competence_id) for r in rows} == expected
+
+    async def test_seed_does_not_hand_the_fixture_dict_to_the_row(
+        self, db: AsyncSession, tenant, user
+    ):
+        """The module-level fixture must not become the JSONB value."""
+        result = await onboarding_service.seed_demo(db, tenant.id, user.id)
+        interview = (
+            await db.execute(
+                select(Interview).where(Interview.id == result["interview_id"])
+            )
+        ).scalar_one()
+        assert interview.analysis_data == onboarding_service.DEMO_AI_ANALYSIS
+        assert interview.analysis_data is not onboarding_service.DEMO_AI_ANALYSIS
+
+    async def test_seed_creates_demo_rows(self, db: AsyncSession, tenant, user):
         result = await onboarding_service.seed_demo(db, tenant.id, user.id)
         assert result["vacancy_id"] is not None
         assert len(result["candidate_ids"]) == 3
         assert result["interview_id"] is not None
 
         vacancies = (
-            await db.execute(select(Vacancy).where(Vacancy.tenant_id == tenant.id))
-        ).scalars().all()
+            (await db.execute(select(Vacancy).where(Vacancy.tenant_id == tenant.id)))
+            .scalars()
+            .all()
+        )
         assert any(v.title == onboarding_service.DEMO_VACANCY_TITLE for v in vacancies)
 
         demo_candidates = (
-            await db.execute(
-                select(Candidate).where(
-                    Candidate.tenant_id == tenant.id,
-                    Candidate.source == "demo",
+            (
+                await db.execute(
+                    select(Candidate).where(
+                        Candidate.tenant_id == tenant.id,
+                        Candidate.source == "demo",
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(demo_candidates) == 3
 
         interview = (
@@ -77,17 +123,13 @@ class TestDemoSeed:
         assert interview.analysis_status == "completed"
         assert interview.analysis_data is not None
 
-    async def test_seed_twice_raises_conflict(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_seed_twice_raises_conflict(self, db: AsyncSession, tenant, user):
         await onboarding_service.seed_demo(db, tenant.id, user.id)
         with pytest.raises(HTTPException) as exc:
             await onboarding_service.seed_demo(db, tenant.id, user.id)
         assert exc.value.status_code == 409
 
-    async def test_cleanup_removes_only_demo(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_cleanup_removes_only_demo(self, db: AsyncSession, tenant, user):
         # Create a real (non-demo) vacancy that must survive the cleanup.
         real = await service.create_vacancy(
             db,
@@ -103,41 +145,45 @@ class TestDemoSeed:
 
         # Demo rows gone.
         leftovers = (
-            await db.execute(
-                select(Candidate).where(
-                    Candidate.tenant_id == tenant.id,
-                    Candidate.source == "demo",
+            (
+                await db.execute(
+                    select(Candidate).where(
+                        Candidate.tenant_id == tenant.id,
+                        Candidate.source == "demo",
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert leftovers == []
 
         # Real vacancy still there.
         survivors = (
-            await db.execute(
-                select(Vacancy).where(Vacancy.tenant_id == tenant.id)
-            )
-        ).scalars().all()
+            (await db.execute(select(Vacancy).where(Vacancy.tenant_id == tenant.id)))
+            .scalars()
+            .all()
+        )
         assert any(v.id == uuid.UUID(str(real["id"])) for v in survivors)
 
-    async def test_cleanup_clears_cv_links(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_cleanup_clears_cv_links(self, db: AsyncSession, tenant, user):
         await onboarding_service.seed_demo(db, tenant.id, user.id)
         await onboarding_service.cleanup_demo(db, tenant.id)
 
         cv_rows = (
-            await db.execute(
-                select(CandidateVacancy).where(
-                    CandidateVacancy.tenant_id == tenant.id
+            (
+                await db.execute(
+                    select(CandidateVacancy).where(
+                        CandidateVacancy.tenant_id == tenant.id
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert cv_rows == []
 
-    async def test_cleanup_cross_tenant_isolation(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_cleanup_cross_tenant_isolation(self, db: AsyncSession, tenant, user):
         # Seed demo in tenant, then call cleanup with a different tenant
         # id — original demo rows must remain.
         await onboarding_service.seed_demo(db, tenant.id, user.id)
@@ -154,11 +200,15 @@ class TestDemoSeed:
         await onboarding_service.cleanup_demo(db, other.id)
         # Demo rows in original tenant are untouched.
         rows = (
-            await db.execute(
-                select(Candidate).where(
-                    Candidate.tenant_id == tenant.id,
-                    Candidate.source == "demo",
+            (
+                await db.execute(
+                    select(Candidate).where(
+                        Candidate.tenant_id == tenant.id,
+                        Candidate.source == "demo",
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(rows) == 3

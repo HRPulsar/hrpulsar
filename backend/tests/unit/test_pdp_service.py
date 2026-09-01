@@ -2,7 +2,9 @@ import uuid
 
 import pytest
 from app.modules.assessment import pdp_service as service
+from app.modules.assessment.models import PDPItem
 from app.modules.assessment.schemas import (
+    CompetenceCriteriaItem,
     PDPCommentCreate,
     PDPCreate,
     PDPItemCreate,
@@ -12,6 +14,7 @@ from app.modules.assessment.schemas import (
     PDPUpdate,
 )
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -545,6 +548,39 @@ class TestPDPRecomputeOnGradeChange:
         assert "My custom goal" not in titles
         assert titles == ["Python B", "SQL B"]
 
+    async def test_change_grade_keeps_pinned_gap_items(
+        self, db: AsyncSession, tenant, user, employee
+    ):
+        # HRP-665 gap plans own their item list (``items_pinned``): the
+        # grade link is only their header, so a spec/grade edit must not
+        # replace the gap list with the target grade's matrix — PDPUpdate
+        # has no way to resupply it (HRP-654 review).
+        (
+            (spec_a, grade_a, comp_a1, _),
+            (spec_b, grade_b, _, _),
+        ) = await self._setup_two_links(db, tenant)
+        pdp = await service.create_pdp(
+            db,
+            tenant.id,
+            user.id,
+            PDPCreate(
+                title="Gap plan",
+                employee_id=employee.id,
+                specialization_id=spec_a.id,
+                grade_id=grade_a.id,
+                competences=[CompetenceCriteriaItem(competence_id=comp_a1.id)],
+            ),
+        )
+        await service.update_pdp(
+            db,
+            tenant.id,
+            pdp["id"],
+            PDPUpdate(specialization_id=spec_b.id, grade_id=grade_b.id),
+        )
+        detail = await service.get_pdp_detail(db, tenant.id, pdp["id"])
+        assert [i["title"] for i in detail["items"]] == ["Python A"]
+        assert detail["specialization_id"] == spec_b.id
+
     async def test_change_grade_in_progress_blocked(
         self, db: AsyncSession, tenant, user, employee
     ):
@@ -698,9 +734,7 @@ class TestPDPItems:
                 PDPMaterialCreate(title="Mat", link="https://example.com"),
             )
         await service.change_pdp_status(db, tenant.id, pdp["id"], "sent")
-        await service.mark_item_passed(
-            db, tenant.id, pdp["id"], item1["id"], user.id
-        )
+        await service.mark_item_passed(db, tenant.id, pdp["id"], item1["id"], user.id)
         detail = await service.get_pdp_detail(db, tenant.id, pdp["id"])
         assert detail["total_progress"] == 50
 
@@ -764,9 +798,7 @@ class TestPDPMarkItemPermissions:
         )
         return pdp, item
 
-    async def test_non_owner_blocked(
-        self, db: AsyncSession, tenant, user, employee
-    ):
+    async def test_non_owner_blocked(self, db: AsyncSession, tenant, user, employee):
         pdp, item = await self._create_with_item(db, tenant, user, employee)
         await service.change_pdp_status(db, tenant.id, pdp["id"], "sent")
 
@@ -828,9 +860,7 @@ class TestPDPMarkItemPermissions:
             db, tenant.id, pdp["id"], "in_progress", bypass_transition_check=True
         )
 
-        await service.mark_item_passed(
-            db, tenant.id, pdp["id"], item["id"], user.id
-        )
+        await service.mark_item_passed(db, tenant.id, pdp["id"], item["id"], user.id)
         detail = await service.get_pdp_detail(db, tenant.id, pdp["id"])
         assert detail["status"] == "in_progress"
 
@@ -1200,9 +1230,7 @@ class TestPDPReviewItemToggle:
             is_admin=True,
         )
         with pytest.raises(HTTPException) as exc:
-            await service.change_pdp_status(
-                db, tenant.id, pdp["id"], "returned"
-            )
+            await service.change_pdp_status(db, tenant.id, pdp["id"], "returned")
         assert exc.value.status_code == 409
 
     async def test_return_allowed_when_any_item_unchecked(
@@ -1210,9 +1238,7 @@ class TestPDPReviewItemToggle:
     ):
         pdp, _ = await self._create_in_review(db, tenant, user, employee)
         # No items are passed at this point — Return is the natural choice.
-        result = await service.change_pdp_status(
-            db, tenant.id, pdp["id"], "returned"
-        )
+        result = await service.change_pdp_status(db, tenant.id, pdp["id"], "returned")
         assert result["status"] == "returned"
 
     async def test_admin_blocked_outside_review(
@@ -1261,9 +1287,7 @@ class TestPDPTerminalTimestamp:
         )
         before = pdp.get("finished_at")
         assert before is None
-        result = await service.change_pdp_status(
-            db, tenant.id, pdp["id"], "cancelled"
-        )
+        result = await service.change_pdp_status(db, tenant.id, pdp["id"], "cancelled")
         assert result["status"] == "cancelled"
         assert result["finished_at"] is not None
 
@@ -1905,9 +1929,7 @@ class TestPDPProgressOnAddItem:
         assert detail["total_progress"] == 50  # 1/2
 
         # Adding a new item drops the ratio from 1/2 to 1/3.
-        await service.add_item(
-            db, tenant.id, pdp["id"], PDPItemCreate(title="C")
-        )
+        await service.add_item(db, tenant.id, pdp["id"], PDPItemCreate(title="C"))
         detail2 = await service.get_pdp_detail(db, tenant.id, pdp["id"])
         assert detail2["total_progress"] == 33  # int(1/3 * 100)
         # Sanity: the newly added items appear in sort order.
@@ -2060,3 +2082,73 @@ class TestHRP333EmployeeSummary:
         pdp = await service.create_pdp(db, tenant.id, user.id, data)
         assert pdp["employee_position_title"] == employee.position_title
         assert pdp["employee_status"] == employee.status
+
+
+class TestPDPCompetenceTenantIsolation:
+    """HRP-665: PDPCreate.competences may only name this tenant's competences.
+
+    The router checks that the *employee* is in the caller's scope but says
+    nothing about the competence ids, so an unfiltered title lookup let a
+    tenant admin pin a foreign competence onto a PDPItem FK and read its
+    title back in the response.
+    """
+
+    async def _competence(self, db: AsyncSession, tenant_id, title: str):
+        from app.modules.competence.models import Competence, CompetenceGroup
+
+        group = CompetenceGroup(tenant_id=tenant_id, title=f"G-{uuid.uuid4().hex[:4]}")
+        db.add(group)
+        await db.flush()
+        comp = Competence(tenant_id=tenant_id, group_id=group.id, title=title)
+        db.add(comp)
+        await db.commit()
+        await db.refresh(comp)
+        return comp
+
+    async def test_foreign_competence_is_rejected(
+        self, db: AsyncSession, tenant, user, employee
+    ):
+        from app.modules.company.models import Tenant
+
+        other = Tenant(
+            name=f"Other {uuid.uuid4().hex[:6]}", slug=f"other-{uuid.uuid4().hex[:8]}"
+        )
+        db.add(other)
+        await db.commit()
+        await db.refresh(other)
+        foreign = await self._competence(db, other.id, "Foreign")
+
+        with pytest.raises(HTTPException) as exc:
+            await service.create_pdp(
+                db,
+                tenant.id,
+                user.id,
+                PDPCreate(
+                    title="Injected",
+                    employee_id=employee.id,
+                    competences=[CompetenceCriteriaItem(competence_id=foreign.id)],
+                ),
+            )
+        assert exc.value.status_code == 422
+        await db.rollback()
+
+    async def test_own_competence_still_creates_the_item(
+        self, db: AsyncSession, tenant, user, employee
+    ):
+        own = await self._competence(db, tenant.id, "Own")
+        pdp = await service.create_pdp(
+            db,
+            tenant.id,
+            user.id,
+            PDPCreate(
+                title="Gap",
+                employee_id=employee.id,
+                competences=[CompetenceCriteriaItem(competence_id=own.id)],
+            ),
+        )
+        items = (
+            (await db.execute(select(PDPItem).where(PDPItem.pdp_id == pdp["id"])))
+            .scalars()
+            .all()
+        )
+        assert [(i.title, i.competence_id) for i in items] == [("Own", own.id)]

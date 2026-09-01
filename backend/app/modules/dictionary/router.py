@@ -75,8 +75,16 @@ async def delete_item(
 async def get_item_usage(
     item_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("admin")),
 ):
     """HRP-103 redo: preview the live references that block delete so the
-    confirm dialog can enumerate them before the operator commits."""
+    confirm dialog can enumerate them before the operator commits.
+
+    HRP-637: ``admin``, matching the DELETE this preview exists to warn
+    about. On bare authentication it was the shortest way around every
+    guard this ticket added: ``GET /dictionaries/grade`` hands out every
+    grade id, and one call per id answered the exact list of positions
+    holding that grade by title — the "position -> grade" map the
+    catalogue no longer publishes, rebuilt in N+1 requests.
+    """
     return await service.get_item_usage(db, current_user.tenant_id, item_id)

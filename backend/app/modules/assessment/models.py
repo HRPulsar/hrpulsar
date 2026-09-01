@@ -589,6 +589,13 @@ class PDP(BaseModel, TenantMixin):
         nullable=True,
     )
     total_progress: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # HRP-665 gap plans are built from an explicit competence list, not the
+    # grade matrix — so a spec/grade edit must NOT regenerate their items
+    # (the matrix rebuild would silently destroy the gap list, and
+    # ``PDPUpdate`` has no way to resupply it).
+    items_pinned: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

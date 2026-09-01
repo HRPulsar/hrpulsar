@@ -631,6 +631,9 @@ async def dev_loop(
             "gaps": {
                 "employees": len(facts.gap_employees),
                 "competences": facts.gap_competences,
+                # HRP-656: a gap that already has a plan is the loop working,
+                # not an alarm — the tile only turns red on this number.
+                "without_plan": len(cohorts["gaps_without_plan"]),
             },
             "developing": {
                 "open_pdps": facts.open_pdp_count,

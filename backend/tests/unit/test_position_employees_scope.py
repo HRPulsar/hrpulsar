@@ -191,9 +191,9 @@ async def test_grade_follows_the_tenant_flag(
 ):
     """The flag HRP-623 introduced was decorative while these routes were open.
 
-    (It only closes the *directory's* copy of the grade — the positions
-    catalogue still publishes a position's grade to everyone. That is a
-    wider hole than this ticket: HRP-637.)
+    (It used to close only the *directory's* copy of the grade, while the
+    positions catalogue still published a position's grade to everyone —
+    HRP-637 closed that half. See ``test_position_catalogue_rbac.py``.)
     """
     url = _routes(persona)[route]
 

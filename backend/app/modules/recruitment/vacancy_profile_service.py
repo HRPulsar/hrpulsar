@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, exception_summary
+from app.modules.recruitment.analysis_language import resolve_analysis_language
 from app.modules.recruitment.common import (
     _get_vacancy,
     normalize_competence_id,
@@ -288,7 +289,11 @@ async def generate_profile_now(
         "conditions": (vacancy.conditions or "").strip() or "Not specified",
         "attachments_text": attachments_text,
         "clarification": (clarification or "").strip(),
-        "language": vacancy.language or "en",
+        # HRP-628: the generated competence *names* are what the analysis
+        # matrix labels its rows with, so they follow the tenant's content
+        # language too — otherwise a Russian analysis gets English row
+        # labels. The ``id`` slugs stay English by prompt contract.
+        "language": await resolve_analysis_language(db, tenant_id, vacancy),
     }
 
     async def _mark_session_failed(error: str) -> None:

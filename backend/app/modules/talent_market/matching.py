@@ -45,12 +45,15 @@ async def _fetch_match_inputs(
       * comp_rows: the Required Competence links (may be empty).
       * spec_rows: the Required Specialization links (may be empty).
     """
+    # HRP-665: ORDER BY on both — row order drives the gap list, the PDP
+    # item order and the target-specialization pick, none of which may
+    # depend on what the planner happens to return.
     comp_rows = (
         (
             await db.execute(
-                select(TalentCardCompetence).where(
-                    TalentCardCompetence.card_id == card_id
-                )
+                select(TalentCardCompetence)
+                .where(TalentCardCompetence.card_id == card_id)
+                .order_by(TalentCardCompetence.id)
             )
         )
         .scalars()
@@ -59,15 +62,70 @@ async def _fetch_match_inputs(
     spec_rows = (
         (
             await db.execute(
-                select(TalentCardSpecialization).where(
-                    TalentCardSpecialization.card_id == card_id
-                )
+                select(TalentCardSpecialization)
+                .where(TalentCardSpecialization.card_id == card_id)
+                .order_by(TalentCardSpecialization.id)
             )
         )
         .scalars()
         .all()
     )
     return list(comp_rows), list(spec_rows)
+
+
+async def _unique_comp_rows(
+    db: AsyncSession, comp_rows: list[TalentCardCompetence]
+) -> list[TalentCardCompetence]:
+    """HRP-665: one Required Competence row per competence.
+
+    A card built from two grade ladders of the same specialization carries
+    the same competence twice at different levels (demo `tc-platform-arch`
+    requires `c-python` at both L3 and L4). Left duplicated, the employee
+    reads the same competence twice in the gap list, gets two identical
+    PDPItems with two material sets, and the Match cell counts rows ("1 of
+    8") where it means competences ("1 of 4").
+
+    Keeps the row carrying the strictest requirement — the highest
+    ``SkillLevel.sort_index``; an unlevelled row means "any level counts"
+    and loses to any levelled one. Ties break on row id, so the pick is
+    stable across calls.
+
+    Deliberately NOT applied to ``_comp_percent_from_map`` or to the
+    ``required_pairs`` fed to ``_last_passed_percents``: Match% is a stored,
+    seeded card-level number, and the assessment-eligibility guard still
+    needs every required (competence, level) pair to decide which Done
+    assessments may be projected. Narrowing either would silently restate
+    scores, which is a separate decision from de-duplicating the gap list.
+    """
+    if len(comp_rows) < 2:
+        return list(comp_rows)
+
+    sl_ids = {r.skill_level_id for r in comp_rows if r.skill_level_id is not None}
+    sl_sort: dict[uuid.UUID, int] = {}
+    if sl_ids:
+        sl_sort = {
+            row[0]: row[1]
+            for row in (
+                await db.execute(
+                    select(SkillLevel.id, SkillLevel.sort_index).where(
+                        SkillLevel.id.in_(sl_ids)
+                    )
+                )
+            ).all()
+        }
+
+    def rank(row: TalentCardCompetence) -> tuple[int, str]:
+        sort_index = (
+            sl_sort.get(row.skill_level_id) if row.skill_level_id is not None else None
+        )
+        return (sort_index if sort_index is not None else -1, str(row.id))
+
+    best: dict[uuid.UUID, TalentCardCompetence] = {}
+    for row in comp_rows:
+        current = best.get(row.competence_id)
+        if current is None or rank(row) > rank(current):
+            best[row.competence_id] = row
+    return list(best.values())
 
 
 async def _done_status_id(db: AsyncSession) -> uuid.UUID | None:
@@ -391,8 +449,18 @@ async def _last_passed_percents(
         sl_id_options = required_by_comp.get(comp_id)
         if not sl_id_options:
             continue
-        passes = False
+        # HRP-657: an assessment that never pinned a target level
+        # (``AssessmentCompetenceItem.skill_level_id`` is optional, and the
+        # `competences` criteria type leaves it NULL) covers the whole
+        # ladder of the competence — it is not "below the required level",
+        # it is unlevelled. Dropping it made every Required Competence read
+        # as "no assessment" on tenants that never set levels. The per-level
+        # projection below still narrows the result to the required level
+        # via the indicator ladder, so nothing above the bar leaks in.
+        passes = sl_id is None
         for required_sl_id in sl_id_options:
+            if passes:
+                break
             if required_sl_id is None:
                 passes = True
                 break
@@ -508,6 +576,27 @@ def _comp_percent_from_map(
     n = len(comp_rows)
     # Integer arithmetic for deterministic half-up rounding.
     return (total * 2 + n) // (2 * n)
+
+
+def _comp_gap_rows(
+    comp_rows: list[TalentCardCompetence],
+    last_by_comp: dict[uuid.UUID, int],
+    threshold: int,
+) -> list[TalentCardCompetence]:
+    """HRP-657/HRP-665: the Required Competences this employee is short on.
+
+    A row is a gap when the projected percent is below the card's Match%
+    threshold *or* there is no `done` assessment covering it at all — the
+    same two cases ``_comp_percent_from_map`` scores as "below" and "0".
+    Feeds the "N of M competencies" reason on the Match cell and the
+    development plan built from the gaps.
+    """
+    gaps: list[TalentCardCompetence] = []
+    for link in comp_rows:
+        actual = last_by_comp.get(link.competence_id)
+        if actual is None or actual < threshold:
+            gaps.append(link)
+    return gaps
 
 
 async def _compute_match_score(

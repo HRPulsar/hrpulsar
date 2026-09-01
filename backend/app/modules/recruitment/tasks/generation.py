@@ -89,6 +89,9 @@ def generate_questions_task(
             from app.modules.recruitment.ai_service import (
                 generate_individual_questions,
             )
+            from app.modules.recruitment.analysis_language import (
+                resolve_analysis_language_sync,
+            )
 
             creds = resolve_generation_target_sync(db, vacancy.tenant_id, None)
             questions = asyncio.run(
@@ -96,7 +99,7 @@ def generate_questions_task(
                     resume_data=resume.parsed_data,
                     profile_data=profile.profile_data,
                     vacancy_title=vacancy.title,
-                    language=vacancy.language or "en",
+                    language=resolve_analysis_language_sync(db, tenant_id, vacancy),
                     credentials=creds,
                 )
             )
@@ -187,6 +190,9 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
     from sqlalchemy.orm import Session
 
     from app.config import settings
+    from app.modules.recruitment.analysis_language import (
+        resolve_analysis_language_sync,
+    )
     from app.modules.recruitment.models import Vacancy, VacancyProfile
 
     sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
@@ -214,7 +220,9 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
                     else ""
                 ),
                 "tasks_kpi": json.dumps(vacancy.tasks_kpi) if vacancy.tasks_kpi else "",
-                "language": vacancy.language or "en",
+                # HRP-628: same as the interactive path — generated
+                # competence names follow the tenant's content language.
+                "language": resolve_analysis_language_sync(db, tenant_id, vacancy),
             }
 
             from app.modules.ai.providers import resolve_generation_target_sync

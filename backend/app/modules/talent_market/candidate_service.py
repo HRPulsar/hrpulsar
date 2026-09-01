@@ -11,11 +11,16 @@ import uuid
 from datetime import date, datetime, timezone
 
 from fastapi import status
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
+from app.modules.assessment.models import (
+    Assessment,
+    AssessmentCompetence,
+    AssessmentResult,
+)
 from app.modules.auth.models import User
 from app.modules.competence.models import Competence, SkillLevel
 from app.modules.dictionary.models import DictionaryItem
@@ -24,9 +29,11 @@ from app.modules.position.models import Position
 from app.modules.talent_market import common
 from app.modules.talent_market.common import _candidate_to_read
 from app.modules.talent_market.matching import (
+    _comp_gap_rows,
     _comp_percent_from_map,
     _compute_match_score,
     _current_position_matches_spec,
+    _done_status_id,
     _employee_current_position,
     _employee_current_position_matches_any_spec,
     _employee_experience_months,
@@ -35,10 +42,12 @@ from app.modules.talent_market.matching import (
     _fetch_match_inputs,
     _last_passed_percents,
     _load_work_exp_cache,
+    _unique_comp_rows,
 )
 from app.modules.talent_market.models import (
     TalentCandidate,
     TalentCard,
+    TalentCardSpecialization,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,6 +119,9 @@ async def list_candidate_pool(
     )
 
     comp_rows, spec_rows = await _fetch_match_inputs(db, card_id)
+    # HRP-665: "N of M" counts competences, not requirement rows. Resolved
+    # once per card, outside the per-employee loop.
+    unique_comp_rows = await _unique_comp_rows(db, comp_rows)
     work_exp_cache = await _load_work_exp_cache(
         db, [e.id for e in employees], spec_rows
     )
@@ -162,8 +174,14 @@ async def list_candidate_pool(
         # exp_months is total tenure on matching positions (None when no
         # spec requirement or no matching WorkExperience row).
         comp_match: int | None = None
+        comp_met: int | None = None
         if comp_rows:
             comp_match = _comp_percent_from_map(comp_rows, last_map.get(emp.id, {}))
+            # HRP-657: same "N of M cleared" reason the Candidates table
+            # shows, so the picker explains its ranking too.
+            comp_met = len(unique_comp_rows) - len(
+                _comp_gap_rows(unique_comp_rows, last_map.get(emp.id, {}), threshold)
+            )
         comp_qualifies = comp_match is not None and comp_match >= threshold
         exp_months: int | None = None
         exp_qualifies = False
@@ -183,11 +201,8 @@ async def list_candidate_pool(
             # picker chip switches from red "no experience" to greyed
             # "has experience" and the drawer labels the row
             # accordingly.
-            if (
-                exp_months is None
-                and await _employee_current_position_matches_any_spec(
-                    db, emp.id, spec_rows, current_pos_cache=current_pos_cache
-                )
+            if exp_months is None and await _employee_current_position_matches_any_spec(
+                db, emp.id, spec_rows, current_pos_cache=current_pos_cache
             ):
                 exp_via_current_position = True
         items.append(
@@ -199,6 +214,8 @@ async def list_candidate_pool(
                 "basis": basis,
                 "comp_match": comp_match,
                 "comp_qualifies": comp_qualifies,
+                "comp_met": comp_met,
+                "comp_total": len(unique_comp_rows) if comp_rows else None,
                 "exp_months": exp_months,
                 "exp_qualifies": exp_qualifies,
                 "has_comp_requirement": bool(comp_rows),
@@ -256,6 +273,79 @@ async def list_candidate_pool(
     return items
 
 
+async def _other_level_results(
+    db: AsyncSession,
+    employee_id: uuid.UUID,
+    competence_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, tuple[str, str | None, int]]:
+    """HRP-695: {competence_id: (level title, level i18n_key, percent)} —
+    the employee's best Done assessment of that competence at a level the
+    matcher did not count.
+
+    Reference data for the match drawer; it never reaches the scoring
+    path. "Best" mirrors the Competences tab (HRP-153): the highest
+    assessed level wins, the latest assessment breaks the tie. Levelless
+    assessments are absent by construction (the join needs a
+    ``skill_level_id``) — those already count toward the match.
+
+    ponytail: reads the assessment's own ``AssessmentResult.percent``
+    instead of re-projecting the per-level breakdown. A reference line
+    does not need the cascade average, and the projection would cost a
+    breakdown batch on every drawer open. Swap in
+    ``compute_per_level_breakdowns_batch`` if the two numbers ever have
+    to agree to the point.
+    """
+    if not competence_ids:
+        return {}
+    done_id = await _done_status_id(db)
+    if done_id is None:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                AssessmentCompetence.competence_id,
+                SkillLevel.title,
+                SkillLevel.i18n_key,
+                SkillLevel.sort_index,
+                Assessment.finished_at,
+                AssessmentResult.percent,
+            )
+            .join(Assessment, Assessment.id == AssessmentCompetence.assessment_id)
+            .join(
+                AssessmentResult,
+                and_(
+                    AssessmentResult.assessment_id == Assessment.id,
+                    AssessmentResult.competence_id
+                    == AssessmentCompetence.competence_id,
+                ),
+            )
+            .join(SkillLevel, SkillLevel.id == AssessmentCompetence.skill_level_id)
+            .where(
+                Assessment.status_id == done_id,
+                Assessment.employee_id == employee_id,
+                AssessmentCompetence.competence_id.in_(competence_ids),
+                AssessmentResult.percent.isnot(None),
+            )
+            # Deterministic tie-break: without it, two done assessments at
+            # the same level and timestamp resolve by planner row order.
+            .order_by(
+                SkillLevel.sort_index,
+                Assessment.finished_at,
+                Assessment.id,
+            )
+        )
+    ).all()
+
+    best: dict[uuid.UUID, tuple] = {}
+    for comp_id, title, i18n_key, sort_index, finished_at, percent in rows:
+        # ``finished_at is not None`` sits before the stamp itself so a
+        # NULL one is never compared against a real datetime.
+        rank = (sort_index or 0, finished_at is not None, finished_at or datetime.min)
+        if comp_id not in best or rank > best[comp_id][0]:
+            best[comp_id] = (rank, (title, i18n_key, int(percent)))
+    return {comp_id: payload for comp_id, (_, payload) in best.items()}
+
+
 async def get_candidate_breakdown(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -285,6 +375,12 @@ async def get_candidate_breakdown(
         emp_name = f"{emp.user.first_name} {emp.user.last_name}".strip() or None
 
     comp_rows, spec_rows = await _fetch_match_inputs(db, card_id)
+    # HRP-665: the drawer lists competences, not requirement rows — the
+    # same de-dup behind the Match cell's "N of M" and the gap plan, or a
+    # card requiring one competence at two levels opens "1 of 4" onto a
+    # list of 8. ``required_pairs`` below deliberately keeps every
+    # (competence, level) pair — see _unique_comp_rows' docstring.
+    unique_comp_rows = await _unique_comp_rows(db, comp_rows)
     threshold = card.match_percent if card.match_percent is not None else 80
 
     # Per-competence projected percent for the chosen Done assessments.
@@ -295,8 +391,10 @@ async def get_candidate_breakdown(
     per_comp = last_map.get(employee_id, {})
 
     # Resolve competence + skill level titles in one go to avoid N+1.
-    comp_ids = {r.competence_id for r in comp_rows}
-    sl_ids = {r.skill_level_id for r in comp_rows if r.skill_level_id is not None}
+    comp_ids = {r.competence_id for r in unique_comp_rows}
+    sl_ids = {
+        r.skill_level_id for r in unique_comp_rows if r.skill_level_id is not None
+    }
     comp_titles: dict[uuid.UUID, str] = {}
     if comp_ids:
         rows = (
@@ -320,12 +418,32 @@ async def get_candidate_breakdown(
         ).all()
         sl_titles = {r[0]: (r[1], r[2]) for r in sl_rows}
 
+    # HRP-695: a Done assessment of a required competence taken at a
+    # *different* level never reaches the matcher — ``_last_passed_percents``
+    # only counts the required level or higher — so the drawer read
+    # "no assessment" while the employee had, say, an L3 result at 82%.
+    # Shown as a reference line under the requirement; the percent above,
+    # and the card's match score, stay exactly what the matcher computed.
+    other_level = await _other_level_results(
+        db,
+        employee_id,
+        {
+            r.competence_id
+            for r in unique_comp_rows
+            if per_comp.get(r.competence_id) is None
+        },
+    )
+
     competences_payload: list[dict] = []
-    for r in comp_rows:
+    for r in unique_comp_rows:
         actual = per_comp.get(r.competence_id)
         qualifies = actual is not None and actual >= threshold
+        other = other_level.get(r.competence_id) if actual is None else None
         competences_payload.append(
             {
+                "other_level_title": other[0] if other else None,
+                "other_level_i18n_key": other[1] if other else None,
+                "other_level_percent": other[2] if other else None,
                 "competence_id": r.competence_id,
                 "competence_title": comp_titles.get(r.competence_id) or "—",
                 "required_skill_level_id": r.skill_level_id,
@@ -709,6 +827,170 @@ async def appoint_candidate(
         emp_name,
         position_title=emp_position_title,
         employee_status=emp_status_val,
+    )
+
+
+async def _pick_plan_specialization(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    spec_rows: list[TalentCardSpecialization],
+    gaps: list,
+) -> TalentCardSpecialization | None:
+    """HRP-665: which Required Specialization the gap plan is built against.
+
+    The pick is not cosmetic — it selects the material override set
+    (``get_materials_for_specialization``) and the grade the plan header
+    shows. Taking ``spec_rows[0]`` off an unordered query meant a card with
+    two Required Specializations stamped a different material set on
+    identical inputs from one call to the next.
+
+    Prefer the ladder that actually covers the most of the employee's gaps;
+    ``max`` keeps the first of equal candidates and ``_fetch_match_inputs``
+    orders rows by id, so ties resolve the same way every time.
+    """
+    if len(spec_rows) < 2:
+        return spec_rows[0] if spec_rows else None
+
+    from app.modules.grade_system.models import (
+        GradeCompetenceLink,
+        GradeSpecialization,
+    )
+
+    gap_ids = {row.competence_id for row in gaps}
+    covered: dict[tuple[uuid.UUID, uuid.UUID | None], set[uuid.UUID]] = {}
+    grade_ids = {s.grade_id for s in spec_rows if s.grade_id is not None}
+    if grade_ids:
+        rows = (
+            await db.execute(
+                select(
+                    GradeSpecialization.specialization_id,
+                    GradeSpecialization.grade_id,
+                    GradeCompetenceLink.competence_id,
+                )
+                .join(
+                    GradeCompetenceLink,
+                    GradeCompetenceLink.grade_specialization_id
+                    == GradeSpecialization.id,
+                )
+                .where(
+                    GradeSpecialization.tenant_id == tenant_id,
+                    GradeSpecialization.grade_id.in_(grade_ids),
+                    GradeSpecialization.specialization_id.in_(
+                        {s.specialization_id for s in spec_rows}
+                    ),
+                )
+            )
+        ).all()
+        for spec_id, grade_id, comp_id in rows:
+            covered.setdefault((spec_id, grade_id), set()).add(comp_id)
+
+    return max(
+        spec_rows,
+        key=lambda s: len(
+            covered.get((s.specialization_id, s.grade_id), set()) & gap_ids
+        ),
+    )
+
+
+async def create_candidate_development_plan(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    card_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    author_id: uuid.UUID,
+    data,
+) -> dict:
+    """HRP-665: build a development plan from the candidate's competence gaps.
+
+    The plan items are exactly the card's Required Competences whose
+    projected percent is below the card's Match% threshold (or that the
+    employee has never been assessed on) — required vs current, nothing
+    else. The created plan is linked back through the long-declared
+    ``TalentCandidate.pdp_id`` column.
+
+    Delegates to ``pdp_service.create_pdp`` through the module (not a
+    from-import) so the billing wrapper installed at startup is the one
+    that runs — the plan is charged once, as ``pdp.create``, and the
+    active-plan cap (409 ``pdp_active_limit_reached``) applies here too.
+
+    Appointment order does not matter: a candidate can get the plan before
+    or after ``appoint_candidate`` — neither touches the other's column.
+    """
+    from app.modules.assessment import pdp_service
+    from app.modules.assessment.schemas import CompetenceCriteriaItem, PDPCreate
+
+    card = await db.get(TalentCard, card_id)
+    if not card or card.tenant_id != tenant_id:
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
+    common.assert_card_not_terminal(card)
+
+    candidate = await db.get(TalentCandidate, candidate_id)
+    if not candidate or candidate.card_id != card_id:
+        raise AppError("candidate_not_found", status.HTTP_404_NOT_FOUND)
+    if candidate.pdp_id is not None:
+        raise AppError("tm_candidate_plan_exists", status.HTTP_409_CONFLICT)
+
+    comp_rows, spec_rows = await _fetch_match_inputs(db, card_id)
+    if not comp_rows:
+        raise AppError("tm_no_required_competences", status.HTTP_409_CONFLICT)
+    threshold = card.match_percent if card.match_percent is not None else 80
+    required_pairs = {(r.competence_id, r.skill_level_id) for r in comp_rows}
+    last_map = await _last_passed_percents(db, [candidate.employee_id], required_pairs)
+    # HRP-665: one gap per competence — a card requiring the same
+    # competence through two grade ladders used to produce two identical
+    # PDP items, each with its own material set.
+    gaps = _comp_gap_rows(
+        await _unique_comp_rows(db, comp_rows),
+        last_map.get(candidate.employee_id, {}),
+        threshold,
+    )
+    if not gaps:
+        raise AppError("tm_no_competence_gaps", status.HTTP_409_CONFLICT)
+
+    # The target Specialization picks the material override set and shows
+    # on the plan header.
+    spec = await _pick_plan_specialization(db, tenant_id, spec_rows, gaps)
+
+    # The back-link rides inside create_pdp's own commit: the plan, the
+    # billing charge and ``candidate.pdp_id`` land atomically, so an
+    # interruption between "plan committed" and "candidate linked" can no
+    # longer strand a paid orphan plan behind the pdp_id-is-None guard
+    # above (HRP-654 review).
+    async def _link_candidate(plan) -> None:
+        candidate.pdp_id = plan.id
+
+    pdp = await pdp_service.create_pdp(
+        db,
+        tenant_id,
+        author_id,
+        PDPCreate(
+            title=(data.title if data and data.title else card.title)[:100],
+            employee_id=candidate.employee_id,
+            specialization_id=spec.specialization_id if spec else None,
+            grade_id=spec.grade_id if spec else None,
+            competences=[
+                CompetenceCriteriaItem(
+                    competence_id=row.competence_id,
+                    skill_level_id=row.skill_level_id,
+                )
+                for row in gaps
+            ],
+        ),
+        before_commit=_link_candidate,
+    )
+
+    await db.refresh(candidate)
+
+    emp = await db.get(Employee, candidate.employee_id)
+    emp_name = (
+        f"{emp.user.first_name} {emp.user.last_name}" if emp and emp.user else None
+    )
+    return _candidate_to_read(
+        candidate,
+        emp_name,
+        pdp_status=pdp["status"],
+        position_title=emp.position_title if emp else None,
+        employee_status=emp.status if emp else None,
     )
 
 

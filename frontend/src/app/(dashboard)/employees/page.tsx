@@ -54,6 +54,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { FieldError, FormErrorBanner } from "@/components/ui/form-error";
+import { Hint } from "@/components/ui/hint";
 import {
   EMPTY_FORM_ERROR,
   parseFormError,
@@ -174,6 +175,7 @@ function buildBackendQuery(
 
 export default function EmployeesPage() {
   const t = useTranslations("employees");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const tRole = useTranslations("sidebar");
@@ -507,9 +509,15 @@ export default function EmployeesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t("employees")}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {t("employees")}
+            </h1>
+            <Hint
+              text={tSections("employees.hint")}
+              data-testid="employees-hint-title"
+            />
+          </div>
           <p className="text-sm text-muted-foreground">
             {t("totalCount", { count: total })}
           </p>

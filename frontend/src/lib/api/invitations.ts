@@ -14,6 +14,23 @@ export type InvitationCreatePayload = {
   position_id?: string | null;
 };
 
+/** One address `POST /invitations/bulk` refused, with the backend error code. */
+export type InvitationBulkFailure = {
+  email: string;
+  error_code: string;
+};
+
+/**
+ * Multi-status answer of the bulk create (HRP-593). It used to be a plain
+ * `Invitation[]` of whatever made it through, so a refused address just
+ * vanished from the response — callers must render `failed` (translating
+ * `error_code`), not report the whole batch as sent.
+ */
+export type InvitationBulkResult = {
+  created: Invitation[];
+  failed: InvitationBulkFailure[];
+};
+
 export type InvitationListParams = {
   status?: string;
   skip?: number;
@@ -34,7 +51,7 @@ export const invitationsApi = {
   create: (payload: InvitationCreatePayload) =>
     api.post<Invitation>("/invitations", payload),
   bulkCreate: (invitations: InvitationCreatePayload[]) =>
-    api.post<Invitation[]>("/invitations/bulk", { invitations }),
+    api.post<InvitationBulkResult>("/invitations/bulk", { invitations }),
   cancel: (id: string) => api.post<Invitation>(`/invitations/${id}/cancel`),
   resend: (id: string) => api.post<Invitation>(`/invitations/${id}/resend`),
   update: (id: string, payload: InvitationUpdate) =>

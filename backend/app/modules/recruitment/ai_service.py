@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.modules.ai.llm_client import LLMOutputTruncatedError, generate_json
 from app.modules.ai.providers import GenerationTarget
+from app.modules.ai_settings.service import language_directive
 from app.modules.recruitment.prompts import (
     GENERATE_PROFILE,
     GENERATE_QUESTIONS,
@@ -93,21 +94,55 @@ def _normalise_resume_payload(payload: dict) -> None:
         if isinstance(head, dict):
             payload["current_position"] = head.get("position") or head.get("role")
 
-    if isinstance(experience, list):
-        for entry in experience:
-            if not isinstance(entry, dict):
-                continue
-            position = entry.get("position") or entry.get("role")
-            if position:
-                entry.setdefault("position", position)
-                entry.setdefault("role", position)
-            _normalise_experience_entry(entry)
+    _normalise_resume_entries(payload)
 
     contacts = payload.get("contacts")
     if not payload.get("location") and isinstance(contacts, dict):
         loc = contacts.get("location")
         if loc:
             payload["location"] = loc
+
+
+def _normalise_resume_entries(payload: dict) -> None:
+    """Map every nested resume list onto the card contract (HRP-686).
+
+    Idempotent: an entry already in the card's shape is left untouched,
+    so it is safe to run on write (fresh LLM output) and on read (JSONB
+    stored by an older prompt).
+    """
+    for entry in _dict_entries(payload, "experience"):
+        position = entry.get("position") or entry.get("role")
+        if position:
+            entry.setdefault("position", position)
+            entry.setdefault("role", position)
+        _normalise_experience_entry(entry)
+
+    # The pre-HRP-686 prompt emitted ``education.year`` and
+    # ``certificates.title`` / ``certificates.year``; the card reads
+    # start_date/end_date and name/issued_at. A single year is the
+    # graduation / issue date — there is no start date to recover, so it
+    # stays absent rather than being guessed.
+    for entry in _dict_entries(payload, "education"):
+        _fill_from_legacy(entry, "end_date", entry.get("year"))
+    for entry in _dict_entries(payload, "certificates"):
+        _fill_from_legacy(entry, "name", entry.get("title"))
+        _fill_from_legacy(entry, "issued_at", entry.get("year"))
+
+
+def _dict_entries(payload: dict, key: str) -> list[dict]:
+    value = payload.get(key)
+    if not isinstance(value, list):
+        return []
+    return [entry for entry in value if isinstance(entry, dict)]
+
+
+def _fill_from_legacy(entry: dict, key: str, legacy: Any) -> None:
+    """Copy a legacy value under the card's key when that key is empty."""
+    if entry.get(key) or not isinstance(legacy, (str, int)):
+        return
+    text = str(legacy).strip()
+    if text:
+        entry[key] = text
 
 
 def _normalise_experience_entry(entry: dict) -> None:
@@ -191,6 +226,12 @@ async def generate_vacancy_profile(
             f"{clarification}"
         )
 
+    # HRP-690: the bare ISO code buried in the English template ("Respond
+    # in ru language") lost to ~2 KB of English JSON exemplars — the
+    # directive must name the language and sit in the system prompt too,
+    # same pattern as HRP-541 in ai_competence_generation.
+    directive = language_directive(vacancy_data.get("language", "en"))
+    system_prompt = f"{SYSTEM_RECRUITER} {directive}"
     prompt = GENERATE_PROFILE.format(
         title=vacancy_data.get("title", ""),
         specialization=vacancy_data.get("specialization", "Not specified"),
@@ -207,11 +248,12 @@ async def generate_vacancy_profile(
         industry_context=industry_context,
         vacancy_id=vacancy_data.get("vacancy_id", ""),
         language=vacancy_data.get("language", "en"),
+        language_directive=directive,
     )
     try:
         result = await generate_json(
             prompt,
-            system=SYSTEM_RECRUITER,
+            system=system_prompt,
             temperature=0.3,
             max_tokens=RECRUITMENT_MAX_TOKENS,
             credentials=credentials,
@@ -232,7 +274,7 @@ async def generate_vacancy_profile(
         )
         result = await generate_json(
             prompt + _COMPACT_PROFILE_SUFFIX,
-            system=SYSTEM_RECRUITER,
+            system=system_prompt,
             temperature=0.3,
             max_tokens=RECRUITMENT_MAX_TOKENS,
             credentials=credentials,
@@ -255,15 +297,17 @@ async def generate_individual_questions(
     """
     import json
 
+    directive = language_directive(language)
     prompt = GENERATE_QUESTIONS.format(
         resume_data=json.dumps(resume_data, ensure_ascii=False, indent=2),
         profile_data=json.dumps(profile_data, ensure_ascii=False, indent=2),
         vacancy_title=vacancy_title,
         language=language,
+        language_directive=directive,
     )
     result = await generate_json(
         prompt,
-        system=SYSTEM_RECRUITER,
+        system=f"{SYSTEM_RECRUITER} {directive}",
         temperature=0.3,
         max_tokens=RECRUITMENT_MAX_TOKENS,
         credentials=credentials,

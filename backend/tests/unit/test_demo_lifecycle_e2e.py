@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from app.config import settings
+from app.models import Person
 from app.modules.assessment.models import Assessment
 from app.modules.auth.models import User
 from app.modules.company.models import Tenant
@@ -200,6 +201,68 @@ async def test_full_lifecycle_start_activity_purge_cascade(
         assert remaining == [], (
             f"{model.__name__} rows survived tenant purge: {remaining}"
         )
+
+
+@pytest.mark.asyncio
+async def test_purge_removes_the_internal_candidate_person(
+    client: AsyncClient,
+    admin_role,
+    enable_demo,
+    db: AsyncSession,
+    sync_test_engine,
+    skill_levels,
+    monkeypatch,
+):
+    """HRP-679: the one Person the seed mints must not outlive the demo.
+
+    ``persons`` is a global, tenant-less registry and CASCADE runs
+    Person → Candidate, never the reverse — so the row the internal
+    candidate shares with his employee ``User`` would survive tenant
+    deletion on its own. The purge task collects it before the DELETE and
+    reaps it once nothing references it; drive the real endpoint and check
+    the row is gone rather than reasoning about the SQL.
+    """
+    import app.modules.demo.tasks as tasks
+
+    resp = await client.post("/api/demo/start", json={})
+    assert resp.status_code == 201, resp.text
+    tenant_id = uuid.UUID(resp.json()["tenant_id"])
+
+    person_ids = (
+        await db.execute(
+            select(Candidate.person_id).where(
+                Candidate.tenant_id == tenant_id,
+                Candidate.person_id.is_not(None),
+            )
+        )
+    ).scalars().all()
+    assert len(person_ids) == 1, (
+        "the seed should mint exactly one Person — the internal candidate"
+    )
+    person_id = person_ids[0]
+    # Prove the row exists first, so the post-purge assertion below can't
+    # pass on an empty premise.
+    assert (
+        await db.execute(select(Person).where(Person.id == person_id))
+    ).scalar_one_or_none() is not None
+
+    await db.execute(
+        update(Tenant)
+        .where(Tenant.id == tenant_id)
+        .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+    )
+    await db.commit()
+
+    monkeypatch.setattr(tasks, "_sync_engine", lambda: sync_test_engine)
+    assert tasks.purge_expired_demo_tenants()["deleted"] >= 1
+
+    db.expire_all()
+    assert (
+        await db.execute(select(Person).where(Person.id == person_id))
+    ).scalar_one_or_none() is None, (
+        "the demo's Person row survived the purge — the global registry "
+        "would accrete one row per demo session"
+    )
 
 
 @pytest.mark.asyncio

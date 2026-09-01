@@ -55,6 +55,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
     from app.modules.recruitment.models import (
         AIAssessment,
         Candidate,
+        CandidateFile,
         CandidateVacancy,
         ConsolidatedReport,
         HumanAssessment,
@@ -64,6 +65,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
         VacancyStage,
     )
     from app.modules.recruitment.report_xlsx import render_report_xlsx
+    from app.modules.recruitment.resume_analysis_service import _derive_readiness
     from app.modules.storage.models import File
 
     sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
@@ -136,6 +138,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
             cv_ids = [cv.id for cv in cvs]
 
             persons_by_candidate: dict[uuid.UUID, Person] = {}
+            candidates_with_parsed_resume: set[uuid.UUID] = set()
             candidate_ids = {cv.candidate_id for cv in cvs}
             if candidate_ids:
                 cand_rows = (
@@ -143,6 +146,13 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     .scalars()
                     .all()
                 )
+                # ``is not None``, not truthiness: the candidates table
+                # derives readiness with ``parsed_resume_jsonb.is_not(None)``
+                # (resume_analysis_service), and an empty parse ({}) must
+                # read the same on both surfaces.
+                candidates_with_parsed_resume = {
+                    c.id for c in cand_rows if c.parsed_resume_jsonb is not None
+                }
                 person_ids = {c.person_id for c in cand_rows if c.person_id}
                 persons: dict[uuid.UUID, Person] = {}
                 if person_ids:
@@ -508,6 +518,51 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
             )
             selected_cv_ids = {cv.id for cv in selected_cvs}
 
+            # HRP-685 — readiness is derived from the inputs on file, never
+            # read off the ``candidate_vacancies.ai_readiness`` mirror. That
+            # column is stamped by whichever analysis last ran and claims
+            # ``resume_and_transcript`` even for a candidate whose resume was
+            # never parsed (the full prompt takes the resume summary as
+            # optional), so the Summary sheet printed "Full data" for them.
+            # HRP-493 already moved the candidates table onto the same
+            # derivation; ``_derive_readiness`` is the shared seam.
+            #
+            # Cost: one extra bounded query for the whole report. The parsed
+            # resumes come from ``cand_rows`` and the transcripts from the
+            # ``interviews`` list, both already loaded above, so every row is
+            # two set lookups — no per-candidate query.
+            resume_file_candidates: set[uuid.UUID] = set()
+            if candidate_ids:
+                resume_file_candidates = {
+                    cid
+                    for cid in db.execute(
+                        select(CandidateFile.candidate_id).where(
+                            CandidateFile.tenant_id == vacancy.tenant_id,
+                            CandidateFile.candidate_id.in_(candidate_ids),
+                            CandidateFile.file_type == "resume",
+                            CandidateFile.parse_status == "completed",
+                        )
+                    )
+                    .scalars()
+                    .all()
+                    if cid is not None
+                }
+            candidates_with_resume = (
+                candidates_with_parsed_resume | resume_file_candidates
+            )
+            cvs_with_transcript = {
+                iv.candidate_vacancy_id
+                for iv in interviews
+                if iv.transcription_status == "completed" and iv.archived_at is None
+            }
+            readiness_by_cv: dict[uuid.UUID, str] = {
+                cv.id: _derive_readiness(
+                    cv.candidate_id in candidates_with_resume,
+                    cv.id in cvs_with_transcript,
+                )
+                for cv in selected_cvs
+            }
+
             # Tenant divergence threshold + active scale max (HRP-265).
             divergence_threshold = 1.0
             max_score = 5.0
@@ -716,14 +771,18 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     else "—"
                 )
 
-                readiness = (cv.ai_readiness or "none").lower()
-                # ``ai_readiness`` is the candidate-level record of which
-                # inputs the model actually saw, so it — not the score
+                readiness = readiness_by_cv[cv.id]
+                # Which inputs the model could actually see — not the score
                 # count — decides the wording of the empty AI cell.
                 if readiness == "resume_and_transcript":
                     readiness_text = "Full data"
                 elif readiness == "resume_only":
                     readiness_text = "No transcript"
+                elif readiness == "transcript_only":
+                    # HRP-681 / HRP-685: a transcript is an input in its own
+                    # right, so this candidate has a real analysis — just not
+                    # one the resume backed up.
+                    readiness_text = "No resume"
                 else:
                     readiness_text = "No data"
 
@@ -834,8 +893,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 {
                     "id": cv.candidate_id,
                     "name": _cv_display_name(cv),
-                    "ai_full_data": (cv.ai_readiness or "").lower()
-                    == "resume_and_transcript",
+                    "ai_full_data": readiness_by_cv[cv.id] == "resume_and_transcript",
                     "manager_denominator": round(max_score * len(comp_keys), 1),
                     "ai_denominator": round(
                         max_score
@@ -996,12 +1054,14 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 )
 
             # Sheet 4 — Incomplete data (always emitted).
+            # "Has a resume" must mean the same thing here as in the
+            # Summary sheet's readiness derivation above — the union of a
+            # parsed JSONB and a completed resume file — or one workbook
+            # calls the same candidate "Full data" and "Resume not parsed".
             incomplete_rows: list[dict] = []
             for cv in selected_cvs:
                 agg = per_cv_aggregates[cv.id]
-                if cv.candidate is None or not getattr(
-                    cv.candidate, "parsed_resume_jsonb", None
-                ):
+                if cv.candidate_id not in candidates_with_resume:
                     incomplete_rows.append(
                         {
                             "candidate_name": _cv_display_name(cv),

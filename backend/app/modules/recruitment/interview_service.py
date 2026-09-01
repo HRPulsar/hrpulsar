@@ -175,25 +175,19 @@ async def _enforce_demo_upload_quota(tenant_id: uuid.UUID) -> None:
     not lock a paid tenant out of a feature it shares with demo via the
     same code path.
     """
-    import contextlib
-
-    import redis.asyncio as aioredis
     from redis.exceptions import RedisError
 
     from app.config import settings
+    from app.core.redis import bump_counter
 
     if settings.demo_quota_uploads <= 0:
         return
-    client = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
-        key = f"demo:uploads:{tenant_id}"
-        async with client.pipeline(transaction=True) as pipe:
-            pipe.incr(key)
-            # ``nx=True`` makes EXPIRE a no-op when the key already has a
-            # TTL, anchoring the window to the first upload so an
-            # actively-retrying client can't push expiry out indefinitely.
-            pipe.expire(key, settings.demo_session_ttl_seconds, nx=True)
-            count, _ = await pipe.execute()
+        # The helper anchors the window to the first upload, so an
+        # actively-retrying client can't push expiry out indefinitely.
+        count = await bump_counter(
+            f"demo:uploads:{tenant_id}", settings.demo_session_ttl_seconds
+        )
         if count > settings.demo_quota_uploads:
             raise AppError(
                 "upload_quota_exhausted",
@@ -203,17 +197,16 @@ async def _enforce_demo_upload_quota(tenant_id: uuid.UUID) -> None:
         raise
     except (RedisError, ConnectionError, TimeoutError) as exc:
         # Narrow on purpose: a TypeError/ValueError out of the pipeline
-        # unpack would mean a redis-py contract change, and silently
-        # failing open across all demo tenants on that is worse than
-        # surfacing the regression.
+        # unpack inside ``bump_counter`` would mean a redis-py contract
+        # change, and silently failing open across all demo tenants on
+        # that is worse than surfacing the regression. A malformed
+        # ``REDIS_URL`` (``ValueError`` out of ``from_url``) is
+        # misconfiguration and stays loud here for the same reason.
         logger.warning(
             "demo upload quota: redis unavailable, allowing tenant=%s (%s)",
             tenant_id,
             exc,
         )
-    finally:
-        with contextlib.suppress(Exception):
-            await client.aclose()  # type: ignore[attr-defined]
 
 
 async def _get_interview_with_relations(

@@ -18,12 +18,14 @@ from sqlalchemy.orm import selectinload
 
 from app.core.access_scope import get_visible_employee_ids
 from app.core.errors import AppError
+from app.modules.assessment.models import PDP
 from app.modules.auth.models import User
 from app.modules.position.models import Position
 from app.modules.talent_market import common
 from app.modules.talent_market.common import _card_to_detail, _card_to_read
 from app.modules.talent_market.matching import (
     _auto_populate_candidates,
+    _comp_gap_rows,
     _comp_percent_from_map,
     _employee_current_position_matches_any_spec,
     _employee_experience_months,
@@ -31,6 +33,7 @@ from app.modules.talent_market.matching import (
     _fetch_match_inputs,
     _last_passed_percents,
     _load_work_exp_cache,
+    _unique_comp_rows,
 )
 from app.modules.talent_market.models import (
     TalentCandidate,
@@ -276,10 +279,19 @@ async def _compute_candidates_breakdown(
     Shares the prefetch helpers `_fetch_match_inputs`, `_load_work_exp_cache`
     and `_last_passed_percents` with the auto-pool builder so the matcher
     fans out across employees with constant SQL, not N+1.
+
+    HRP-657 adds ``comp_met`` / ``comp_total`` — how many of the card's
+    Required Competences clear the threshold — so the Match cell can say
+    *why* the average landed where it did without opening the drawer.
+    HRP-665 adds ``pdp_status``, the state of the development plan built
+    from those gaps (NULL when the candidate has no plan yet).
     """
     if not employee_ids:
         return {}
     comp_rows, spec_rows = await _fetch_match_inputs(db, card.id)
+    # HRP-665: "N of M" counts competences, not requirement rows. Resolved
+    # once per card, outside the per-employee loop.
+    unique_comp_rows = await _unique_comp_rows(db, comp_rows)
     work_exp_cache = await _load_work_exp_cache(db, employee_ids, spec_rows)
     last_map: dict[uuid.UUID, dict[uuid.UUID, int]] = {}
     if comp_rows:
@@ -287,11 +299,28 @@ async def _compute_candidates_breakdown(
         last_map = await _last_passed_percents(db, employee_ids, required_pairs)
     threshold = card.match_percent if card.match_percent is not None else 80
     current_pos_cache: dict[uuid.UUID, Position | None] = {}
+    # HRP-665: plan state per candidate row, resolved in one statement.
+    pdp_status_by_emp: dict[uuid.UUID, str] = {}
+    pdp_ids = {ca.pdp_id for ca in card.candidates if ca.pdp_id is not None}
+    if pdp_ids:
+        status_by_pdp = {
+            row[0]: row[1]
+            for row in (
+                await db.execute(select(PDP.id, PDP.status).where(PDP.id.in_(pdp_ids)))
+            ).all()
+        }
+        for ca in card.candidates:
+            if ca.pdp_id is not None and ca.pdp_id in status_by_pdp:
+                pdp_status_by_emp[ca.employee_id] = status_by_pdp[ca.pdp_id]
     out: dict[uuid.UUID, dict] = {}
     for emp_id in employee_ids:
         comp_match: int | None = None
+        comp_met: int | None = None
         if comp_rows:
             comp_match = _comp_percent_from_map(comp_rows, last_map.get(emp_id, {}))
+            comp_met = len(unique_comp_rows) - len(
+                _comp_gap_rows(unique_comp_rows, last_map.get(emp_id, {}), threshold)
+            )
         comp_qualifies = comp_match is not None and comp_match >= threshold
         exp_months: int | None = None
         exp_qualifies = False
@@ -309,19 +338,19 @@ async def _compute_candidates_breakdown(
             )
             # HRP-210: surface the current-position fallback for the
             # Candidates table's Match cell (mirrors the picker logic).
-            if (
-                exp_months is None
-                and await _employee_current_position_matches_any_spec(
-                    db, emp_id, spec_rows, current_pos_cache=current_pos_cache
-                )
+            if exp_months is None and await _employee_current_position_matches_any_spec(
+                db, emp_id, spec_rows, current_pos_cache=current_pos_cache
             ):
                 exp_via_current_position = True
         out[emp_id] = {
             "comp_match": comp_match,
             "comp_qualifies": comp_qualifies,
+            "comp_met": comp_met,
+            "comp_total": len(unique_comp_rows) if comp_rows else None,
             "exp_months": exp_months,
             "exp_qualifies": exp_qualifies,
             "exp_via_current_position": exp_via_current_position,
+            "pdp_status": pdp_status_by_emp.get(emp_id),
         }
     return out
 

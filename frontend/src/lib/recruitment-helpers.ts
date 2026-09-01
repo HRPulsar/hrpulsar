@@ -407,3 +407,13 @@ export function joinLocalDateTime(
   const parsed = new Date(`${date}T${time || "00:00"}`);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
+
+/**
+ * HRP-680 — DOM id of the Interviews block on the candidate page.
+ *
+ * Shared so the "Go to interviews" shortcut in the AI Insights banner
+ * and the section itself cannot drift apart. An id rather than the
+ * section's ``data-testid``: this is product behaviour, and it doubles
+ * as a real ``#`` anchor target.
+ */
+export const CANDIDATE_INTERVIEWS_ANCHOR_ID = "candidate-interviews";

@@ -500,6 +500,86 @@ async def _auto_generate_items_from_grade_link(
         )
 
 
+async def _generate_items_from_competences(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    pdp_id: uuid.UUID,
+    specialization_id: uuid.UUID | None,
+    competences: list,
+) -> None:
+    """HRP-665: pre-fill PDP items from an explicit competence list.
+
+    Same shape as ``_auto_generate_items_from_grade_link`` — one item per
+    competence plus its per-specialization material set — but the caller
+    picks the competences instead of the (specialization, grade) matrix.
+    The Talent Market gap plan passes exactly the Required Competences the
+    employee is short on, so the plan closes the gap and nothing else.
+
+    Each entry may carry ``skill_level_id``; materials are then capped at
+    that level the way HRP-189 caps the grade-driven path.
+    """
+    from app.modules.competence.models import Competence
+
+    comp_ids = [c.competence_id for c in competences]
+    titles: dict[uuid.UUID, str] = {}
+    if comp_ids:
+        # HRP-665: resolve inside the tenant only. The router checks the
+        # employee scope but never the competences, so an unfiltered lookup
+        # let a tenant admin pin a foreign competence_id onto a PDPItem FK
+        # (and read its title back). Same guard talent_market's
+        # requirement_service applies to Required Competences.
+        rows = (
+            await db.execute(
+                select(Competence.id, Competence.title).where(
+                    Competence.id.in_(comp_ids),
+                    Competence.tenant_id == tenant_id,
+                )
+            )
+        ).all()
+        titles = {row[0]: row[1] for row in rows}
+        foreign = [cid for cid in comp_ids if cid not in titles]
+        if foreign:
+            raise AppError(
+                "tm_competence_id_not_found",
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                competence_id=foreign[0],
+            )
+    level_ids = {c.skill_level_id for c in competences if c.skill_level_id is not None}
+    level_sort: dict[uuid.UUID, int] = {}
+    if level_ids:
+        level_rows = (
+            await db.execute(
+                select(SkillLevel.id, SkillLevel.sort_index).where(
+                    SkillLevel.id.in_(level_ids)
+                )
+            )
+        ).all()
+        level_sort = {row[0]: row[1] for row in level_rows}
+
+    for idx, entry in enumerate(competences):
+        item = PDPItem(
+            pdp_id=pdp_id,
+            competence_id=entry.competence_id,
+            title=titles.get(entry.competence_id) or "Competence",
+            sort_index=idx,
+            entity_type="competence",
+        )
+        db.add(item)
+        await db.flush()
+        await _attach_default_materials(
+            db,
+            tenant_id,
+            item.id,
+            entry.competence_id,
+            specialization_id,
+            up_to_skill_level_sort_index=(
+                level_sort.get(entry.skill_level_id)
+                if entry.skill_level_id is not None
+                else None
+            ),
+        )
+
+
 async def _reload_pdp_for_read(
     db: AsyncSession, tenant_id: uuid.UUID, pdp_id: uuid.UUID
 ) -> dict:
@@ -514,8 +594,21 @@ async def _reload_pdp_for_read(
 
 
 async def create_pdp(
-    db: AsyncSession, tenant_id: uuid.UUID, author_id: uuid.UUID, data
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    author_id: uuid.UUID,
+    data,
+    *,
+    before_commit=None,
 ) -> dict:
+    """Create a plan with its generated items and commit.
+
+    ``before_commit(pdp_row)`` (async) runs inside the same transaction,
+    right before the commit — the Talent Market uses it to write the
+    ``TalentCandidate.pdp_id`` back-link atomically with the plan, so an
+    interruption can never leave a billed plan the candidate row does not
+    point to (HRP-654 review).
+    """
     # HRP-38: cap concurrent active plans per employee. Active = status
     # not in ({done, cancelled}). The error wording matches the
     # Assessments cap (HRP-37) so the Create plan dialog can render the
@@ -544,18 +637,31 @@ async def create_pdp(
         specialization_id=data.specialization_id,
         grade_id=data.grade_id,
         deadline=data.deadline,
+        # An explicit list pins the items: update_pdp must never replace
+        # them with the grade matrix (see _recompute_items_for_grade_change).
+        items_pinned=bool(data.competences),
     )
     db.add(p)
     await db.flush()
 
-    await _auto_generate_items_from_grade_link(
-        db,
-        tenant_id,
-        p.id,
-        data.specialization_id,
-        data.grade_id,
-    )
+    # HRP-665: an explicit competence list wins over the grade matrix —
+    # the gap plan asks for exactly the competences the employee is short
+    # on, not every competence the target grade lists.
+    if data.competences:
+        await _generate_items_from_competences(
+            db, tenant_id, p.id, data.specialization_id, data.competences
+        )
+    else:
+        await _auto_generate_items_from_grade_link(
+            db,
+            tenant_id,
+            p.id,
+            data.specialization_id,
+            data.grade_id,
+        )
 
+    if before_commit is not None:
+        await before_commit(p)
     await db.commit()
     return await _reload_pdp_for_read(db, tenant_id, p.id)
 
@@ -570,12 +676,14 @@ async def _recompute_items_for_grade_change(
     """HRP-189: rebuild the items + materials from scratch when the
     (specialization, grade) link changes.
 
-    Because the link can only be changed while the plan is still in
-    ``draft`` (no items are passed yet), wiping everything is safe — we
-    drop the old set, regenerate the auto-items from the new (spec, grade)
-    pair, and reset ``total_progress`` to zero. The dialog warns the user
-    that "All items will be replaced with the new specialization & grade set."
-    so this matches the documented contract.
+    Only valid for plans whose items were generated FROM the grade link —
+    ``update_pdp`` skips the call for ``items_pinned`` plans (HRP-665 gap
+    lists), where the wipe would destroy an item set the API cannot
+    resupply. For matrix plans the draft-only gate keeps the wipe safe:
+    we drop the old set, regenerate the auto-items from the new
+    (spec, grade) pair, and reset ``total_progress`` to zero. The dialog
+    warns the user that "All items will be replaced with the new
+    specialization & grade set." so this matches the documented contract.
     """
     pdp_row = await db.get(PDP, pdp_id)
     if pdp_row is None or pdp_row.status != "draft":
@@ -643,7 +751,10 @@ async def update_pdp(
     if "grade_id" in fields:
         p.grade_id = fields["grade_id"]
 
-    if grade_link_changed:
+    # A pinned plan (HRP-665: built from an explicit competence list) keeps
+    # its items — the grade link is only its header there, and the matrix
+    # rebuild would replace the gap list with something unrelated.
+    if grade_link_changed and not p.items_pinned:
         await db.flush()
         await _recompute_items_for_grade_change(
             db,

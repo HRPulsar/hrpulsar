@@ -7,6 +7,7 @@ hooks target this module; ``service.py`` re-exports via module
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 
 from fastapi import status
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
+from app.core.redis import redis_client
 from app.modules.auth.models import User
 from app.modules.recruitment.common import (
     _FULL_ROLES,
@@ -352,14 +354,14 @@ async def get_report_preview(
         raise AppError("report_not_ready", status.HTTP_409_CONFLICT)
 
     cache_key = _preview_cache_key(tenant_id, export_id)
-    redis_client = None
+    cache_reachable = True
     try:
-        import redis.asyncio as aioredis
-
-        from app.config import settings
-
-        redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
-        cached = await redis_client.get(cache_key)
+        # Read and write are two short-lived clients rather than one held
+        # across the S3 download and the openpyxl parse below (HRP-596):
+        # the old shape never closed the connection at all, and on a cache
+        # miss it kept it idle through both.
+        async with redis_client() as client:
+            cached = await client.get(cache_key)
         if cached:
             try:
                 return json.loads(cached)
@@ -367,8 +369,11 @@ async def get_report_preview(
                 pass
     except Exception:  # noqa: BLE001
         # Redis is best-effort here. If it's down we just re-parse the
-        # XLSX every time — slower, never wrong.
-        redis_client = None
+        # XLSX every time — slower, never wrong. The failed read also
+        # cancels the write below: this path already re-parses the whole
+        # workbook, and paying a second connect timeout on the way out
+        # would only make the slow case slower.
+        cache_reachable = False
 
     file_row = (
         await db.execute(select(File).where(File.id == export.file_id))
@@ -436,13 +441,12 @@ async def get_report_preview(
         "truncated": truncated,
     }
 
-    if redis_client is not None:
-        import contextlib
-
+    if cache_reachable:
         with contextlib.suppress(Exception):
-            await redis_client.set(
-                cache_key, json.dumps(payload), ex=_PREVIEW_CACHE_TTL_SECONDS
-            )
+            async with redis_client() as client:
+                await client.set(
+                    cache_key, json.dumps(payload), ex=_PREVIEW_CACHE_TTL_SECONDS
+                )
 
     return payload
 

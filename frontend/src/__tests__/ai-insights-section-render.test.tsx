@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import enMessages from "../../messages/en.json";
 import type {
   AiAnalysisRun,
+  ResumeExcerpt,
   TopupEligibility,
 } from "@/lib/recruitment-types";
 
@@ -128,7 +129,10 @@ function mkEligibility(
   };
 }
 
-async function render(hasParsedResume: boolean) {
+async function render(
+  hasParsedResume: boolean,
+  onExcerptsChange?: (excerpts: ResumeExcerpt[]) => void,
+) {
   await act(async () => {
     root.render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -136,6 +140,7 @@ async function render(hasParsedResume: boolean) {
           candidateId="cand-1"
           vacancyApplications={[APPLICATION]}
           hasParsedResume={hasParsedResume}
+          onExcerptsChange={onExcerptsChange}
         />
       </NextIntlClientProvider>,
     );
@@ -340,6 +345,40 @@ describe("AI Insights — top-up callout (HRP-489)", () => {
     ) as HTMLButtonElement;
     expect(upgrade.disabled).toBe(false);
     expect(upgrade.textContent).toContain("20");
+  });
+});
+
+describe("AI Insights — resume citations (HRP-680)", () => {
+  const EXCERPT: ResumeExcerpt = {
+    section: "experience",
+    excerpt_text: "Led the payments team",
+    source_company: "Acme",
+    source_period: "2022-2024",
+  };
+
+  it("publishes the citations of the run it is showing", async () => {
+    runs.push(mkRun({ resume_excerpts: [EXCERPT] }));
+    eligibility = mkEligibility();
+    const onExcerptsChange = vi.fn();
+    await render(true, onExcerptsChange);
+
+    expect(onExcerptsChange).toHaveBeenLastCalledWith([EXCERPT]);
+  });
+
+  it("clears them while a new run is in flight", async () => {
+    // The in-flight card replaces the one that owns the chips and the
+    // citation-focus listener, so marks left on the resume would link
+    // back to nothing.
+    runs.push(
+      mkRun({ resume_excerpts: [EXCERPT] }),
+      mkRun({ id: "run-2", status: "processing", verdict: null }),
+    );
+    eligibility = mkEligibility();
+    const onExcerptsChange = vi.fn();
+    await render(true, onExcerptsChange);
+
+    expect(byTestId("ai-analysis-inflight-card")).not.toBeNull();
+    expect(onExcerptsChange).toHaveBeenLastCalledWith([]);
   });
 });
 

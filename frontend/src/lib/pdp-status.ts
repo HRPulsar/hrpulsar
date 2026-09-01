@@ -31,6 +31,13 @@ export const PDP_TERMINAL_STATUSES: readonly PDPStatus[] = [
   "cancelled",
 ] as const;
 
+// HRP-37: the backend refuses a fourth concurrent plan with a 409. Mirrors
+// MAX_ACTIVE_PDPS_PER_EMPLOYEE in
+// backend/app/modules/assessment/pdp_service.py — HRP-660 reads it so the
+// employee card can offer the plan the employee already has instead of a
+// Create button that only ever answers with an error toast.
+export const MAX_ACTIVE_PDPS_PER_EMPLOYEE = 3;
+
 // HRP-189: spec/grade is editable only while the plan is still in Draft;
 // pressing Send freezes it for the rest of the lifecycle. Mirrors
 // PDP_GRADE_LOCKED_STATUSES in backend/app/modules/assessment/pdp_service.py.

@@ -117,15 +117,105 @@ caller the seniority ranking, so a restricted caller gets the directory's own
 Both routes stay on `get_current_user`; the scope rides into the service
 (`visible_employee_ids=`), so a third caller cannot forget it.
 
-**What this does not close.** `grade_title` on these rows is the grade of the
-*position*, and `GET /api/positions` publishes every position's grade,
-specialization and salary band to any authenticated user. Since the directory
-also shows a colleague's job title, `directory_show_grades` hides the grade
-from the payload but not from anyone willing to join two lists — and the same
-join reconstructs `specialization_title`, which the directory schema also
-withholds (on `/specializations/{id}/employees` the specialization is the
-route, whatever the row shape). Closing that means gating the positions
-catalogue itself — a separate decision (HRP-637).
+## The positions catalogue
+
+`GET /api/positions` stays open to the workspace — a position picker is a
+picker for every role — but since HRP-637 what a row carries depends on who
+asks, in two classes that answer to **two different role sets**:
+
+| Field class | Who reads it |
+|-------------|--------------|
+| title, division, headcount, employee count, lifecycle, source | everyone |
+| `specialization_id` / `_title`, `grade_id` / `_title`, the `specializations[]` and `grades[]` option pools, `matrix_configured` | `platform_admin`, `admin`, `hr`, `manager`, **`recruiter`, `hiring_manager`** — and everyone else only while the tenant has `directory_show_grades` on |
+| `salary_min`, `salary_max`, `salary_currency` | `platform_admin`, `admin`, `hr`, `manager` only — no tenant flag opens compensation |
+
+The two rows are `can_see_position_grades()` and `can_see_compensation()` in
+`app/core/access_scope.py`, and they are deliberately **not** the same
+predicate. Hiring reads the pair because a requisition cannot be raised
+without the grade and specialization of the position it fills — the form
+fills its pickers from exactly these fields (HRP-180) — but a band is not a
+recruiter's to read. Collapsing the two calls back into one
+`is_employee_only()` would hand hiring the compensation data; the tests pin
+the gap in both directions.
+
+Grade and specialization ride `directory_show_grades` because they are the
+other half of the join the employee directory opens: the directory publishes
+"colleague -> position" to everyone, so a catalogue that publishes
+"position -> grade" to everyone rebuilds any colleague's grade whatever the
+flag says.
+
+Filters go with the fields. `?grade_id=`, `?specialization_id=` and
+`?matrix_unconfigured=` are ignored for a caller who does not get the
+columns, because a predicate over a hidden field answers the same question
+the field would, one request per grade. They start applying again the moment
+the flag opens the columns.
+
+`can_manage` on a position row is a different question — HRP-631, whether
+this viewer may *edit* the row — and is not a visibility signal.
+
+### Every route that carries these keys
+
+The list is exhaustive as of HRP-637 and was built mechanically, by walking
+every `GET` route's `response_model` for the sensitive field names rather
+than by grepping the ones the ticket happened to name — the route that
+turned out to matter most mentions neither positions nor specializations.
+Rebuild it before assuming a new route is covered:
+
+```
+cd backend && ../.venv/bin/python scripts/audit_sensitive_read_routes.py
+```
+
+It prints every `GET` whose payload can carry these keys next to the gate
+guarding it. Twenty-five of them still answer on bare authentication, and
+that is not twenty-five holes: the assessment, PDP and talent-market
+payloads carry a grade because they are *about* one person, and each is
+scoped by its own module's rule (`get_visible_employee_ids`, the assessment
+manager scope, HRP-209). What the audit gives you is the decision list —
+every route where somebody has to have decided.
+
+| Route | What the trimmed side loses |
+|-------|-----------------------------|
+| `GET /positions`, `GET /positions/{id}` | both classes, plus the three predicates |
+| `GET /positions/{id}/matrix-status`, `/competences` | the pair ids, `grade_specialization_id` included — the specialization page turns that one back into a grade title |
+| `GET /specializations/{id}/positions` | the pair — the same join under the specialization's own URL |
+| `GET /specializations/{id}/grades`, `GET /specializations/{id}`, `GET /grade-system/specializations/{id}`, `GET /grade-system/divisions/{id}` | the bands only; the grade ladder itself says what grades exist, not who holds them |
+| `GET /specializations/{id}/matrix-bulk` | the whole ladder (`grades: []`) — `grade_id` is a required uuid there, so the payload cannot be blanked field-by-field, and the grade-to-competence mapping it carries is half of the fingerprint oracle below |
+| `GET /specializations/{id}/matrix` | 403 — it carries no grade key, but takes `grade_id` as a *query* parameter, which makes it the other half of that oracle |
+| `GET /dictionaries/items/{id}/usage` | 403, `admin` only — see below |
+
+`GET /dictionaries/items/{id}/usage` was the cheapest way around all of the
+above and it touches none of the routes the ticket named. On bare
+authentication: `GET /dictionaries/grade` hands any member every grade id,
+and one call per id answered the exact list of positions holding that grade,
+by title. Joined with `position_title` from the employee directory that is a
+named colleague's grade in N+1 requests. The route exists to tell an admin
+what a delete would break, and the delete is `require_role("admin")`, so the
+preview is too.
+
+### Known remainders
+
+Written down rather than closed, because closing them costs more than the
+narrowing is worth. Re-price them if the threat model changes.
+
+- **The specialization is the route, whatever the row shape.** On
+  `/specializations/{id}/employees` and `/specializations/{id}/positions` the
+  specialization is in the URL, so walking `GET /specializations` and calling
+  each one still maps positions — and, through `user_name` on the directory
+  row, people — to a specialization even with every field trimmed. Closing it
+  means refusing the routes outright, which contradicts the HRP-633 decision
+  that these lists stay whole for everyone. The fields are trimmed; the
+  route-level fact is not.
+- **Numeric narrowing.** `PositionMatrixStatus.link_count` survives the trim
+  and `SpecializationGradeRead.competence_count` is published on the open
+  grade ladder. A position whose link count matches exactly one rung's
+  competence count is narrowed to that grade. This is a count collision, not
+  an identifier: it is exact only where the ladder's rungs happen to have
+  distinct competence counts, and it names nobody on its own. Gating the
+  counters would cost the "matrix not configured" banner its number.
+- **Divisional granularity.** `GET /divisions/{id}/specializations` publishes
+  which specializations a division works in. That narrows a colleague's
+  specialization to the set mapped to their division, never to one, and the
+  mapping is org structure rather than a personal fact. Left open.
 
 ## Catalogues, and the one exception
 
@@ -141,7 +231,7 @@ asset.
 | answer scales | `admin`, `hr` | unchanged |
 | specialization grade ladder and competence matrices | `admin`, `hr` | unchanged |
 | `POST /ai/generate-competences`, `/ai/generate-indicators` | `admin`, `hr` | — |
-| positions | `admin`, and `manager` **inside their managed subtree** | unchanged |
+| positions | `admin`, and `manager` **inside their managed subtree** | open to the workspace, trimmed per role — see "The positions catalogue" |
 
 The AI generators follow the surface they write to: the two that fill the
 catalogue moved with it, and `POST /ai/generate-positions` follows the
@@ -279,8 +369,9 @@ card from another department shows on the board with its action menu gone.
 the whole workspace by competence match, which is assessment-derived data the
 employee card withholds outside the subtree. Narrowing it would defeat what
 internal mobility is for — the pool exists to find people elsewhere in the
-company — so the boundary there is a product decision of the same class as
-HRP-637, not part of this fence.
+company — so the boundary there is a product decision still open, and not
+part of this fence. (The positions catalogue was the same class of question;
+HRP-637 answered that one — see "The positions catalogue" above.)
 
 ## Error codes returned on `/employees/*` write rejections
 

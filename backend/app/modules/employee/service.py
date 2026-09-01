@@ -603,12 +603,36 @@ async def _resolve_emp_avatars_bulk(
     return out
 
 
+async def employee_issue_codes(
+    db: AsyncSession, tenant_id: uuid.UUID, emp: Employee
+) -> list[str]:
+    """Every problem one employee has — hygiene alerts plus loop issues.
+
+    Same two families, same codes and same suppression rules the employee
+    list renders, so a card and the row that linked to it can never name the
+    problem differently. The cohort is the single employee: the tenant-wide
+    pass exists for the ``?issue=`` filter, which has to select rows before
+    pagination — a card only has to explain itself.
+    """
+    alerts = await compute_employee_alerts_bulk_all(db, tenant_id, [emp])
+    facts = await collect_issue_facts(db, tenant_id, employee_ids={emp.id})
+    loop = issues_by_employee(issue_cohorts(facts))
+    return [*alerts.get(emp.id, []), *loop.get(emp.id, [])]
+
+
 async def get_employee(
-    db: AsyncSession, tenant_id: uuid.UUID, employee_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    employee_id: uuid.UUID,
+    *,
+    with_issues: bool = False,
 ) -> dict:
     emp = await _get_employee(db, tenant_id, employee_id)
     url = await _resolve_emp_avatar(db, emp)
-    return _employee_to_read(emp, url)
+    # HRP-660: opt-in — the card wants the badges, the dozen internal
+    # callers that just need the row should not pay for the scan.
+    issues = await employee_issue_codes(db, tenant_id, emp) if with_issues else None
+    return _employee_to_read(emp, url, _top_alert(issues), issues)
 
 
 async def update_employee(

@@ -12,8 +12,11 @@ import { basename, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  AI_ANALYSIS_STAGE_LABEL_KEYS,
+  AI_ANALYSIS_STAGES,
   AI_NEXT_STEP_LABEL_KEYS,
   AI_VERDICT_LABEL_KEYS,
+  aiAnalysisStageLabel,
   aiNextStepLabel,
   aiVerdictLabel,
   type AiNextStep,
@@ -54,8 +57,10 @@ describe("Verdict labels (HRP-550)", () => {
     }
   });
 
-  it("falls back to the raw code for a verdict the UI does not know", () => {
-    expect(aiVerdictLabel(t, "escalated")).toBe("escalated");
+  it("de-slugs a verdict the UI does not know", () => {
+    // Underscored on purpose: "escalated" alone passes under either
+    // fallback, so it could not tell the de-slug branch from the raw one.
+    expect(aiVerdictLabel(t, "escalated_to_lead")).toBe("escalated to lead");
   });
 
   it("carries every verdict key in all shipped catalogs", () => {
@@ -86,6 +91,8 @@ describe("Next-step labels (HRP-550)", () => {
   });
 
   it("falls back to the raw code for an unknown recommendation", () => {
+    // Underscores survive here: this resolver keeps the wire form, and
+    // that is the half of the contract the shared factory parameterises.
     expect(aiNextStepLabel(t, "hold_for_budget")).toBe("hold_for_budget");
   });
 
@@ -93,6 +100,30 @@ describe("Next-step labels (HRP-550)", () => {
     for (const [locale, catalog] of Object.entries(CATALOGS)) {
       for (const code of CODES) {
         const key = AI_NEXT_STEP_LABEL_KEYS[code];
+        expect(catalog.recruitment[key], `${locale}.${key}`).toBeTruthy();
+      }
+    }
+  });
+});
+
+describe("Pipeline stage labels (HRP-596)", () => {
+  it("translates every stage the pipeline can report", () => {
+    for (const stage of AI_ANALYSIS_STAGES) {
+      const label = aiAnalysisStageLabel(t, stage);
+      expect(label).not.toBe(stage);
+      expect(label).not.toContain("_");
+    }
+  });
+
+  it("keeps the raw code for a stage the UI does not know", () => {
+    // Raw, not de-slugged: the stage list is a closed taxonomy mirrored
+    // from the backend, so an unknown code is a bug worth seeing verbatim.
+    expect(aiAnalysisStageLabel(t, "future_stage")).toBe("future_stage");
+  });
+
+  it("carries every stage key in all shipped catalogs", () => {
+    for (const [locale, catalog] of Object.entries(CATALOGS)) {
+      for (const key of Object.values(AI_ANALYSIS_STAGE_LABEL_KEYS)) {
         expect(catalog.recruitment[key], `${locale}.${key}`).toBeTruthy();
       }
     }

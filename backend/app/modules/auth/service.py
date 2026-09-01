@@ -41,6 +41,7 @@ from app.modules.auth.schemas import (
     UserUpdate,
 )
 from app.modules.company.models import Division, Tenant
+from app.modules.demo.utils import demo_persona_for_email
 from app.modules.position.models import Position
 from app.modules.storage.models import File
 
@@ -504,28 +505,29 @@ async def magic_login(db: AsyncSession, token: str) -> dict[str, Any]:
 async def _consume_magic_jti(jti: str) -> None:
     """One-time JTI guard backed by Redis ``SET NX EX``.
 
-    Falls *open* on Redis errors: a transient flake here would otherwise
-    lock out every newly approved account, and the JWT itself is still
-    expiry-bounded (`settings.magic_login_token_ttl_hours`). The replay
-    window is the JTI TTL — pinned to the JWT TTL so a deploy that
-    later raises the JWT lifetime can't open a replay window beyond it.
+    Falls *closed* on Redis errors — see the handler below for why. The
+    docstring claimed the opposite until HRP-596: the fail-open wording
+    survived the review fix (P3-46) that inverted the behaviour, so the
+    two halves of this function had been contradicting each other since.
+    The replay window is the JTI TTL — pinned to the JWT TTL so a deploy
+    that later raises the JWT lifetime can't open a replay window beyond
+    it.
     """
-    import contextlib as _contextlib
-
-    import redis.asyncio as aioredis
-
     from app.config import settings
+    from app.core.redis import redis_client
 
     ttl_seconds = max(1, settings.magic_login_token_ttl_hours * 3600)
-    client = None
     try:
-        client = aioredis.from_url(settings.redis_url, decode_responses=True)
-        ok = await client.set(
-            f"magic-login:used:{jti}",
-            "1",
-            nx=True,
-            ex=ttl_seconds,
-        )
+        # Inside the ``try``: ``from_url`` raises synchronously on a
+        # malformed URL, and that has to reach the fail-closed branch
+        # below like any other Redis failure.
+        async with redis_client() as client:
+            ok = await client.set(
+                f"magic-login:used:{jti}",
+                "1",
+                nx=True,
+                ex=ttl_seconds,
+            )
         if not ok:
             raise AppError(
                 "magic_login_link_already_used", status.HTTP_401_UNAUTHORIZED
@@ -542,10 +544,6 @@ async def _consume_magic_jti(jti: str) -> None:
         raise AppError(
             "sign_in_temporarily_unavailable", status.HTTP_503_SERVICE_UNAVAILABLE
         ) from None
-    finally:
-        if client is not None:
-            with _contextlib.suppress(Exception):
-                await client.aclose()  # type: ignore[attr-defined]
 
 
 async def _get_tenant_info(db: AsyncSession, user: User) -> dict[str, Any]:
@@ -720,6 +718,13 @@ async def get_me(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
         payload["tenant_is_demo"] = bool(getattr(tenant, "is_demo", False))
         payload["tenant_expires_at"] = getattr(tenant, "expires_at", None)
         payload["tenant_default_locale"] = tenant.default_locale
+        payload["tenant_directory_show_grades"] = bool(tenant.directory_show_grades)
+        if payload["tenant_is_demo"]:
+            # HRP-676: the "View as" switcher reads the active persona from
+            # here. It used to re-derive it from the email domain in the SPA,
+            # which silently broke the switch on any change to the demo email
+            # scheme — and a wrong persona reads as a dead button.
+            payload["demo_persona"] = demo_persona_for_email(user.email)
     return payload
 
 

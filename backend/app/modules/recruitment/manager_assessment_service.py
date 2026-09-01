@@ -2046,17 +2046,24 @@ async def _claim_invite_mail_budget(emails: Sequence[str]) -> None:
             # was not sent (review fix).
             async with client.pipeline(transaction=True) as pipe:
                 for key, sends in counted:
+                    # The window is anchored at the first send: re-arming
+                    # it on every refused attempt would let a retrying
+                    # client keep an address over cap forever (review
+                    # fix). ``SET ... EX NX`` + ``INCRBY`` rather than
+                    # ``EXPIRE ... NX`` for that anchor — the EXPIRE flags
+                    # need Redis 7.x, which the fleet's system Redis does
+                    # not guarantee, and on 6.x the unsupported flag would
+                    # fail the whole claim straight into the fail-closed
+                    # 503 below (HRP-596). Same reasoning as
+                    # ``core.redis.bump_counter``, which this batch cannot
+                    # use: one refusal has to roll the whole batch back.
+                    pipe.set(key, 0, ex=INVITE_MAIL_WINDOW_SECONDS, nx=True)
                     pipe.incrby(key, sends)
-                    # NX: the window is anchored at the first send. An
-                    # unconditional EXPIRE would re-arm it on every
-                    # refused attempt, so a retrying client could keep an
-                    # address over cap forever (review fix).
-                    pipe.expire(key, INVITE_MAIL_WINDOW_SECONDS, nx=True)
                 results = await pipe.execute()
             over = next(
                 (
                     key
-                    for (key, _), count in zip(counted, results[::2], strict=True)
+                    for (key, _), count in zip(counted, results[1::2], strict=True)
                     if count > cap
                 ),
                 None,

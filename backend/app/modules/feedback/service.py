@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.errors import AppError
 from app.core.events import publish
-from app.core.redis import redis_client
+from app.core.redis import bump_counter
 from app.modules.auth.models import User
 from app.modules.company.models import Tenant
 from app.modules.feedback.schemas import FeedbackCreate
@@ -41,18 +41,10 @@ async def _enforce_rate_limit(user_id: uuid.UUID) -> None:
     if limit <= 0:
         return
     try:
-        async with redis_client() as client:
-            key = f"feedback:rl:{user_id}"
-            async with client.pipeline(transaction=True) as pipe:
-                pipe.incr(key)
-                # NX: the window is anchored at the first submission, so
-                # refused retries can't hold the user over cap forever.
-                pipe.expire(key, 3600, nx=True)
-                count, _ = await pipe.execute()
-            if count > limit:
-                raise AppError(
-                    "feedback_rate_limited", status.HTTP_429_TOO_MANY_REQUESTS
-                )
+        # The helper anchors the window at the first submission, so
+        # refused retries can't hold the user over cap forever.
+        if await bump_counter(f"feedback:rl:{user_id}", 3600) > limit:
+            raise AppError("feedback_rate_limited", status.HTTP_429_TOO_MANY_REQUESTS)
     except HTTPException:
         raise
     except Exception:  # noqa: BLE001

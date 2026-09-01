@@ -555,7 +555,12 @@ export default function SpecializationDetailPage() {
                 {t("gradeAttributes")}
               </h2>
               <p className="text-xs text-muted-foreground">
-                {t("gradeAttributesHint")}
+                {/* HRP-637: the salary fields below are admin / hr / manager
+                    only, and a hint promising them to a viewer who will not
+                    see them is worse than no hint. */}
+                {canViewHrData
+                  ? t("gradeAttributesHint")
+                  : t("gradeAttributesHintNoSalary")}
               </p>
               <div className="space-y-4">
                 {detail.grades.map((g) => (

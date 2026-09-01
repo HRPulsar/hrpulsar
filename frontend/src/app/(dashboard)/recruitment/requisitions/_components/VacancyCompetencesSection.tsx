@@ -2,9 +2,26 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import type { Vacancy, VacancyProfile } from "@/lib/types";
+import type {
+  CompetenceGroupTree,
+  Vacancy,
+  VacancyCompetenceLink,
+  VacancyProfile,
+} from "@/lib/types";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { CompetenceTreePicker } from "@/components/competence/competence-tree-picker";
+import { useCompetenceTree } from "@/hooks/use-competence-tree";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   CompetenceTreeView,
   findUnnamedCompetence,
@@ -25,6 +42,10 @@ interface VacancyCompetencesSectionProps {
   profile: VacancyProfile | null;
   canEdit: boolean;
   onProfileChange: () => void | Promise<void>;
+  /** HRP-687: fired after the library-linked competence set changed, so
+   *  the internal-candidates block re-reads `has_library_competences`
+   *  and its "Post to talent market" button unlocks without an F5. */
+  onLibraryCompetencesChange?: () => void;
 }
 
 // HRP-318: the Edit affordance now lives inline on the section card — the
@@ -37,6 +58,7 @@ export function VacancyCompetencesSection({
   profile,
   canEdit,
   onProfileChange,
+  onLibraryCompetencesChange,
 }: VacancyCompetencesSectionProps) {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
@@ -64,8 +86,107 @@ export function VacancyCompetencesSection({
     useState<ProfileSessionPayload | null>(null);
   const [statusRefreshKey, setStatusRefreshKey] = useState(0);
 
+  // HRP-687: library-linked competences (`VacancyCompetence`) live beside
+  // the AI profile, not inside it — the profile carries free-text slugs,
+  // these carry real dictionary ids and are what the talent-market matcher
+  // (and therefore the "Post to talent market" bridge) reads.
+  const { tree } = useCompetenceTree();
+  // PATCH …/competences is require_role("admin", "recruiter") while this
+  // page is open to every recruitment viewer — same rule, same shape as
+  // the internal-candidates block: disabled with the reason, not a 403
+  // at the end of the flow.
+  const { isAdmin, isRecruiter } = usePermissions();
+  const canManageLibrary = isAdmin || isRecruiter;
+  const [libraryRows, setLibraryRows] = useState<VacancyCompetenceLink[]>([]);
+  // The GET is the baseline for a replace-set PATCH, so a failed read is
+  // not "no competences" — it is "we do not know", and nothing may be
+  // saved from it.
+  const [libraryLoadFailed, setLibraryLoadFailed] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerIds, setPickerIds] = useState<Set<string>>(() => new Set());
+  const [savingLibrary, setSavingLibrary] = useState(false);
+
   const sessionBlocksActions =
     activeSession?.status === "running" || sessionHasPendingResult(activeSession);
+
+  const loadLibrary = useCallback(async () => {
+    try {
+      setLibraryRows(
+        await api.get<VacancyCompetenceLink[]>(
+          `/recruitment/vacancies/${vacancy.id}/competences`,
+        ),
+      );
+      setLibraryLoadFailed(false);
+    } catch {
+      // Never fall back to an empty list: the picker seeds itself from
+      // these rows and saves the result as a replace-set, so one failed
+      // GET used to wipe every library competence on the vacancy — with a
+      // success toast on top of it.
+      setLibraryLoadFailed(true);
+    }
+  }, [vacancy.id]);
+
+  useEffect(() => {
+    void loadLibrary();
+  }, [loadLibrary]);
+
+  const titleByCompetenceId = useMemo(() => {
+    const map = new Map<string, string>();
+    const walk = (groups: CompetenceGroupTree[]) => {
+      for (const g of groups) {
+        for (const c of g.competences || []) map.set(c.id, c.title);
+        if (g.children?.length) walk(g.children);
+      }
+    };
+    walk(tree);
+    return map;
+  }, [tree]);
+
+  function openPicker() {
+    if (libraryLoadFailed) {
+      // Refuse and retry in the same click — the editor reopens by
+      // itself on the next press once the read comes back.
+      toast.error(t("vacancyLibraryLoadFailed"));
+      void loadLibrary();
+      return;
+    }
+    setPickerIds(new Set(libraryRows.map((r) => r.competence_id)));
+    setPickerOpen(true);
+  }
+
+  async function saveLibrary() {
+    // Second lock on the same door: the payload below is only as complete
+    // as the rows we read.
+    if (libraryLoadFailed || !canManageLibrary) return;
+    setSavingLibrary(true);
+    try {
+      // PATCH …/competences is a replace-set, so a row that survives the
+      // edit has to be sent back with the levels and source it already
+      // carries — otherwise re-opening the picker would silently strip
+      // the target levels a seeded or API-set row came with.
+      const existing = new Map(libraryRows.map((r) => [r.competence_id, r]));
+      const rows = await api.patch<VacancyCompetenceLink[]>(
+        `/recruitment/vacancies/${vacancy.id}/competences`,
+        {
+          competences: [...pickerIds].map((id) => ({
+            competence_id: id,
+            skill_level_ids: existing.get(id)?.skill_level_ids ?? [],
+            source: existing.get(id)?.source ?? "library",
+          })),
+        },
+      );
+      setLibraryRows(rows);
+      setPickerOpen(false);
+      toast.success(t("vacancyLibraryToastSaved"));
+      onLibraryCompetencesChange?.();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : t("vacancyLibrarySaveFailed"),
+      );
+    } finally {
+      setSavingLibrary(false);
+    }
+  }
 
   // Stable identity: the dialog's polling effect lists onOpenChange in
   // its deps — an inline arrow would tear the interval down and fire an
@@ -249,8 +370,11 @@ export function VacancyCompetencesSection({
               variant="outline"
               size="sm"
               data-testid="vacancy-competences-add-from-dict-btn"
-              disabled={editing || sessionBlocksActions}
-              onClick={() => toast.info(t("vacancyCompetencesAddFromDictToast"))}
+              disabled={editing || sessionBlocksActions || !canManageLibrary}
+              title={
+                canManageLibrary ? undefined : t("vacancyLibraryNoPermission")
+              }
+              onClick={openPicker}
             >
               <BookOpen className="mr-1 size-4" />
               {t("vacancyCompetencesAddFromDict")}
@@ -265,6 +389,24 @@ export function VacancyCompetencesSection({
           onReview={openGenerate}
           refreshKey={statusRefreshKey}
         />
+        {libraryRows.length > 0 && (
+          <div className="space-y-1.5" data-testid="vacancy-library-competences">
+            <p className="text-sm font-medium">
+              {t("vacancyLibraryCompetencesTitle")}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {libraryRows.map((row) => (
+                <Badge
+                  key={row.id}
+                  variant="secondary"
+                  data-testid={`vacancy-library-competence-${row.competence_id}`}
+                >
+                  {titleByCompetenceId.get(row.competence_id) ?? "—"}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
         {hasProfile ? (
           <CompetenceTreeView
             profileData={treeData}
@@ -306,6 +448,42 @@ export function VacancyCompetencesSection({
         activeSession={activeSession}
         onProfileChange={onProfileChange}
       />
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent
+          data-testid="vacancy-competences-library-dialog"
+          className="max-h-[85vh] overflow-y-auto sm:max-w-xl"
+        >
+          <DialogHeader>
+            <DialogTitle>{t("vacancyLibraryDialogTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("vacancyLibraryDialogHint")}
+            </DialogDescription>
+          </DialogHeader>
+          <CompetenceTreePicker
+            tree={tree}
+            selectedIds={pickerIds}
+            onChange={setPickerIds}
+            testIdPrefix="vacancy-competences-library-picker"
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPickerOpen(false)}
+              disabled={savingLibrary}
+              data-testid="vacancy-competences-library-cancel-btn"
+            >
+              {tc("cancel")}
+            </Button>
+            <Button
+              onClick={saveLibrary}
+              disabled={savingLibrary}
+              data-testid="vacancy-competences-library-save-btn"
+            >
+              {savingLibrary ? t("actionSaving") : t("save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

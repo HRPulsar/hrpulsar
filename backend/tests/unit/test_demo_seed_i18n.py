@@ -109,7 +109,7 @@ def test_load_transcript_picks_de_variant(monkeypatch):
     monkeypatch.setattr(settings, "available_locales", "de,en")
     monkeypatch.setattr(settings, "default_locale", "de")
     transcript = load_transcript()
-    assert "Kandidatin: Elena Volkov" in transcript
+    assert "Kandidatin: Elena Vogel" in transcript
 
 
 @pytest.mark.asyncio
@@ -164,11 +164,11 @@ async def test_clone_seed_localizes_content_de(
         await db.execute(
             select(Interview).where(
                 Interview.tenant_id == tenant.id,
-                Interview.title == "Technik + Systemdesign — Elena Volkov",
+                Interview.title == "Technik + Systemdesign — Elena Vogel",
             )
         )
     ).scalar_one()
-    assert "Kandidatin: Elena Volkov" in elena.transcript
+    assert "Kandidatin: Elena Vogel" in elena.transcript
     assert elena.analysis_data["verdict_summary"].startswith("Klare Empfehlung.")
 
     # Notification templates: pinned to the de row per code when the

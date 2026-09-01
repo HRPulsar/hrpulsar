@@ -19,7 +19,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class TestServiceLazyCreate:
-    async def test_get_or_default_creates_row(self, db: AsyncSession, tenant) -> None:
+    """HRP-628: reading the settings must not create them.
+
+    ``get_or_default`` used to persist a defaults row, so opening
+    Settings -> AI stamped ``content_language="en"`` on the tenant and
+    every consumer downstream lost the ability to tell "never chose"
+    from "chose English". Reading now answers with an unsaved row.
+    """
+
+    async def test_get_or_default_returns_defaults(
+        self, db: AsyncSession, tenant
+    ) -> None:
         row = await service.get_or_default(db, tenant.id)
         assert row.tenant_id == tenant.id
         assert row.content_language == "en"
@@ -28,13 +38,39 @@ class TestServiceLazyCreate:
         assert row.max_retries == 5
         assert row.llm_model is None
         assert row.company_context is None
+        # The read projection needs these, so the transient row carries them.
+        assert row.id is not None
+        assert row.created_at is not None and row.updated_at is not None
 
-    async def test_get_or_default_returns_existing(
+    async def test_get_or_default_does_not_persist(
         self, db: AsyncSession, tenant
     ) -> None:
-        first = await service.get_or_default(db, tenant.id)
-        second = await service.get_or_default(db, tenant.id)
-        assert first.id == second.id
+        await service.get_or_default(db, tenant.id)
+        await db.commit()
+        stored = (
+            await db.execute(
+                select(TenantAISettings).where(TenantAISettings.tenant_id == tenant.id)
+            )
+        ).scalar_one_or_none()
+        assert stored is None, "a plain read must leave the tenant unconfigured"
+
+    async def test_update_persists_the_row(self, db: AsyncSession, tenant) -> None:
+        await service.update(db, tenant.id, AISettingsUpdate(content_language="de"))
+        stored = (
+            await db.execute(
+                select(TenantAISettings).where(TenantAISettings.tenant_id == tenant.id)
+            )
+        ).scalar_one()
+        assert stored.content_language == "de"
+
+    async def test_get_or_default_returns_the_saved_row_once_saved(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        saved = await service.update(
+            db, tenant.id, AISettingsUpdate(content_language="de")
+        )
+        again = await service.get_or_default(db, tenant.id)
+        assert again.id == saved.id
 
 
 class TestServiceUpdate:
@@ -216,7 +252,8 @@ class TestUniqueConstraint:
     async def test_duplicate_tenant_row_rejected(
         self, db: AsyncSession, tenant
     ) -> None:
-        await service.get_or_default(db, tenant.id)
+        # A saved row, not a read — reads no longer create one (HRP-628).
+        await service.update(db, tenant.id, AISettingsUpdate(content_language="de"))
         duplicate = TenantAISettings(tenant_id=tenant.id)
         db.add(duplicate)
         with pytest.raises(IntegrityError):
@@ -230,9 +267,16 @@ class TestUniqueConstraint:
 
 
 class TestRouterGet:
-    async def test_get_creates_lazy_row(
+    async def test_get_returns_defaults_without_configuring_the_tenant(
         self, auth_client: AsyncClient, db: AsyncSession, tenant
     ) -> None:
+        """HRP-628: opening Settings -> AI must not decide anything.
+
+        The GET used to persist a defaults row, which pinned
+        ``content_language="en"`` on a tenant that never chose it — and
+        the recruitment analysis then treated that as a deliberate
+        answer instead of falling back to the vacancy language.
+        """
         existing = await db.execute(
             select(TenantAISettings).where(TenantAISettings.tenant_id == tenant.id)
         )
@@ -244,11 +288,15 @@ class TestRouterGet:
         assert body["effort_level"] == "balanced"
         assert body["content_language"] == "en"
         assert body["effective_model"]  # any non-empty default
+        # The projection still needs an id and timestamps to validate.
+        assert body["id"] and body["created_at"] and body["updated_at"]
 
         after = await db.execute(
             select(TenantAISettings).where(TenantAISettings.tenant_id == tenant.id)
         )
-        assert after.scalar_one() is not None
+        assert after.scalar_one_or_none() is None, (
+            "a read must leave the tenant unconfigured"
+        )
 
 
 class TestRouterPatch:

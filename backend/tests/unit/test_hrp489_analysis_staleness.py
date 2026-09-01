@@ -395,6 +395,24 @@ class TestApplyAiAnalysisState:
         )
         assert items[0]["ai_readiness"] == "resume_and_transcript"
 
+    async def test_transcript_without_resume_is_transcript_only(
+        self, db: AsyncSession, tenant, user, pair
+    ):
+        """HRP-681 — the transcript is an input on its own.
+
+        The full analysis prompt takes the resume as an optional
+        summary, so this candidate can be (and usually has been)
+        analysed; reporting ``none`` claimed there was no data at all.
+        """
+        pair["resume"].parse_status = "failed"
+        await _add_transcribed_interview(db, tenant, user, pair)
+        items = await self._items(db, pair)
+
+        await resume_analysis_service.apply_ai_analysis_state(
+            db, tenant.id, items
+        )
+        assert items[0]["ai_readiness"] == "transcript_only"
+
     async def test_no_resume_stays_none(
         self, db: AsyncSession, tenant, user, pair
     ):

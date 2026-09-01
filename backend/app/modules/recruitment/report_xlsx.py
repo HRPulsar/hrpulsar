@@ -355,6 +355,9 @@ def _completeness_disclaimer(rows: list[dict]) -> str:
     total = len(rows)
     full = sum(1 for r in rows if r.get("data_readiness") == "Full data")
     no_transcript = sum(1 for r in rows if r.get("data_readiness") == "No transcript")
+    # HRP-685 — the fourth bucket: analysed off the transcript alone,
+    # with no parsed resume behind it.
+    no_resume = sum(1 for r in rows if r.get("data_readiness") == "No resume")
     no_data = sum(1 for r in rows if r.get("data_readiness") == "No data")
     if full == total:
         return (
@@ -364,6 +367,8 @@ def _completeness_disclaimer(rows: list[dict]) -> str:
     parts = [f"{full} of {total} candidates have full data"]
     if no_transcript:
         parts.append(f"{no_transcript} have no interview transcript")
+    if no_resume:
+        parts.append(f"{no_resume} have no parsed resume")
     if no_data:
         parts.append(f"{no_data} have no AI analysis at all")
     return (

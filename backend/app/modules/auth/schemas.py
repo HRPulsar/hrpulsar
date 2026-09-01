@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -105,12 +106,22 @@ class UserRead(BaseModel):
     # SPA can render <DemoBanner/> + the countdown without an extra request.
     tenant_is_demo: bool = False
     tenant_expires_at: datetime | None = None
+    # HRP-676: which "View as" persona the demo session is currently in.
+    # The banner's switcher must not re-derive this from the email domain.
+    # None outside a demo session.
+    demo_persona: Literal["admin", "employee"] | None = None
     # i18n (F0): personal interface locale; None → tenant/deployment default.
     language: str | None = None
     # Tenant-default interface locale — populated by /auth/me (tenant row is
     # already loaded there) so the SPA resolves the locale without an extra
     # company-profile request.
     tenant_default_locale: str | None = None
+    # HRP-637: the tenant's grade-visibility switch, carried here for the
+    # same reason as the locale above — the tenant row is already loaded,
+    # and the SPA has to know whether the positions catalogue will arrive
+    # with its grade columns. Inferring that from the rows on the current
+    # page guesses wrong on any page whose rows happen to have no pair.
+    tenant_directory_show_grades: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -219,6 +230,29 @@ class InvitationRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class InvitationBulkFailure(BaseModel):
+    """One address the bulk create refused, and why."""
+
+    email: str
+    error_code: str
+
+
+class InvitationBulkResult(BaseModel):
+    """Multi-status answer of ``POST /invitations/bulk`` (HRP-593).
+
+    The endpoint used to answer with a bare list of what it managed to
+    create: an address refused as a duplicate and one refused because the
+    role sits above the inviter both simply vanished from the response, so
+    no caller could tell them apart — or notice at all.
+
+    ``error_code`` carries the ``AppError`` code rather than a message; the
+    client translates it, the same way it does for a single create.
+    """
+
+    created: list[InvitationRead]
+    failed: list[InvitationBulkFailure]
 
 
 class InvitationList(BaseModel):

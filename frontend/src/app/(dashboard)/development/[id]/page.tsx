@@ -6,6 +6,8 @@ import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { getBrandAccent } from "@/lib/brand";
+import { MATERIAL_FORMAT_OPTIONS } from "@/lib/enum-labels";
+import { materialFormatLabel } from "@/lib/competences/material-options";
 import { api } from "@/lib/api";
 import { ALERT_TONE, BADGE_COLOR } from "@/lib/badge-tones";
 import {
@@ -66,6 +68,10 @@ const brandAccent = getBrandAccent();
 
 export default function PDPDetailPage() {
   const t = useTranslations("development");
+  // Material format labels are owned by the competences catalog —
+  // the plan copies Material.format verbatim, so it must read the
+  // same vocabulary rather than a shorter one of its own (HRP-653).
+  const tFormat = useTranslations("competences");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const { id } = useParams<{ id: string }>();
@@ -1103,7 +1109,7 @@ export default function PDPDetailPage() {
                                     <span>{mat.title}</span>
                                   )}
                                   {mat.format && (
-                                    <Badge variant="outline" className="text-[10px]">{mat.format}</Badge>
+                                    <Badge variant="outline" className="text-[10px]">{materialFormatLabel(tFormat, mat.format)}</Badge>
                                   )}
                                   {canEditThisItem && (
                                     <>
@@ -1467,12 +1473,12 @@ export default function PDPDetailPage() {
               >
                 <SelectTrigger className="w-full" data-testid="development-detail-mat-format">
                   <SelectValue placeholder={t("selectFormat")}>
-                    {matForm.format || undefined}
+                    {materialFormatLabel(tFormat, matForm.format) || undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {["course", "book", "article", "video", "practice"].map((f) => (
-                    <SelectItem key={f} value={f}>{f}</SelectItem>
+                  {MATERIAL_FORMAT_OPTIONS.map((f) => (
+                    <SelectItem key={f} value={f}>{materialFormatLabel(tFormat, f)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

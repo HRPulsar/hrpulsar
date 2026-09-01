@@ -89,6 +89,39 @@ class TestCandidateBreakdownEndpointHRP172:
         # No Required Specs on this card → empty list, not absent.
         assert bd["specializations"] == []
 
+    async def test_duplicate_requirement_rows_collapse_to_one(
+        self, db: AsyncSession, tenant, user, employee
+    ):
+        """HRP-665 (HRP-654 review): the drawer lists competences, not
+        requirement rows — a card requiring one competence through two
+        grade ladders must not list it twice against the de-duplicated
+        "N of M" count that opened the drawer."""
+        from app.modules.talent_market.models import TalentCardCompetence
+
+        card_dict, (comp_a, _comp_b), _sl = await _setup_card_with_two_comps(
+            db, tenant, user
+        )
+        stricter = SkillLevel(tenant_id=tenant.id, title="L2", sort_index=1)
+        db.add(stricter)
+        await db.flush()
+        db.add(
+            TalentCardCompetence(
+                card_id=card_dict["id"],
+                competence_id=comp_a.id,
+                skill_level_id=stricter.id,
+            )
+        )
+        await db.commit()
+
+        bd = await service.get_candidate_breakdown(
+            db, tenant.id, card_dict["id"], employee.id
+        )
+        comp_a_rows = [r for r in bd["competences"] if r["competence_id"] == comp_a.id]
+        assert len(comp_a_rows) == 1
+        # The surviving row carries the strictest requirement.
+        assert comp_a_rows[0]["required_skill_level_id"] == stricter.id
+        assert len(bd["competences"]) == 2
+
 
 class TestCandidatesBreakdownInCardDetailHRP173:
     """get_card_detail enriches each candidate with comp_match / etc."""
@@ -197,3 +230,119 @@ class TestPoolRankingHRP173:
         # then Bob in the non-qualifying bucket.
         assert names_in_order[:2] == ["Alice Doe", "Carl Doe"]
         assert names_in_order[-1] == "Bob Doe"
+
+
+class TestOtherLevelReferenceHRP695:
+    """A Done assessment at another level is stated, not scored.
+
+    The matcher only counts an assessment taken at the required level or
+    above, so a required L4 with an L3 result on file read as "no
+    assessment" in the drawer. The row now carries the L3 result for
+    reference — and the percent it feeds is unchanged.
+    """
+
+    async def _setup(self, db: AsyncSession, tenant, user):
+        card_dict = await service.create_card(
+            db,
+            tenant.id,
+            user.id,
+            TalentCardCreate(
+                title="HRP-695 reference row",
+                card_type="vacancy",
+                match_percent=60,
+            ),
+        )
+        group = CompetenceGroup(tenant_id=tenant.id, title="G")
+        db.add(group)
+        await db.flush()
+        l3 = SkillLevel(tenant_id=tenant.id, title="L3", sort_index=3)
+        l4 = SkillLevel(tenant_id=tenant.id, title="L4", sort_index=4)
+        db.add_all([l3, l4])
+        await db.flush()
+        c_a = Competence(tenant_id=tenant.id, group_id=group.id, title="A")
+        c_b = Competence(tenant_id=tenant.id, group_id=group.id, title="B")
+        db.add_all([c_a, c_b])
+        await db.commit()
+        await service.add_required_competences(
+            db,
+            tenant.id,
+            card_dict["id"],
+            RequiredCompetenceBulkCreate(
+                items=[
+                    RequiredCompetenceItem(competence_id=c_a.id, skill_level_id=l4.id),
+                    RequiredCompetenceItem(competence_id=c_b.id, skill_level_id=l4.id),
+                ]
+            ),
+        )
+        return card_dict, c_a, c_b, l3, l4
+
+    async def test_lower_level_result_is_reported_but_not_scored(
+        self, db: AsyncSession, tenant, user, employee
+    ):
+        from tests.unit.test_talent_market_service import TestComputeMatchHRP129
+
+        card_dict, comp_a, comp_b, l3, l4 = await self._setup(db, tenant, user)
+        helper = TestComputeMatchHRP129()
+        # A: assessed at L3 only — below the required L4.
+        await helper._add_done_assessment(db, tenant, employee, comp_a, l3, 82)
+        # B: assessed at the required level, so it counts as it always did.
+        await helper._add_done_assessment(db, tenant, employee, comp_b, l4, 90)
+
+        bd = await service.get_candidate_breakdown(
+            db, tenant.id, card_dict["id"], employee.id
+        )
+        rows = {r["competence_id"]: r for r in bd["competences"]}
+
+        a_row = rows[comp_a.id]
+        assert a_row["actual_percent"] is None
+        assert a_row["qualifies"] is False
+        assert a_row["other_level_title"] == "L3"
+        assert a_row["other_level_percent"] == 82
+
+        # The counted row keeps its percent and carries no reference line.
+        b_row = rows[comp_b.id]
+        assert b_row["actual_percent"] == 90
+        assert b_row["other_level_title"] is None
+        assert b_row["other_level_percent"] is None
+
+        # The match percent is what it was before the reference row
+        # existed: (0 + 90) / 2. The L3 result did not enter it.
+        await service.add_candidate(
+            db, tenant.id, card_dict["id"], CandidateAdd(employee_id=employee.id)
+        )
+        detail = await service.get_card_detail(db, tenant.id, card_dict["id"])
+        assert detail["candidates"][0]["comp_match"] == 45
+        assert detail["candidates"][0]["comp_met"] == 1
+
+    async def test_highest_assessed_level_wins(
+        self, db: AsyncSession, tenant, user, employee
+    ):
+        """Two lower-level results on one competence → the higher one."""
+        from tests.unit.test_talent_market_service import TestComputeMatchHRP129
+
+        card_dict, comp_a, _comp_b, l3, _l4 = await self._setup(db, tenant, user)
+        l2 = SkillLevel(tenant_id=tenant.id, title="L2", sort_index=2)
+        db.add(l2)
+        await db.commit()
+        helper = TestComputeMatchHRP129()
+        await helper._add_done_assessment(db, tenant, employee, comp_a, l2, 95)
+        await helper._add_done_assessment(db, tenant, employee, comp_a, l3, 70)
+
+        bd = await service.get_candidate_breakdown(
+            db, tenant.id, card_dict["id"], employee.id
+        )
+        rows = {r["competence_id"]: r for r in bd["competences"]}
+        assert rows[comp_a.id]["other_level_title"] == "L3"
+        assert rows[comp_a.id]["other_level_percent"] == 70
+
+    async def test_no_assessment_at_all_keeps_the_row_bare(
+        self, db: AsyncSession, tenant, user, employee
+    ):
+        card_dict, comp_a, _comp_b, _l3, _l4 = await self._setup(db, tenant, user)
+        bd = await service.get_candidate_breakdown(
+            db, tenant.id, card_dict["id"], employee.id
+        )
+        rows = {r["competence_id"]: r for r in bd["competences"]}
+        assert rows[comp_a.id]["actual_percent"] is None
+        assert rows[comp_a.id]["other_level_title"] is None
+        assert rows[comp_a.id]["other_level_percent"] is None

@@ -96,6 +96,10 @@ class _FakePipe:
     async def __aexit__(self, *_a):
         return False
 
+    def set(self, *args, **kwargs):
+        self.ops.append(("set", args, kwargs))
+        return self
+
     def incr(self, key):
         self.ops.append(("incr", (key,), {}))
         return self
@@ -114,6 +118,15 @@ class _FakeRedis:
     def __init__(self):
         self.store: dict = {}
         self.ttls: dict = {}
+
+    async def set(self, key, value, ex=None, nx=False):
+        # NX: only creates the bucket, and only the first call arms its TTL —
+        # the anchored window ``core.redis.bump_counter`` relies on.
+        if nx and key in self.store:
+            return None
+        self.store[key] = value
+        self.ttls[key] = ex
+        return True
 
     async def incr(self, key):
         self.store[key] = self.store.get(key, 0) + 1

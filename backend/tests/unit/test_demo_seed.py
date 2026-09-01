@@ -9,7 +9,10 @@ analysis payload populated (the demo's first-screen promise).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
+from app.models import Person
 from app.modules.assessment.models import (
     PDP,
     Assessment,
@@ -21,7 +24,12 @@ from app.modules.assessment.models import (
 )
 from app.modules.company.models import Division
 from app.modules.competence.models import Competence, Indicator, Material, SkillLevel
-from app.modules.demo.seed import clone_seed_into_demo_tenant
+from app.modules.demo.seed import (
+    _seed_company_structure,
+    _seed_employees,
+    _seed_recruitment_extras,
+    clone_seed_into_demo_tenant,
+)
 from app.modules.demo.seed_data import (
     ELENA_INTERVIEW_ANALYSIS,
     INVESTOR_MARKER,
@@ -35,11 +43,28 @@ from app.modules.demo.seed_data_competences import (
     MATERIALS,
 )
 from app.modules.dictionary.models import DictionaryItem
-from app.modules.employee.models import Employee
+from app.modules.employee.issues import collect_issue_facts, issue_cohorts
+from app.modules.employee.models import Employee, WorkExperience
 from app.modules.exam.models import Exam, MassExam
 from app.modules.notification.models import Notification
-from app.modules.recruitment.models import Candidate, Interview, Vacancy
-from app.modules.talent_market.models import TalentCard
+from app.modules.recruitment.models import (
+    Candidate,
+    CandidateVacancy,
+    Interview,
+    Vacancy,
+)
+from app.modules.talent_market.matching import (
+    _auto_populate_candidates,
+    _comp_gap_rows,
+    _compute_match_score,
+    _fetch_match_inputs,
+    _last_passed_percents,
+)
+from app.modules.talent_market.models import (
+    TalentCandidate,
+    TalentCard,
+    TalentCardSpecialization,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -99,18 +124,22 @@ async def test_clone_seed_populates_expected_counts(db: AsyncSession, tenant, us
         .all()
     )
     assert len(cand_count) == result["candidates"]
-    # HRP-276 / H2: demo seed must NOT mint Person rows — those are
-    # tenant-less and would accumulate after each demo purge.
-    assert all(c.person_id is None for c in cand_count)
+    # HRP-276 / H2: demo seed must NOT mint Person rows beyond the one it
+    # needs — those are tenant-less and would accumulate after each demo
+    # purge. HRP-679: the single exception is the internal candidate, who
+    # shares a Person with his employee User so ``is_employee`` can join.
+    assert sum(c.person_id is not None for c in cand_count) == 1
 
 
 @pytest.mark.asyncio
 async def test_seeded_candidate_cards_serialise(db: AsyncSession, tenant, user):
-    """HRP-625: every seeded candidate answers 200, none of them has a Person.
+    """HRP-625: every seeded candidate answers 200, almost none has a Person.
 
     ``CandidateRead`` required ``person_id`` / ``person``, which the demo
     seed deliberately leaves NULL (HRP-276 keeps tenant-less Person rows out
-    of the sandbox) — so opening any demo candidate answered 500.
+    of the sandbox) — so opening any demo candidate answered 500. HRP-679
+    added exactly one candidate that does carry a Person; both shapes have
+    to serialise.
     """
     from app.modules.recruitment import candidate_service
     from app.modules.recruitment.schemas import CandidateRead
@@ -125,13 +154,17 @@ async def test_seeded_candidate_cards_serialise(db: AsyncSession, tenant, user):
         .all()
     )
     assert seeded, "demo seed produced no candidates"
+    with_person = 0
     for candidate in seeded:
         payload = CandidateRead.model_validate(
             await candidate_service.get_candidate(db, tenant.id, candidate.id)
         )
-        assert payload.person is None
-        assert payload.person_id is None
         assert payload.full_name
+        if payload.person_id is None:
+            assert payload.person is None
+        else:
+            with_person += 1
+    assert with_person == 1
 
 
 @pytest.mark.asyncio
@@ -202,7 +235,12 @@ async def test_clone_seed_writes_ready_ai_assessments_with_citations(
         .all()
     )
     assert rows, "seeded interviews must carry ready AI assessments"
-    assert all(r.citations for r in rows), "citations are the demo's headline"
+    # HRP-598: every *assessed* competence cites its evidence; a
+    # ``not_covered`` one has nothing to quote, exactly as the real
+    # LLM path writes it.
+    assert all(r.citations for r in rows if r.status == "assessed"), (
+        "citations are the demo's headline"
+    )
 
     # Keyed on the vacancy-profile slug namespace, the ids the matrix
     # looks up (HRP-275) — a label-derived uuid renders as '--'.
@@ -403,6 +441,422 @@ async def test_seed_talent_cards_cover_every_status(db: AsyncSession, tenant, us
     statuses = {c.status for c in cards}
     for expected in {"draft", "published", "completed", "cancelled"}:
         assert expected in statuses, f"TalentCard status '{expected}' is missing"
+
+
+@pytest.mark.asyncio
+async def test_seed_shows_one_internal_candidate_on_a_vacancy(
+    db: AsyncSession, tenant, user
+):
+    """HRP-679: the demo has an applicant the badge can actually mark.
+
+    Both sides of the ``is_employee`` join used to be NULL in the seed, so
+    the badge shipped in HRP-663 was invisible on a live demo. Drive the
+    same enriched list the vacancy table renders and prove exactly one row
+    comes back flagged — and that the flag rests on a Person genuinely
+    shared with an employee's ``User``, not on a stray row.
+    """
+    from app.modules.auth.models import User
+    from app.modules.recruitment.candidate_service import (
+        list_vacancy_candidates_enriched,
+    )
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    internal = [
+        c
+        for c in (
+            await db.execute(select(Candidate).where(Candidate.tenant_id == tenant.id))
+        )
+        .scalars()
+        .all()
+        if c.person_id is not None
+    ]
+    assert len(internal) == 1, "seed must mint exactly one shared Person"
+    candidate = internal[0]
+
+    # The Person is the employee's, not a lookalike: same row id on the
+    # User that an Employee of this tenant hangs off.
+    employee_user = (
+        await db.execute(
+            select(User)
+            .join(Employee, Employee.user_id == User.id)
+            .where(
+                User.tenant_id == tenant.id,
+                User.person_id == candidate.person_id,
+            )
+        )
+    ).scalar_one()
+    assert employee_user.email == candidate.email
+    assert candidate.full_name == (
+        f"{employee_user.first_name} {employee_user.last_name}"
+    )
+
+    vacancy_id = (
+        await db.execute(
+            select(CandidateVacancy.vacancy_id).where(
+                CandidateVacancy.candidate_id == candidate.id
+            )
+        )
+    ).scalar_one()
+    items, _total = await list_vacancy_candidates_enriched(db, tenant.id, vacancy_id)
+    flagged = [i for i in items if i["is_employee"]]
+    assert len(flagged) == 1, "exactly one row on this vacancy is internal"
+    assert flagged[0]["candidate_id"] == candidate.id
+    # The point of the story: he is not alone on the vacancy — the badge
+    # has external applicants to stand out against.
+    assert len(items) > 1
+
+
+@pytest.mark.asyncio
+async def test_seed_reruns_without_minting_a_second_person(
+    db: AsyncSession, tenant, user
+):
+    """HRP-679: a second pass over the internal applicant reuses the
+    Person it already linked.
+
+    ``_seed_recruitment_extras`` skips a candidate whose row is still
+    there, so the Person branch only runs again once that row is gone --
+    the demo candidate was deleted and the tenant re-seeded on top. Then
+    the branch must find ``user.person_id`` already set and reuse it,
+    instead of minting a second registry row nobody points at.
+    Re-running ``clone_seed_into_demo_tenant`` cannot show this: it
+    returns at the ``_already_seeded`` guard long before the branch.
+    """
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+    persons = select(Person.id).order_by(Person.id)
+    before = (await db.execute(persons)).scalars().all()
+    assert before, "the internal applicant must have minted one Person"
+
+    internal = (
+        await db.execute(
+            select(Candidate).where(
+                Candidate.tenant_id == tenant.id,
+                Candidate.person_id.is_not(None),
+            )
+        )
+    ).scalar_one()
+    linked_person_id = internal.person_id
+    internal_id = internal.id
+    # Deleted, not archived: ``uq_candidate_person_tenant`` spans the
+    # archived rows too, so a re-seed on top of an archived internal
+    # applicant could never insert the second row in the first place.
+    await db.delete(internal)
+    await db.commit()
+
+    # Rebuild the context the seeder passes around (both helpers are
+    # idempotent on an already-seeded tenant) and run the extras again --
+    # this time the candidate lookup misses and the Person branch runs.
+    now = datetime.now(timezone.utc)
+    ctx = await _seed_company_structure(db, tenant.id)
+    await _seed_employees(db, tenant.id, ctx, now=now)
+    await _seed_recruitment_extras(
+        db,
+        tenant.id,
+        ctx,
+        owner_user_id=user.id,
+        legacy_vacancies={},
+        now=now,
+        with_interviews=False,
+    )
+    await db.commit()
+
+    assert (await db.execute(persons)).scalars().all() == before
+    reseeded = (
+        await db.execute(
+            select(Candidate).where(
+                Candidate.tenant_id == tenant.id,
+                Candidate.person_id.is_not(None),
+                Candidate.archived_at.is_(None),
+            )
+        )
+    ).scalar_one()
+    assert reseeded.id != internal_id
+    assert reseeded.person_id == linked_person_id
+
+
+@pytest.mark.asyncio
+async def test_seed_talent_candidates_agree_with_the_matcher(
+    db: AsyncSession,
+    tenant,
+    user,
+    assessment_statuses,
+    assessment_types,
+    default_answer_scale,
+):
+    """HRP-664: the demo must not advertise numbers the product cannot
+    reproduce.
+
+    Before this guard the fixture carried invented scores (88 / 82 / 64)
+    while the matcher scored the same people in the twenties, so the
+    first press of "Recompute" pruned most of the roster. Every seeded
+    candidate is re-scored here with the engine the UI calls, and the
+    auto-pool is rebuilt from scratch, so an edit to the assessment
+    fixtures that breaks the agreement fails here instead of in a demo.
+    """
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    cards = (
+        (await db.execute(select(TalentCard).where(TalentCard.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
+    assert cards
+
+    for card in cards:
+        seeded = {
+            (row.employee_id, row.status, row.match_score)
+            for row in (
+                await db.execute(
+                    select(TalentCandidate).where(TalentCandidate.card_id == card.id)
+                )
+            )
+            .scalars()
+            .all()
+        }
+
+        # 1. Every stored score is the one the matcher computes.
+        comp_rows, spec_rows = await _fetch_match_inputs(db, card.id)
+        for employee_id, _status, score in seeded:
+            computed, _basis = await _compute_match_score(
+                db,
+                card,
+                employee_id,
+                comp_rows=comp_rows,
+                spec_rows=spec_rows,
+                _inputs_loaded=True,
+            )
+            assert score == computed, (
+                f"{card.title}: seeded match_score {score} for employee "
+                f"{employee_id} but the matcher computes {computed}"
+            )
+
+        # 2. Recomputing the auto-pool leaves the roster untouched — no
+        #    pruned "matched" row, no promotion, no surprise addition.
+        await _auto_populate_candidates(db, tenant.id, card.id)
+        await db.commit()
+        after = {
+            (row.employee_id, row.status, row.match_score)
+            for row in (
+                await db.execute(
+                    select(TalentCandidate).where(TalentCandidate.card_id == card.id)
+                )
+            )
+            .scalars()
+            .all()
+        }
+        assert after == seeded, f"{card.title}: recompute changed the candidate roster"
+
+
+@pytest.mark.asyncio
+async def test_seed_talent_card_leaves_a_gap_to_plan_for(
+    db: AsyncSession,
+    tenant,
+    user,
+    assessment_statuses,
+    assessment_types,
+    default_answer_scale,
+):
+    """HRP-664: the bench card's promise is a development plan.
+
+    Its description says the gaps found here become development plans,
+    and the drawer only offers "Create development plan" when the
+    candidate is short on a Required Competence -- the card used to ask
+    for exactly the two competences its only candidate had aced, so the
+    flagship gap-to-plan flow answered 409 ``tm_no_competence_gaps``.
+    Every candidate on the card must clear the bar *and* still carry a
+    gap: strong enough to keep, short enough to grow.
+    """
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    card = (
+        await db.execute(
+            select(TalentCard).where(
+                TalentCard.tenant_id == tenant.id,
+                TalentCard.card_type == "talent",
+                TalentCard.status == "draft",
+            )
+        )
+    ).scalar_one()
+    comp_rows, _spec_rows = await _fetch_match_inputs(db, card.id)
+    required_pairs = {(r.competence_id, r.skill_level_id) for r in comp_rows}
+    rows = (
+        (
+            await db.execute(
+                select(TalentCandidate).where(TalentCandidate.card_id == card.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows, "the bench card carries the candidate the story is about"
+    for row in rows:
+        last_by_comp = (
+            await _last_passed_percents(db, [row.employee_id], required_pairs)
+        ).get(row.employee_id, {})
+        gaps = _comp_gap_rows(comp_rows, last_by_comp, card.match_percent)
+        assert gaps, (
+            f"{card.title}: candidate {row.employee_id} meets every "
+            "requirement, so the card can produce no development plan"
+        )
+        assert row.match_score is not None and row.match_score >= card.match_percent
+
+
+@pytest.mark.asyncio
+async def test_seed_keeps_a_red_competence_without_a_plan(
+    db: AsyncSession,
+    tenant,
+    user,
+    assessment_statuses,
+    assessment_types,
+    default_answer_scale,
+):
+    """HRP-661: the demo keeps one competence in the red band.
+
+    The employee card paints a competence red below 50% and amber below
+    the passing bar, and the whole dev-loop story starts from a red one
+    nobody has a plan for (the seed's sales fixtures put a product
+    knowledge score under 50). Nothing pinned that: raising a single
+    fixture score would have quietly left the demo with four look-alike
+    ambers and no red example at all.
+    """
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    facts = await collect_issue_facts(db, tenant.id)
+    without_plan = issue_cohorts(facts)["gaps_without_plan"]
+    # 50 is the card's red band (below it the bar chart turns red);
+    # `gaps_without_plan` is the same cohort the admin action queue lists.
+    in_the_red = {
+        emp_id
+        for emp_id, row in facts.latest_done.items()
+        if any(res.percent < 50 for res in facts.results_by_assessment.get(row.id, []))
+    }
+    assert in_the_red & without_plan, (
+        "no seeded employee carries a competence below 50% without an open "
+        "plan — the demo lost its red example"
+    )
+
+
+@pytest.mark.asyncio
+async def test_seed_experience_axis_is_measured_not_assumed(
+    db: AsyncSession,
+    tenant,
+    user,
+    assessment_statuses,
+    assessment_types,
+    default_answer_scale,
+):
+    """HRP-682: the Experience axis reads a real tenure.
+
+    The seed used to create no ``WorkExperience`` at all, so every card
+    had to drop ``min_years`` (HRP-664) and the Match cell could only say
+    "current position matches". Now every employee carries the spell they
+    are in, cards carry years floors again, and the floor decides — some
+    candidates clear it, some honestly do not.
+    """
+    from app.modules.talent_market.card_service import _compute_candidates_breakdown
+    from sqlalchemy.orm import selectinload
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    # Every seeded employee has a Current Employment spell that starts on
+    # their hire date — the row the matcher measures tenure from.
+    employees = (
+        (await db.execute(select(Employee).where(Employee.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
+    spells = (
+        (
+            await db.execute(
+                select(WorkExperience).where(WorkExperience.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_employee = {w.employee_id: w for w in spells}
+    assert len(by_employee) == len(employees), "every demo employee needs a spell"
+    for emp in employees:
+        spell = by_employee[emp.id]
+        assert spell.position_id == emp.position_id
+        assert spell.start_date == emp.hire_date
+        # Whoever still works here is in an open spell. The former
+        # teammate's is closed: an "Inactive" card that also reads
+        # "hire date — present" contradicts itself (HRP-682 review).
+        if emp.status == "inactive":
+            assert spell.end_date is not None
+        else:
+            assert spell.end_date is None
+    assert any(e.status == "inactive" for e in employees), (
+        "the seed keeps one former teammate — without them the closed "
+        "spell above is never exercised"
+    )
+
+    cards = (
+        (
+            await db.execute(
+                select(TalentCard)
+                .options(selectinload(TalentCard.candidates))
+                .where(TalentCard.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    floored = []
+    for card in cards:
+        min_years = (
+            (
+                await db.execute(
+                    select(TalentCardSpecialization.min_experience_years).where(
+                        TalentCardSpecialization.card_id == card.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not card.candidates or not any(m for m in min_years):
+            continue
+        floored.append(card)
+        breakdown = await _compute_candidates_breakdown(
+            db, card, [c.employee_id for c in card.candidates]
+        )
+        for bd in breakdown.values():
+            # A measured tenure, not the HRP-210 "current position matches"
+            # fallback the demo was stuck on.
+            assert bd["exp_months"] is not None, f"{card.title}: no tenure to show"
+            assert bd["exp_months"] > 0
+            assert bd["exp_via_current_position"] is False
+        # Whoever the card keeps as `matched` cleared the floor on tenure.
+        for cand in card.candidates:
+            if cand.status == "matched":
+                assert breakdown[cand.employee_id]["exp_qualifies"], (
+                    f"{card.title}: matched candidate below the years floor"
+                )
+
+    assert len(floored) >= 4, "the demo must show years floors on several cards"
+
+    # And the floor has teeth: the DACH vacancy keeps an account executive
+    # who is short on years — a red experience chip next to a real number.
+    dach = next(c for c in cards if c.title.startswith("Senior Account Executive"))
+    dach_breakdown = await _compute_candidates_breakdown(
+        db, dach, [c.employee_id for c in dach.candidates]
+    )
+    verdicts = {bd["exp_qualifies"] for bd in dach_breakdown.values()}
+    assert verdicts == {True, False}, "the DACH card must split on experience"
 
 
 @pytest.mark.asyncio
@@ -1064,3 +1518,147 @@ async def test_seeded_tenant_tells_the_dev_loop_story(
     assert any(f["code"] == "gap_without_plan" for f in personal["findings"])
     assert personal["growth"] is not None
     assert personal["growth"]["next_grade"] is not None
+
+
+@pytest.mark.asyncio
+async def test_demo_recruiting_funnel_tells_the_recommendation_story(
+    db: AsyncSession, tenant, user
+):
+    """HRP-666: the vacancy the demo opens on must be readable at a glance.
+
+    Three candidates, each in a funnel stage, and all three manager/AI
+    states represented: agreement (Elena), one explainable disagreement
+    (Tomás — the AI rated his payments background near the top, the
+    manager did not), and no manager opinion yet (Priya). Without the
+    manager rounds the MANAGER column, the % match and the whole
+    DIVERGENCE story were empty on every demo row.
+
+    HRP-662 rides on the same fixture: ``score_divergence`` is now the
+    per-competence count, so the flag and the number in one row agree.
+    """
+    from app.modules.recruitment import candidate_service
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    vacancy = (
+        await db.execute(
+            select(Vacancy).where(
+                Vacancy.tenant_id == tenant.id,
+                Vacancy.title == "Senior Backend Engineer — Payments",
+            )
+        )
+    ).scalar_one()
+
+    rows, _total = await candidate_service.list_vacancy_candidates_enriched(
+        db, tenant.id, vacancy.id
+    )
+    assert len(rows) == 3, "HRP-666 caps the headline funnel at three candidates"
+    by_name = {r["candidate_name"]: r for r in rows}
+    assert set(by_name) == {"Elena Volkov", "Priya Shah", "Tomás Becker"}
+    assert all(r["stage"] is not None for r in rows), "every demo row has a stage"
+
+    elena = by_name["Elena Volkov"]
+    assert elena["manager_score"] is not None
+    assert elena["divergence_count"] == 0
+    assert elena["score_divergence"] is False
+
+    tomas = by_name["Tomás Becker"]
+    assert tomas["manager_score"] is not None
+    assert tomas["divergence_count"] == 1
+    assert tomas["score_divergence"] is True
+    assert tomas["divergence_top"][0]["competence_name"] == "Payments domain"
+    # The card verdict agrees with the verdict his own interview analysis
+    # produced — a "recommended" chip over a "needs check" analysis was
+    # exactly the kind of noise the ticket is about.
+    assert tomas["ai_verdict"] == "needs_check"
+
+    priya = by_name["Priya Shah"]
+    assert priya["manager_score"] is None
+    assert priya["ai_verdict"] == "not_recommended"
+
+
+@pytest.mark.asyncio
+async def test_seeded_analysis_runs_back_the_candidate_card(
+    db: AsyncSession, tenant, user
+):
+    """HRP-666: AI Insights reads ``AIAnalysisRun``, not the interview.
+
+    Without a run the card offered "Analyze this candidate" on the very
+    candidates whose finished analysis the demo is meant to show off.
+    """
+    from app.modules.recruitment.models import AIAnalysisRun
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    runs = (
+        (
+            await db.execute(
+                select(AIAnalysisRun).where(AIAnalysisRun.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(runs) == 3
+    for run in runs:
+        assert run.status == "completed"
+        assert run.verdict_summary
+        # HRP-680: the interview-backed runs stayed ``full``; the third
+        # is the resume-only one and has no interview by construction.
+        assert (run.interview_id is not None) is (run.mode == "full")
+    assert sorted(r.mode for r in runs) == ["full", "full", "resume_only"]
+
+
+@pytest.mark.asyncio
+async def test_seeded_resume_citations_open_the_resume(
+    db: AsyncSession, tenant, user
+):
+    """HRP-680: the AI Insights citation chips are click-to-locate into
+    the parsed resume, and both halves only exist on a resume-only run —
+    ``extract_resume_excerpts`` returns nothing for ``full``.
+    """
+    from app.modules.recruitment import resume_analysis_service
+    from app.modules.recruitment.models import AIAnalysisRun
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    run = (
+        await db.execute(
+            select(AIAnalysisRun).where(
+                AIAnalysisRun.tenant_id == tenant.id,
+                AIAnalysisRun.mode == "resume_only",
+            )
+        )
+    ).scalar_one()
+    candidate = (
+        await db.execute(
+            select(Candidate).where(
+                Candidate.tenant_id == tenant.id,
+                Candidate.email == "priya.shah@example.com",
+            )
+        )
+    ).scalar_one()
+    assert run.candidate_vacancy_id
+    parsed = candidate.parsed_resume_jsonb
+    assert parsed, "the chips have no resume to point at"
+
+    # Same call the runs endpoint makes — the raw payload never reaches
+    # the client, so this is the only place the chips come from.
+    current_hash = await resume_analysis_service.current_resume_hash_for_candidate(
+        db, tenant.id, candidate.id
+    )
+    read = resume_analysis_service.serialize_run_for_read(run, current_hash)
+    assert read.resume_excerpts, "resume-only run produced no citation chips"
+    # A freshly cloned demo must not open on a "resume updated" banner.
+    assert read.resume_outdated is False
+
+    companies = {e["company"] for e in parsed["experience"]}
+    for excerpt in read.resume_excerpts:
+        if excerpt.section == "experience":
+            assert excerpt.source_company in companies

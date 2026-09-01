@@ -45,6 +45,10 @@ class _FakePipeline:
     async def __aexit__(self, *_exc) -> bool:
         return False
 
+    def set(self, key, value, **kwargs):
+        self._ops.append(("set", (key, value), kwargs))
+        return self
+
     def incrby(self, key, amount=1):
         self._ops.append(("incrby", (key, amount), {}))
         return self

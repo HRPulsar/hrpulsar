@@ -653,6 +653,7 @@ async def list_position_employees(
     *,
     with_alerts: bool = False,
     visible_employee_ids: set[uuid.UUID] | None,
+    show_grades: bool,
 ) -> list[dict]:
     """Drill-down: employees assigned to this position.
 
@@ -715,9 +716,14 @@ async def list_position_employees(
 
     # Position details are uniform for the whole list: assignment is
     # filtered by position_id, so spec/grade/division come from `pos`,
-    # not from each employee's own row.
-    pos_specialization_title = pos.specialization.title if pos.specialization else None
-    pos_grade_title = pos.grade.title if pos.grade else None
+    # not from each employee's own row. HRP-637 hides exactly these two
+    # fields on every other position payload, and an in-scope row here is
+    # the same "position -> grade" join — so the same predicate gates it
+    # (``show_grades`` is ``can_see_position_grades`` at the router).
+    pos_specialization_title = (
+        pos.specialization.title if show_grades and pos.specialization else None
+    )
+    pos_grade_title = pos.grade.title if show_grades and pos.grade else None
     pos_position_title = pos.title
 
     items: list[dict] = []

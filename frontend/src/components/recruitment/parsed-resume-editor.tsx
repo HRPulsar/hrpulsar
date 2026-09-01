@@ -49,10 +49,15 @@ import type {
   ParsedResumeEducation,
   ParsedResumeExperience,
   ParsedResumeLanguage,
+  ResumeExcerpt,
   ResumeExcerptSection,
 } from "@/lib/recruitment-types";
 import {
   RESUME_EXCERPT_FOCUS_EVENT,
+  dispatchResumeCitationFocus,
+  mapExcerptsToResumeItems,
+  normalisePeriod,
+  overlaps,
   type ResumeExcerptFocusDetail,
 } from "@/lib/resume-excerpt-focus";
 import { cn } from "@/lib/utils";
@@ -61,6 +66,9 @@ interface Props {
   card: CandidateCanonicalCard;
   etag: string | null;
   onSaved: (next: CandidateCanonical, etag: string | null) => void;
+  /** HRP-680: the excerpts the active analysis quoted, so the items they
+   * came from carry a permanent mark and link back to their chip. */
+  excerpts?: ResumeExcerpt[];
 }
 
 // HRP-271: section keys for the collapse state map. Includes
@@ -96,17 +104,48 @@ const HIGHLIGHT_CLASSES = [
 ];
 const HIGHLIGHT_DURATION_MS = 2000;
 
-// HRP-271 (review): normalise period strings so LLM-supplied
-// ``source_period`` ('2020 - 2022', '2020–2022', 'Mar 2020 — Dec 2022')
-// matches the DOM dataset value ('2020 — 2022') regardless of dash
-// variant or whitespace. Collapses '—', '–', '-' to a single '-' and
-// strips inner whitespace.
-function normalisePeriod(value: string | null | undefined): string {
-  if (!value) return "";
-  return value
-    .toLowerCase()
-    .replace(/[‐-―−-]+/g, "-")
-    .replace(/\s+/g, "");
+// HRP-680: the permanent mark on a quoted item. Deliberately quiet —
+// a soft primary wash and a hairline inset ring, the same vocabulary
+// the rest of the card uses for "this is interactive". Loud enough to
+// be findable while reading the resume, not loud enough to compete
+// with the content.
+const CITED_CLASS =
+  "cursor-pointer bg-primary/5 ring-1 ring-inset ring-primary/25 " +
+  "transition-colors hover:bg-primary/10 focus-visible:outline-none " +
+  "focus-visible:ring-2 focus-visible:ring-primary";
+
+/**
+ * HRP-680 — props that turn a rendered resume item into the clickable
+ * half of the citation pair.
+ *
+ * Returns just the base className when the item was not cited, so every
+ * call site is one expression whether or not an analysis quoted it.
+ * ``role``/``tabIndex``/``onKeyDown`` rather than a ``<button>``: these
+ * items wrap block content, which a button may not contain.
+ */
+function citedItemProps(
+  baseClass: string,
+  excerpt: ResumeExcerpt | undefined,
+  label: string,
+  onFocus: (excerpt: ResumeExcerpt) => void,
+) {
+  if (!excerpt) return { className: baseClass };
+  const go = () => onFocus(excerpt);
+  return {
+    className: cn(baseClass, CITED_CLASS),
+    role: "button",
+    tabIndex: 0,
+    title: label,
+    "aria-label": label,
+    "data-resume-cited": "true",
+    onClick: go,
+    onKeyDown: (evt: React.KeyboardEvent) => {
+      if (evt.key === "Enter" || evt.key === " ") {
+        evt.preventDefault();
+        go();
+      }
+    },
+  };
 }
 
 function prefersReducedMotion(): boolean {
@@ -168,21 +207,37 @@ function findGenericTarget(
   if (items.length === 0) return null;
   const excerpt = detail.excerpt_text.trim().toLowerCase();
   if (!excerpt) return null;
-  // Try both directions: the excerpt may be longer than the item
-  // (multi-skill quote vs single chip) or shorter (verbatim chunk of
-  // a longer description). Either substring is a positive match.
+  // Same rule as the data-side matcher (``overlaps``): two-way
+  // containment, with short chips (R, Go, C#) held to whole-token
+  // matches so they cannot claim an unrelated excerpt.
   for (const it of items) {
     const text = (it.textContent ?? "").toLowerCase();
-    if (text.includes(excerpt) || excerpt.includes(text)) return it;
+    if (overlaps(text, excerpt)) return it;
   }
   return null;
 }
 
-export function ParsedResumeEditor({ card, etag, onSaved }: Props) {
+export function ParsedResumeEditor({
+  card,
+  etag,
+  onSaved,
+  excerpts,
+}: Props) {
   const t = useTranslations("recruitment");
   const parsed = card.parsed_resume_jsonb ?? null;
   const candidateId = card.id;
   const containerRef = useRef<HTMLDivElement>(null);
+  // HRP-680: which rendered items the active analysis quoted.
+  const cited = useMemo(
+    () => mapExcerptsToResumeItems(parsed, excerpts),
+    [parsed, excerpts],
+  );
+  const citedLabel = t("resumeEditorCitedInAnalysis");
+  const onCitedFocus = useCallback(
+    (excerpt: ResumeExcerpt) =>
+      dispatchResumeCitationFocus({ ...excerpt, candidate_id: candidateId }),
+    [candidateId],
+  );
   const highlightStateRef = useRef<{
     el: HTMLElement;
     timer: number;
@@ -329,24 +384,36 @@ export function ParsedResumeEditor({ card, etag, onSaved }: Props) {
           collapsed={collapsed.summary}
           onToggleCollapsed={() => toggleCollapsed("summary")}
           onSave={(v) => patchSection("summary", v)}
+          cited={cited}
+          citedLabel={citedLabel}
+          onCitedFocus={onCitedFocus}
         />
         <ExperienceEditor
           value={parsed?.experience ?? []}
           collapsed={collapsed.experience}
           onToggleCollapsed={() => toggleCollapsed("experience")}
           onSave={(v) => patchSection("experience", v)}
+          cited={cited}
+          citedLabel={citedLabel}
+          onCitedFocus={onCitedFocus}
         />
         <EducationEditor
           value={parsed?.education ?? []}
           collapsed={collapsed.education}
           onToggleCollapsed={() => toggleCollapsed("education")}
           onSave={(v) => patchSection("education", v)}
+          cited={cited}
+          citedLabel={citedLabel}
+          onCitedFocus={onCitedFocus}
         />
         <SkillsEditor
           value={parsed?.skills ?? []}
           collapsed={collapsed.skills}
           onToggleCollapsed={() => toggleCollapsed("skills")}
           onSave={(v) => patchSection("skills", v)}
+          cited={cited}
+          citedLabel={citedLabel}
+          onCitedFocus={onCitedFocus}
         />
         <LanguagesEditor
           value={parsed?.languages ?? []}
@@ -511,17 +578,28 @@ async function runSave(
 // Summary
 // ---------------------------------------------------------------------------
 
+// HRP-680: every read-mode section needs the same three things to mark
+// a quoted item and link it back to its chip.
+interface CitedSectionProps {
+  cited: Map<string, ResumeExcerpt>;
+  citedLabel: string;
+  onCitedFocus: (excerpt: ResumeExcerpt) => void;
+}
+
 function SummaryEditor({
   value,
   collapsed,
   onToggleCollapsed,
   onSave,
+  cited,
+  citedLabel,
+  onCitedFocus,
 }: {
   value: string | null;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onSave: (v: string | null) => Promise<void>;
-}) {
+} & CitedSectionProps) {
   const t = useTranslations("recruitment");
   const { editing, setEditing, draft, setDraft, busy, setBusy } =
     useEditState<string | null>(value);
@@ -553,7 +631,16 @@ function SummaryEditor({
             data-testid="candidate-card-edit-summary-input"
           />
         ) : value ? (
-          <p className="whitespace-pre-line text-foreground/90">{value}</p>
+          <p
+            {...citedItemProps(
+              "whitespace-pre-line text-foreground/90",
+              cited.get("summary"),
+              citedLabel,
+              onCitedFocus,
+            )}
+          >
+            {value}
+          </p>
         ) : (
           <p className="text-xs text-muted-foreground">
             {t("resumeEditorSummaryEmpty")}
@@ -572,12 +659,15 @@ function SkillsEditor({
   collapsed,
   onToggleCollapsed,
   onSave,
+  cited,
+  citedLabel,
+  onCitedFocus,
 }: {
   value: string[];
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onSave: (v: string[]) => Promise<void>;
-}) {
+} & CitedSectionProps) {
   const t = useTranslations("recruitment");
   const { editing, setEditing, draft, setDraft, busy, setBusy } =
     useEditState<string[]>(value);
@@ -648,7 +738,12 @@ function SkillsEditor({
               <Badge
                 key={`${s}-${idx}`}
                 variant="secondary"
-                className="text-[11px]"
+                {...citedItemProps(
+                  "text-[11px]",
+                  cited.get(`skill-${idx}`),
+                  citedLabel,
+                  onCitedFocus,
+                )}
                 data-resume-item-key={`skill-${idx}`}
               >
                 {s}
@@ -673,12 +768,15 @@ function ExperienceEditor({
   collapsed,
   onToggleCollapsed,
   onSave,
+  cited,
+  citedLabel,
+  onCitedFocus,
 }: {
   value: ParsedResumeExperience[];
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onSave: (v: ParsedResumeExperience[]) => Promise<void>;
-}) {
+} & CitedSectionProps) {
   const t = useTranslations("recruitment");
   const { editing, setEditing, draft, setDraft, busy, setBusy } =
     useEditState<ParsedResumeExperience[]>(value);
@@ -794,7 +892,12 @@ function ExperienceEditor({
             return (
               <li
                 key={i}
-                className="rounded-md border-l-2 border-primary/40 pl-3"
+                {...citedItemProps(
+                  "rounded-md border-l-2 border-primary/40 pl-3",
+                  cited.get(`experience-${i}`),
+                  citedLabel,
+                  onCitedFocus,
+                )}
                 data-resume-item-key={`experience-${i}`}
                 data-resume-company={exp.company ?? ""}
                 data-resume-period={period}
@@ -830,12 +933,15 @@ function EducationEditor({
   collapsed,
   onToggleCollapsed,
   onSave,
+  cited,
+  citedLabel,
+  onCitedFocus,
 }: {
   value: ParsedResumeEducation[];
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onSave: (v: ParsedResumeEducation[]) => Promise<void>;
-}) {
+} & CitedSectionProps) {
   const t = useTranslations("recruitment");
   const { editing, setEditing, draft, setDraft, busy, setBusy } =
     useEditState<ParsedResumeEducation[]>(value);
@@ -936,7 +1042,12 @@ function EducationEditor({
           {value.map((edu, i) => (
             <li
               key={i}
-              className="flex items-start gap-2"
+              {...citedItemProps(
+                "flex items-start gap-2",
+                cited.get(`education-${i}`),
+                citedLabel,
+                onCitedFocus,
+              )}
               data-resume-item-key={`education-${i}`}
             >
               <GraduationCap className="mt-0.5 size-4 text-muted-foreground" />

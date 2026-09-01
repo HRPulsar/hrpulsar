@@ -31,11 +31,14 @@ async def _check_redis() -> dict:
     """Check Redis connectivity."""
     start = time.perf_counter()
     try:
-        import redis.asyncio as aioredis
+        from app.core.redis import redis_client
 
-        r = aioredis.from_url(settings.redis_url)
-        await r.ping()  # type: ignore[misc]
-        await r.aclose()  # type: ignore[attr-defined]
+        # ``redis_client`` closes in a ``finally``; the hand-rolled version
+        # here closed on the happy path only, so a probe against a Redis
+        # that accepts the connection and then fails ``ping`` leaked one
+        # connection per probe — every 60s, forever (HRP-596).
+        async with redis_client() as r:
+            await r.ping()  # type: ignore[misc]
         return {
             "status": "ok",
             "latency_ms": round((time.perf_counter() - start) * 1000, 1),
@@ -61,13 +64,13 @@ async def _check_celery() -> dict:
     import asyncio
 
     try:
-        import redis.asyncio as aioredis
+        from app.core.redis import redis_client
 
-        r = aioredis.from_url(settings.redis_url)
-        try:
+        # ``decode_responses=True`` (the shared client) makes ``value`` a
+        # str where it used to be bytes; the read below already handled
+        # both, and the writer stores a plain ISO timestamp either way.
+        async with redis_client() as r:
             value = await r.get("status:celery:heartbeat")
-        finally:
-            await r.aclose()  # type: ignore[attr-defined]
     except Exception as exc:  # noqa: BLE001 - health probe reports the failure
         return {"status": "error", "error": str(exc)}
 

@@ -7,6 +7,7 @@ the task_failure status map).
 """
 
 import logging
+import uuid
 from datetime import datetime
 
 from app.core.celery_app import celery
@@ -75,6 +76,50 @@ def auto_chain_step(interview_id: str, tenant_id: str, step: str) -> bool:
             "auto-process %s chain failed for interview %s", step, interview_id
         )
         return False
+
+
+def _chain_analysis_if_requested(
+    db, interview_id: str, tenant_id: str, *, requested: bool
+) -> None:
+    """HRP-202 REDO: hand a finished transcript to AI analysis.
+
+    The upload was submitted with "transcribe & analyze" on, so the
+    analyze hop runs here (cache-aware, billed like the manual button).
+    The flag is one-shot: a later manual re-transcribe must never
+    silently re-trigger a billed analysis from stale upload intent.
+
+    HRP-275: every exit of ``transcribe_interview_task`` goes through
+    this. The demo kill-switch path used to return before the chain, so
+    on a demo tenant an uploaded recording transcribed and then stopped
+    — the interview page showed a transcript and an AI analysis that
+    stayed empty forever, and the flag was never consumed either.
+
+    Two ordering details, both about the tenant's credits:
+
+    * ``requested`` is captured by the caller *before* its commit.
+      Reading ``interview.auto_process`` here would refresh an expired
+      instance, and a session already in rollback-required state (a
+      notification that blew up) would raise from that SELECT — the
+      outer handler would then mark a finished transcription failed and
+      retry it.
+    * The flag is cleared and committed *before* the hop runs. A process
+      death between the two now costs a missing auto-analysis (the
+      manual button still works) instead of a second billed one.
+    """
+    if not requested:
+        return
+
+    from sqlalchemy import update as sa_update
+
+    from app.modules.recruitment.models import Interview as InterviewRow
+
+    db.execute(
+        sa_update(InterviewRow)
+        .where(InterviewRow.id == uuid.UUID(interview_id))
+        .values(auto_process=False)
+    )
+    db.commit()
+    auto_chain_step(interview_id, tenant_id, "analyze")
 
 
 @celery.task(
@@ -162,10 +207,32 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 )
                 interview.transcript = load_transcript()
                 interview.transcription_provider = "demo-killswitch"
+                # HRP-275: the bundled transcript is diarized on the
+                # page — turn it back into segments so the transcript
+                # panel shows speakers and timecodes instead of one
+                # blob, exactly as a diarizing provider would leave it.
+                from app.modules.demo.seed_data import (
+                    parse_transcript_segments,
+                )
+
+                segment_rows = parse_transcript_segments(interview.transcript)
+                segment_count = len(segment_rows)
+                for segment in segment_rows:
+                    db.add(
+                        InterviewSegment(
+                            tenant_id=uuid.UUID(tenant_id),
+                            interview_id=interview.id,
+                            speaker=segment["speaker"],
+                            start_sec=segment["start_sec"],
+                            end_sec=segment["end_sec"],
+                            text=segment["text"],
+                        )
+                    )
                 if not interview.duration_seconds:
                     interview.duration_seconds = 600
                 interview.transcription_status = "completed"
                 interviewer_id = interview.interviewer_id
+                auto_process_requested = bool(interview.auto_process)
                 db.commit()
                 # Mirror the real path: emit N-05 transcript_ready so
                 # the interviewer still gets a notification.
@@ -194,10 +261,16 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                     "Interview %s transcribed via demo-killswitch",
                     interview_id,
                 )
+                _chain_analysis_if_requested(
+                    db,
+                    interview_id,
+                    tenant_id,
+                    requested=auto_process_requested,
+                )
                 return {
                     "status": "completed",
                     "interview_id": interview_id,
-                    "segments": 0,
+                    "segments": segment_count,
                     "demo_killswitch": True,
                 }
 
@@ -325,6 +398,7 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
 
             interview.transcription_status = "completed"
             interviewer_id = interview.interviewer_id
+            auto_process_requested = bool(interview.auto_process)
             db.commit()
             # R4c N-05: notify the interviewer that the transcript is ready.
             try:
@@ -346,16 +420,12 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
             logger.info(
                 "Interview %s transcribed via %s", interview_id, result.provider
             )
-            # HRP-202 REDO: auto-processing chain — the upload was submitted
-            # with "transcribe & analyze" on, so hand the finished transcript
-            # straight to AI analysis (cache-aware, billed like the manual
-            # button). The flag is one-shot: it is consumed here so a later
-            # manual re-transcribe never silently re-triggers a billed
-            # analysis from stale upload intent.
-            if interview.auto_process:
-                auto_chain_step(interview_id, tenant_id, "analyze")
-                interview.auto_process = False
-                db.commit()
+            _chain_analysis_if_requested(
+                db,
+                interview_id,
+                tenant_id,
+                requested=auto_process_requested,
+            )
             return {
                 "status": "completed",
                 "interview_id": interview_id,
@@ -548,8 +618,7 @@ def _finalize_full_analysis_run(
     # schema validators in ``prompts_interview``). ``cv.ai_score_normalized``
     # rebases it onto the tenant's active scale (identity fallback when
     # no scale is configured) so it is directly comparable with
-    # ``manager_score`` — ``compute_score_divergence`` consumes the
-    # normalized value, never the raw one.
+    # ``manager_score`` on the candidates table.
     from app.modules.recruitment.models import ScaleConfig
     from app.modules.recruitment.resume_analysis_service import (
         aggregate_ai_score_sync,
@@ -738,6 +807,9 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
     from app.config import settings
     from app.modules.ai.llm_client import generate_json
     from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
+    from app.modules.recruitment.analysis_language import (
+        resolve_analysis_language_sync,
+    )
     from app.modules.recruitment.common import normalize_competence_id
     from app.modules.recruitment.models import (
         AIAnalysisRun,
@@ -926,7 +998,9 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
 
             prompt = build_interview_analysis_prompt(
                 vacancy_title=(vacancy.title if vacancy else ""),
-                vacancy_language=(vacancy.language if vacancy else "en"),
+                analysis_language=resolve_analysis_language_sync(
+                    db, tenant_id, vacancy
+                ),
                 profile_competences=profile_competences,
                 transcript=interview.transcript or "",
                 segments=segments_payload,
@@ -1227,6 +1301,9 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
     from app.config import settings
     from app.modules.ai.llm_client import generate_json
     from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
+    from app.modules.recruitment.analysis_language import (
+        resolve_analysis_language_sync,
+    )
     from app.modules.recruitment.models import (
         AIAnalysisRun,
         Candidate,
@@ -1302,7 +1379,9 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
 
             prompt = build_resume_only_analysis_prompt(
                 vacancy_title=(vacancy.title if vacancy else ""),
-                vacancy_language=(vacancy.language if vacancy else "en"),
+                analysis_language=resolve_analysis_language_sync(
+                    db, tenant_id, vacancy
+                ),
                 profile_competences=profile_competences,
                 parsed_resume=resume.parsed_data or {},
                 resume_raw_text=resume.raw_text,

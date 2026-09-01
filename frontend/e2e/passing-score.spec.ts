@@ -65,12 +65,28 @@ test.describe("Passing score & grade recommendation — frontend", () => {
     // change_status(draft → sent) guard requires both — if we leave either
     // unset, the transition silently fails and the assessment stays in
     // draft, which would let the criteria PUT below succeed (200) and mask
-    // the read-only invariant we're actually testing.
+    // the read-only invariant we're actually testing. HRP-688 also refuses
+    // the send when the criteria resolve to zero indicators, so the
+    // criteria pin an indicator-backed competence instead of the fixture's
+    // bare current position.
+    const criteriaFixture = await setupCriteriaFixture({
+      page,
+      accessToken: setup.accessToken,
+    });
     const criteriaResp = await page.request.put(
       `${API_BASE}/assessments/${a.id}/criteria`,
       {
         headers: { Authorization: `Bearer ${setup.accessToken}` },
-        data: { criteria_type: "current_positions", passing_score: 80 },
+        data: {
+          criteria_type: "competences",
+          competences: [
+            {
+              competence_id: criteriaFixture.competenceId,
+              skill_level_id: criteriaFixture.skillLevelId,
+            },
+          ],
+          passing_score: 80,
+        },
       },
     );
     expect(criteriaResp.ok()).toBeTruthy();

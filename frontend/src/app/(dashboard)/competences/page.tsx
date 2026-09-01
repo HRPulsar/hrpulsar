@@ -77,6 +77,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Hint } from "@/components/ui/hint";
 
 import { GenerationStatusButton } from "@/components/competence-generation/GenerationStatusButton";
 import { GenerationDrawer } from "@/components/competence-generation/GenerationDrawer";
@@ -737,6 +738,7 @@ export default function CompetencesPage() {
   const t = useTranslations("competences");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
+  const tSections = useTranslations("sections");
   const { tree, loading: treeLoading } = useCompetenceTree();
   const [compTypes, setCompTypes] = useState<DictionaryItem[]>([]);
   const [auxLoading, setAuxLoading] = useState(true);
@@ -1268,9 +1270,15 @@ export default function CompetencesPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t("title")}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {t("title")}
+            </h1>
+            <Hint
+              text={tSections("competences.hint")}
+              data-testid="competences-hint-title"
+            />
+          </div>
           <p className="text-sm text-muted-foreground">
             {t("subtitleCounts", {
               groups: tree.length,

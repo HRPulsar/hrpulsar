@@ -12,6 +12,7 @@ import logging
 import re
 import unicodedata
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -104,33 +105,42 @@ def _candidate_to_read(candidate: Candidate, is_employee: bool = False) -> dict:
 # ---------------------------------------------------------------------------
 
 
+async def _employee_person_ids(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    person_ids: Iterable[uuid.UUID | None],
+) -> set[uuid.UUID]:
+    """Which of these persons are employees of this tenant.
+
+    HRP-663: one statement for a whole page. The per-row twin below used
+    to be called inside the list loop and cost two queries per candidate.
+
+    HRP-181 REDO: externally-sourced candidates have ``person_id=None``.
+    Dropping the NULLs is the safe answer — without it the
+    ``User.person_id IN (...)`` predicate would carry a NULL and, in the
+    single-id form this replaced, matched every tenant user with a NULL
+    person_id, falsely flagging external candidates as employees.
+    """
+    ids = {p for p in person_ids if p is not None}
+    if not ids:
+        return set()
+    rows = await db.execute(
+        select(User.person_id)
+        .join(Employee, Employee.user_id == User.id)
+        .where(
+            User.person_id.in_(ids),
+            User.tenant_id == tenant_id,
+            Employee.tenant_id == tenant_id,
+        )
+    )
+    return {row[0] for row in rows}
+
+
 async def _check_is_employee(
     db: AsyncSession, tenant_id: uuid.UUID, person_id: uuid.UUID | None
 ) -> bool:
-    """Check if a person is linked to a user who is an employee in this tenant.
-
-    HRP-181 REDO: externally-sourced candidates have ``person_id=None``.
-    Skipping the lookup is the safe answer — without this guard the
-    ``User.person_id == None`` predicate emits SQL ``IS NULL`` and would
-    match every tenant user with a NULL person_id, falsely flagging
-    external candidates as employees.
-    """
-    if person_id is None:
-        return False
-
-    result = await db.execute(
-        select(User).where(User.person_id == person_id, User.tenant_id == tenant_id)
-    )
-    user = result.scalar_one_or_none()
-    if not user:
-        return False
-
-    result = await db.execute(
-        select(Employee).where(
-            Employee.user_id == user.id, Employee.tenant_id == tenant_id
-        )
-    )
-    return result.scalar_one_or_none() is not None
+    """Is this person an employee of this tenant (single-row form)."""
+    return bool(await _employee_person_ids(db, tenant_id, [person_id]))
 
 
 async def create_candidate(
@@ -276,10 +286,14 @@ async def list_candidates(
     )
     candidates = result.scalars().unique().all()
 
-    items = []
-    for c in candidates:
-        is_emp = await _check_is_employee(db, tenant_id, c.person_id)
-        items.append(_candidate_to_read(c, is_employee=is_emp))
+    # HRP-663: one lookup for the page, not two queries per row.
+    employee_person_ids = await _employee_person_ids(
+        db, tenant_id, [c.person_id for c in candidates]
+    )
+    items = [
+        _candidate_to_read(c, is_employee=c.person_id in employee_person_ids)
+        for c in candidates
+    ]
     return items, total
 
 
@@ -764,35 +778,6 @@ async def list_candidate_vacancies(
 # ---------------------------------------------------------------------------
 
 
-# Manager / AI score gap threshold (FR-09 "score_divergence"), expressed
-# on the tenant assessment scale. Hard-coded to 1.0 because the active
-# assessment scale is 1..5 with 0.5 step — a one-step delta is the
-# smallest gap a recruiter would treat as meaningful. Per-tenant override
-# is out of scope for Stage 2 (separate spec).
-SCORE_DIVERGENCE_THRESHOLD: float = 1.0
-
-
-def compute_score_divergence(
-    manager_score: float | None,
-    ai_score_normalized: float | None,
-    threshold: float = SCORE_DIVERGENCE_THRESHOLD,
-) -> bool:
-    """Return True when manager / AI verdicts disagree past the threshold.
-
-    Compares like with like: ``manager_score`` lives on the tenant
-    assessment scale, so the AI side must be ``cv.ai_score_normalized``
-    (the canonical 0..1 raw ``cv.ai_score`` rebased onto the same tenant
-    scale, HRP-274) — never the raw score, which would flag a false
-    divergence on every fully-scored candidate.
-
-    Both scores must be present — a missing side means "no opinion to
-    disagree with".
-    """
-    if manager_score is None or ai_score_normalized is None:
-        return False
-    return abs(float(manager_score) - float(ai_score_normalized)) >= threshold
-
-
 def candidate_vacancy_etag(cv: CandidateVacancy | dict) -> str:
     """Weak ETag derived from ``candidate_vacancies.version``.
 
@@ -819,26 +804,32 @@ def candidate_etag(candidate: Candidate | dict) -> str:
 
 
 def _normalised_parsed_resume(parsed: dict | None) -> dict | None:
-    """Read-time HRP-346 mapping for payloads parsed before the fix.
+    """Read-time HRP-346 / HRP-686 mapping for payloads parsed before the fix.
 
-    Stored payloads keep legacy ``period`` / ``achievements`` experience
-    keys forever — normalise a copy on the way out so old candidates render
-    dates and descriptions without a re-parse. The stored JSONB is not
-    mutated.
+    Stored payloads keep legacy keys forever — ``period`` / ``achievements``
+    on experience, ``year`` on education, ``title`` / ``year`` on
+    certificates. Normalise a copy on the way out so old candidates render
+    dates, descriptions and certificate names without a re-parse. The
+    stored JSONB is not mutated.
     """
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("experience"), list):
+    if not isinstance(parsed, dict):
         return parsed
-    from app.modules.recruitment.ai_service import _normalise_experience_entry
+    from app.modules.recruitment.ai_service import _normalise_resume_entries
 
     parsed = copy.deepcopy(parsed)
-    for entry in parsed["experience"]:
-        if isinstance(entry, dict):
-            _normalise_experience_entry(entry)
+    _normalise_resume_entries(parsed)
     return parsed
 
 
-def _candidate_canonical_to_read(candidate: Candidate) -> dict:
-    """Serialise canonical Candidate row for ``CandidateCanonicalRead``."""
+def _candidate_canonical_to_read(candidate: Candidate, *, is_employee: bool) -> dict:
+    """Serialise canonical Candidate row for ``CandidateCanonicalRead``.
+
+    HRP-663: ``is_employee`` is required, not defaulted. The flag lives on
+    no column of this row, and every client merges the body it gets back
+    into the card it already shows — a silent ``False`` here wipes the
+    internal-candidate badge on save. Making the caller state it keeps the
+    next surface from inheriting that bug.
+    """
     return {
         "id": candidate.id,
         "tenant_id": candidate.tenant_id,
@@ -852,6 +843,7 @@ def _candidate_canonical_to_read(candidate: Candidate) -> dict:
         "source": candidate.source,
         "notes": candidate.notes,
         "parsed_resume_jsonb": _normalised_parsed_resume(candidate.parsed_resume_jsonb),
+        "is_employee": is_employee,
         "archived_at": candidate.archived_at,
         "created_at": candidate.created_at,
         "updated_at": candidate.updated_at,
@@ -896,6 +888,9 @@ def _candidate_vacancy_enriched_dict(cv: CandidateVacancy) -> dict:
         "candidate_id": cv.candidate_id,
         "vacancy_id": cv.vacancy_id,
         "candidate_name": full_name,
+        # HRP-663: default False; filled in bulk by the list route (and
+        # per-row by the PATCH route) so a page costs one lookup.
+        "is_employee": False,
         "last_position": last_position,
         "years_of_experience": (candidate.years_of_experience if candidate else None),
         "stage_id": cv.stage_id,
@@ -907,12 +902,14 @@ def _candidate_vacancy_enriched_dict(cv: CandidateVacancy) -> dict:
         # finalizer writes both (raw 0..1 + tenant-scale normalized) on
         # completion.
         "ai_score_normalized": cv.ai_score_normalized,
-        # Divergence compares the tenant-scale normalized AI score with
-        # the manager score — raw ``ai_score`` is on the 0..1 LLM scale
-        # and would falsely diverge on every scored candidate.
-        "score_divergence": compute_score_divergence(
-            cv.manager_score, cv.ai_score_normalized
-        ),
+        # HRP-662: divergence has exactly one definition in the product —
+        # the per-competence comparison ``get_assessment_matrix`` makes
+        # against the tenant threshold. This row-level flag is derived
+        # from that count in :func:`apply_matrix_aggregates`; the old
+        # second opinion (a hard-coded 1.0 gap between ``manager_score``
+        # and ``ai_score_normalized``) could contradict the divergence
+        # count printed in the very same row.
+        "score_divergence": False,
         # HRP-267 — populated by apply_matrix_aggregates; defaults match
         # the schema so a non-aggregating caller still validates.
         "manager_percent": None,
@@ -949,6 +946,8 @@ async def apply_matrix_aggregates(
     tenant_id: uuid.UUID,
     vacancy_id: uuid.UUID,
     payloads: list[dict],
+    *,
+    only_cv_ids: list[uuid.UUID] | None = None,
 ) -> None:
     """Mutate enriched-candidate payloads with Compact-matrix aggregates.
 
@@ -956,11 +955,15 @@ async def apply_matrix_aggregates(
     threshold loaded inside ``get_assessment_matrix`` — without this
     helper the candidates table would use the global hard-coded 1.0 and
     contradict the Compact matrix's own badge for the same data
-    (HRP-265 → HRP-267 consistency).
+    (HRP-265 → HRP-267 consistency). HRP-662 finished the job: the
+    row-level ``score_divergence`` flag is derived here too, so the
+    boolean and the count in one row can no longer disagree.
     """
     if not payloads:
         return
-    matrix = await get_assessment_matrix(db, tenant_id, vacancy_id)
+    matrix = await get_assessment_matrix(
+        db, tenant_id, vacancy_id, only_cv_ids=only_cv_ids
+    )
     competence_name_by_id: dict[str, str] = {
         str(comp["id"]): comp["name"] for comp in matrix["competences"]
     }
@@ -974,6 +977,8 @@ async def apply_matrix_aggregates(
         payload["manager_percent"] = cand["manager_percent"]
         payload["ai_percent"] = cand["ai_percent"]
         payload["divergence_count"] = cand["divergence_count"]
+        # HRP-662: the row flag and the row count are now one statement.
+        payload["score_divergence"] = cand["divergence_count"] > 0
         # Build the tooltip preview from the divergent cells only. The
         # matrix cells are already in profile order, so the first N are
         # the natural pick — no extra ranking signal beyond "topmost".
@@ -1196,7 +1201,10 @@ async def add_candidate_to_vacancy_manual(
     await db.refresh(candidate, ["files"])
     await db.refresh(cv, ["candidate", "vacancy", "stage"])
 
-    payload = _candidate_canonical_to_read(candidate)
+    payload = _candidate_canonical_to_read(
+        candidate,
+        is_employee=await _check_is_employee(db, tenant_id, candidate.person_id),
+    )
     payload["candidate_vacancy_id"] = cv.id
     payload["etag"] = candidate_vacancy_etag(cv)
     return payload
@@ -1464,6 +1472,14 @@ async def list_vacancy_candidates_enriched(
     )
     cvs = (await db.execute(rows_q)).scalars().unique().all()
     items = [_candidate_vacancy_enriched_dict(cv) for cv in cvs]
+    # HRP-663: mark the internal candidates on this page in one lookup.
+    employee_person_ids = await _employee_person_ids(
+        db, tenant_id, [cv.candidate.person_id if cv.candidate else None for cv in cvs]
+    )
+    for cv, item in zip(cvs, items, strict=True):
+        item["is_employee"] = (
+            cv.candidate is not None and cv.candidate.person_id in employee_person_ids
+        )
     # Single Compact-matrix call powers the per-row % match aggregates
     # + Divergence column shown in the candidates table (HRP-267).
     await apply_matrix_aggregates(db, tenant_id, vacancy_id, items)
@@ -1554,12 +1570,23 @@ async def patch_candidate_vacancy(
     await db.refresh(cv, ["candidate", "vacancy", "stage"])
 
     payload = _candidate_vacancy_enriched_dict(cv)
-    # Only manager_score edits perturb the matrix aggregates — stage /
-    # status PATCHes leave manager_avg, ai_score and divergence_count
-    # untouched, so the full vacancy-wide recompute is wasted work and
-    # an unnecessary load on a hot kanban path (HRP-267 wave-review).
-    if "manager_score" in updates:
-        await apply_matrix_aggregates(db, tenant_id, cv.vacancy_id, [payload])
+    # HRP-663: the table swaps the row in place from this body, so the
+    # internal-candidate marker has to survive the PATCH.
+    payload["is_employee"] = await _check_is_employee(
+        db, tenant_id, cv.candidate.person_id if cv.candidate else None
+    )
+    # HRP-662: the aggregates have to be recomputed on every PATCH, not
+    # only on ``manager_score``. The table swaps the row in place from
+    # this body, and ``_candidate_vacancy_enriched_dict`` cannot derive
+    # them — so skipping the call on a stage move answered with
+    # ``score_divergence: false`` / ``divergence_count: 0`` and silently
+    # erased the divergence highlight until the next reload.
+    # ``only_cv_ids`` keeps the kanban path off the whole-vacancy grid
+    # (the "unnecessary load on a hot kanban path" the HRP-267 wave-review
+    # guard used to prevent): one row in, one row's matrix out.
+    await apply_matrix_aggregates(
+        db, tenant_id, cv.vacancy_id, [payload], only_cv_ids=[cv.id]
+    )
     # HRP-493: keep the PATCH response's AI block consistent with the
     # list endpoint — the table swaps the row in place from this body.
     from app.modules.recruitment.resume_analysis_service import (
@@ -1668,7 +1695,12 @@ async def get_candidate_full_card(
         for cf in (candidate.files or [])
     ]
 
-    payload = _candidate_canonical_to_read(candidate)
+    # HRP-663: the card is where a recruiter decides — it has to say the
+    # person in front of them already works here.
+    payload = _candidate_canonical_to_read(
+        candidate,
+        is_employee=await _check_is_employee(db, tenant_id, candidate.person_id),
+    )
     payload["vacancy_applications"] = applications
     payload["candidate_files"] = files_summary
     payload["etag"] = candidate_etag(candidate)
@@ -1744,7 +1776,12 @@ async def patch_candidate(
     # ETag stamp reads off it.
     await db.refresh(candidate, ["files", "updated_at"])
 
-    payload = _candidate_canonical_to_read(candidate)
+    # HRP-663: the card merges this body into the state it already shows,
+    # so an omitted flag reads as "not an employee" and drops the badge.
+    payload = _candidate_canonical_to_read(
+        candidate,
+        is_employee=await _check_is_employee(db, tenant_id, candidate.person_id),
+    )
     payload["etag"] = candidate_etag(candidate)
     return payload
 
@@ -1893,13 +1930,12 @@ async def bulk_upload_resumes(
             if ext
             else f"{tenant_id}/resumes/{file_uuid}"
         )
-        # Best-effort S3 upload — community dev stack may not have S3
-        # configured, in which case the parser falls back to ``raw_text``
-        # populated downstream.
-        import contextlib
-
-        with contextlib.suppress(Exception):
-            upload_file(data, s3_path, content_type)
+        # Best-effort S3 upload — ``upload_file`` logs and returns None on
+        # any storage error instead of raising; the parse task then fails
+        # this file with an explicit storage error (HRP-691 — a silent
+        # failure here used to surface as an unexplained "no files
+        # recognized" in the bulk-import modal).
+        upload_file(data, s3_path, content_type)
 
         file_record = File(
             tenant_id=tenant_id,

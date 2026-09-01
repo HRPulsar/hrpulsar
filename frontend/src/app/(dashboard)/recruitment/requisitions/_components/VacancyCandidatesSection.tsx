@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/card";
 import {
   AddCandidateDialog,
+  InternalCandidatesBlock,
   VacancyCandidatesTable,
   VacancyStagesDrawer,
 } from "@/components/recruitment";
@@ -20,11 +21,15 @@ import {
 interface VacancyCandidatesSectionProps {
   vacancyId: string;
   count: number;
+  /** HRP-687: bumped by the competences section when its library-linked
+   *  set changes — the internal block re-reads the posting precondition. */
+  internalReloadToken?: number;
 }
 
 export function VacancyCandidatesSection({
   vacancyId,
   count,
+  internalReloadToken,
 }: VacancyCandidatesSectionProps) {
   const t = useTranslations("recruitment");
   const router = useRouter();
@@ -65,6 +70,12 @@ export function VacancyCandidatesSection({
         </div>
       </CardHeader>
       <CardContent>
+        {/* HRP-667: the internal shortlist sits above the external one —
+            "who do we already have" is the question that comes first. */}
+        <InternalCandidatesBlock
+          vacancyId={vacancyId}
+          reloadToken={internalReloadToken}
+        />
         <VacancyCandidatesTable
           vacancyId={vacancyId}
           reloadToken={reloadToken}

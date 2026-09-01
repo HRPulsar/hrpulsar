@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
+import { usePermissions } from "@/hooks/use-permissions";
 
 type Props = {
   specId: string;
@@ -120,6 +121,7 @@ export function GradeHeaderCell({
     }
   }
 
+  const { canViewHrData } = usePermissions();
   const hasSalary = grade.salary_min != null || grade.salary_max != null;
   const salaryLabel = hasSalary
     ? `${grade.salary_min ?? "?"} – ${grade.salary_max ?? "?"} ${grade.salary_currency}`
@@ -166,7 +168,12 @@ export function GradeHeaderCell({
               </span>
             )}
           </div>
-          {editingSalary ? (
+          {/* HRP-637: salary bands are compensation, not structure — admin
+              / hr / manager only, whatever `directory_show_grades`
+              says. The API drops them for everyone else, so without
+              this the pill would offer its "add salary" placeholder
+              to a viewer who can neither read nor set one. */}
+          {!canViewHrData ? null : editingSalary ? (
             <div
               data-testid={`matrix-grade-salary-edit-${grade.grade_id}`}
               className="space-y-1.5"

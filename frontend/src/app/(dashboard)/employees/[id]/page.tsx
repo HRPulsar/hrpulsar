@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { EVENT_TYPE_OPTIONS, eventTypeLabel } from "@/lib/enum-labels";
 import { useCompetenceTree } from "@/hooks/use-competence-tree";
 import { cn, flattenTree } from "@/lib/utils";
 import { formatDate } from "@/lib/date-format";
@@ -17,14 +18,22 @@ import {
   assessmentStatusTitle,
   assessmentTypeTitle,
 } from "@/lib/reference-labels";
-import { pdpStatusColor, translatePdpStatus } from "@/lib/pdp-status";
+import {
+  MAX_ACTIVE_PDPS_PER_EMPLOYEE,
+  isTerminalPDPStatus,
+  pdpStatusColor,
+  translatePdpStatus,
+} from "@/lib/pdp-status";
 import { sortPdpsForList } from "@/lib/pdp-filters";
 import {
   goalsProgressPercent,
   openAssessmentCount,
   openPdpCount,
 } from "@/lib/employee-kpis";
-import { EmployeeCompetenceTree } from "@/components/employees/employee-competence-tree";
+import {
+  CompetenceGapBadge,
+  EmployeeCompetenceTree,
+} from "@/components/employees/employee-competence-tree";
 import { employeeStatusLabel } from "@/components/employees/employee-status";
 import { EmployeeCompetenceBreakdown } from "@/components/employees/employee-competence-breakdown";
 import { CompetenceTreePicker } from "@/components/competence/competence-tree-picker";
@@ -80,6 +89,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/context/auth-context";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -88,8 +103,10 @@ import {
   resolveAssignableRoleCode,
   resolveRoleLabel,
 } from "@/lib/user-role-label";
+import { createAssessmentHref, createPdpHref } from "@/lib/employee-actions";
+import { ISSUE_TONE } from "@/lib/employee-issues";
 import { toast } from "sonner";
-import { ArrowLeft, DollarSign, ExternalLink, Info, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, DollarSign, ExternalLink, Info, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 
 const statusColors: Record<string, string> = {
@@ -100,17 +117,6 @@ const statusColors: Record<string, string> = {
 };
 
 const statusOptions = ["active", "inactive", "on_leave", "terminated"];
-
-const eventTypeOptions = [
-  "hire",
-  "promotion",
-  "transfer",
-  "leave",
-  "return",
-  "review",
-  "training",
-  "other",
-];
 
 const degreeOptions = [
   "Secondary",
@@ -151,6 +157,7 @@ export default function EmployeeDetailPage() {
   const tRef = useTranslations("reference");
   const tRole = useTranslations("sidebar");
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const { user: currentUser } = useAuth();
   const { canManage, canAssignRoles } = usePermissions();
   const [employee, setEmployee] = useState<Employee | null>(null);
@@ -961,6 +968,26 @@ export default function EmployeeDetailPage() {
     },
   ];
 
+  // HRP-660: every action whose subject is this employee is startable from
+  // this card. The flows themselves stay on the screens that own them —
+  // the employee travels there in the URL (lib/employee-actions).
+  const employeeIssues = employee.issues ?? [];
+  const activePdps = sortPdpsForList(
+    pdps.filter((p) => !isTerminalPDPStatus(p.status)),
+  );
+  // A fourth concurrent plan is a 409, so offer the plan that already
+  // exists instead of a button whose only outcome is an error toast.
+  const pdpLimitReached = activePdps.length >= MAX_ACTIVE_PDPS_PER_EMPLOYEE;
+  const pdpActionHref = pdpLimitReached
+    ? `/development/${activePdps[0].id}`
+    : createPdpHref(id);
+  const pdpActionLabel = pdpLimitReached
+    ? t("openDevelopmentPlan")
+    : tDevelopment("createTitle");
+  const pdpActionReason = pdpLimitReached
+    ? t("developmentPlanLimitReason", { limit: MAX_ACTIVE_PDPS_PER_EMPLOYEE })
+    : null;
+
   return (
     <div className="flex flex-col gap-4">
       <Link
@@ -1045,9 +1072,81 @@ export default function EmployeeDetailPage() {
                 <Pencil className="h-3.5 w-3.5" />
                 {t("editProfile")}
               </Button>
+              {/* HRP-660: one menu for everything you can start about this
+                  person. Same gate as Edit profile — every entry below is
+                  admin/manager on the API, and a manager outside their
+                  subtree only ever sees the directory card. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  data-testid="employee-btn-actions"
+                  aria-label={t("actions")}
+                  render={<Button variant="outline" size="sm" />}
+                >
+                  {t("actions")}
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-60">
+                  <DropdownMenuItem
+                    data-testid="employee-action-development-plan"
+                    onClick={() => router.push(pdpActionHref)}
+                  >
+                    {pdpLimitReached ? (
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                    ) : (
+                      <Plus className="mr-2 h-4 w-4" />
+                    )}
+                    <span className="flex flex-col items-start">
+                      <span>{pdpActionLabel}</span>
+                      {pdpActionReason && (
+                        <span className="text-xs text-muted-foreground">
+                          {pdpActionReason}
+                        </span>
+                      )}
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    data-testid="employee-action-create-assessment"
+                    onClick={() => router.push(createAssessmentHref(id))}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    {tAssessments("createAssessment")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    data-testid="employee-action-add-event"
+                    onClick={() => setEventOpen(true)}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    {t("addEvent")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           )}
         </div>
+        {/* HRP-660: the list already names every problem a row has; opening
+            the card used to lose that. Same codes, same tones, same
+            priority order — a card and the row that linked to it cannot
+            describe the same person differently. */}
+        {!isDirectoryCard && employeeIssues.length > 0 && (
+          <div
+            className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/40 px-5 py-3"
+            data-testid="employee-issues"
+          >
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {t("issues")}
+            </span>
+            {employeeIssues.map((issue) => (
+              <Badge
+                key={issue.code}
+                variant="outline"
+                className={ISSUE_TONE[issue.code]}
+                data-testid={`employee-issue-${issue.code}`}
+              >
+                {t(`issue_${issue.code}`)}
+              </Badge>
+            ))}
+          </div>
+        )}
         {!isDirectoryCard && (
         <div className="flex flex-wrap border-t border-border">
           {kpis.map((k, i) => (
@@ -1139,12 +1238,12 @@ export default function EmployeeDetailPage() {
                         className="flex items-start gap-3 rounded-md border p-3"
                       >
                         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium uppercase">
-                          {event.event_type.charAt(0)}
+                          {eventTypeLabel(t, event.event_type).charAt(0)}
                         </div>
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-medium capitalize">
-                              {event.event_type}
+                              {eventTypeLabel(t, event.event_type)}
                             </span>
                             <span className="text-xs text-muted-foreground">
                               {event.event_date}
@@ -1751,10 +1850,45 @@ export default function EmployeeDetailPage() {
         <TabsContent value="competences">
           <div className="space-y-6">
             <Card>
-              <CardHeader>
+              <CardHeader className="flex-row items-center justify-between">
                 <CardTitle className="text-base">
                   {t("currentPositionCompetences")}
                 </CardTitle>
+                {/* HRP-660: start the plan where the gaps are visible. The
+                    dialog itself stays on /development — this only hands it
+                    the employee. */}
+                {canEditOtherSections && (
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => router.push(pdpActionHref)}
+                      data-testid="employee-competences-btn-development-plan"
+                    >
+                      {pdpLimitReached ? (
+                        <ExternalLink className="mr-1 h-4 w-4" />
+                      ) : (
+                        <Plus className="mr-1 h-4 w-4" />
+                      )}
+                      {pdpActionLabel}
+                    </Button>
+                    {pdpActionReason && (
+                      <Tooltip>
+                        <TooltipTrigger
+                          type="button"
+                          aria-label={pdpActionReason}
+                          className="inline-flex text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none"
+                          data-testid="employee-competences-development-plan-info"
+                        >
+                          <Info className="h-3.5 w-3.5" />
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs text-left">
+                          {pdpActionReason}
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
+                )}
               </CardHeader>
               <CardContent>
                 {competenceOverview ? (
@@ -1802,6 +1936,7 @@ export default function EmployeeDetailPage() {
                             </Badge>
                           </div>
                           <div className="flex items-center gap-2">
+                            <CompetenceGapBadge row={row} />
                             {row.percent !== null ? (
                               <span
                                 className={`rounded-md px-2 py-0.5 text-xs font-medium ${tone}`}
@@ -1963,12 +2098,14 @@ export default function EmployeeDetailPage() {
                 }
               >
                 <SelectTrigger className="w-full" data-testid="employee-events-select-type">
-                  <SelectValue />
+                  {/* Explicit child: a bare SelectValue falls back to the raw
+                      enum code until Radix matches an item (HRP-653). */}
+                  <SelectValue>{eventTypeLabel(t, eventForm.event_type)}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {eventTypeOptions.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
+                  {EVENT_TYPE_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {eventTypeLabel(t, option)}
                     </SelectItem>
                   ))}
                 </SelectContent>

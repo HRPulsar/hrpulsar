@@ -33,7 +33,6 @@ import { formatDate } from "@/lib/date-format";
 import { cn } from "@/lib/utils";
 import { BADGE_OUTLINE } from "@/lib/badge-tones";
 import { AiVerdictBadge } from "./ai-verdict-badge";
-import { AiReadinessBadge } from "./ai-readiness-badge";
 import { AI_ANALYSIS_PRICING } from "@/lib/recruitment-types";
 import type {
   BulkAnalyzeResponse,
@@ -47,29 +46,14 @@ type SortDir = "asc" | "desc";
 
 const SORT_LS_PREFIX = "hrp:vacancy-candidates:sort:";
 
-// HRP-274 — recruiter-side toggle between the raw LLM mean (canonical
-// 0..1 scale, default, back-compat) and the normalized score rebased
-// onto the tenant's active assessment scale (directly comparable with
-// the manager score). Stored per-vacancy so a recruiter can keep two
-// different windows open with different preferences.
+// HRP-274 introduced a raw/normalized units toggle on the AI column.
+// HRP-662 retired the control: "0.92" and "4.6" are the same fact in two
+// unit systems, and picking between them is not a hiring decision. The
+// table shows the % match — the one number that is directly comparable
+// with the manager side — and keeps the tenant-scale normalized score in
+// the cell tooltip, or as the value itself when the row has no % match.
+// The helper stays parameterised because both formats are still real.
 type AiScoreView = "raw" | "normalized";
-const AI_SCORE_VIEW_LS_PREFIX = "hrp:vacancy-candidates:ai-score-view:";
-
-function readPersistedAiScoreView(vacancyId: string): AiScoreView | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(AI_SCORE_VIEW_LS_PREFIX + vacancyId);
-    if (raw === "raw" || raw === "normalized") return raw;
-  } catch {
-    /* corrupted entry — fall back to default */
-  }
-  return null;
-}
-
-function persistAiScoreView(vacancyId: string, value: AiScoreView): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(AI_SCORE_VIEW_LS_PREFIX + vacancyId, value);
-}
 
 export function formatAiScoreForView(
   row: Pick<CandidateVacancyEnrichedRow, "ai_score" | "ai_score_normalized">,
@@ -321,14 +305,6 @@ export function VacancyCandidatesTable({
   }, [vacancyId]);
   const [sortBy, setSortBy] = useState<SortBy>(initialSort.by);
   const [sortDir, setSortDir] = useState<SortDir>(initialSort.dir);
-  const [aiScoreView, setAiScoreView] = useState<AiScoreView>(() =>
-    readPersistedAiScoreView(vacancyId) ?? "raw",
-  );
-
-  useEffect(() => {
-    persistAiScoreView(vacancyId, aiScoreView);
-  }, [vacancyId, aiScoreView]);
-
   // Persist whenever the user changes the sort, and reflect it in the
   // URL without scrolling the page.
   //
@@ -431,11 +407,7 @@ export function VacancyCandidatesTable({
           setSortDir(dir);
         }}
       />
-      <AiScoreViewToggle
-        view={aiScoreView}
-        onChange={setAiScoreView}
-      />
-      {/* Desktop ≥ md: full 11-column table per product spec. */}
+      {/* Desktop ≥ md: 10 columns — HRP-662 dropped the AI DATA one. */}
       <div
         className="hidden md:block overflow-x-auto rounded-md border"
         data-testid="vacancy-candidates-table"
@@ -453,17 +425,27 @@ export function VacancyCandidatesTable({
               <th className="px-3 py-2 font-medium">
                 {t("candidatesTableColStage")}
               </th>
-              <th className="px-3 py-2 text-center font-medium">
+              {/* HRP-662: each of the three comparison columns says what
+                  its number is. Two of them are % of the vacancy profile
+                  scored by a different assessor; the third counts where
+                  the two disagree. None of that was written anywhere. */}
+              <th
+                className="px-3 py-2 text-center font-medium"
+                title={t("candidatesTableColManagerHint")}
+              >
                 {t("candidatesTableColManager")}
               </th>
-              <th className="px-3 py-2 text-center font-medium">
+              <th
+                className="px-3 py-2 text-center font-medium"
+                title={t("candidatesTableColAiHint")}
+              >
                 {t("candidatesTableColAi")}
               </th>
-              <th className="px-3 py-2 text-center font-medium">
+              <th
+                className="px-3 py-2 text-center font-medium"
+                title={t("candidatesTableColDivergenceHint")}
+              >
                 {t("candidatesTableColDivergence")}
-              </th>
-              <th className="px-3 py-2 text-center font-medium">
-                {t("candidatesTableColAiData")}
               </th>
               <th className="px-3 py-2 font-medium">
                 {t("candidatesTableColAiVerdict")}
@@ -488,7 +470,6 @@ export function VacancyCandidatesTable({
                 onDelete={(cvId, candidateName) =>
                   setDeleting({ cvId, candidateName })
                 }
-                aiScoreView={aiScoreView}
               />
             ))}
           </tbody>
@@ -507,7 +488,6 @@ export function VacancyCandidatesTable({
             onDelete={(cvId, candidateName) =>
               setDeleting({ cvId, candidateName })
             }
-            aiScoreView={aiScoreView}
           />
         ))}
       </div>
@@ -561,7 +541,6 @@ interface RowProps {
   stages: VacancyStage[];
   onStageSelected: (row: CandidateVacancyEnrichedRow, value: string) => void;
   onDelete: (cvId: string, candidateName: string) => void;
-  aiScoreView: AiScoreView;
 }
 
 function Row({
@@ -570,7 +549,6 @@ function Row({
   stages,
   onStageSelected,
   onDelete,
-  aiScoreView,
 }: RowProps) {
   const t = useTranslations("recruitment");
   const stageTone = stageToneFor(row.stage);
@@ -578,7 +556,12 @@ function Row({
   return (
     <tr
       data-testid={`vacancy-candidates-row-${row.id}`}
-      className="hover:bg-muted/30"
+      // HRP-663: same tinting language the divergence cells already use —
+      // a conditional Tailwind tone through `cn`, not a second mechanism.
+      className={cn(
+        "hover:bg-muted/30",
+        row.is_employee && "bg-indigo-50/60 dark:bg-indigo-950/20",
+      )}
     >
       <td className="px-3 py-2 align-top">
         <Link
@@ -587,6 +570,15 @@ function Row({
         >
           {row.candidate_name}
         </Link>
+        {row.is_employee && (
+          <Badge
+            variant="outline"
+            className={cn("ml-2 border text-[10px]", BADGE_OUTLINE.indigo)}
+            data-testid={`vacancy-candidates-row-${row.id}-internal-badge`}
+          >
+            {t("internalCandidateBadge")}
+          </Badge>
+        )}
       </td>
       <td className="px-3 py-2 align-top text-muted-foreground">
         {row.last_position || "—"}
@@ -631,25 +623,16 @@ function Row({
         )}
         data-testid={`vacancy-candidates-row-${row.id}-manager-score`}
       >
-        <div className="flex flex-col items-center">
-          <span>
-            {row.manager_score !== null ? row.manager_score.toFixed(1) : "—"}
-          </span>
-          {/* HRP-493 (task 3): the second line is the % match from the
-              Compact matrix, not a duplicate of the score. It used to
-              render a bare "—" on every unscored row — a dash under a
-              dash that read as a rendering artefact. It now appears
-              only when there is a percentage to show. */}
-          {row.manager_percent !== null &&
-            row.manager_percent !== undefined && (
-              <span
-                className="text-[10px] text-muted-foreground"
-                data-testid={`vacancy-candidates-row-${row.id}-manager-percent`}
-              >
-                {formatPercent(row.manager_percent)}
-              </span>
-            )}
-        </div>
+        <ScoreCell
+          percent={row.manager_percent}
+          score={
+            row.manager_score !== null ? row.manager_score.toFixed(1) : null
+          }
+          percentTestId={`vacancy-candidates-row-${row.id}-manager-percent`}
+          emptyLabel={t("candidatesTableManagerNotAssessed")}
+          emptyHint={t("candidatesTableManagerNotAssessedHint")}
+          emptyTestId={`vacancy-candidates-row-${row.id}-manager-empty`}
+        />
       </td>
       <td
         className={cn(
@@ -658,31 +641,21 @@ function Row({
         )}
         data-testid={`vacancy-candidates-row-${row.id}-ai-score`}
       >
-        <div className="flex flex-col items-center">
-          <span data-testid={`vacancy-candidates-row-${row.id}-ai-score-value`}>
-            {formatAiScoreForView(row, aiScoreView)}
-          </span>
-          {row.ai_percent !== null && row.ai_percent !== undefined && (
-            <span
-              className="text-[10px] text-muted-foreground"
-              data-testid={`vacancy-candidates-row-${row.id}-ai-percent`}
-            >
-              {formatPercent(row.ai_percent)}
-            </span>
-          )}
-        </div>
+        <ScoreCell
+          percent={row.ai_percent}
+          score={formatAiScoreForView(row, "normalized")}
+          scoreTestId={`vacancy-candidates-row-${row.id}-ai-score-value`}
+          percentTestId={`vacancy-candidates-row-${row.id}-ai-percent`}
+          emptyLabel={t("candidatesTableAiNotAnalyzed")}
+          emptyHint={t("candidatesTableAiNotAnalyzedHint")}
+          emptyTestId={`vacancy-candidates-row-${row.id}-ai-empty`}
+        />
       </td>
       <td
         className="px-3 py-2 align-top text-center"
         data-testid={`vacancy-candidates-row-${row.id}-divergence`}
       >
         <DivergenceBadge row={row} vacancyId={vacancyId} />
-      </td>
-      <td className="px-3 py-2 align-top text-center">
-        <AiReadinessBadge
-          readiness={row.ai_readiness}
-          testId={`vacancy-candidates-row-${row.id}-ai-readiness`}
-        />
       </td>
       <td className="px-3 py-2 align-top">
         <AiVerdictBadge
@@ -696,6 +669,19 @@ function Row({
           riskMitigation={row.ai_risk_mitigation}
           testIdPrefix={`vacancy-candidates-row-${row.id}`}
         />
+        {/* HRP-662: the reason for the verdict belongs next to the
+            verdict. It used to live only behind the info popover, so a
+            recruiter scanning the list saw a colour and a word and had
+            to guess what the model actually found. */}
+        {row.ai_verdict_summary && (
+          <p
+            className="mt-1 line-clamp-2 max-w-[22rem] text-xs text-muted-foreground"
+            title={row.ai_verdict_summary}
+            data-testid={`vacancy-candidates-row-${row.id}-ai-verdict-reason`}
+          >
+            {row.ai_verdict_summary}
+          </p>
+        )}
       </td>
       <td className="px-3 py-2 align-top text-right text-xs text-muted-foreground">
         {formatDate(row.added_at)}
@@ -723,7 +709,6 @@ interface MobileCardProps {
   stages: VacancyStage[];
   onStageSelected: (row: CandidateVacancyEnrichedRow, value: string) => void;
   onDelete: (cvId: string, candidateName: string) => void;
-  aiScoreView: AiScoreView;
 }
 
 function MobileCard({
@@ -732,13 +717,15 @@ function MobileCard({
   stages,
   onStageSelected,
   onDelete,
-  aiScoreView,
 }: MobileCardProps) {
   const t = useTranslations("recruitment");
   const stageTone = stageToneFor(row.stage);
   return (
     <div
-      className="rounded-md border p-3"
+      className={cn(
+        "rounded-md border p-3",
+        row.is_employee && "bg-indigo-50/60 dark:bg-indigo-950/20",
+      )}
       data-testid={`vacancy-candidates-mobile-row-${row.id}`}
     >
       <div className="flex items-start justify-between gap-2">
@@ -749,6 +736,15 @@ function MobileCard({
           >
             {row.candidate_name}
           </Link>
+          {row.is_employee && (
+            <Badge
+              variant="outline"
+              className={cn("mt-1 border text-[10px]", BADGE_OUTLINE.indigo)}
+              data-testid={`vacancy-candidates-mobile-row-${row.id}-internal-badge`}
+            >
+              {t("internalCandidateBadge")}
+            </Badge>
+          )}
           {row.last_position && (
             <p className="truncate text-xs text-muted-foreground">
               {row.last_position}
@@ -774,32 +770,30 @@ function MobileCard({
           <p className="uppercase tracking-wide">
             {t("candidatesTableColManager")}
           </p>
-          <p className="text-foreground tabular-nums">
-            {row.manager_score !== null ? row.manager_score.toFixed(1) : "—"}
-          </p>
-          <p
-            className="text-[10px] text-muted-foreground"
-            data-testid={`vacancy-candidates-mobile-row-${row.id}-manager-percent`}
-          >
-            {formatPercent(row.manager_percent ?? null)}
-          </p>
+          <ScoreCell
+            percent={row.manager_percent}
+            score={
+              row.manager_score !== null ? row.manager_score.toFixed(1) : null
+            }
+            percentTestId={`vacancy-candidates-mobile-row-${row.id}-manager-percent`}
+            emptyLabel={t("candidatesTableManagerNotAssessed")}
+            emptyHint={t("candidatesTableManagerNotAssessedHint")}
+            emptyTestId={`vacancy-candidates-mobile-row-${row.id}-manager-empty`}
+          />
         </div>
         <div>
           <p className="uppercase tracking-wide">
             {t("candidatesTableColAi")}
           </p>
-          <p
-            className="text-foreground tabular-nums"
-            data-testid={`vacancy-candidates-mobile-row-${row.id}-ai-score-value`}
-          >
-            {formatAiScoreForView(row, aiScoreView)}
-          </p>
-          <p
-            className="text-[10px] text-muted-foreground"
-            data-testid={`vacancy-candidates-mobile-row-${row.id}-ai-percent`}
-          >
-            {formatPercent(row.ai_percent ?? null)}
-          </p>
+          <ScoreCell
+            percent={row.ai_percent}
+            score={formatAiScoreForView(row, "normalized")}
+            scoreTestId={`vacancy-candidates-mobile-row-${row.id}-ai-score-value`}
+            percentTestId={`vacancy-candidates-mobile-row-${row.id}-ai-percent`}
+            emptyLabel={t("candidatesTableAiNotAnalyzed")}
+            emptyHint={t("candidatesTableAiNotAnalyzedHint")}
+            emptyTestId={`vacancy-candidates-mobile-row-${row.id}-ai-empty`}
+          />
         </div>
       </div>
       {(row.divergence_count ?? 0) > 0 && (
@@ -959,38 +953,71 @@ function SortControl({ sortBy, sortDir, onChange }: SortControlProps) {
 }
 
 
-interface AiScoreViewToggleProps {
-  view: AiScoreView;
-  onChange: (next: AiScoreView) => void;
-}
-
-function AiScoreViewToggle({ view, onChange }: AiScoreViewToggleProps) {
+/**
+ * HRP-662 — one shape for the MANAGER and AI columns.
+ *
+ * Two changes over what the two hand-rolled cells did before:
+ *
+ * 1. The % match leads. It is the only number the two sides share —
+ *    a manager level (1..4 of the vacancy scale) and an AI score
+ *    (0..1 rebased onto the tenant scale) printed side by side read as
+ *    a comparison they are not. The underlying score stays as the
+ *    second line for anyone who wants it.
+ * 2. "No opinion yet" says so. A bare em dash cannot tell "nobody has
+ *    assessed this candidate" from "the value failed to load".
+ */
+function ScoreCell({
+  percent,
+  score,
+  scoreTestId,
+  percentTestId,
+  emptyLabel,
+  emptyHint,
+  emptyTestId,
+}: {
+  percent: number | null | undefined;
+  score: string | null;
+  scoreTestId?: string;
+  percentTestId: string;
+  emptyLabel: string;
+  emptyHint: string;
+  emptyTestId: string;
+}) {
   const t = useTranslations("recruitment");
-  return (
-    <div
-      className="flex flex-wrap items-center gap-2 px-1 pb-2 text-xs"
-      data-testid="vacancy-candidates-ai-score-view-toggle"
-    >
-      <span className="text-muted-foreground">
-        {t("candidatesTableAiScore")}
+  const hasScore = score !== null && score !== "—";
+  const hasPercent = percent !== null && percent !== undefined;
+  if (!hasScore && !hasPercent) {
+    return (
+      <span
+        className="text-xs text-muted-foreground"
+        title={emptyHint}
+        data-testid={emptyTestId}
+      >
+        {emptyLabel}
       </span>
-      <SortButton<AiScoreView>
-        value="raw"
-        label={t("candidatesTableAiScoreRaw")}
-        testid="vacancy-candidates-ai-score-view-raw"
-        active={view === "raw"}
-        onSelect={onChange}
-      />
-      <SortButton<AiScoreView>
-        value="normalized"
-        label={t("candidatesTableAiScoreNormalized")}
-        testid="vacancy-candidates-ai-score-view-normalized"
-        active={view === "normalized"}
-        onSelect={onChange}
-      />
-    </div>
+    );
+  }
+  // One number per cell. The % is what the two columns share; the
+  // underlying score moves into the tooltip rather than sitting under
+  // it as a second, differently-scaled number.
+  if (hasPercent) {
+    return (
+      <span
+        className="font-medium tabular-nums"
+        title={hasScore ? t("candidatesTableScoreTooltip", { score }) : undefined}
+        data-testid={percentTestId}
+      >
+        {formatPercent(percent)}
+      </span>
+    );
+  }
+  return (
+    <span className="tabular-nums" data-testid={scoreTestId}>
+      {score}
+    </span>
   );
 }
+
 
 interface DivergenceBadgeProps {
   row: CandidateVacancyEnrichedRow;

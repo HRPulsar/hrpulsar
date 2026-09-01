@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from fastapi import status
@@ -130,13 +131,40 @@ def curated_models() -> list[dict[str, Any]]:
 
 
 def upsert_allowed_model(entry: dict[str, Any]) -> None:
-    """Insert or replace one whitelist entry.
+    """Insert or replace one whitelist entry. Curated ids are never replaced.
 
     HRP-466 moderation path: platform admin approves a discovered model
     with an explicit multiplier, which must reach the in-memory registry
     immediately so billing stays on the fast lookup (no DB hit per charge).
+
+    HRP-573: a moderated row carrying a curated (credits.yaml / preset)
+    model id used to overwrite the config price in this worker's
+    whitelist, where nothing short of a restart put it back.
+
+    Billing is *not* the blast radius — `get_effective_credit_multiplier_async`
+    reads the catalog row first and reaches this list only as a fallback.
+    The settings projection is: `to_read_dict` quotes
+    `effective_credit_multiplier` from the sync
+    `get_effective_credit_multiplier`, which is this list, so the
+    workspace would be shown a price for a curated model that no sibling
+    worker agrees with.
+
+    The guard lives here rather than in each caller because both of them
+    (`ee.routers.model_catalog._sync_registry`, the boot-time
+    `model_catalog_service.sync_registry_from_catalog`) route through this
+    function, and their own filters are narrower (`source == "seed"`, a
+    `_model_lookup` on the mutable list). No-op rather than raise, the way
+    `remove_allowed_model` refuses to evict a curated id: both callers
+    already treat "this one is not mine to touch" as a normal skip, and a
+    boot-time replay must not die on one row.
     """
     global _allowed_models
+    if any(e["model"] == entry["model"] for e in _curated_models):
+        logger.warning(
+            "ai settings: refusing to overwrite curated model %s in the whitelist",
+            entry["model"],
+        )
+        return
     normalized = {
         "provider": entry["provider"],
         "model": entry["model"],
@@ -189,7 +217,23 @@ def _model_lookup(model_id: str) -> dict[str, Any] | None:
 
 
 async def get_or_default(db: AsyncSession, tenant_id: uuid.UUID) -> TenantAISettings:
-    """Return the tenant's row, creating it with defaults on first call."""
+    """Return the tenant's row, or an unsaved defaults row when it has none.
+
+    HRP-628: reading the settings must not create them. This used to
+    ``db.add()`` + ``commit()`` the defaults row, so merely opening
+    Settings -> AI — a plain ``GET /api/ai-settings`` — stamped
+    ``content_language="en"`` on the tenant forever. Nothing downstream
+    could then tell a default nobody chose from a deliberate English
+    choice, and the recruitment analysis resolver reads exactly that
+    distinction to decide whether to fall back to the vacancy language.
+
+    The returned row is transient when the tenant has none: callers read
+    effective values off it exactly as before, and ``update()`` /
+    ``reset()`` add it to the session when the tenant actually saves.
+    ``id`` and the timestamps are filled in here because the read
+    projection returns them; a row that is never saved simply discards
+    them.
+    """
     result = await db.execute(
         select(TenantAISettings).where(TenantAISettings.tenant_id == tenant_id)
     )
@@ -197,17 +241,17 @@ async def get_or_default(db: AsyncSession, tenant_id: uuid.UUID) -> TenantAISett
     if row is not None:
         return row
 
-    row = TenantAISettings(
+    now = datetime.now(UTC)
+    return TenantAISettings(
+        id=uuid.uuid4(),
         tenant_id=tenant_id,
         content_language=DEFAULT_LANGUAGE,
         effort_level=DEFAULT_EFFORT,
         temperature=0.3,
         max_retries=5,
+        created_at=now,
+        updated_at=now,
     )
-    db.add(row)
-    await db.commit()
-    await db.refresh(row)
-    return row
 
 
 async def update(
@@ -217,6 +261,9 @@ async def update(
 ) -> TenantAISettings:
     """Apply a partial update. Explicit overrides flip effort_level → custom."""
     row = await get_or_default(db, tenant_id)
+    # HRP-628: a tenant that never saved before gets a transient row —
+    # this is the call that persists it. No-op for an existing row.
+    db.add(row)
     data = patch.model_dump(exclude_unset=True)
 
     if "llm_model" in data and data["llm_model"]:
@@ -269,6 +316,7 @@ async def update(
 async def reset(db: AsyncSession, tenant_id: uuid.UUID) -> TenantAISettings:
     """Reset a tenant's AI settings to defaults (balanced, English, no context)."""
     row = await get_or_default(db, tenant_id)
+    db.add(row)
     row.content_language = DEFAULT_LANGUAGE
     row.effort_level = DEFAULT_EFFORT
     row.llm_model = None
@@ -460,6 +508,23 @@ async def get_effective_credit_multiplier_async(
 _LANGUAGE_NAMES = {"en": "English", "de": "German", "ru": "Russian"}
 
 
+def language_directive(code: str | None) -> str:
+    """Output-language directive from a bare language code (HRP-690).
+
+    For callers that resolve the content language themselves (recruitment's
+    ``resolve_analysis_language``) instead of holding a settings row. A bare
+    ISO code in the prompt ("Respond in ru language") loses to kilobytes of
+    English exemplars — the directive must name the language.
+    """
+    name = _LANGUAGE_NAMES.get(code or "en", "English")
+    return (
+        f"Generate ALL content in {name}. "
+        "Echo machine-readable values verbatim in their original wording, "
+        "never translated: enum values (such as `type`, `material_type`), "
+        "and any skill-level or grade titles that come from the input."
+    )
+
+
 def build_language_directive(row: TenantAISettings) -> str:
     """Output-language directive appended to AI system prompts.
 
@@ -469,13 +534,7 @@ def build_language_directive(row: TenantAISettings) -> str:
     a translated echo-back would be silently dropped or fail schema
     validation.
     """
-    name = _LANGUAGE_NAMES.get(row.content_language, "English")
-    return (
-        f"Generate ALL content in {name}. "
-        "Echo machine-readable values verbatim in their original wording, "
-        "never translated: enum values (such as `type`, `material_type`), "
-        "and any skill-level or grade titles that come from the input."
-    )
+    return language_directive(row.content_language)
 
 
 def build_system_prompt_extras(row: TenantAISettings | None) -> list[str]:

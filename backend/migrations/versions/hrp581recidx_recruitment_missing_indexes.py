@@ -66,11 +66,19 @@ INDEXES: tuple[tuple[str, str], ...] = (
 )
 
 
+# ``IF NOT EXISTS`` / ``IF EXISTS`` rather than ``op.create_index`` /
+# ``op.drop_index``: a deploy interrupted between two of these operations
+# leaves the revision half applied, and the re-run has to finish the job
+# instead of tripping over the indexes it already created (HRP-594).
+# The interpolated names come from the INDEXES constant above, never from
+# user input, so the f-string carries no injection surface.
 def upgrade() -> None:
     for table, column in INDEXES:
-        op.create_index(f"ix_{table}_{column}", table, [column])
+        op.execute(
+            f"CREATE INDEX IF NOT EXISTS ix_{table}_{column} ON {table} ({column})"
+        )
 
 
 def downgrade() -> None:
     for table, column in reversed(INDEXES):
-        op.drop_index(f"ix_{table}_{column}", table_name=table)
+        op.execute(f"DROP INDEX IF EXISTS ix_{table}_{column}")

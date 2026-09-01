@@ -49,7 +49,13 @@ import type {
   ResumeExcerptSection,
   TopupEligibility,
 } from "@/lib/recruitment-types";
-import { dispatchResumeExcerptFocus } from "@/lib/resume-excerpt-focus";
+import type { AssessmentMatrixData } from "@/lib/types";
+import {
+  RESUME_CITATION_FOCUS_EVENT,
+  dispatchResumeExcerptFocus,
+  type ResumeExcerptFocusDetail,
+} from "@/lib/resume-excerpt-focus";
+import { CANDIDATE_INTERVIEWS_ANCHOR_ID } from "@/lib/recruitment-helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -77,6 +83,9 @@ interface Props {
   /** HRP-488: a candidate added by hand has nothing to analyse, so the
    * empty state says "upload a resume" and keeps Analyze disabled. */
   hasParsedResume?: boolean;
+  /** HRP-680: hands the active run's citations to the page so the
+   * parsed-resume card can mark the items they were quoted from. */
+  onExcerptsChange?: (excerpts: ResumeExcerpt[]) => void;
 }
 
 export function AiInsightsSection({
@@ -84,6 +93,7 @@ export function AiInsightsSection({
   vacancyApplications,
   initialVacancyId,
   hasParsedResume = false,
+  onExcerptsChange,
 }: Props) {
   const t = useTranslations("recruitment");
   // Credit pricing copy is SaaS-only; on-prem (community) builds have no
@@ -153,6 +163,12 @@ export function AiInsightsSection({
     void refresh();
   }, [refresh]);
 
+  const selectedVacancyId = useMemo(
+    () =>
+      vacancyApplications.find((a) => a.cv_id === selectedCvId)?.vacancy_id ??
+      null,
+    [vacancyApplications, selectedCvId],
+  );
   const activeRun = useMemo(
     () => runs.find((r) => r.archived_at === null && r.status === "completed"),
     [runs],
@@ -164,6 +180,21 @@ export function AiInsightsSection({
       ),
     [runs],
   );
+
+  // HRP-680: the citations are needed on the other side of the page —
+  // the parsed-resume card marks the items they quote. Published from
+  // here rather than threaded down through ActiveRunCard: the chips
+  // stay that component's business, the raw list is the section's.
+  //
+  // The condition mirrors what is rendered below: while a new run is in
+  // flight ``InFlightCard`` replaces ``ActiveRunCard``, taking the chips
+  // and the citation-focus listener with it. Leaving the marks on the
+  // resume then offers a link back to a target that no longer exists.
+  useEffect(() => {
+    onExcerptsChange?.(
+      activeRun && !inFlightRun ? extractResumeExcerpts(activeRun) : [],
+    );
+  }, [activeRun, inFlightRun, onExcerptsChange]);
 
   const trigger = useCallback(
     async (mode: ModeOption) => {
@@ -349,6 +380,7 @@ export function AiInsightsSection({
           <ActiveRunCard
             run={activeRun}
             candidateId={candidateId}
+            vacancyId={selectedVacancyId}
             eligibility={eligibility}
             showCredits={showCredits}
             staleness={staleness}
@@ -605,6 +637,7 @@ function InFlightCard({
 function ActiveRunCard({
   run,
   candidateId,
+  vacancyId,
   eligibility,
   showCredits,
   staleness,
@@ -616,6 +649,7 @@ function ActiveRunCard({
 }: {
   run: AiAnalysisRun;
   candidateId: string;
+  vacancyId: string | null;
   eligibility: TopupEligibility | null;
   showCredits: boolean;
   staleness: AnalysisStalenessKind;
@@ -696,6 +730,14 @@ function ActiveRunCard({
           </div>
         )}
       </dl>
+
+      {/* HRP-662 (task 4): the drill-down into the resume was already
+          click-to-locate, but nothing on the page said *what* the manager
+          and the AI actually disagreed about — the recruiter had to open
+          the Assessments tab and read a grid of numbers. This block spells
+          it out in words, off the same matrix (and therefore the same
+          tenant threshold) the Compact view and the Divergence badge use. */}
+      <DivergenceSummary vacancyId={vacancyId} cvId={run.candidate_vacancy_id} />
 
       {isResumeOnly && excerpts.length > 0 && (
         <ResumeExcerptList candidateId={candidateId} excerpts={excerpts} />
@@ -813,6 +855,11 @@ function ResumeExcerptList({
   excerpts: ResumeExcerpt[];
 }) {
   const t = useTranslations("recruitment");
+  const containerRef = useRef<HTMLDivElement>(null);
+  // HRP-680: the chip a resume item just linked back to, flashed for
+  // the same 2 s the resume side uses. Keyed by `${section}-${idx}`,
+  // the same key the chips are rendered under.
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const groups = useMemo(() => {
     const map = new Map<ResumeExcerptSection, ResumeExcerpt[]>();
     for (const e of excerpts) {
@@ -826,8 +873,41 @@ function ResumeExcerptList({
     });
   }, [excerpts]);
 
+  // HRP-680: the return leg of the citation link. The resume item
+  // dispatches the excerpt it was marked with, so the chip is found by
+  // value rather than by re-running the matcher in reverse.
+  useEffect(() => {
+    let timer: number | undefined;
+    function handle(evt: Event) {
+      const detail = (evt as CustomEvent<ResumeExcerptFocusDetail>).detail;
+      if (!detail || detail.candidate_id !== candidateId) return;
+      const group = groups.find((g) => g.section === detail.section);
+      const idx =
+        group?.items.findIndex(
+          (e) => e.excerpt_text === detail.excerpt_text,
+        ) ?? -1;
+      if (!group || idx === -1) return;
+      containerRef.current?.scrollIntoView({
+        block: "center",
+        behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")
+          .matches
+          ? "auto"
+          : "smooth",
+      });
+      window.clearTimeout(timer);
+      setFocusedKey(`${detail.section}-${idx}`);
+      timer = window.setTimeout(() => setFocusedKey(null), 2000);
+    }
+    window.addEventListener(RESUME_CITATION_FOCUS_EVENT, handle);
+    return () => {
+      window.removeEventListener(RESUME_CITATION_FOCUS_EVENT, handle);
+      window.clearTimeout(timer);
+    };
+  }, [candidateId, groups]);
+
   return (
     <div
+      ref={containerRef}
       className="space-y-2 rounded-md border bg-muted/30 p-3"
       data-testid="ai-analysis-resume-excerpts"
     >
@@ -851,7 +931,14 @@ function ResumeExcerptList({
                       candidate_id: candidateId,
                     })
                   }
-                  className="inline-flex max-w-full items-start rounded-md border border-border bg-background px-2 py-1 text-left text-xs text-foreground/90 hover:border-primary/60 hover:bg-primary/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  className={cn(
+                    "inline-flex max-w-full items-start rounded-md border border-border bg-background px-2 py-1 text-left text-xs text-foreground/90 hover:border-primary/60 hover:bg-primary/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                    focusedKey === `${section}-${idx}` &&
+                      "ring-2 ring-amber-400 ring-offset-2 transition-all duration-200",
+                  )}
+                  data-focused={
+                    focusedKey === `${section}-${idx}` ? "true" : undefined
+                  }
                   title={
                     e.source_company || e.source_period
                       ? [e.source_company, e.source_period]
@@ -868,6 +955,132 @@ function ResumeExcerptList({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * HRP-662 (task 4) — "where the manager and the AI disagree", in words.
+ *
+ * Reads the vacancy's assessment matrix, which is the single place that
+ * decides what counts as a divergence (per-competence, against the
+ * tenant threshold). Deriving a second opinion here is what produced two
+ * contradicting numbers on one screen in the first place.
+ *
+ * Three states, all of them worth saying out loud:
+ *   - no manager assessment yet → the AI score has nothing to be
+ *     compared against, and the card now says so instead of showing
+ *     nothing;
+ *   - agreement → name the number of competences both sides scored;
+ *   - divergence → one line per competence, with the direction.
+ */
+function DivergenceSummary({
+  vacancyId,
+  cvId,
+}: {
+  vacancyId: string | null;
+  cvId: string;
+}) {
+  const t = useTranslations("recruitment");
+  const [matrix, setMatrix] = useState<AssessmentMatrixData | null>(null);
+
+  useEffect(() => {
+    if (!vacancyId) return;
+    let cancelled = false;
+    api
+      .get<AssessmentMatrixData>(
+        `/recruitment/vacancies/${vacancyId}/assessment-matrix`,
+      )
+      .then((data) => {
+        if (!cancelled) setMatrix(data);
+      })
+      // A missing or forbidden matrix is not worth a toast on a card
+      // the recruiter opened to read the AI verdict — the block simply
+      // does not render.
+      .catch(() => {
+        if (!cancelled) setMatrix(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [vacancyId, cvId]);
+
+  // Defensive: the block is an extra on a card whose main job is the
+  // verdict, so an unexpected payload must render nothing, never throw.
+  const candidate = Array.isArray(matrix?.candidates)
+    ? matrix.candidates.find((c) => c.candidate_vacancy_id === cvId)
+    : undefined;
+  if (!vacancyId || !candidate || !Array.isArray(candidate.cells)) return null;
+
+  const names = new Map(
+    (matrix?.competences ?? []).map((c) => [c.id, c.name]),
+  );
+  const divergent = candidate.cells.filter((cell) => cell.divergence);
+  const managerScored = candidate.cells.some(
+    (cell) => cell.manager_score !== null,
+  );
+  const compared = candidate.cells.filter(
+    (cell) => cell.manager_score !== null && cell.ai_score !== null,
+  ).length;
+  // Manager scores exist but land on competences the AI never covered:
+  // there is genuinely nothing to compare, and the run card above
+  // already reports what the AI did find. Say nothing rather than
+  // claim nobody has assessed the candidate.
+  if (managerScored && compared === 0) return null;
+
+  return (
+    <div
+      className="space-y-2 rounded-md border bg-muted/30 p-3 text-xs"
+      data-testid="ai-analysis-divergence-summary"
+      data-divergence-count={divergent.length}
+    >
+      <p className="font-medium text-foreground">
+        {t("aiInsightsDivergenceTitle")}
+      </p>
+      {!managerScored ? (
+        <p className="text-muted-foreground">
+          {t("aiInsightsDivergenceNoManager")}
+        </p>
+      ) : divergent.length === 0 ? (
+        <p className="text-muted-foreground">
+          {t("aiInsightsDivergenceNone", { count: compared })}
+        </p>
+      ) : (
+        <>
+          <p className="text-muted-foreground">
+            {t("aiInsightsDivergenceIntro", {
+              count: divergent.length,
+              compared,
+            })}
+          </p>
+          <ul className="space-y-1">
+            {divergent.map((cell) => {
+              const manager = cell.manager_score ?? 0;
+              const ai = cell.ai_score ?? 0;
+              const key = ai > manager
+                ? "aiInsightsDivergenceLineAiHigher"
+                : "aiInsightsDivergenceLineAiLower";
+              return (
+                <li
+                  key={cell.competence_id}
+                  className="text-muted-foreground"
+                  data-testid={`ai-analysis-divergence-line-${cell.competence_id}`}
+                >
+                  {t(key, {
+                    name: names.get(cell.competence_id) ?? cell.competence_id,
+                    manager: manager.toFixed(1),
+                    ai: ai.toFixed(1),
+                    delta: Math.abs(ai - manager).toFixed(1),
+                  })}
+                </li>
+              );
+            })}
+          </ul>
+          <p className="text-muted-foreground/80">
+            {t("aiInsightsDivergenceHint")}
+          </p>
+        </>
+      )}
     </div>
   );
 }
@@ -937,6 +1150,11 @@ function TopupCallout({
   };
   const text = reasonMap[eligibility.reason ?? ""] ?? "";
   if (!text) return null;
+  // HRP-680: "upload and transcribe an interview" names the condition
+  // but the section that satisfies it is two screens further down, so
+  // the banner read as a dead end. Only this reason gets the shortcut —
+  // the other three are not fixed by visiting Interviews.
+  const showInterviewsLink = eligibility.reason === "no_transcribed_interview";
   return (
     <div
       className={`flex flex-wrap items-center justify-between gap-3 rounded-md p-3 text-sm ${ALERT_TONE.amber}`}
@@ -950,16 +1168,41 @@ function TopupCallout({
         />
         <p>{text}</p>
       </div>
-      <Button
-        size="sm"
-        disabled
-        title={text}
-        data-testid="ai-analysis-upgrade-to-full-btn"
-      >
-        {upgradeLabel}
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        {showInterviewsLink && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={scrollToInterviews}
+            data-testid="ai-analysis-go-to-interviews-btn"
+          >
+            {t("aiInsightsGoToInterviews")}
+          </Button>
+        )}
+        <Button
+          size="sm"
+          disabled
+          title={text}
+          data-testid="ai-analysis-upgrade-to-full-btn"
+        >
+          {upgradeLabel}
+        </Button>
+      </div>
     </div>
   );
+}
+
+// HRP-680: both cards live on the candidate page, so the path from the
+// banner to the thing it asks for is a scroll, not a navigation.
+function scrollToInterviews(): void {
+  const el = document.getElementById(CANDIDATE_INTERVIEWS_ANCHOR_ID);
+  if (!el) return;
+  el.scrollIntoView({
+    block: "start",
+    behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+      ? "auto"
+      : "smooth",
+  });
 }
 
 function VerdictPill({

@@ -225,6 +225,10 @@ class CandidatePoolItem(BaseModel):
     basis: str
     comp_match: int | None = None
     comp_qualifies: bool = False
+    # HRP-657: how many Required Competences clear the card threshold out
+    # of how many are asked for — the "why" behind the average percent.
+    comp_met: int | None = None
+    comp_total: int | None = None
     exp_months: int | None = None
     exp_qualifies: bool = False
     has_comp_requirement: bool = False
@@ -261,6 +265,12 @@ class CandidateBreakdownCompetenceRow(BaseModel):
     card_match_percent: int
     actual_percent: int | None
     qualifies: bool
+    # HRP-695: reference only — the employee's best Done assessment of
+    # this competence at a level the matcher does not count (set only
+    # when ``actual_percent`` is None). Never enters the match percent.
+    other_level_title: str | None = None
+    other_level_i18n_key: str | None = None
+    other_level_percent: int | None = None
 
 
 class CandidateBreakdownSpecRow(BaseModel):
@@ -315,6 +325,10 @@ class CandidateRead(BaseModel):
     # Add/Change dialog.
     comp_match: int | None = None
     comp_qualifies: bool = False
+    # HRP-657: Required Competences cleared / asked for, so the Match cell
+    # can say why the average landed where it did.
+    comp_met: int | None = None
+    comp_total: int | None = None
     exp_months: int | None = None
     exp_qualifies: bool = False
     has_comp_requirement: bool = False
@@ -331,6 +345,19 @@ class CandidateRead(BaseModel):
     employee_status: str | None = None
     assessment_id: uuid.UUID | None
     pdp_id: uuid.UUID | None
+    # HRP-665: state of the gap-based development plan referenced by
+    # ``pdp_id``. None when the candidate has no plan yet.
+    pdp_status: str | None = None
     response_at: datetime | None
     appointed_at: datetime | None
     model_config = {"from_attributes": True}
+
+
+class CandidateDevelopmentPlanCreate(BaseModel):
+    """HRP-665: build a PDP from the candidate's competence gaps.
+
+    ``title`` is optional so API callers can post an empty body — the
+    service falls back to the card title. The UI sends a localized one.
+    """
+
+    title: str | None = Field(default=None, max_length=100)

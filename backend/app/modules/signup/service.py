@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.errors import AppError
 from app.core.i18n import resolve_locale
-from app.core.redis import redis_client
+from app.core.redis import bump_counter, redis_client
 from app.core.security import (
     create_magic_login_token,
     create_signup_verify_token,
@@ -103,24 +103,23 @@ async def _verify_turnstile(token: str | None, *, remote_ip: str | None) -> bool
 
 
 async def _enforce_rate_limit(remote_ip: str | None) -> None:
-    """Per-IP per-hour throttle backed by an atomic Redis pipeline.
+    """Per-IP per-hour throttle, counted by ``core.redis.bump_counter``.
 
-    Same shape as ``demo.service._enforce_rate_limit``: pipeline so we
-    can't crash between INCR and EXPIRE, and Redis failure fails
-    closed (a transient flake is preferable to opening the funnel).
+    The counting is shared with the other throttles (HRP-596); the policy
+    is not. Redis failure fails closed here — a transient flake is
+    preferable to opening the funnel.
+
+    The window the helper keeps is anchored at the first attempt. This
+    call site used to re-arm the TTL on every attempt, refused ones
+    included, so a throttled IP could hold itself over the cap forever by
+    retrying — the same defect HRP-645 fixed on the demo throttle.
     """
     limit = settings.signup_rate_limit_per_ip_per_hour
     if remote_ip is None or limit <= 0:
         return
     try:
-        async with redis_client() as client:
-            key = f"signup:rl:{remote_ip}"
-            async with client.pipeline(transaction=True) as pipe:
-                pipe.incr(key)
-                pipe.expire(key, 3600)
-                count, _ = await pipe.execute()
-            if count > limit:
-                raise AppError("signup_rate_limited", status.HTTP_429_TOO_MANY_REQUESTS)
+        if await bump_counter(f"signup:rl:{remote_ip}", 3600) > limit:
+            raise AppError("signup_rate_limited", status.HTTP_429_TOO_MANY_REQUESTS)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -528,8 +527,7 @@ async def _convert_demo_tenant(db: AsyncSession, row: SignupRequest) -> Any:
         pass
 
     logger.info(
-        "signup-approve: converted demo tenant %s into a real workspace "
-        "for request %s",
+        "signup-approve: converted demo tenant %s into a real workspace for request %s",
         tenant.id,
         row.id,
     )
@@ -618,8 +616,7 @@ async def approve_signup(
             await seed_default_recruitment_stages(db, tenant.id)
     except Exception:
         logger.exception(
-            "signup-approve: failed to seed default recruitment stages "
-            "for tenant %s",
+            "signup-approve: failed to seed default recruitment stages for tenant %s",
             tenant.id,
         )
 

@@ -20,13 +20,30 @@ indexed PK fetch per call. No caching layer needed.
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import select
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
+
+# The throw-away demo admin's email domain (see ``_create_demo_user``).
+DEMO_ADMIN_EMAIL_DOMAIN = "demo.hrpulsar.local"
+
+
+def demo_persona_for_email(email: str | None) -> Literal["admin", "employee"]:
+    """Which "View as" persona a demo-tenant user is signed in as.
+
+    Single source of truth for the rule ``switch_demo_view`` applies when it
+    resolves the ``admin`` persona: the throw-away demo user lives on
+    :data:`DEMO_ADMIN_EMAIL_DOMAIN`, every seeded employee does not. Callers
+    must have established that the tenant is a demo tenant — outside one the
+    answer is not "employee", it is "no persona at all".
+    """
+    return (
+        "admin" if (email or "").endswith(f"@{DEMO_ADMIN_EMAIL_DOMAIN}") else "employee"
+    )
 
 
 def _coerce_uuid(value: uuid.UUID | str | None) -> uuid.UUID | None:

@@ -123,7 +123,7 @@ export default function PositionsPage() {
     setDrilldownOpen(true);
   }
 
-  const { canManage } = usePermissions();
+  const { canManage, canViewJobProfile } = usePermissions();
   // HRP-631: creating is a role question — a manager files the new position
   // under one of their own divisions. Editing an existing one is a row
   // question: outside the managed subtree it 403s, so the controls follow
@@ -315,6 +315,12 @@ export default function PositionsPage() {
 
   const approved = positions.filter((p) => p.source !== "ai_draft");
   const drafts = positions.filter((p) => p.source === "ai_draft");
+  // HRP-637: whether the catalogue arrives with its grade and
+  // specialization columns is a property of the viewer and the tenant, not
+  // of whichever rows this page happens to hold — a filtered page whose
+  // rows all lack a pair must not collapse the table for a tenant that
+  // switched grades on.
+  const showJobProfile = canViewJobProfile;
 
   // HRP-72 § 7.3: client-side group-by (Division / Specialization / none).
   // Server returns the rows already filtered; grouping is purely a visual
@@ -437,8 +443,12 @@ export default function PositionsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>{t("colPositionTitle")}</TableHead>
-                    <TableHead>{t("specialization")}</TableHead>
-                    <TableHead>{t("grade")}</TableHead>
+                    {showJobProfile ? (
+                      <>
+                        <TableHead>{t("specialization")}</TableHead>
+                        <TableHead>{t("grade")}</TableHead>
+                      </>
+                    ) : null}
                     <TableHead>{t("division")}</TableHead>
                     <TableHead>{t("colFilledPlan")}</TableHead>
                     <TableHead className="w-32" />
@@ -452,8 +462,14 @@ export default function PositionsPage() {
                       className="bg-blue-50/50 dark:bg-blue-950/20"
                     >
                       <TableCell className="font-medium">{pos.title}</TableCell>
-                      <TableCell>{pos.specialization_title || "—"}</TableCell>
-                      <TableCell>{pos.grade_title || "—"}</TableCell>
+                      {showJobProfile ? (
+                        <>
+                          <TableCell>
+                            {pos.specialization_title || "—"}
+                          </TableCell>
+                          <TableCell>{pos.grade_title || "—"}</TableCell>
+                        </>
+                      ) : null}
                       <TableCell data-testid={`positions-row-${pos.id}-division`}>
                         {pos.division_name || "—"}
                       </TableCell>
@@ -544,15 +560,20 @@ export default function PositionsPage() {
           {t("hasVacancies")}
         </Button>
 
-        <Button
-          data-testid="positions-filter-matrix-unconfigured"
-          size="sm"
-          variant={matrixUnconfigured ? "default" : "outline"}
-          onClick={() => setMatrixUnconfigured((v) => !v)}
-        >
-          <AlertTriangle className="mr-1 h-4 w-4" />
-          {t("matrixNotConfigured")}
-        </Button>
+        {/* HRP-637: selects on whether the hidden (spec, grade) pair has
+            competence links, so the API ignores it for a viewer without the
+            pair — a button that silently does nothing is worse than none. */}
+        {showJobProfile ? (
+          <Button
+            data-testid="positions-filter-matrix-unconfigured"
+            size="sm"
+            variant={matrixUnconfigured ? "default" : "outline"}
+            onClick={() => setMatrixUnconfigured((v) => !v)}
+          >
+            <AlertTriangle className="mr-1 h-4 w-4" />
+            {t("matrixNotConfigured")}
+          </Button>
+        ) : null}
 
         {filtersActive ? (
           <Button
@@ -568,7 +589,15 @@ export default function PositionsPage() {
 
         <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
           <span>{t("groupBy")}</span>
-          {(["none", "division", "specialization"] as GroupBy[]).map((g) => (
+          {(
+            [
+              "none",
+              "division",
+              // Grouping by a column the viewer does not get would bucket
+              // the whole catalogue under "No specialization".
+              ...(showJobProfile ? (["specialization"] as const) : []),
+            ] as GroupBy[]
+          ).map((g) => (
             <Button
               key={g}
               data-testid={`positions-group-${g}`}
@@ -591,12 +620,18 @@ export default function PositionsPage() {
         <TableHeader>
           <TableRow>
             <TableHead>{t("colPositionTitle")}</TableHead>
-            <TableHead>{t("specialization")}</TableHead>
-            <TableHead>{t("grade")}</TableHead>
+            {showJobProfile ? (
+              <>
+                <TableHead>{t("specialization")}</TableHead>
+                <TableHead>{t("grade")}</TableHead>
+              </>
+            ) : null}
             <TableHead>{t("division")}</TableHead>
             <TableHead>{t("status")}</TableHead>
             <TableHead>{t("colFilledPlan")}</TableHead>
-            <TableHead>{t("colMatrix")}</TableHead>
+            {/* The matrix cell reads the (spec, grade) pair — without it
+                every row would render the same dash. */}
+            {showJobProfile ? <TableHead>{t("colMatrix")}</TableHead> : null}
             <TableHead>{t("colSource")}</TableHead>
             <TableHead className="w-12" />
           </TableRow>
@@ -610,7 +645,7 @@ export default function PositionsPage() {
                   className="bg-muted/40"
                 >
                   <TableCell
-                    colSpan={9}
+                    colSpan={showJobProfile ? 9 : 6}
                     className="py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"
                   >
                     {group.label} · {group.rows.length}
@@ -623,144 +658,150 @@ export default function PositionsPage() {
                   pos.specialization_id,
                 );
                 return (
-                <TableRow
-                  key={pos.id}
-                  data-testid={`positions-row-${pos.id}`}
-                  className={activeSession ? "bg-primary/5" : undefined}
-                >
-                  <TableCell className="font-medium">
-                    <div className="flex items-center gap-2">
-                      <Link
-                        href={`/company/positions/${pos.id}`}
-                        data-testid={`positions-row-${pos.id}-link`}
-                        className="hover:underline"
-                      >
-                        {pos.title}
-                      </Link>
-                      {activeSession ? (
-                        <ActiveAiSessionBadge
-                          sessions={[activeSession]}
-                          onOpen={() =>
-                            router.push(
-                              activeSessionRoute({
-                                id: activeSession.session_id,
-                                scope: activeSession.scope,
-                                target_id: activeSession.target_id,
-                                status: activeSession.status,
-                                // HRP-33 review fix: only carry the
-                                // session's true originating position id —
-                                // not this row's id. Routing the badge to
-                                // an unrelated position would land Apply
-                                // on the wrong page.
-                                params: {
-                                  position_id: activeSession.position_id,
-                                },
-                              }),
-                            )
-                          }
-                          testIdSuffix={`positions-row-${pos.id}`}
-                        />
-                      ) : null}
-                    </div>
-                  </TableCell>
-                  {/* HRP-54: clickable spec/grade in the column when set,
-                      CTA «Set» to open the edit dialog when missing — so the
-                      operator can wire spec/grade in without navigating to
-                      the detail page first. */}
-                  <TableCell>
-                    {pos.specialization_id && pos.specialization_title ? (
-                      <Link
-                        href={`/company/specializations/${pos.specialization_id}`}
-                        data-testid={`positions-row-${pos.id}-specialization-link`}
-                        className="text-primary hover:underline"
-                      >
-                        {pos.specialization_title}
-                      </Link>
-                    ) : canEdit(pos) ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        data-testid={`positions-row-${pos.id}-btn-set-specialization`}
-                        onClick={() => openEdit(pos)}
-                      >
-                        <Plus className="mr-1 h-3 w-3" />
-                        {t("setSpecialization")}
-                      </Button>
-                    ) : (
-                      "—"
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {pos.grade_id && pos.grade_title ? (
-                      pos.specialization_id ? (
+                  <TableRow
+                    key={pos.id}
+                    data-testid={`positions-row-${pos.id}`}
+                    className={activeSession ? "bg-primary/5" : undefined}
+                  >
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
                         <Link
-                          href={`/company/specializations/${pos.specialization_id}/matrix?grade_id=${pos.grade_id}`}
-                          data-testid={`positions-row-${pos.id}-grade-link`}
-                          className="text-primary hover:underline"
+                          href={`/company/positions/${pos.id}`}
+                          data-testid={`positions-row-${pos.id}-link`}
+                          className="hover:underline"
                         >
-                          {pos.grade_title}
+                          {pos.title}
                         </Link>
-                      ) : (
-                        pos.grade_title
-                      )
-                    ) : canEdit(pos) ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        data-testid={`positions-row-${pos.id}-btn-set-grade`}
-                        onClick={() => openEdit(pos)}
+                        {activeSession ? (
+                          <ActiveAiSessionBadge
+                            sessions={[activeSession]}
+                            onOpen={() =>
+                              router.push(
+                                activeSessionRoute({
+                                  id: activeSession.session_id,
+                                  scope: activeSession.scope,
+                                  target_id: activeSession.target_id,
+                                  status: activeSession.status,
+                                  // HRP-33 review fix: only carry the
+                                  // session's true originating position id —
+                                  // not this row's id. Routing the badge to
+                                  // an unrelated position would land Apply
+                                  // on the wrong page.
+                                  params: {
+                                    position_id: activeSession.position_id,
+                                  },
+                                }),
+                              )
+                            }
+                            testIdSuffix={`positions-row-${pos.id}`}
+                          />
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    {showJobProfile ? (
+                      <>
+                        {/* HRP-54: clickable spec/grade in the column when set,
+                        CTA «Set» to open the edit dialog when missing — so the
+                        operator can wire spec/grade in without navigating to
+                        the detail page first. */}
+                        <TableCell>
+                          {pos.specialization_id && pos.specialization_title ? (
+                            <Link
+                              href={`/company/specializations/${pos.specialization_id}`}
+                              data-testid={`positions-row-${pos.id}-specialization-link`}
+                              className="text-primary hover:underline"
+                            >
+                              {pos.specialization_title}
+                            </Link>
+                          ) : canEdit(pos) ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              data-testid={`positions-row-${pos.id}-btn-set-specialization`}
+                              onClick={() => openEdit(pos)}
+                            >
+                              <Plus className="mr-1 h-3 w-3" />
+                              {t("setSpecialization")}
+                            </Button>
+                          ) : (
+                            "—"
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {pos.grade_id && pos.grade_title ? (
+                            pos.specialization_id ? (
+                              <Link
+                                href={`/company/specializations/${pos.specialization_id}/matrix?grade_id=${pos.grade_id}`}
+                                data-testid={`positions-row-${pos.id}-grade-link`}
+                                className="text-primary hover:underline"
+                              >
+                                {pos.grade_title}
+                              </Link>
+                            ) : (
+                              pos.grade_title
+                            )
+                          ) : canEdit(pos) ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              data-testid={`positions-row-${pos.id}-btn-set-grade`}
+                              onClick={() => openEdit(pos)}
+                            >
+                              <Plus className="mr-1 h-3 w-3" />
+                              {t("setGrade")}
+                            </Button>
+                          ) : (
+                            "—"
+                          )}
+                        </TableCell>
+                      </>
+                    ) : null}
+                    <TableCell data-testid={`positions-row-${pos.id}-division`}>
+                      {pos.division_name || "—"}
+                    </TableCell>
+                    <TableCell>
+                      <PositionStatusBadge
+                        status={pos.lifecycle_status}
+                        testId={`positions-row-${pos.id}-status`}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <button
+                        type="button"
+                        data-testid={`positions-row-${pos.id}-headcount`}
+                        className="text-left underline-offset-2 hover:underline"
+                        onClick={() => openHeadcountDrilldown(pos)}
                       >
-                        <Plus className="mr-1 h-3 w-3" />
-                        {t("setGrade")}
-                      </Button>
-                    ) : (
-                      "—"
-                    )}
-                  </TableCell>
-                  <TableCell data-testid={`positions-row-${pos.id}-division`}>
-                    {pos.division_name || "—"}
-                  </TableCell>
-                  <TableCell>
-                    <PositionStatusBadge
-                      status={pos.lifecycle_status}
-                      testId={`positions-row-${pos.id}-status`}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <button
-                      type="button"
-                      data-testid={`positions-row-${pos.id}-headcount`}
-                      className="text-left underline-offset-2 hover:underline"
-                      onClick={() => openHeadcountDrilldown(pos)}
-                    >
-                      {pos.headcount != null
-                        ? `${pos.employee_count}/${pos.headcount}`
-                        : pos.employee_count}
-                    </button>
-                  </TableCell>
-                  <TableCell data-testid={`positions-row-${pos.id}-matrix`}>
-                    {pos.specialization_id && pos.grade_id ? (
-                      pos.matrix_configured ? (
-                        <span
-                          className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"
-                          title={t("matrixConfigured")}
-                        >
-                          <CheckCircle2 className="h-4 w-4" />
-                        </span>
-                      ) : (
-                        <span
-                          className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
-                          title={t("matrixNotConfiguredProfile")}
-                        >
-                          <AlertTriangle className="h-4 w-4" />
-                        </span>
-                      )
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
+                        {pos.headcount != null
+                          ? `${pos.employee_count}/${pos.headcount}`
+                          : pos.employee_count}
+                      </button>
+                    </TableCell>
+                    {showJobProfile ? (
+                      <TableCell data-testid={`positions-row-${pos.id}-matrix`}>
+                        {pos.specialization_id && pos.grade_id ? (
+                          pos.matrix_configured ? (
+                            <span
+                              className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"
+                              title={t("matrixConfigured")}
+                            >
+                              <CheckCircle2 className="h-4 w-4" />
+                            </span>
+                          ) : (
+                            <span
+                              className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
+                              title={t("matrixNotConfiguredProfile")}
+                            >
+                              <AlertTriangle className="h-4 w-4" />
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                    ) : null}
               <TableCell>
                 <Badge variant="outline">
                   {pos.source === "ai_approved" ? t("sourceAi") : t("sourceManual")}
@@ -818,7 +859,7 @@ export default function PositionsPage() {
           {approved.length === 0 && (
             <TableRow>
               <TableCell
-                colSpan={9}
+                colSpan={showJobProfile ? 9 : 6}
                 className="py-8 text-center text-muted-foreground"
               >
                 {filtersActive

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
@@ -36,12 +36,14 @@ import {
 import {
   Tooltip, TooltipContent, TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Hint } from "@/components/ui/hint";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { toast } from "sonner";
 import Link from "next/link";
 import { Pagination } from "@/components/pagination";
 import { usePermissions } from "@/hooks/use-permissions";
+import { readCreateDeepLink } from "@/lib/employee-actions";
 import {
   ChevronDown,
   ChevronRight,
@@ -118,6 +120,7 @@ function statusSummaryText(
 
 export default function AssessmentsPage() {
   const t = useTranslations("assessments");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const [items, setItems] = useState<GroupedAssessmentListItem[]>([]);
@@ -306,6 +309,45 @@ export default function AssessmentsPage() {
     setForm(emptyForm);
     setCreateOpen(true);
   }
+
+  // HRP-660: `/assessments?create=1&employee_id=<id>` — the employee card
+  // starts an assessment here rather than carrying a second copy of this
+  // form. Skips the mode picker: the card is about one person, so "mass"
+  // was never the question.
+  const deepLinkEmployeeId = useMemo(
+    () => readCreateDeepLink(searchParams.toString()),
+    // read once on mount — the filter mirror above strips the params
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const deepLinkConsumed = useRef(false);
+
+  useEffect(() => {
+    if (loading || deepLinkConsumed.current) return;
+    if (!deepLinkEmployeeId || !canManage) return;
+    deepLinkConsumed.current = true;
+    void (async () => {
+      // `loadEmployees` reads one page; a card further down the roster
+      // must still arrive prefilled rather than on a blank select.
+      if (!employees.some((e) => e.id === deepLinkEmployeeId)) {
+        try {
+          const emp = await api.get<Employee>(
+            `/employees/${deepLinkEmployeeId}`,
+          );
+          setEmployees((prev) =>
+            prev.some((e) => e.id === emp.id) ? prev : [...prev, emp],
+          );
+        } catch {
+          toast.error(t("errorCreateFailed"));
+          return;
+        }
+      }
+      setForm({ ...emptyForm, employee_id: deepLinkEmployeeId });
+      setCreateMode("single");
+      setCreateOpen(true);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, deepLinkEmployeeId, canManage]);
 
   async function handleCreateSingle() {
     if (isPastDeadline(form.ended_at)) {
@@ -504,7 +546,13 @@ export default function AssessmentsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight" data-testid="assessments-heading">{t("title")}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight" data-testid="assessments-heading">{t("title")}</h1>
+            <Hint
+              text={tSections("assessments.hint")}
+              data-testid="assessments-hint-title"
+            />
+          </div>
           <p className="text-sm text-muted-foreground">
             {t("itemsCount", { count: total })}
           </p>

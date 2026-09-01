@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { ApiError, api } from "@/lib/api";
 import { formatDate } from "@/lib/date-format";
 import { cn } from "@/lib/utils";
+import { BADGE_OUTLINE } from "@/lib/badge-tones";
 import { AiInsightsSection } from "@/components/recruitment/ai-insights-section";
 import { AiVerdictBadge } from "@/components/recruitment/ai-verdict-badge";
 import { CandidateInterviewsSection } from "@/components/recruitment/candidate-interviews-section";
@@ -38,6 +39,7 @@ import { useAuth } from "@/context/auth-context";
 import type {
   CandidateCanonical,
   CandidateCanonicalCard,
+  ResumeExcerpt,
 } from "@/lib/recruitment-types";
 
 // HRP-476: labels live in the `recruitment` i18n namespace; this list only
@@ -117,6 +119,10 @@ export default function CandidateDetailPage() {
   // above the parsed resume — they open the card minutes before the call
   // and the questions are what they came for.
   const [questionsAboveResume, setQuestionsAboveResume] = useState(false);
+  // HRP-680: AI Insights owns the analysis, the parsed-resume card owns
+  // the text it quoted. The page is the only thing that sees both, so it
+  // carries the citations across — the two cards stay independent.
+  const [resumeExcerpts, setResumeExcerpts] = useState<ResumeExcerpt[]>([]);
 
   const assessmentVacancies = useMemo(
     () =>
@@ -253,6 +259,7 @@ export default function CandidateDetailPage() {
                 key="resume"
                 card={card}
                 etag={etag}
+                excerpts={resumeExcerpts}
                 onSaved={(c, newEtag) => {
                   setCard((prev) =>
                     prev
@@ -272,6 +279,7 @@ export default function CandidateDetailPage() {
                 candidateId={card.id}
                 vacancyApplications={card.vacancy_applications}
                 initialVacancyId={vacancyContextId ?? undefined}
+                onExcerptsChange={setResumeExcerpts}
                 // HRP-488: a manually added candidate has nothing to
                 // analyse. Either a parsed resume file or the canonical
                 // parsed-resume mirror (manual entry, bulk import) is
@@ -369,6 +377,17 @@ function Header({
             <span className="inline-flex items-center gap-1">
               <MapPin className="size-3.5" /> {card.location}
             </span>
+          )}
+          {/* HRP-663: the card is where the hire/no-hire call happens —
+              it has to say the person already works here. */}
+          {card.is_employee && (
+            <Badge
+              variant="outline"
+              className={cn("border", BADGE_OUTLINE.indigo)}
+              data-testid="candidate-card-internal-badge"
+            >
+              {t("internalCandidateBadge")}
+            </Badge>
           )}
           {isArchived && (
             <Badge variant="outline" className="border-rose-200 text-rose-700">

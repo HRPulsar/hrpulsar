@@ -22,6 +22,7 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Hint } from "@/components/ui/hint";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -29,17 +30,12 @@ import { toast } from "sonner";
 import Link from "next/link";
 import { MoreHorizontal, Plus, Search, Send, Trash2, X } from "lucide-react";
 import { formatDate } from "@/lib/date-format";
+import {
+  TALENT_CARD_TYPES,
+  TYPE_HINT_KEYS,
+  TYPE_KEYS,
+} from "@/lib/talent-card-types";
 
-// HRP-476: the wording lives in the `talentMarket` i18n namespace — these
-// maps only own the code → key relation (same shape as
-// `components/employees/employee-status.ts`).
-const TYPE_KEYS: Record<string, string> = {
-  vacancy: "typeVacancy",
-  talent: "typeTalent",
-  project: "typeProject",
-};
-
-const TYPE_CODES = ["vacancy", "talent", "project"] as const;
 
 const statusColors: Record<string, string> = {
   draft: BADGE_COLOR.neutral,
@@ -171,6 +167,7 @@ const emptyForm = {
 
 export default function TalentMarketPage() {
   const t = useTranslations("talentMarket");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const [cards, setCards] = useState<TalentCard[]>([]);
   // HRP-290 follow-up: server total across all cards, not just the loaded
@@ -225,7 +222,7 @@ export default function TalentMarketPage() {
 
   const flatDivisions = flattenTree(divisions);
 
-  const typeOptions = TYPE_CODES.map((value) => ({
+  const typeOptions = TALENT_CARD_TYPES.map((value) => ({
     value,
     label: t(TYPE_KEYS[value]),
   }));
@@ -355,7 +352,13 @@ export default function TalentMarketPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight" data-testid="talent-market-heading">{t("title")}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight" data-testid="talent-market-heading">{t("title")}</h1>
+            <Hint
+              text={tSections("talentMarket.hint")}
+              data-testid="talent-market-hint-title"
+            />
+          </div>
           {/* HRP-290: counter respects active filters (Assessments parity). */}
           <p className="text-sm text-muted-foreground" data-testid="talent-market-count">{t("cardCount", { count: displayCount })}</p>
         </div>
@@ -427,7 +430,18 @@ export default function TalentMarketPage() {
             <Card key={card.id} className="group relative">
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
-                  <Badge variant="secondary">
+                  {/* HRP-664: the definition rides the badge as a native
+                      title — a Hint glyph on every card in the grid would
+                      be noise, and the create dialog + card detail carry
+                      the accessible copy. */}
+                  <Badge
+                    variant="secondary"
+                    title={
+                      TYPE_HINT_KEYS[card.card_type]
+                        ? t(TYPE_HINT_KEYS[card.card_type])
+                        : undefined
+                    }
+                  >
                     {TYPE_KEYS[card.card_type]
                       ? t(TYPE_KEYS[card.card_type])
                       : card.card_type}
@@ -549,8 +563,21 @@ export default function TalentMarketPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
+                  {/* HRP-664: "Vacancy / Talent / Project" were three bare
+                      words with no explanation anywhere. The moment the
+                      type is chosen is the one that has to teach it. */}
                   {typeOptions.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                    <SelectItem key={opt.value} value={opt.value}>
+                      <span className="flex flex-col gap-0.5">
+                        <span>{opt.label}</span>
+                        <span
+                          className="text-xs font-normal text-muted-foreground whitespace-normal"
+                          data-testid={`talent-market-type-desc-${opt.value}`}
+                        >
+                          {t(TYPE_HINT_KEYS[opt.value])}
+                        </span>
+                      </span>
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>

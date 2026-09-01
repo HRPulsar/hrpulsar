@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.22.0] - 2026-09-01
+
+### Added
+- Match drawer shows the best done assessment at another level as a reference line when a required competence has no counting score (HRP-695)
+- A vacancy can be excluded from internal search: a per-vacancy switch gates posting to the talent market, and changing a posted vacancy's competences re-syncs its talent-market card and shortlist (HRP-678, HRP-693)
+- Vacancy competences can be picked from the company library right on the vacancy page, which is what arms the internal talent-market bridge on a fresh workspace (HRP-687)
+- Employee card shows the same issue badges the directory does and starts every action about that person — development plan, assessment, career event — from one actions menu with the employee prefilled (HRP-660)
+- Competences tab labels a score below its assessment's passing bar as a gap and offers to create the development plan right there (HRP-660)
+- Talent market candidate row states how many required competences the employee clears, opens its breakdown from anywhere on the match cell, and the breakdown names the verdict in words (HRP-657)
+- Talent market builds a development plan from a candidate's competence gaps and links it on the candidate row, in either order with the appointment (HRP-665)
+- Talent market explains what Vacancy, Talent and Project mean where the type is chosen and where a card shows it (HRP-664)
+- Candidate analysis card names, in words, the competences where the manager and the AI disagree and which way the AI leaned (HRP-662)
+- Vacancy offers to search internally before hiring outside: one action posts it to the talent market as a vacancy card carrying its required competences (HRP-667)
+- Vacancy shows the employees the talent market matched to it, with their percentage match, above the external candidate list (HRP-663)
+- Candidates who already work here are marked "internal candidate" in the vacancy table, on the candidate page and with a tinted row, not only in the global candidate list (HRP-663)
+
+### Changed
+- Dashboard gaps tile only turns red when a gap has no development plan behind it; planned gaps read as amber and a chip counts the ones still unowned (HRP-656)
+- Dashboard development loop reads as a funnel: connected stages, a share bar and a distinct tone per stage (HRP-656)
+- Dashboard drops the half-empty row under the action queue — the assessment-cycle card spans the width and lays its number, bar, legend and CTA out in one line (HRP-658)
+- Dashboard stages, the action queue, the assessment-cycle card and the page heading carry a question mark that explains what each number counts (HRP-659)
+- Every section reachable from the sidebar carries a question mark next to its page heading explaining what the section is for (HRP-659)
+- Bulk invitation create now answers with per-address outcomes: every address it could not invite is returned with its reason instead of being dropped from the response (HRP-593)
+- Vacancy candidates table leads with the manager and AI % match, shows the reason for the AI verdict in the row, explains an unassessed candidate instead of showing a dash, and drops the AI-data column and the raw/normalized score toggle (HRP-662)
+- Manager/AI divergence has one definition everywhere: the per-competence workspace threshold, so the row flag can no longer contradict the count beside it (HRP-662)
+
+### Fixed
+- Vacancy competency profiles and individual interview questions are now generated in the workspace's AI content language instead of English (HRP-690)
+- Resume upload works with S3-compatible storage providers that reject request checksums, and a resume the platform could not store or read now reports the actual storage error instead of "no files recognized" (HRP-691)
+- Recruitment managers can read the assessment matrix behind the divergence badge they already see, including its export and cell drill-down (HRP-694)
+- Assessment whose evaluation criteria resolve to zero indicators is refused at send instead of producing an empty questionnaire that submits silently (HRP-688)
+- Parsed-resume education and certificates render their dates and names on a live parse, not only in the demo (HRP-686)
+- Vacancy posted to the talent market now carries its specialization and grade as well as its competences, so the card's experience axis is scored instead of blank (HRP-683)
+- Editing a card's required specialization no longer deletes required competences that specialization never produced, including the ones copied from a vacancy or picked by hand (HRP-683)
+- Verdict for a candidate interviewed without a resume on file now says it is based on the interview transcript, instead of claiming there is no AI data at all (HRP-681)
+- Consolidated XLSX report printed "Full data" for a candidate whose analysis never saw a resume; the AI data column now reports the inputs on file (HRP-685)
+- Vacancy candidate list opens faster on large funnels (HRP-663)
+- Talent market ignored every assessment that was run without a target skill level, so cards on such a workspace reported "no assessment" for candidates who had been assessed (HRP-657)
+- Talent market card type is translated on the card page instead of showing its raw code (HRP-664)
+- Resume fragments an analysis quoted are marked in the parsed resume and click back to their citation, so the drill-down is no longer a one-way jump to the top of the page (HRP-680)
+- Blocked "upgrade to full" callout offers a shortcut to the Interviews section instead of only naming the transcript it is waiting for (HRP-680)
+- Quick-start seed wrote talent candidate statuses that no longer exist in the domain, leaving the status badge unlabelled (HRP-675)
+- Positions catalogue no longer shows a colleague's grade, specialization or salary band to rank-and-file staff; grades follow the same workspace switch as the directory, salary ranges stay with admins, HR and managers, and recruiters keep the grade they need to raise a requisition (HRP-637)
+- Dictionary usage preview is admin-only, matching the delete it warns about (HRP-637)
+- Interview and resume analyses, generated questions, the generated competency profile and their reports now follow the workspace's AI content language instead of the language the vacancy was created in (HRP-628)
+- Opening the AI settings page no longer pins the workspace's content language to English behind the admin's back — the setting is stored when it is saved, not when it is read (HRP-628)
+- Employee event types and development-plan material formats are translated instead of showing their raw codes, including the formats a plan item inherits from a competence's recommended materials (HRP-653)
+- A throttled sign-up IP is blocked for one hour rather than for as long as it keeps retrying (HRP-596)
+- Redis connections are no longer leaked by the consolidated report preview, or by a Redis health probe whose connection opens and then fails (HRP-596)
+
 ## [1.21.0] - 2026-08-25
 
 ### Added

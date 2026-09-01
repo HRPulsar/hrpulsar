@@ -7,6 +7,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { EmployeeCompetenceBreakdown } from "@/components/employees/employee-competence-breakdown";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { ISSUE_TONE, isCompetenceGap } from "@/lib/employee-issues";
 import type {
   CompetenceGroupTree,
   EmployeeCompetenceRow,
@@ -88,6 +89,27 @@ function PercentBadge({ percent }: { percent: number | null }) {
   );
 }
 
+/**
+ * HRP-660: a score under the bar has to read as a gap, not just as a warmer
+ * colour. Deliberately the same word and tone the `competence_gap` badge
+ * uses on the card header and in the employee list — one problem, one name.
+ * The PercentBadge thresholds above are a different scale (75/50 traffic
+ * lights) and stay where they are.
+ */
+export function CompetenceGapBadge({ row }: { row: EmployeeCompetenceRow }) {
+  const t = useTranslations("employees");
+  if (!isCompetenceGap(row)) return null;
+  return (
+    <Badge
+      variant="outline"
+      className={`shrink-0 text-xs ${ISSUE_TONE.competence_gap}`}
+      data-testid={`employee-competence-gap-${row.competence_id}`}
+    >
+      {t("issue_competence_gap")}
+    </Badge>
+  );
+}
+
 interface BranchProps {
   node: RenderedNode;
   depth: number;
@@ -129,6 +151,7 @@ function Branch({ node, depth, expanded, toggle }: BranchProps) {
                 </Badge>
               </div>
               <div className="flex items-center gap-2">
+                <CompetenceGapBadge row={row} />
                 <PercentBadge percent={row.percent} />
                 <EmployeeCompetenceBreakdown
                   competenceId={id}

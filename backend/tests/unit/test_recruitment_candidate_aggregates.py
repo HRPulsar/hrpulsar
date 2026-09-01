@@ -11,6 +11,7 @@ from app.modules.recruitment.schemas import (
     AssessmentScoreCreate,
     CandidateCreate,
     CandidateVacancyCreate,
+    CandidateVacancyPatch,
     VacancyCreate,
     VacancyProfileUpdate,
 )
@@ -178,6 +179,8 @@ class TestApplyMatrixAggregates:
             db, tenant.id, uuid.UUID(str(vacancy["id"]))
         )
         assert items[0]["divergence_count"] == 1
+        # HRP-662: the row flag is the count, not a second opinion.
+        assert items[0]["score_divergence"] is True
         # Raise threshold to 2.5 → gap of 2.0 no longer counts.
         await settings_service.update_matrix_settings(
             db, tenant.id, MatrixSettingsUpdate(divergence_threshold=2.5)
@@ -187,6 +190,74 @@ class TestApplyMatrixAggregates:
         )
         assert items2[0]["divergence_count"] == 0
         assert items2[0]["divergence_top"] == []
+        assert items2[0]["score_divergence"] is False
+
+    async def test_stage_move_keeps_the_divergence_the_row_had(
+        self, db: AsyncSession, tenant, user, matrix_scale
+    ) -> None:
+        """HRP-662: the table swaps the row in place from the PATCH body.
+
+        A stage move does not touch the matrix, but the response is built
+        from the ORM row, where the aggregates do not exist — so skipping
+        the recompute answered ``divergence_count: 0`` and wiped the
+        highlight the very same table had just drawn.
+        """
+        await service.seed_default_recruitment_stages(db, tenant.id)
+        await db.commit()
+        vacancy, cvs = await _setup(db, tenant, user, candidates=1)
+        cv = cvs[0]
+        # Manager 5 / AI 3 on one competence — one divergent cell at the
+        # default 1.0 threshold.
+        await service.record_human_assessment(
+            db,
+            tenant.id,
+            uuid.UUID(str(cv["id"])),
+            user.id,
+            AssessmentScoreCreate(
+                competence_id=service.normalize_competence_id("python-skills"),
+                score=5.0,
+            ),
+        )
+        interview = Interview(
+            tenant_id=tenant.id,
+            candidate_vacancy_id=uuid.UUID(str(cv["id"])),
+            transcription_status="completed",
+            analysis_status="completed",
+        )
+        db.add(interview)
+        await db.commit()
+        await db.refresh(interview)
+        db.add(
+            AIAssessment(
+                tenant_id=tenant.id,
+                interview_id=interview.id,
+                competence_id=service.normalize_competence_id("python-skills"),
+                score=0.6,
+                status="assessed",
+                citations=[],
+            )
+        )
+        await db.commit()
+
+        items, _ = await service.list_vacancy_candidates_enriched(
+            db, tenant.id, uuid.UUID(str(vacancy["id"]))
+        )
+        assert items[0]["score_divergence"] is True
+
+        stages = await service._get_applicable_stages(
+            db, tenant.id, uuid.UUID(str(vacancy["id"]))
+        )
+        target = next(s for s in stages if s.id != items[0]["stage_id"])
+        patched = await service.patch_candidate_vacancy(
+            db,
+            tenant.id,
+            uuid.UUID(str(cv["id"])),
+            CandidateVacancyPatch(stage_id=target.id),
+        )
+        assert patched["stage_id"] == target.id
+        assert patched["divergence_count"] == 1
+        assert patched["score_divergence"] is True
+        assert patched["manager_percent"] is not None
 
     async def test_apply_aggregates_skips_unknown_payloads(
         self, db: AsyncSession, tenant, user, matrix_scale

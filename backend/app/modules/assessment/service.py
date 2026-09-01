@@ -949,6 +949,53 @@ async def get_assessment_detail(
     return data
 
 
+async def _questionnaire_indicator_count(
+    db: AsyncSession, assessment_id: uuid.UUID
+) -> int:
+    """Count the indicators the questionnaire actually surfaces.
+
+    Mirrors the HRP-43 cascade: an ``AssessmentCompetence`` row carrying a
+    ``skill_level_id`` shows only indicators at or below that level, a row
+    without one shows every active indicator of the competence. Shared by
+    the draft → sent guard (HRP-688) and the participant completion check
+    so both agree on what "the questionnaire" contains.
+    """
+    from app.modules.competence.models import Indicator, SkillLevel
+
+    target_level = aliased(SkillLevel, name="target_level")
+    ind_level = aliased(SkillLevel, name="ind_level")
+    q = (
+        select(func.count(func.distinct(Indicator.id)))
+        .select_from(AssessmentCompetence)
+        .join(
+            Indicator,
+            Indicator.competence_id == AssessmentCompetence.competence_id,
+        )
+        .outerjoin(target_level, target_level.id == AssessmentCompetence.skill_level_id)
+        .outerjoin(ind_level, ind_level.id == Indicator.skill_level_id)
+        .where(
+            AssessmentCompetence.assessment_id == assessment_id,
+            Indicator.is_active.is_(True),
+            or_(
+                # No skill_level filter on the AssessmentCompetence row →
+                # questionnaire shows every active indicator of the
+                # competence (legacy contract preserved).
+                AssessmentCompetence.skill_level_id.is_(None),
+                # Cascade: keep only indicators at or below the target
+                # level. Indicators with no skill_level cannot be ranked,
+                # so they're excluded when a filter is in effect — the
+                # questionnaire wouldn't surface them either.
+                and_(
+                    AssessmentCompetence.skill_level_id.is_not(None),
+                    ind_level.id.is_not(None),
+                    ind_level.sort_index <= target_level.sort_index,
+                ),
+            ),
+        )
+    )
+    return (await db.execute(q)).scalar() or 0
+
+
 async def change_status(
     db: AsyncSession, tenant_id: uuid.UUID, assessment_id: uuid.UUID, new_code: str
 ) -> dict:
@@ -1004,6 +1051,16 @@ async def change_status(
             raise AppError(
                 "assessment_deadline_in_past",
                 status.HTTP_409_CONFLICT,
+            )
+        # HRP-688: the selected criteria can resolve to competences that
+        # carry no indicators at all (an empty grade matrix, a competence
+        # with none authored). That produced a questionnaire with zero
+        # questions which participants could still "submit". Guard on the
+        # real indicator count, not on the criteria type.
+        if await _questionnaire_indicator_count(db, a.id) == 0:
+            raise AppError(
+                "assessment_no_indicators",
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
             )
 
     # Manual on_review requires at least one completed participant. The
@@ -1829,8 +1886,6 @@ async def _maybe_mark_participant_completed(
     ``is_completed`` stuck at False whenever any competence had higher-
     level indicators the user never saw.
     """
-    from app.modules.competence.models import Indicator, SkillLevel
-
     # Cheap gate first: already-completed participants keep editing their
     # answers (allowed until the assessment turns terminal) — skip the two
     # aggregate counts below on every such autosave. Lock-free read; the
@@ -1839,38 +1894,7 @@ async def _maybe_mark_participant_completed(
     if not participant or participant.is_completed:
         return False
 
-    target_level = aliased(SkillLevel, name="target_level")
-    ind_level = aliased(SkillLevel, name="ind_level")
-    expected_q = (
-        select(func.count(func.distinct(Indicator.id)))
-        .select_from(AssessmentCompetence)
-        .join(
-            Indicator,
-            Indicator.competence_id == AssessmentCompetence.competence_id,
-        )
-        .outerjoin(target_level, target_level.id == AssessmentCompetence.skill_level_id)
-        .outerjoin(ind_level, ind_level.id == Indicator.skill_level_id)
-        .where(
-            AssessmentCompetence.assessment_id == assessment_id,
-            Indicator.is_active.is_(True),
-            or_(
-                # No skill_level filter on the AssessmentCompetence row →
-                # questionnaire shows every active indicator of the
-                # competence (legacy contract preserved).
-                AssessmentCompetence.skill_level_id.is_(None),
-                # Cascade: keep only indicators at or below the target
-                # level. Indicators with no skill_level cannot be ranked,
-                # so they're excluded when a filter is in effect — the
-                # questionnaire wouldn't surface them either.
-                and_(
-                    AssessmentCompetence.skill_level_id.is_not(None),
-                    ind_level.id.is_not(None),
-                    ind_level.sort_index <= target_level.sort_index,
-                ),
-            ),
-        )
-    )
-    expected = (await db.execute(expected_q)).scalar() or 0
+    expected = await _questionnaire_indicator_count(db, assessment_id)
     if expected == 0:
         return False
 
@@ -3729,6 +3753,7 @@ async def bulk_change_status(
         "already_cancelled": 0,
         "missing_criteria_or_scale": 0,
         "deadline_in_past": 0,
+        "no_indicators": 0,
         "no_completed_participant": 0,
         "not_in_on_review": 0,
         "manual_in_progress_not_allowed": 0,
@@ -3775,6 +3800,16 @@ async def bulk_change_status(
             ):
                 skipped += 1
                 reasons["deadline_in_past"] += 1
+                continue
+            # HRP-688: mirror change_status — never launch a questionnaire
+            # with zero questions.
+            if (
+                a.status.code == "draft"
+                and new_code == "sent"
+                and await _questionnaire_indicator_count(db, a.id) == 0
+            ):
+                skipped += 1
+                reasons["no_indicators"] += 1
                 continue
             # Manual on_review requires at least one completed participant.
             if new_code == "on_review":

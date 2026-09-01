@@ -46,6 +46,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Hint } from "@/components/ui/hint";
 import { toast } from "sonner";
 import { MoreHorizontal, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 
@@ -83,6 +84,7 @@ export default function DictionariesPage() {
 
 function DictionariesPageContent() {
   const t = useTranslations("dictionaries");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const [activeType, setActiveType] = useState("grade");
@@ -222,9 +224,15 @@ function DictionariesPageContent() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t("title")}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {t("title")}
+            </h1>
+            <Hint
+              text={tSections("dictionaries.hint")}
+              data-testid="dictionaries-hint-title"
+            />
+          </div>
           <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
         <Button size="sm" onClick={openCreate} data-testid="dictionaries-btn-add" className="sm:self-auto self-start">

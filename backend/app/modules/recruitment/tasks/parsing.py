@@ -13,6 +13,34 @@ from app.core.celery_app import celery
 logger = logging.getLogger(__name__)
 
 
+class PermanentParseError(RuntimeError):
+    """The file can never be parsed as-is — retrying cannot help.
+
+    Broken storage config, a missing storage record, an unsupported mime
+    type. Raised so the task can mark the row ``failed`` once and stop,
+    instead of burning the retry budget flapping the status
+    failed → processing → failed (HRP-654 review of HRP-691).
+    """
+
+
+def _mark_parse_failed(engine, target_id: str, error: str) -> None:
+    import uuid
+
+    from sqlalchemy.orm import Session
+
+    from app.modules.recruitment.models import CandidateFile
+
+    try:
+        with Session(engine) as db:
+            resume = db.get(CandidateFile, uuid.UUID(target_id))
+            if resume:
+                resume.parse_status = "failed"
+                resume.parsed_data = {"error": error}
+                db.commit()
+    except Exception:
+        logger.exception("Failed to update resume status to failed")
+
+
 @celery.task(
     bind=True,
     max_retries=2,
@@ -112,52 +140,62 @@ def parse_resume_task(
             logger.info("CandidateFile %s parsed successfully", target_id)
             return {"status": "completed", "file_id": target_id}
 
+    except PermanentParseError as exc:
+        # Terminal by definition — one clean ``failed``, no retry, so the
+        # status never flaps back to ``processing`` for a file that can
+        # never parse (empty S3 config, unsupported mime, lost record).
+        logger.error("parse_resume_task permanent failure for %s: %s", target_id, exc)
+        _mark_parse_failed(engine, target_id, str(exc))
+        return {"status": "failed", "error": str(exc)}
     except Exception as exc:
         logger.exception("parse_resume_task failed for %s", target_id)
-        try:
-            with Session(engine) as db:
-                resume = db.get(CandidateFile, uuid.UUID(target_id))
-                if resume:
-                    resume.parse_status = "failed"
-                    resume.parsed_data = {"error": str(exc)}
-                    db.commit()
-        except Exception:
-            logger.exception("Failed to update resume status to failed")
+        _mark_parse_failed(engine, target_id, str(exc))
         raise self.retry(exc=exc)
     finally:
         engine.dispose()
 
 
 def _extract_text_from_s3(resume, settings) -> str:
-    """Download file from S3 and extract text based on mime type."""
+    """Download file from S3 and extract text based on mime type.
+
+    Raises ``RuntimeError`` with the actual reason when the file cannot be
+    read from storage. HRP-691: these branches used to silently return an
+    empty string, so a broken storage config surfaced only as an
+    unexplained "no files recognized" in the bulk-import modal — with
+    nothing in the logs.
+    """
     from app.core.s3 import get_s3_client
 
     client = get_s3_client()
     if not client:
-        return ""
+        raise PermanentParseError(
+            "File storage is not configured (S3_ENDPOINT is empty or invalid)"
+        )
 
     # Build S3 key from file record
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.modules.storage.models import File
+
+    sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
+    engine = create_engine(sync_url)
     try:
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import Session
+        with Session(engine) as db:
+            file_record = db.get(File, resume.file_id)
+            path = file_record.path if file_record else None
+    finally:
+        engine.dispose()
+    if path is None:
+        raise PermanentParseError(f"Storage record missing for file {resume.file_id}")
 
-        from app.modules.storage.models import File
-
-        sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
-        engine = create_engine(sync_url)
-        try:
-            with Session(engine) as db:
-                file_record = db.get(File, resume.file_id)
-                if not file_record:
-                    return ""
-                path = file_record.path
-        finally:
-            engine.dispose()
-
+    # Deliberately NOT permanent: an unreachable MinIO is the one storage
+    # failure a retry can actually fix.
+    try:
         response = client.get_object(Bucket=settings.s3_bucket, Key=path)
         data = response["Body"].read()
-    except Exception:  # noqa: BLE001 - unreadable source file -> empty text
-        return ""
+    except Exception as exc:
+        raise RuntimeError(f"Could not read '{path}' from file storage: {exc}") from exc
 
     mime = resume.mime_type.lower()
 
@@ -168,7 +206,7 @@ def _extract_text_from_s3(resume, settings) -> str:
     elif "text" in mime or "rtf" in mime:
         return data.decode("utf-8", errors="ignore")
 
-    return ""
+    raise PermanentParseError(f"Unsupported mime type for text extraction: {mime}")
 
 
 def _extract_pdf_text(data: bytes) -> str:

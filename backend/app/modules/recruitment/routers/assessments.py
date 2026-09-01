@@ -413,9 +413,7 @@ async def get_assessment_matrix(
         description="AI round scope: 'latest', 'all', or a 1-based round number.",
     ),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hr", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
     _scope: None = Depends(vacancy_scope),
 ):
     """Aggregated matrix for the Assessments tab and the % match column.
@@ -425,6 +423,12 @@ async def get_assessment_matrix(
     flags. HM scoping at the per-row level is a separate ticket — for now
     every recruitment role inside the tenant sees the full matrix, same as
     the existing ``/canvas`` endpoint.
+
+    HRP-694: ``manager`` is on that list too. It already reads the
+    candidate card and the divergence badge, both of which are explained
+    by this payload — the narrower tuple only made the Manager vs AI
+    block render empty. Which vacancies a manager may read is still
+    decided by ``vacancy_scope``, not by the role tuple.
 
     ``round`` (HRP-510) scopes the AI side to an interview round; manager
     scores have no round dimension and are unaffected.
@@ -439,9 +443,7 @@ async def export_assessment_matrix_xlsx(
     vacancy_id: uuid.UUID,
     round: str = Query(default="latest"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hr", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
     _scope: None = Depends(vacancy_scope),
 ):
     """HRP-510 — the fullscreen canvas' XLSX export.
@@ -478,13 +480,16 @@ async def get_assessment_matrix_cell_detail(
     candidate_vacancy_id: uuid.UUID,
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hr", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
     _scope: None = Depends(vacancy_scope),
     _cv_scope: None = Depends(candidate_vacancy_scope),
 ):
-    """Footer-info drill-down for a single Compact matrix cell."""
+    """Footer-info drill-down for a single Compact matrix cell.
+
+    HRP-694: same gate as the matrix it drills into — the payload is a
+    strict subset of one matrix cell, so a caller who may read the whole
+    grid may read the cell behind it.
+    """
     return await service.get_assessment_matrix_cell_detail(
         db,
         current_user.tenant_id,

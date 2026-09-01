@@ -44,6 +44,10 @@ export default function VacancyDetailPage() {
   const [etag, setEtag] = useState<string | null>(null);
   const [profile, setProfile] = useState<VacancyProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  // HRP-687: the competences section and the internal-candidates block are
+  // siblings; adding library competences in one unlocks the "Post to talent
+  // market" button in the other, so the page carries the signal.
+  const [libraryCompetencesToken, setLibraryCompetencesToken] = useState(0);
 
   const loadVacancy = useCallback(async () => {
     try {
@@ -252,10 +256,14 @@ export default function VacancyDetailPage() {
             profile={profile}
             canEdit={canEdit}
             onProfileChange={loadProfile}
+            onLibraryCompetencesChange={() =>
+              setLibraryCompetencesToken((n) => n + 1)
+            }
           />
           <VacancyCandidatesSection
             vacancyId={vacancy.id}
             count={vacancy.candidates_count ?? 0}
+            internalReloadToken={libraryCompetencesToken}
           />
         </TabsContent>
 

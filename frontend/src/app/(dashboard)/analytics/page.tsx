@@ -17,6 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Hint } from "@/components/ui/hint";
 import { RequireRole } from "@/components/require-role";
 
 interface AssessmentStats {
@@ -75,6 +76,7 @@ interface CompensationBenchmark {
 
 export default function AnalyticsPage() {
   const t = useTranslations("analytics");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const locale = useLocale();
   const [assessmentStats, setAssessmentStats] = useState<AssessmentStats | null>(null);
@@ -119,7 +121,13 @@ export default function AnalyticsPage() {
     <RequireRole manage>
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
+          <Hint
+            text={tSections("analytics.hint")}
+            data-testid="analytics-hint-title"
+          />
+        </div>
         <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
       </div>
 

@@ -62,7 +62,10 @@ import {
   UploadError,
   uploadInterviewMedia,
 } from "@/lib/interview-upload";
-import { labelForAssessmentRound } from "@/lib/recruitment-helpers";
+import {
+  CANDIDATE_INTERVIEWS_ANCHOR_ID,
+  labelForAssessmentRound,
+} from "@/lib/recruitment-helpers";
 import type {
   ConsentRequest,
   Interview,
@@ -400,6 +403,9 @@ export function CandidateInterviewsSection({
 
   return (
     <Card
+      // HRP-680: scroll target for the "Go to interviews" shortcut in
+      // the AI Insights top-up banner.
+      id={CANDIDATE_INTERVIEWS_ANCHOR_ID}
       data-testid="recruitment-candidate-interviews-section"
       className="gap-3"
     >

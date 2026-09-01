@@ -36,8 +36,10 @@ export const ISSUE_TONE: Record<EmployeeIssueCode, string> = {
     "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-300",
   pdp_overdue:
     "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-300",
+  // HRP-656: a gap nobody is working on is the alarm — a gap with an open
+  // plan stays amber under `competence_gap`.
   gaps_without_plan:
-    "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300",
+    "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-300",
   competence_gap:
     "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300",
   pdp_stuck_review:
@@ -45,3 +47,15 @@ export const ISSUE_TONE: Record<EmployeeIssueCode, string> = {
   assessment_stale:
     "border-border bg-muted text-muted-foreground",
 };
+
+// HRP-660: one competence row is a gap when its score sits below the passing
+// bar of the assessment that produced it — the same rule `competence_gap`
+// applies in backend/app/modules/employee/issues.py, narrowed to a single
+// row. A row with no score is "never assessed", not a gap: the badge would
+// accuse the employee of failing something nobody measured.
+export function isCompetenceGap(row: {
+  percent: number | null;
+  passing_score: number;
+}): boolean {
+  return row.percent !== null && row.percent < row.passing_score;
+}

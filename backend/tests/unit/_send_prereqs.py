@@ -32,6 +32,11 @@ async def seed_send_prereqs(
     """Set the minimum criteria + scale needed to leave draft.
 
     Idempotent: leaves whichever field is already populated alone.
+
+    HRP-688: draft → sent now also refuses an assessment whose criteria
+    resolve to zero indicators, so this helper attaches a one-indicator
+    competence when the assessment has none. Tests that deliberately
+    exercise the empty questionnaire must not use this helper.
     """
     a = await db.get(Assessment, assessment_id)
     if a is None:
@@ -66,6 +71,55 @@ async def seed_send_prereqs(
 
     if dirty:
         await db.commit()
+
+    if await service._questionnaire_indicator_count(db, assessment_id) == 0:
+        await seed_one_indicator(db, tenant_id, assessment_id)
+
+
+async def seed_one_indicator(
+    db: AsyncSession, tenant_id: uuid.UUID, assessment_id: uuid.UUID
+) -> uuid.UUID:
+    """Attach a competence carrying exactly one active indicator.
+
+    HRP-688: the draft → sent guard counts the indicators the
+    questionnaire would show, so an assessment needs at least one to be
+    sendable. The ``AssessmentCompetence`` row is created without a
+    ``skill_level_id`` — no cascade filter, every active indicator of the
+    competence counts. Returns the indicator id.
+    """
+    from app.modules.assessment.models import AssessmentCompetence
+    from app.modules.competence.models import (
+        Competence,
+        CompetenceGroup,
+        Indicator,
+        SkillLevel,
+    )
+
+    group = CompetenceGroup(tenant_id=tenant_id, title=f"G-{uuid.uuid4().hex[:6]}")
+    db.add(group)
+    await db.flush()
+    competence = Competence(
+        tenant_id=tenant_id, group_id=group.id, title=f"C-{uuid.uuid4().hex[:6]}"
+    )
+    level = SkillLevel(tenant_id=tenant_id, title=f"L-{uuid.uuid4().hex[:6]}")
+    db.add_all([competence, level])
+    await db.flush()
+    indicator = Indicator(
+        tenant_id=tenant_id,
+        competence_id=competence.id,
+        skill_level_id=level.id,
+        title=f"I-{uuid.uuid4().hex[:6]}",
+    )
+    db.add(indicator)
+    db.add(
+        AssessmentCompetence(
+            assessment_id=assessment_id,
+            competence_id=competence.id,
+            skill_level_id=None,
+        )
+    )
+    await db.commit()
+    return indicator.id
 
 
 async def advance_to_in_progress(

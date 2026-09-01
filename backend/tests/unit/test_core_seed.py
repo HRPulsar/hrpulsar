@@ -551,6 +551,23 @@ async def test_populate_tenant_full_demo_counts(
         )
         == 0
     )
+    # HRP-675: the seed once wrote legacy statuses (`interested` /
+    # `nominated`) no surface can label. The domain set is HRP-214's.
+    seeded_candidate_statuses = set(
+        (
+            await db.execute(
+                select(TalentCandidate.status).where(
+                    TalentCandidate.card_id.in_(card_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert seeded_candidate_statuses <= {"matched", "not_matched", "appointed"}, (
+        f"seed created candidate statuses outside the domain: "
+        f"{sorted(seeded_candidate_statuses - {'matched', 'not_matched', 'appointed'})}"
+    )
 
 
 SECONDARY_PEOPLE = [

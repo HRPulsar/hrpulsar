@@ -4,7 +4,7 @@
 to ``[0..1]``, never rejected); ``compute_normalized_ai_score`` rebases
 the raw value onto the tenant's active scale (``raw × scale_max``) with
 an identity fallback when no scale is configured, so the raw/normalized
-toggle is never inert. ``compute_score_divergence`` compares the
+toggle is never inert. The candidates table compares the
 tenant-scale normalized value with ``manager_score`` — like with like.
 
 The DB-backed tests drive ``_finalize_full_analysis_run`` through a real
@@ -18,7 +18,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from app.modules.recruitment.candidate_service import compute_score_divergence
 from app.modules.recruitment.prompts_interview import (
     CompetenceAssessment,
     InterviewAnalysisResult,
@@ -134,37 +133,6 @@ class TestSchemaScoreClamp:
             competence_id="sql", score=0.6, status="assessed"
         )
         assert b.score == 0.6
-
-
-# ---------------------------------------------------------------------------
-# Divergence — compares tenant-scale normalized AI score vs manager score
-# ---------------------------------------------------------------------------
-
-
-class TestScoreDivergenceUsesNormalized:
-    def test_diverges_on_tenant_scale(self) -> None:
-        # manager 4.0 vs normalized 2.5 on a 0..5 scale — 1.5 ≥ 1.0.
-        assert compute_score_divergence(4.0, 2.5) is True
-
-    def test_agreement_within_threshold(self) -> None:
-        # raw 0.8 on a 0..5 scale → normalized 4.0; manager 4.5 agrees.
-        normalized = compute_normalized_ai_score(0.8, 5.0)
-        assert compute_score_divergence(4.5, normalized) is False
-
-    def test_no_divergence_when_ai_side_missing(self) -> None:
-        assert compute_score_divergence(4.0, None) is False
-
-    def test_no_divergence_when_manager_side_missing(self) -> None:
-        assert compute_score_divergence(None, 2.0) is False
-
-    def test_raw_score_would_have_false_flagged(self) -> None:
-        # Regression guard for the original bug: manager 4.0 vs raw 0.8
-        # differs by 3.2 — but the normalized value (4.0 on a 0..5
-        # scale) agrees perfectly. The production caller passes
-        # ``cv.ai_score_normalized``, never raw ``cv.ai_score``.
-        raw = 0.8
-        normalized = compute_normalized_ai_score(raw, 5.0)
-        assert compute_score_divergence(4.0, normalized) is False
 
 
 # ---------------------------------------------------------------------------

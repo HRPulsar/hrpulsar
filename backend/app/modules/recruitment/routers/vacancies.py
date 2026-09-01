@@ -34,6 +34,7 @@ from app.modules.recruitment.schemas import (
     VacancyCompetenceRead,
     VacancyCompetencesUpdate,
     VacancyCreate,
+    VacancyInternalCandidatesRead,
     VacancyProfileGenerateRequest,
     VacancyProfileSessionApplyRequest,
     VacancyProfileSessionCancelRequest,
@@ -379,6 +380,52 @@ async def set_vacancy_competences(
 ):
     return await service.set_vacancy_competences(
         db, current_user.tenant_id, vacancy_id, data
+    )
+
+
+# ── HRP-667: internal talent market bridge ──────────────────────────
+
+
+@router.get(
+    "/recruitment/vacancies/{vacancy_id}/internal-candidates",
+    response_model=VacancyInternalCandidatesRead,
+)
+async def get_vacancy_internal_candidates(
+    vacancy_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
+):
+    """Who inside already fits this vacancy, per the talent-market matcher.
+
+    Reading is as wide as reading the vacancy itself: whoever may open the
+    requisition may see the internal shortlist for it.
+    """
+    return await service.get_vacancy_internal_candidates(
+        db, current_user.tenant_id, vacancy_id
+    )
+
+
+@router.post(
+    "/recruitment/vacancies/{vacancy_id}/talent-card",
+    response_model=VacancyInternalCandidatesRead,
+    status_code=201,
+)
+async def post_vacancy_to_talent_market(
+    vacancy_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "recruiter")),
+    _scope: None = Depends(vacancy_scope),
+):
+    """Post this vacancy to the internal talent market and match employees.
+
+    Gated on the vacancy's own authority rather than the talent market's
+    (``admin`` / ``manager``): the actor is the recruiter who owns the
+    requisition, and the card lands in Draft with them as author — every
+    later action on it goes back through the talent market's own rules.
+    """
+    return await service.post_vacancy_to_talent_market(
+        db, current_user.tenant_id, vacancy_id, current_user.id
     )
 
 

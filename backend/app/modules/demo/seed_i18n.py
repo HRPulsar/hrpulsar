@@ -62,8 +62,17 @@ TRANSLATABLE_KEYS = frozenset(
         "key_strength",
         "key_risk",
         "risk_mitigation",
-        "evidence",
-        "competence",
+        "reasoning",
+        # Citation quotes (Citation schema) — the demo fixture cites the
+        # same sentence its reasoning carries, so the catalog entry is shared.
+        "quote",
+        # HRP-680 — resume-only analog of ``quote`` (ResumeExcerpt). The
+        # chip renders this text, so it is display copy; the editor still
+        # locates the item by company + period. Since HRP-666 ``company``
+        # is translated too — both sides of the pair (``company`` /
+        # ``source_company``) resolve through one catalog entry, so the
+        # anchor still matches in every locale.
+        "excerpt_text",
         "subject_data",
         "transcript",
         "title_prefix",
@@ -72,8 +81,33 @@ TRANSLATABLE_KEYS = frozenset(
         "process_findings",
         "blind_spots",
         "red_flags",
-        # Nested inside ``blind_spots`` items (BlindSpot schema).
+        # Nested inside ``blind_spots`` / ``process_findings`` / ``red_flags``
+        # items (BlindSpot / ProcessFinding / RedFlag schemas).
         "suggested_question",
+        "positive_reframe",
+        "full_description",
+        # HRP-680 — parsed-resume payload (``PARSED_RESUMES``). ``role``
+        # is the parser's back-compat mirror of ``position`` and carries
+        # the same value, so both resolve through one catalog entry.
+        "summary",
+        "position",
+        "role",
+        "skills",
+        "field",
+        # HRP-666 — the candidate's background is display text too: a
+        # Russian demo whose top candidate lives in Moscow but lists a
+        # Stockholm employer and a Barcelona university reads as a
+        # translated foreigner, not a local. ``company`` and its citation
+        # mirror ``source_company`` MUST move together — the resume
+        # editor anchors a chip by (company, period), and one catalog
+        # entry serves both sides so the pair stays equal in every
+        # locale. CEFR levels and the language names beside them stay
+        # out: ``name`` already covers the latter, and its strings are
+        # shared with the language dictionary.
+        "company",
+        "source_company",
+        "institution",
+        "degree",
     }
 )
 
@@ -220,6 +254,8 @@ def localized_structures() -> list[Any]:
     """
     from app.modules.demo.seed_data import (
         ELENA_INTERVIEW_ANALYSIS,
+        PARSED_RESUMES,
+        PRIYA_RESUME_ANALYSIS,
         TOMAS_INTERVIEW_ANALYSIS,
         VACANCIES,
         candidates,
@@ -251,6 +287,8 @@ def localized_structures() -> list[Any]:
         candidates(),
         ELENA_INTERVIEW_ANALYSIS,
         TOMAS_INTERVIEW_ANALYSIS,
+        PARSED_RESUMES,
+        PRIYA_RESUME_ANALYSIS,
         DIVISIONS,
         SPECIALIZATIONS,
         POSITIONS,
@@ -289,6 +327,26 @@ def employee_identity_strings() -> set[str]:
     return out
 
 
+def candidate_identity_strings() -> set[str]:
+    """Recruitment candidate full names, translated as whole strings.
+
+    ``first_name`` / ``last_name`` are structural halves the seed joins
+    (and the extras use for interview titles), so they never pass through
+    :func:`localize`; the seed calls :func:`translate` on the joined name
+    instead, exactly like :func:`employee_identity_strings` does for the
+    employee pool. Emails deliberately stay out: they are ASCII lookup
+    keys (dedupe, ``DEMO_FIRST_SCREEN_CANDIDATE_EMAIL``, the analysis
+    killswitch), not display text.
+    """
+    from app.modules.demo.seed_data import candidates
+    from app.modules.demo.seed_data_recruitment_extras import EXTRA_CANDIDATES
+
+    return {
+        f"{spec['first_name']} {spec['last_name']}"
+        for spec in (*candidates(), *EXTRA_CANDIDATES)
+    }
+
+
 def collect_translatable_strings() -> set[str]:
     """All display strings a locale catalog must cover."""
     out: set[str] = set()
@@ -296,4 +354,5 @@ def collect_translatable_strings() -> set[str]:
         _collect(structure, out)
     out.update(EXTRA_STRINGS)
     out |= employee_identity_strings()
+    out |= candidate_identity_strings()
     return out

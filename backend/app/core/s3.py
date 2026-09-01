@@ -4,7 +4,7 @@ import logging
 
 import boto3
 from botocore.client import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.config import settings
 
@@ -17,13 +17,21 @@ def _make_client(endpoint: str):
     # addressing_style="path": the self-hosted proxy route matches the bucket
     # as a path prefix (deploy/selfhosted/Caddyfile), so URLs must stay
     # path-style rather than depend on botocore's endpoint-specific default.
+    # request/response_checksum="when_required": boto3 >= 1.36 defaults to
+    # injecting CRC32 flexible checksums into every PutObject; S3-compatible
+    # providers that predate that extension (Ceph RGW and older MinIO) reject
+    # such requests with XAmzContentSHA256Mismatch, which broke every
+    # server-side upload on one fleet deployment's storage (HRP-691).
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id=settings.s3_access_key,
         aws_secret_access_key=settings.s3_secret_key,
         config=Config(
-            signature_version="s3v4", s3={"addressing_style": "path"}
+            signature_version="s3v4",
+            s3={"addressing_style": "path"},
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
         ),
     )
 
@@ -31,7 +39,15 @@ def _make_client(endpoint: str):
 def get_s3_client():
     if not settings.s3_endpoint:
         return None
-    return _make_client(settings.s3_endpoint)
+    try:
+        return _make_client(settings.s3_endpoint)
+    except ValueError:
+        # botocore rejects a malformed endpoint (e.g. missing scheme) at
+        # construction time, outside every caller's (BotoCoreError,
+        # ClientError) net — so a typo'd S3_ENDPOINT must degrade to the
+        # same "storage not configured" path, not 500 the request.
+        logger.exception("S3 endpoint is misconfigured: %r", settings.s3_endpoint)
+        return None
 
 
 def get_s3_presign_client():
@@ -49,7 +65,13 @@ def get_s3_presign_client():
         return get_s3_client()
     if not settings.s3_endpoint:
         return None
-    return _make_client(settings.s3_public_endpoint)
+    try:
+        return _make_client(settings.s3_public_endpoint)
+    except ValueError:
+        logger.exception(
+            "S3 public endpoint is misconfigured: %r", settings.s3_public_endpoint
+        )
+        return None
 
 
 def upload_file(data: bytes, path: str, content_type: str) -> str | None:
@@ -66,7 +88,7 @@ def upload_file(data: bytes, path: str, content_type: str) -> str | None:
             ContentType=content_type,
         )
         return f"{settings.s3_endpoint}/{settings.s3_bucket}/{path}"
-    except ClientError:
+    except (BotoCoreError, ClientError):
         logger.exception("S3 upload failed for %s", path)
         return None
 
@@ -79,7 +101,7 @@ def delete_file(path: str) -> bool:
     try:
         client.delete_object(Bucket=settings.s3_bucket, Key=path)
         return True
-    except ClientError:
+    except (BotoCoreError, ClientError):
         logger.exception("S3 delete failed for %s", path)
         return False
 
@@ -112,7 +134,7 @@ def get_presigned_url(
             Params=params,
             ExpiresIn=expires_in,
         )
-    except ClientError:
+    except (BotoCoreError, ClientError):
         logger.exception("S3 presigned URL failed for %s", path)
         return None
 
@@ -138,7 +160,7 @@ def init_multipart_upload(path: str, content_type: str) -> str | None:
             ContentType=content_type,
         )
         return response["UploadId"]
-    except ClientError:
+    except (BotoCoreError, ClientError):
         logger.exception("S3 multipart init failed for %s", path)
         return None
 
@@ -166,7 +188,7 @@ def get_part_presigned_url(
             },
             ExpiresIn=expires_in,
         )
-    except ClientError:
+    except (BotoCoreError, ClientError):
         logger.exception(
             "S3 multipart part-url failed for %s part=%s", path, part_number
         )
@@ -197,7 +219,7 @@ def complete_multipart_upload(
             MultipartUpload={"Parts": sorted_parts},
         )
         return f"{settings.s3_endpoint}/{settings.s3_bucket}/{path}"
-    except ClientError:
+    except (BotoCoreError, ClientError):
         logger.exception("S3 multipart complete failed for %s", path)
         return None
 
@@ -214,7 +236,7 @@ def abort_multipart_upload(path: str, upload_id: str) -> bool:
             UploadId=upload_id,
         )
         return True
-    except ClientError:
+    except (BotoCoreError, ClientError):
         logger.exception("S3 multipart abort failed for %s", path)
         return False
 
@@ -226,7 +248,7 @@ def head_object(path: str) -> dict | None:
 
     try:
         return client.head_object(Bucket=settings.s3_bucket, Key=path)
-    except ClientError:
+    except (BotoCoreError, ClientError):
         logger.exception("S3 head_object failed for %s", path)
         return None
 
@@ -242,6 +264,6 @@ def download_bytes(path: str) -> bytes | None:
     try:
         response = client.get_object(Bucket=settings.s3_bucket, Key=path)
         return response["Body"].read()
-    except ClientError:
+    except (BotoCoreError, ClientError):
         logger.exception("S3 get_object failed for %s", path)
         return None

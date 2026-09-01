@@ -34,6 +34,7 @@ from app.core.errors import AppError
 from app.models import Person
 from app.modules.company.models import Tenant
 from app.modules.recruitment.models import (
+    AIAssessment,
     Candidate,
     CandidateVacancy,
     Interview,
@@ -54,16 +55,57 @@ DEMO_TRANSCRIPT = (
     "[Recruiter] What challenged you the most?\n"
     "[Candidate] Coordinating two teams across timezones."
 )
+# HRP-598: same contract as ``InterviewAnalysisResult`` — the onboarding
+# demo renders through the production analysis panel, so a payload that
+# diverges shows the new tenant a completed analysis with an empty
+# verdict and an empty matrix. ``competence_id`` carries the slug the
+# demo vacancy profile below records; scores are on the 0..1 raw scale.
+# The competences DEMO_AI_ANALYSIS below scores. One list, so the fixture
+# and the profile it is scored against cannot drift apart.
+DEMO_PROFILE_COMPETENCES: list[dict[str, Any]] = [
+    {"id": "python-core", "name": "Python core", "must_have": True},
+    {"id": "system-design", "name": "System design", "must_have": False},
+]
+
 DEMO_AI_ANALYSIS: dict[str, Any] = {
-    "data_completeness": "medium",
-    "process_findings": [],
-    "blind_spots": [],
-    "red_flags": [],
+    "data_completeness": "partial",
+    "verdict": "needs_check",
     "verdict_summary": "Strong technical background, needs a follow-up on system-design depth.",
     "key_strength": "End-to-end ownership of a non-trivial migration.",
     "key_risk": "Limited evidence of cross-team leadership at scale.",
     "risk_mitigation": "Probe further in a technical panel.",
-    "competence_assessments": [],
+    "competence_assessments": [
+        {
+            "competence_id": "python-core",
+            "score": 0.8,
+            "status": "assessed",
+            "citations": [
+                {
+                    "segment_id": None,
+                    "start_sec": None,
+                    "end_sec": None,
+                    "quote": "We migrated a monolith to FastAPI on AWS.",
+                }
+            ],
+            "reasoning": "Owned a monolith-to-FastAPI migration end to end.",
+        },
+        {
+            "competence_id": "system-design",
+            "score": None,
+            "status": "insufficient",
+            "citations": [],
+            "reasoning": "The interview did not go deep enough to score system design.",
+        },
+    ],
+    "process_findings": [],
+    "blind_spots": [
+        {
+            "competence_id": "system-design",
+            "human_score": None,
+            "suggested_question": "Walk me through how you would split that monolith today, and where the data boundaries would go.",
+        }
+    ],
+    "red_flags": [],
 }
 
 
@@ -221,12 +263,7 @@ async def seed_demo(
     profile = VacancyProfile(
         tenant_id=tenant_id,
         vacancy_id=vacancy.id,
-        profile_data={
-            "competences": [
-                {"id": "python-core", "name": "Python core", "must_have": True},
-                {"id": "system-design", "name": "System design", "must_have": False},
-            ]
-        },
+        profile_data={"competences": DEMO_PROFILE_COMPETENCES},
         version=1,
         language="en",
         generated_by="demo",
@@ -279,10 +316,33 @@ async def seed_demo(
         status="completed",
         transcription_status="completed",
         analysis_status="completed",
-        analysis_data=DEMO_AI_ANALYSIS,
+        # Copied: the module-level fixture must never become the JSONB
+        # value a later writer could mutate in place.
+        analysis_data=dict(DEMO_AI_ANALYSIS),
         notes="Demo interview",
     )
     db.add(interview)
+    await db.flush()
+
+    # HRP-598: the competence matrix and the candidate report read
+    # AIAssessment rows, not ``analysis_data`` — writing only the JSON
+    # left the new tenant with a completed analysis whose matrix and
+    # report were still empty. Same row builder the demo seed uses, so
+    # every writer of a seeded analysis mints competence ids the same way.
+    from app.modules.demo.seed import _build_seed_assessment_rows
+
+    for row in _build_seed_assessment_rows(interview.analysis_data or {}):
+        db.add(
+            AIAssessment(
+                tenant_id=tenant_id,
+                interview_id=interview.id,
+                competence_id=uuid.UUID(row["competence_id"]),
+                score=row["score"],
+                status=row["status"],
+                citations=row["citations"],
+                reasoning=row["reasoning"],
+            )
+        )
 
     state = _coerce_state(tenant.recruitment_onboarding) or _initial_state()
     state["demo_seeded_at"] = now.isoformat()

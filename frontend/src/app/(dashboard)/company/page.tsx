@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { FieldError, FormErrorBanner } from "@/components/ui/form-error";
+import { Hint } from "@/components/ui/hint";
 import {
   EMPTY_FORM_ERROR,
   parseFormError,
@@ -184,6 +185,7 @@ function employeeLabel(
 
 export default function CompanyPage() {
   const t = useTranslations("company");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [divisions, setDivisions] = useState<Division[]>([]);
@@ -410,7 +412,13 @@ export default function CompanyPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
+            <Hint
+              text={tSections("company.hint")}
+              data-testid="company-hint-title"
+            />
+          </div>
           <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
         {isAdmin && (

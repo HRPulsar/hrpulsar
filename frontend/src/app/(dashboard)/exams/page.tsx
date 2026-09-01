@@ -22,6 +22,7 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Hint } from "@/components/ui/hint";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "sonner";
@@ -71,6 +72,7 @@ export default function ExamsPage() {
 
 function ManagerExamsView() {
   const t = useTranslations("exams");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const [exams, setExams] = useState<MassExam[]>([]);
   const [loading, setLoading] = useState(true);
@@ -168,7 +170,10 @@ function ManagerExamsView() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight" data-testid="exams-heading">{t("title")}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight" data-testid="exams-heading">{t("title")}</h1>
+            <Hint text={tSections("exams.hint")} data-testid="exams-hint-title" />
+          </div>
           {/* HRP-290: counter respects active filters (Assessments parity). */}
           <p className="text-sm text-muted-foreground" data-testid="exams-count">
             {t("examsCount", { count: filtered.length })}
@@ -359,6 +364,7 @@ function ManagerExamsView() {
 
 function EmployeeExamsView() {
   const t = useTranslations("exams");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const [exams, setExams] = useState<EmployeeExamRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -395,7 +401,10 @@ function EmployeeExamsView() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight" data-testid="exams-heading">{t("title")}</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight" data-testid="exams-heading">{t("title")}</h1>
+          <Hint text={tSections("exams.hint")} data-testid="exams-hint-title" />
+        </div>
         <p className="text-sm text-muted-foreground">
           {t("examsCount", { count: exams.length })}
         </p>

@@ -1,6 +1,9 @@
 import { test, expect } from "./fixtures";
 import {
   createAssessment,
+  createCompetence,
+  createCompetenceGroup,
+  createIndicator,
   setAuthTokens,
   setupFullTenant,
 } from "./helpers";
@@ -31,17 +34,49 @@ async function pickDefaultScaleId(
   return def.id;
 }
 
+// HRP-688: draft → sent refuses criteria that resolve to zero indicators,
+// and `current_positions` on this fixture's bare position resolves none —
+// so the lock tests pin their criteria to one indicator-backed competence.
+// The lock behaviour under test does not care which criteria mode is set.
+async function makeIndicatorBackedCriteria(
+  page: import("@playwright/test").Page,
+  accessToken: string,
+): Promise<{ competence_id: string; skill_level_id: string }> {
+  const slResp = await page.request.get(`${API}/skill-levels`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  expect(slResp.ok()).toBeTruthy();
+  const skillLevelId = ((await slResp.json()) as { id: string }[])[0].id;
+  const stamp = Date.now().toString(36);
+  const group = await createCompetenceGroup(
+    { page, accessToken },
+    `LockGroup-${stamp}`,
+  );
+  const comp = await createCompetence(
+    { page, accessToken },
+    group.id,
+    `LockComp-${stamp}`,
+  );
+  await createIndicator({ page, accessToken }, comp.id, `LockInd-${stamp}`, skillLevelId);
+  return { competence_id: comp.id, skill_level_id: skillLevelId };
+}
+
 async function configureAssessment(
   page: import("@playwright/test").Page,
   accessToken: string,
   assessmentId: string,
   scaleId: string,
 ): Promise<void> {
+  const criteriaCompetence = await makeIndicatorBackedCriteria(page, accessToken);
   const criteria = await page.request.put(
     `${API}/assessments/${assessmentId}/criteria`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
-      data: { criteria_type: "current_positions", passing_score: 75 },
+      data: {
+        criteria_type: "competences",
+        competences: [criteriaCompetence],
+        passing_score: 75,
+      },
     },
   );
   expect(criteria.ok()).toBeTruthy();
@@ -126,11 +161,19 @@ test.describe("HRP-36 — criteria/scale edit locked after draft", () => {
       assessments: { id: string }[];
     };
 
+    const criteriaCompetence = await makeIndicatorBackedCriteria(
+      page,
+      setup.accessToken,
+    );
     const criteriaResp = await page.request.put(
       `${API}/assessment-groups/${group.id}/criteria`,
       {
         headers: { Authorization: `Bearer ${setup.accessToken}` },
-        data: { criteria_type: "current_positions", passing_score: 75 },
+        data: {
+          criteria_type: "competences",
+          competences: [criteriaCompetence],
+          passing_score: 75,
+        },
       },
     );
     expect(criteriaResp.ok()).toBeTruthy();

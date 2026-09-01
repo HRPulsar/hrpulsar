@@ -83,6 +83,15 @@ ASSESSMENTS: list[dict] = [
     # the dashboard's action queue opens with a concrete, fixable problem.
     # Hannah Adler (division head, "self" type — 360 would self-resolve
     # the manager participant) passes for contrast.
+    #
+    # Severity is deliberately spread (HRP-661): the employee card paints a
+    # competence red below 50% and amber below 75%, so the two senior AEs
+    # (Igor, Jana) carry a product-knowledge score under 50 — the demo needs
+    # a visible RED gap, not four look-alike ambers — while Mira and Noah
+    # stay in the amber band. Igor's card then shows all three colours at
+    # once: product knowledge red, objection handling amber, discovery green.
+    # Cards average the per-level breakdown up to the grade's required level,
+    # so these targets are the ones verified on a seeded tenant, not guesses.
     {
         "title": "Sales enablement review — Igor Sokolov",
         "employee_index": 34,  # AE → manager Hannah Adler (idx 33)
@@ -100,7 +109,7 @@ ASSESSMENTS: list[dict] = [
             "c-sales-discovery",
         ],
         "result_overrides": [
-            ("c-product-knowledge", 2.3, 58),
+            ("c-product-knowledge", 1.75, 44),
             ("c-objection-handling", 2.6, 65),
             ("c-sales-discovery", 3.1, 78),
         ],
@@ -115,7 +124,7 @@ ASSESSMENTS: list[dict] = [
         "grade_key": "g-senior",  # matches the AE position's grade
         "competence_keys": ["c-product-knowledge", "c-objection-handling"],
         "result_overrides": [
-            ("c-product-knowledge", 2.5, 62),
+            ("c-product-knowledge", 1.88, 47),
             ("c-objection-handling", 2.8, 70),
         ],
     },
@@ -256,16 +265,26 @@ ASSESSMENTS: list[dict] = [
         "competence_keys": ["c-python", "c-fastapi", "c-postgres"],
         "result_overrides": [],
     },
+    # --- Done: the appointed lead of the Design System Lead card
+    # (seed_data_talent_market.tc-design-system-lead). Left as a draft it
+    # gave the appointed candidate "no assessments" and "0 of 2" on the
+    # very card she runs — worse than the unappointed alternative. Covers
+    # the card's two Required Competences (design systems + React, the
+    # rollout is a React SPA) so the roster reads the way the story does.
     {
         "title": "Q1 self assessment — Yara Saito",
         "employee_index": 24,  # Yara Saito, Senior Designer (division_head — fine for self)
         "type_code": "self",
-        "status_code": "draft",
+        "status_code": "done",
         "criteria_type": "competences",
         "specialization_key": "product-design",
         "grade_key": "g-senior",
-        "competence_keys": ["c-design-systems", "c-user-research"],
-        "result_overrides": [],
+        "competence_keys": ["c-design-systems", "c-user-research", "c-react"],
+        "result_overrides": [
+            ("c-design-systems", 3.7, 93),
+            ("c-user-research", 3.5, 88),
+            ("c-react", 3.4, 85),
+        ],
     },
     # --- Cancelled ---
     {

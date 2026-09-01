@@ -18,6 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Hint } from "@/components/ui/hint";
 
 // HRP-634: what each role can really do. The `permissions` rows the API also
 // returns are seeded but dead — no gate reads a `Permission.codename`, access
@@ -75,6 +76,7 @@ export default function RolesPage() {
 
 function RolesPageContent() {
   const t = useTranslations("settings");
+  const tSections = useTranslations("sections");
   const tSidebar = useTranslations("sidebar");
   const [roles, setRoles] = useState<Role[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -95,9 +97,12 @@ function RolesPageContent() {
   return (
     <div className="space-y-6" data-testid="roles-page">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {t("rolesTitle")}
-        </h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("rolesTitle")}
+          </h1>
+          <Hint text={tSections("roles.hint")} data-testid="roles-hint-title" />
+        </div>
         <p className="text-sm text-muted-foreground">{t("rolesSubtitle")}</p>
       </div>
 

@@ -316,3 +316,75 @@ class TestManagerHiringScope:
         assert [link["vacancy_id"] for link in links] == [
             str(hiring["mine_vacancy"].id)
         ]
+
+
+class TestManagerReadsTheAssessmentMatrix:
+    """HRP-694: the matrix explains the card a manager already reads.
+
+    The candidate card and its divergence badge are open to
+    ``RECRUITMENT_VIEWER_ROLES``, but the matrix behind them used to be
+    ``admin / recruiter / hr / hiring_manager`` — so the Manager vs AI
+    block rendered empty for a division head. Reads are level with the
+    card now; writing a score is still recruiter work.
+    """
+
+    async def test_manager_reads_the_matrix_of_its_own_vacancy(
+        self, client: AsyncClient, hiring
+    ):
+        h = _headers(hiring["mgr_user"])
+        vacancy_id = hiring["mine_vacancy"].id
+        for path in (
+            f"/api/recruitment/vacancies/{vacancy_id}/assessment-matrix",
+            f"/api/recruitment/vacancies/{vacancy_id}/assessment-matrix/export.xlsx",
+        ):
+            resp = await client.get(path, headers=h)
+            assert resp.status_code == 200, f"{path} -> {resp.status_code} {resp.text}"
+
+        # The cell drill-down is a subset of one matrix cell — same gate.
+        cell = await client.get(
+            f"/api/recruitment/vacancies/{vacancy_id}/assessment-matrix"
+            f"/cells/{hiring['mine_cv'].id}/{uuid.uuid4()}",
+            headers=h,
+        )
+        assert cell.status_code != 403, cell.text
+
+    async def test_matrix_of_a_neighbouring_division_stays_refused(
+        self, client: AsyncClient, hiring
+    ):
+        """Role opens the door, scope still says which room."""
+        resp = await client.get(
+            f"/api/recruitment/vacancies/{hiring['theirs_vacancy'].id}"
+            "/assessment-matrix",
+            headers=_headers(hiring["mgr_user"]),
+        )
+        assert resp.status_code == 403
+
+    async def test_manager_still_cannot_write_a_score(
+        self, client: AsyncClient, hiring
+    ):
+        """The write endpoints behind the same matrix are untouched."""
+        h = _headers(hiring["mgr_user"])
+        cv_id = hiring["mine_cv"].id
+        competence_id = uuid.uuid4()
+
+        created = await client.post(
+            f"/api/recruitment/candidate-vacancies/{cv_id}/assessments",
+            headers=h,
+            json={"competence_id": str(competence_id), "score": 4},
+        )
+        assert created.status_code == 403, created.text
+
+        updated = await client.patch(
+            f"/api/recruitment/assessments/{uuid.uuid4()}",
+            headers=h,
+            json={"score": 4},
+        )
+        assert updated.status_code == 403, updated.text
+
+        reverted = await client.post(
+            f"/api/recruitment/candidate-vacancies/{cv_id}/assessments"
+            f"/{competence_id}/evaluators/{uuid.uuid4()}/revert",
+            headers=h,
+            json={"audit_event_id": str(uuid.uuid4())},
+        )
+        assert reverted.status_code == 403, reverted.text

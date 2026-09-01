@@ -86,8 +86,9 @@ frontend/.ee-overlay-manifest
 # its monorepo original (rsync --delete / cp) and only then copies enterprise/
 # into the enterprise repo clone — from the working tree, not from git archive.
 # Nothing ever reads the committed copy, so tracking it only produced drift.
-# Keep this list in step with is_auto_mirrored_overlay_path() in that script;
-# hand-maintained overlay files must stay tracked so check_overlay_drift() and
+# Keep this list in step with is_auto_mirrored_overlay_path() in that script —
+# check_overlay_tracked() fails the sync if a path there is tracked here (HRP-650).
+# Hand-maintained overlay files must stay tracked so check_overlay_drift() and
 # review can see them.
 enterprise/overlay/backend/ee/
 enterprise/overlay/backend/migrations/versions/ee/

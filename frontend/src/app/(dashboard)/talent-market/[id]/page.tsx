@@ -43,6 +43,8 @@ import {
 } from "@/components/ui/table";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/date-format";
+import { TYPE_HINT_KEYS, TYPE_KEYS } from "@/lib/talent-card-types";
+import { Hint } from "@/components/ui/hint";
 import {
   ArrowLeft,
   Check,
@@ -184,6 +186,10 @@ type CandidatePoolItem = {
   basis: "competence" | "experience" | "none";
   comp_match: number | null;
   comp_qualifies: boolean;
+  // HRP-657: "N of M required competencies cleared" — the reason behind
+  // the average percent.
+  comp_met?: number | null;
+  comp_total?: number | null;
   exp_months: number | null;
   exp_qualifies: boolean;
   has_comp_requirement: boolean;
@@ -274,9 +280,13 @@ function formatLastMatched(
 // HRP-173: stacked Match cell. Renders a Competencies row (colour by
 // qualifies + comp_match presence) and, when the card carries Required
 // specializations, an Experience row below it.
-// HRP-172 redo: the chips are no longer the click target — only the
-// trailing chevron opens the breakdown drawer, and it shows in its
-// "active" hover-state styling whenever the drawer is open for this row.
+// HRP-657: the whole cell is the click target again. The chips-only-inert
+// rule from HRP-172 left the affordance invisible — operators read the two
+// coloured chips as a static readout and never found the breakdown behind
+// the chevron. The chevron stays as the visual cue (and keeps the
+// `-match-trigger` testid) but it is now the trailing icon of one button
+// wrapping the whole cell, so a click anywhere on the indicator explains
+// the verdict.
 function MatchCell({
   item,
   onOpen,
@@ -287,6 +297,8 @@ function MatchCell({
   item: {
     comp_match: number | null;
     comp_qualifies: boolean;
+    comp_met?: number | null;
+    comp_total?: number | null;
     exp_months: number | null;
     exp_qualifies: boolean;
     has_comp_requirement: boolean;
@@ -346,11 +358,24 @@ function MatchCell({
       expChip = item.exp_qualifies ? BADGE_COLOR.green : BADGE_COLOR.red;
     }
   }
-  return (
-    <div
-      className="flex items-center justify-end gap-2"
-      data-testid={`${testIdPrefix}-match`}
-    >
+  // HRP-657: the "why" behind the average — how many of the card's
+  // Required competencies this employee actually clears. Only rendered
+  // when the backend sent the counts (cards with a Required block).
+  const metLine =
+    hasComp && item.comp_total ? (
+      <span
+        className="text-[11px] text-muted-foreground"
+        data-testid={`${testIdPrefix}-match-met`}
+      >
+        {t("matchCompetencesMet", {
+          met: item.comp_met ?? 0,
+          total: item.comp_total,
+        })}
+      </span>
+    ) : null;
+
+  const chips = (
+    <>
       <div className="flex flex-col items-end gap-1 text-right tabular-nums">
         <span
           className={`rounded px-2 py-0.5 text-xs ${compChip}`}
@@ -366,24 +391,52 @@ function MatchCell({
             {expText}
           </span>
         )}
+        {metLine}
       </div>
       {!hideTrigger && (
-        <button
-          type="button"
-          onClick={onOpen}
-          aria-label={t("openMatchBreakdown")}
-          aria-pressed={isOpen ? true : undefined}
-          // HRP-172 redo item 2: when the drawer is open for this row the
-          // chevron stays in its hover/active styling so the operator can
-          // tell at a glance which candidate the open Sheet belongs to.
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-            isOpen ? "bg-accent text-foreground" : ""
+        <ChevronRight
+          className={`h-4 w-4 shrink-0 transition-colors ${
+            isOpen ? "text-foreground" : "text-muted-foreground"
           }`}
-          data-testid={`${testIdPrefix}-match-trigger`}
-        >
-          <ChevronRight className="h-4 w-4" />
-        </button>
+          aria-hidden="true"
+        />
       )}
+    </>
+  );
+
+  if (hideTrigger) {
+    return (
+      <div
+        className="flex items-center justify-end gap-2"
+        data-testid={`${testIdPrefix}-match`}
+      >
+        {chips}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex justify-end" data-testid={`${testIdPrefix}-match`}>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-pressed={isOpen ? true : undefined}
+        title={t("openMatchBreakdown")}
+        // HRP-172 redo item 2: when the drawer is open for this row the
+        // trigger stays in its hover/active styling so the operator can
+        // tell at a glance which candidate the open Sheet belongs to.
+        className={`flex items-center justify-end gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+          isOpen ? "bg-accent" : ""
+        }`}
+        data-testid={`${testIdPrefix}-match-trigger`}
+      >
+        {/* HRP-657: the purpose is a visually hidden prefix, not an
+            aria-label — an aria-label replaces the name computed from the
+            content and would hide the very numbers (84%, 2 of 3) this
+            button exists to announce. */}
+        <span className="sr-only">{t("openMatchBreakdown")}</span>
+        {chips}
+      </button>
     </div>
   );
 }
@@ -435,6 +488,12 @@ export default function TalentCardDetailPage() {
   const [drawerEmployeeName, setDrawerEmployeeName] = useState<string | null>(
     null,
   );
+  // HRP-665: the candidate row behind the open drawer — the gap plan is
+  // created from there, and an existing plan is linked instead.
+  const [drawerCandidateId, setDrawerCandidateId] = useState<string | null>(
+    null,
+  );
+  const [drawerPdpId, setDrawerPdpId] = useState<string | null>(null);
 
   // HRP-215: confirm before running the appointment so a stray click on
   // the row's Appoint button doesn't pin an employee.
@@ -448,9 +507,17 @@ export default function TalentCardDetailPage() {
   // affordance on the UI.
   const [reactConfirmOpen, setReactConfirmOpen] = useState(false);
 
-  function openMatchDrawer(employeeId: string, name?: string | null) {
+  function openMatchDrawer(
+    employeeId: string,
+    name?: string | null,
+    candidate?: { id: string; pdpId: string | null },
+  ) {
     setDrawerEmployeeId(employeeId);
     setDrawerEmployeeName(name ?? null);
+    // HRP-665: picker rows have no candidate row yet — the drawer then
+    // renders the breakdown without the plan action.
+    setDrawerCandidateId(candidate?.id ?? null);
+    setDrawerPdpId(candidate?.pdpId ?? null);
     setDrawerOpen(true);
   }
 
@@ -915,7 +982,11 @@ export default function TalentCardDetailPage() {
             </p>
           )}
         </div>
-        <Badge variant="secondary" className={typeColors[card.card_type] || ""}>{card.card_type}</Badge>
+        {/* HRP-664: this rendered the raw wire code ("vacancy"),
+            bypassing i18n entirely. */}
+        <Badge variant="secondary" className={typeColors[card.card_type] || ""}>
+          {TYPE_KEYS[card.card_type] ? t(TYPE_KEYS[card.card_type]) : card.card_type}
+        </Badge>
         <Badge variant="secondary" className={statusColors[card.status] || ""}>
           {statusLabel(t, card.status)}
         </Badge>
@@ -929,8 +1000,19 @@ export default function TalentCardDetailPage() {
         <CardContent>
           <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
             <div>
-              <p className="text-muted-foreground">{t("fieldType")}</p>
-              <Badge variant="secondary" className={typeColors[card.card_type] || ""}>{card.card_type}</Badge>
+              <p className="flex items-center gap-1.5 text-muted-foreground">
+                {t("fieldType")}
+                {TYPE_HINT_KEYS[card.card_type] && (
+                  <Hint
+                    title={t(TYPE_KEYS[card.card_type])}
+                    text={t(TYPE_HINT_KEYS[card.card_type])}
+                    data-testid="talent-market-hint-card-type"
+                  />
+                )}
+              </p>
+              <Badge variant="secondary" className={typeColors[card.card_type] || ""}>
+                {TYPE_KEYS[card.card_type] ? t(TYPE_KEYS[card.card_type]) : card.card_type}
+              </Badge>
             </div>
             <div>
               <p className="text-muted-foreground">{t("fieldStatus")}</p>
@@ -1363,6 +1445,33 @@ export default function TalentCardDetailPage() {
                               {t("candidateReacted")}
                             </Badge>
                           )}
+                          {/* HRP-665: plan state on the row so both ticket
+                              orders read at a glance — appointed and now
+                              walking a plan, or plan completed and ready to
+                              be appointed. */}
+                          {/* HRP-665: same gate as Appoint and the Match
+                              trigger below — a plain candidate has no read
+                              access to a colleague's plan, so the badge
+                              would only advertise it and 403 on click. */}
+                          {c.pdp_id && (canManage || c.is_me) && (
+                            <Link
+                              href={`/development/${c.pdp_id}`}
+                              data-testid="talent-market-candidate-plan"
+                            >
+                              <Badge
+                                variant="secondary"
+                                className={
+                                  c.pdp_status === "done"
+                                    ? BADGE_COLOR.green
+                                    : BADGE_COLOR.purple
+                                }
+                              >
+                                {c.pdp_status === "done"
+                                  ? t("candidatePlanDone")
+                                  : t("candidatePlan")}
+                              </Badge>
+                            </Link>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell
@@ -1373,6 +1482,8 @@ export default function TalentCardDetailPage() {
                           item={{
                             comp_match: c.comp_match ?? null,
                             comp_qualifies: c.comp_qualifies ?? false,
+                            comp_met: c.comp_met ?? null,
+                            comp_total: c.comp_total ?? null,
                             exp_months: c.exp_months ?? null,
                             exp_qualifies: c.exp_qualifies ?? false,
                             has_comp_requirement:
@@ -1383,7 +1494,10 @@ export default function TalentCardDetailPage() {
                               c.exp_via_current_position ?? false,
                           }}
                           onOpen={() =>
-                            openMatchDrawer(c.employee_id, c.employee_name)
+                            openMatchDrawer(c.employee_id, c.employee_name, {
+                              id: c.id,
+                              pdpId: c.pdp_id ?? null,
+                            })
                           }
                           testIdPrefix="talent-market-candidate"
                           isOpen={
@@ -1643,6 +1757,15 @@ export default function TalentCardDetailPage() {
         cardId={id}
         employeeId={drawerEmployeeId}
         employeeName={drawerEmployeeName}
+        candidateId={drawerCandidateId}
+        pdpId={drawerPdpId}
+        // HRP-665: the gap plan is a write — same gate as Appoint.
+        canCreatePlan={canManage && !isTerminal}
+        cardTitle={card.title}
+        onPlanCreated={(pdpId) => {
+          setDrawerPdpId(pdpId);
+          void load();
+        }}
         open={drawerOpen}
         onOpenChange={(o) => {
           setDrawerOpen(o);

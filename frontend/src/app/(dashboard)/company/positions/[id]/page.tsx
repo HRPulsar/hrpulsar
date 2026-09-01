@@ -329,7 +329,11 @@ export default function PositionDetailPage() {
   // HRP-631: a division head edits a position only inside their managed
   // subtree; `can_manage` comes off the position itself, since the role
   // alone would render controls that 403.
-  const { canManage: canManageByRole, canViewHrData } = usePermissions();
+  const {
+    canManage: canManageByRole,
+    canViewHrData,
+    canViewJobProfile,
+  } = usePermissions();
   const [state, setState] = useState<DetailState>(initialState);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -478,6 +482,11 @@ export default function PositionDetailPage() {
     position.specialization_title && position.grade_title
       ? `${position.specialization_title} / ${position.grade_title}`
       : t("thisProfile");
+  // HRP-637: same rule as the catalogue — a property of the viewer and the
+  // tenant, read from `/auth/me`, never inferred from this one row. The
+  // salary block below still renders on its own value: unreadable bands
+  // never arrive, so it disappears by itself.
+  const showJobProfile = canViewJobProfile;
   const salaryLabel = formatSalaryRange(
     position.salary_min,
     position.salary_max,
@@ -563,11 +572,13 @@ export default function PositionDetailPage() {
               ) : null}
             </h1>
           )}
-          <p className="text-sm text-muted-foreground">
-            {[position.specialization_title, position.grade_title]
-              .filter(Boolean)
-              .join(" · ") || "—"}
-          </p>
+          {showJobProfile ? (
+            <p className="text-sm text-muted-foreground">
+              {[position.specialization_title, position.grade_title]
+                .filter(Boolean)
+                .join(" · ") || "—"}
+            </p>
+          ) : null}
         </div>
         {canManage ? (
           <DropdownMenu>
@@ -634,7 +645,14 @@ export default function PositionDetailPage() {
         onSaved={load}
       />
 
-      <PositionAIGenerationCard position={position} onApplied={load} />
+      {/* HRP-637: the card's blocked state reads "set a specialization on
+          this position", which is nonsense for a viewer the payload no
+          longer carries one to. Gated on the same signal as the columns,
+          not on a narrower role — a manager kept the card before this
+          ticket and keeps it now. */}
+      {showJobProfile ? (
+        <PositionAIGenerationCard position={position} onApplied={load} />
+      ) : null}
 
       {/* HRP-57 §6.6: matrix-state banner. Sits above Profile/Overview so the
           state is the first thing the operator sees on the page. */}
@@ -703,67 +721,71 @@ export default function PositionDetailPage() {
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
-            <div>
-              <dt className="text-muted-foreground">{t("specialization")}</dt>
-              <dd
-                data-testid="position-detail-specialization"
-                className="font-medium"
-              >
-                {position.specialization_id &&
-                position.specialization_title &&
-                specHref ? (
-                  <Link
-                    href={specHref}
-                    className="text-primary hover:underline"
-                    data-testid="position-detail-specialization-link"
+            {showJobProfile ? (
+              <>
+                <div>
+                  <dt className="text-muted-foreground">{t("specialization")}</dt>
+                  <dd
+                    data-testid="position-detail-specialization"
+                    className="font-medium"
                   >
-                    {position.specialization_title}
-                  </Link>
-                ) : canManage ? (
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="h-auto p-0 text-sm"
-                    data-testid="position-detail-overview-btn-set-specialization"
-                    onClick={() => setEditOpen(true)}
-                  >
-                    <Plus className="mr-1 h-3 w-3" />
-                    {t("setSpecialization")}
-                  </Button>
-                ) : (
-                  (position.specialization_title ?? "—")
-                )}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">{t("grade")}</dt>
-              <dd data-testid="position-detail-grade" className="font-medium">
-                {position.specialization_id &&
-                position.grade_id &&
-                position.grade_title ? (
-                  <Link
-                    href={`/company/specializations/${position.specialization_id}/matrix?grade_id=${position.grade_id}&from=position&position_id=${position.id}`}
-                    className="text-primary hover:underline"
-                    data-testid="position-detail-grade-link"
-                  >
-                    {position.grade_title}
-                  </Link>
-                ) : canManage ? (
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="h-auto p-0 text-sm"
-                    data-testid="position-detail-overview-btn-set-grade"
-                    onClick={() => setEditOpen(true)}
-                  >
-                    <Plus className="mr-1 h-3 w-3" />
-                    {t("setGrade")}
-                  </Button>
-                ) : (
-                  (position.grade_title ?? "—")
-                )}
-              </dd>
-            </div>
+                    {position.specialization_id &&
+                    position.specialization_title &&
+                    specHref ? (
+                      <Link
+                        href={specHref}
+                        className="text-primary hover:underline"
+                        data-testid="position-detail-specialization-link"
+                      >
+                        {position.specialization_title}
+                      </Link>
+                    ) : canManage ? (
+                      <Button
+                        variant="link"
+                        size="sm"
+                        className="h-auto p-0 text-sm"
+                        data-testid="position-detail-overview-btn-set-specialization"
+                        onClick={() => setEditOpen(true)}
+                      >
+                        <Plus className="mr-1 h-3 w-3" />
+                        {t("setSpecialization")}
+                      </Button>
+                    ) : (
+                      (position.specialization_title ?? "—")
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t("grade")}</dt>
+                  <dd data-testid="position-detail-grade" className="font-medium">
+                    {position.specialization_id &&
+                    position.grade_id &&
+                    position.grade_title ? (
+                      <Link
+                        href={`/company/specializations/${position.specialization_id}/matrix?grade_id=${position.grade_id}&from=position&position_id=${position.id}`}
+                        className="text-primary hover:underline"
+                        data-testid="position-detail-grade-link"
+                      >
+                        {position.grade_title}
+                      </Link>
+                    ) : canManage ? (
+                      <Button
+                        variant="link"
+                        size="sm"
+                        className="h-auto p-0 text-sm"
+                        data-testid="position-detail-overview-btn-set-grade"
+                        onClick={() => setEditOpen(true)}
+                      >
+                        <Plus className="mr-1 h-3 w-3" />
+                        {t("setGrade")}
+                      </Button>
+                    ) : (
+                      (position.grade_title ?? "—")
+                    )}
+                  </dd>
+                </div>
+              </>
+            ) : null}
             <div>
               <dt className="text-muted-foreground">{t("division")}</dt>
               <dd
@@ -992,7 +1014,7 @@ export default function PositionDetailPage() {
                   the operator should do depends entirely on whether spec,
                   grade, or matrix is the gap. Generic "configure matrix"
                   hides which knob to turn. */}
-              {!position.specialization_id ? (
+              {showJobProfile && !position.specialization_id ? (
                 <div
                   data-testid="position-detail-matrix-empty-no-spec"
                   className="space-y-2"
@@ -1009,7 +1031,7 @@ export default function PositionDetailPage() {
                     </Button>
                   ) : null}
                 </div>
-              ) : !position.grade_id ? (
+              ) : showJobProfile && !position.grade_id ? (
                 <div
                   data-testid="position-detail-matrix-empty-no-grade"
                   className="space-y-2"

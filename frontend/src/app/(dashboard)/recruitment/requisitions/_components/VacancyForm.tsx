@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -55,6 +56,9 @@ export type VacancyFormValues = {
   requirements: string;
   responsibilities: string;
   conditions: string;
+  // HRP-678 — off excludes this requisition from the internal talent
+  // market; the search itself stays enabled for the workspace.
+  internal_search_allowed: boolean;
 };
 
 export const emptyVacancyForm: VacancyFormValues = {
@@ -76,6 +80,7 @@ export const emptyVacancyForm: VacancyFormValues = {
   requirements: "",
   responsibilities: "",
   conditions: "",
+  internal_search_allowed: true,
 };
 
 // HRP-476: labels live in the `recruitment` i18n namespace; this map only
@@ -611,6 +616,29 @@ export function VacancyForm({
               rows={3}
             />
           </div>
+
+          {/* HRP-678: internal matching runs on data the employer already
+              holds, so it is on by default — but a replacement hire the
+              team has not been told about needs a way out. */}
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="internal_search_allowed"
+                data-testid="recruitment-vacancy-input-internal-search"
+                checked={values.internal_search_allowed}
+                disabled={disabled}
+                onCheckedChange={(checked) =>
+                  updateField("internal_search_allowed", !!checked)
+                }
+              />
+              <Label htmlFor="internal_search_allowed">
+                {t("vacancyFieldInternalSearch")}
+              </Label>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t("vacancyInternalSearchHint")}
+            </p>
+          </div>
         </div>
 
         <div className="space-y-4 rounded-lg bg-muted/50 p-5">
@@ -684,6 +712,8 @@ export function vacancyFormToPayload(
     requirements: values.requirements.trim() || null,
     responsibilities: values.responsibilities.trim() || null,
     conditions: values.conditions.trim() || null,
+    // HRP-678
+    internal_search_allowed: values.internal_search_allowed,
     position_id: values.position_id,
     specialization_ids: values.specialization_ids,
     grade_ids: values.grade_ids,
@@ -760,5 +790,6 @@ export function vacancyToFormValues(
     requirements: (vacancy.requirements as string | undefined) ?? "",
     responsibilities: (vacancy.responsibilities as string | undefined) ?? "",
     conditions: (vacancy.conditions as string | undefined) ?? "",
+    internal_search_allowed: vacancy.internal_search_allowed !== false,
   };
 }

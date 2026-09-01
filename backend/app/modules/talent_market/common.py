@@ -473,6 +473,9 @@ def _card_to_detail(
                 can_view_profile=_can_view(ca.employee_id),
                 comp_match=bd.get("comp_match"),
                 comp_qualifies=bd.get("comp_qualifies", False),
+                comp_met=bd.get("comp_met"),
+                comp_total=bd.get("comp_total"),
+                pdp_status=bd.get("pdp_status"),
                 exp_months=bd.get("exp_months"),
                 exp_qualifies=bd.get("exp_qualifies", False),
                 has_comp_requirement=has_comp,
@@ -536,6 +539,9 @@ def _candidate_to_read(
     can_view_profile: bool = True,
     comp_match: int | None = None,
     comp_qualifies: bool = False,
+    comp_met: int | None = None,
+    comp_total: int | None = None,
+    pdp_status: str | None = None,
     exp_months: int | None = None,
     exp_qualifies: bool = False,
     has_comp_requirement: bool = False,
@@ -559,6 +565,10 @@ def _candidate_to_read(
     assessment exists.
     HRP-173: `comp_*` and `exp_*` mirror the pool item fields so the
     card-detail Candidates table can apply the same colour rules.
+    HRP-657: `comp_met` / `comp_total` say how many Required Competences
+    cleared the bar, so the row can explain the average without the
+    drawer. HRP-665: `pdp_status` is the state of the development plan
+    built from those gaps (None when the candidate has no plan).
     `has_*_requirement` lets the UI know which axes the card actually
     cares about without re-reading the card payload.
     """
@@ -572,6 +582,9 @@ def _candidate_to_read(
         "basis": basis,
         "comp_match": comp_match,
         "comp_qualifies": comp_qualifies,
+        "comp_met": comp_met,
+        "comp_total": comp_total,
+        "pdp_status": pdp_status,
         "exp_months": exp_months,
         "exp_qualifies": exp_qualifies,
         "has_comp_requirement": has_comp_requirement,

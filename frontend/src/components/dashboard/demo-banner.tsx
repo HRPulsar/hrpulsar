@@ -205,10 +205,6 @@ function SaveAccessModal({
   );
 }
 
-/** The demo admin persona's throw-away user lives on this domain (see
- * backend ``_create_demo_user``); seeded employees use demo.example.com. */
-const DEMO_ADMIN_EMAIL_DOMAIN = "@demo.hrpulsar.local";
-
 function PersonaSwitch({ activePersona }: { activePersona: DemoPersona }) {
   const t = useTranslations("dashboard");
   const [switching, setSwitching] = useState(false);
@@ -335,13 +331,12 @@ export function DemoBanner() {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <PersonaSwitch
-              activePersona={
-                user.email?.endsWith(DEMO_ADMIN_EMAIL_DOMAIN)
-                  ? "admin"
-                  : "employee"
-              }
-            />
+            {/* HRP-676: the persona comes from /auth/me, never from the
+                shape of the user's email. No persona → no switcher, rather
+                than a guess that renders the wrong button as active. */}
+            {user.demo_persona && (
+              <PersonaSwitch activePersona={user.demo_persona} />
+            )}
             <button
               type="button"
               onClick={() => setShowModal(true)}

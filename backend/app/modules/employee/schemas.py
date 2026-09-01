@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.core.currency import installation_currency
 from app.modules.employee.alerts import AlertCode
-from app.modules.employee.issues import IssueCode
+from app.modules.employee.issues import DEFAULT_PASSING, IssueCode
 
 
 def _ensure_past(value: date | None, field: str) -> date | None:
@@ -447,6 +447,11 @@ class EmployeeCompetenceRow(BaseModel):
     skill_level_title: str
     skill_level_sort_index: int = 0
     percent: int | None = None
+    # HRP-660: the bar ``percent`` is judged against — the passing score of
+    # the assessment behind the row (``DEFAULT_PASSING`` when there is none).
+    # Sent so the tab can mark a gap instead of leaving the reader to guess
+    # what an amber number means.
+    passing_score: int = DEFAULT_PASSING
     assessment_id: uuid.UUID | None = None
     completed_at: datetime | None = None
     level_breakdown: list[EmployeeCompetenceLevelBreakdown] = []

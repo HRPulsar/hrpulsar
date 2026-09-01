@@ -36,6 +36,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Hint } from "@/components/ui/hint";
 import { toast } from "sonner";
 import { Pagination } from "@/components/pagination";
 import { AlertTriangle, CheckCircle2, Download, Upload, X } from "lucide-react";
@@ -176,6 +177,7 @@ function validatePreview(
 
 export default function ImportPage() {
   const t = useTranslations("settings");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const [jobs, setJobs] = useState<ImportJob[]>([]);
   const [total, setTotal] = useState(0);
@@ -327,9 +329,15 @@ export default function ImportPage() {
     <RequireRole admin>
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {t("importTitle")}
-        </h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("importTitle")}
+          </h1>
+          <Hint
+            text={tSections("import.hint")}
+            data-testid="import-hint-title"
+          />
+        </div>
         <p className="text-sm text-muted-foreground">{t("importSubtitle")}</p>
       </div>
 

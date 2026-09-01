@@ -1,12 +1,16 @@
 """Extra recruitment fixtures for the demo seed (HRP-281 — S7).
 
-Layered on top of the HRP-250 recruitment seed (3 vacancies + 8
+Layered on top of the HRP-250 recruitment seed (3 vacancies + 6
 candidates + 2 deep-analyzed interviews). Adds four more vacancies,
-twelve more candidates, and four more interviews covering the
+eleven more candidates, and four more interviews covering the
 non-completed states (scheduled / in_progress / completed without
 analysis / archived) so the recruitment funnel shows every
 status the kanban supports — not just the AI-analyzed entry point
 the demo opens on.
+
+HRP-666: at most three candidates per vacancy. A funnel a visitor can
+read end to end in one glance beats a long list where every row looks
+the same.
 
 Vacancy ``key`` strings live in the same namespace as
 ``seed_data.VACANCIES`` for consistency. Candidate ``vacancy_key``
@@ -129,11 +133,11 @@ EXTRA_VACANCIES: list[dict] = [
 
 
 # ---------------------------------------------------------------------------
-# Extra candidates (12 entries across 6 vacancy keys)
+# Extra candidates (12 entries across 5 vacancy keys)
 # ---------------------------------------------------------------------------
 
 EXTRA_CANDIDATES: list[dict] = [
-    # --- em-frontend pipeline (3) ---
+    # --- em-frontend pipeline (4) ---
     {
         "vacancy_key": "em-frontend",
         "first_name": "Mateo",
@@ -183,6 +187,37 @@ EXTRA_CANDIDATES: list[dict] = [
         "ai_strength": "Owns the Productboard design system",
         "ai_risk": "Has not managed people.",
         "ai_mitigation": "Likely better fit for staff IC role.",
+        "interview_kind": None,
+    },
+    {
+        # HRP-679: the demo's one internal applicant — the deputy head of
+        # the very division this role manages, applying from the inside.
+        # ``employee_index`` indexes the seeded employee roster
+        # (``EMPLOYEE_ASSIGNMENTS`` / ``NAME_POOL``); the seed gives him
+        # and his ``User`` row a shared ``Person`` so ``is_employee``
+        # resolves true and the badge shows up on a live demo.
+        #
+        # ``first_name`` / ``last_name`` / ``email`` mirror that roster
+        # entry so the i18n coverage guard sees a name it already knows,
+        # but the seed reads the real identity off the resolved ``User``:
+        # ``localized_name_pool`` translates both name and email, so a
+        # de/ru demo would otherwise show an "internal" candidate whose
+        # name matches nobody on staff.
+        "vacancy_key": "em-frontend",
+        "employee_index": 12,
+        "first_name": "Marcus",
+        "last_name": "Johnson",
+        "email": "marcus.johnson@demo.example.com",
+        "location": "Berlin (hybrid)",
+        "current_position": "Frontend Engineer L3",
+        "years": 6,
+        "status": "interview",
+        "ai_score": 0.88,
+        "ai_verdict": "recommended",
+        "ai_summary": "Already deputy head of the division this role manages.",
+        "ai_strength": "Runs the design system and the frontend on-call rotation.",
+        "ai_risk": "Never carried headcount or run a performance cycle.",
+        "ai_mitigation": "Pair with the People Partner for the first two quarters.",
         "interview_kind": None,
     },
     # --- junior-backend pipeline (3) ---
@@ -305,24 +340,6 @@ EXTRA_CANDIDATES: list[dict] = [
         "ai_strength": "Built recruiting team from 3 to 12 at HelloFresh.",
         "ai_risk": "Vacancy still in draft — no full process yet.",
         "ai_mitigation": "Plan move to published before scheduling.",
-        "interview_kind": None,
-    },
-    # --- senior-backend re-applications (2 — legacy vacancy from seed_data.py) ---
-    {
-        "vacancy_key": "senior-backend",
-        "first_name": "Robin",
-        "last_name": "Lehmann",
-        "email": "robin.lehmann@example.com",
-        "location": "Zurich, Switzerland",
-        "current_position": "Backend Engineer @ Smallpdf",
-        "years": 6,
-        "status": "screen",
-        "ai_score": 0.68,
-        "ai_verdict": "needs_check",
-        "ai_summary": "Solid backend engineer with PDF/B2C SaaS background.",
-        "ai_strength": "Owns Smallpdf billing pipeline.",
-        "ai_risk": "No payments-specific experience.",
-        "ai_mitigation": "Probe domain knowledge in screen.",
         "interview_kind": None,
     },
     # --- product-designer extra (1) ---

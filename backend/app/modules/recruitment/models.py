@@ -166,6 +166,25 @@ class Vacancy(BaseModel, TenantMixin):
         index=True,
     )
     assessment_scale_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # HRP-667: the internal-mobility twin of this requisition — the
+    # ``talent_cards`` row created by "search inside first". Kept on the
+    # vacancy (rather than a ``vacancy_id`` on the card) so talent_market
+    # stays unaware of recruitment; ``SET NULL`` on delete so a removed
+    # card brings the offer back instead of leaving a dangling link.
+    talent_card_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("talent_cards.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # HRP-678: the recruiter's per-vacancy switch for the internal search.
+    # Internal matching runs on data the employer already holds, so the
+    # default is on — but a sensitive requisition (a replacement for a
+    # person still in the seat) must be excludable without turning the
+    # feature off for the whole workspace.
+    internal_search_allowed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
 
     # lazy="raise": loaded explicitly (selectinload) where needed; child rows
     # are removed by the DB-level ON DELETE CASCADE (passive_deletes), so the
@@ -454,9 +473,8 @@ class CandidateVacancy(BaseModel, TenantMixin):
     # (see ``score_normalization.clamp_unit_score``).
     # ``ai_score_normalized`` rebases it onto the tenant's active
     # ScaleConfig max (identity fallback when no scale is active) so it
-    # is directly comparable with ``manager_score`` and feeds
-    # ``compute_score_divergence``. Front-end toggles which one to show
-    # in the candidates table.
+    # is directly comparable with ``manager_score``. The candidates
+    # table renders the normalized value under the % match (HRP-662).
     ai_score_normalized: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_readiness: Mapped[str] = mapped_column(
         String(30), nullable=False, default="none", server_default="none"

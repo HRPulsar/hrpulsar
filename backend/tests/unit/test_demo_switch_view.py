@@ -60,6 +60,14 @@ async def test_switch_to_employee_and_back(
     admin_token = start.json()["access_token"]
     tenant_id = start.json()["tenant_id"]
 
+    # HRP-676: the active persona is a field of the session, not something
+    # the SPA infers from the email domain.
+    me = await client.get(
+        "/api/auth/me", headers={"Authorization": f"Bearer {admin_token}"}
+    )
+    assert me.status_code == 200
+    assert me.json()["demo_persona"] == "admin"
+
     switched = await client.post(
         "/api/demo/switch-view",
         json={"persona": "employee"},
@@ -78,6 +86,7 @@ async def test_switch_to_employee_and_back(
     )
     assert me.status_code == 200
     assert me.json()["first_name"] == "Carlos"
+    assert me.json()["demo_persona"] == "employee"
 
     # Round-trip back to the admin persona.
     back = await client.post(
@@ -88,6 +97,13 @@ async def test_switch_to_employee_and_back(
     assert back.status_code == 200, back.text
     assert back.json()["persona"] == "admin"
     assert back.json()["tenant_id"] == tenant_id
+
+    me_admin = await client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {back.json()['access_token']}"},
+    )
+    assert me_admin.status_code == 200
+    assert me_admin.json()["demo_persona"] == "admin"
 
 
 @pytest.mark.asyncio
@@ -102,6 +118,19 @@ async def test_non_demo_token_rejected(
     )
     assert resp.status_code == 403
     assert "demo_switch_requires_demo_session" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_auth_me_has_no_persona_outside_demo(
+    client: AsyncClient, enable_demo, db: AsyncSession
+):
+    """HRP-676: a paid session has no persona at all, not a defaulted one."""
+    headers = await _paid_account_headers(db)
+    resp = await client.get("/api/auth/me", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tenant_is_demo"] is False
+    assert body["demo_persona"] is None
 
 
 @pytest.mark.asyncio

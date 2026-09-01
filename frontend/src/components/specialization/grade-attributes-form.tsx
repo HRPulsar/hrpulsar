@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { usePermissions } from "@/hooks/use-permissions";
 
 type Props = {
   grade: SpecializationGrade;
@@ -20,6 +21,10 @@ type Props = {
 
 export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
   const t = useTranslations("company");
+  // HRP-637: salary bands are compensation — admin / hr / manager only. The
+  // API drops them for everyone else, so the fields would render empty and a
+  // save would post those blanks back over a band the form never showed.
+  const { canViewHrData } = usePermissions();
   const [description, setDescription] = useState(grade.description ?? "");
   const [requirements, setRequirements] = useState(grade.requirements ?? "");
   const [salaryMin, setSalaryMin] = useState(
@@ -41,9 +46,13 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
       const payload: Record<string, unknown> = {
         description: description || null,
         requirements: requirements || null,
-        salary_min: salaryMin === "" ? null : Number(salaryMin),
-        salary_max: salaryMax === "" ? null : Number(salaryMax),
-        salary_currency: salaryCurrency.toUpperCase(),
+        ...(canViewHrData
+          ? {
+              salary_min: salaryMin === "" ? null : Number(salaryMin),
+              salary_max: salaryMax === "" ? null : Number(salaryMax),
+              salary_currency: salaryCurrency.toUpperCase(),
+            }
+          : {}),
       };
       const next = await api.put<SpecializationGrade>(
         `/grade-system/chains/${grade.id}`,
@@ -109,42 +118,44 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
         />
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <div className="space-y-2">
-          <Label htmlFor={`smin-${grade.id}`}>{t("salaryMin")}</Label>
-          <Input
-            id={`smin-${grade.id}`}
-            data-testid={`specialization-grade-form-${grade.id}-salary-min`}
-            type="number"
-            min={0}
-            value={salaryMin}
-            onChange={(e) => setSalaryMin(e.target.value)}
-          />
+      {canViewHrData ? (
+        <div className="grid grid-cols-3 gap-3">
+          <div className="space-y-2">
+            <Label htmlFor={`smin-${grade.id}`}>{t("salaryMin")}</Label>
+            <Input
+              id={`smin-${grade.id}`}
+              data-testid={`specialization-grade-form-${grade.id}-salary-min`}
+              type="number"
+              min={0}
+              value={salaryMin}
+              onChange={(e) => setSalaryMin(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={`smax-${grade.id}`}>{t("salaryMax")}</Label>
+            <Input
+              id={`smax-${grade.id}`}
+              data-testid={`specialization-grade-form-${grade.id}-salary-max`}
+              type="number"
+              min={0}
+              value={salaryMax}
+              onChange={(e) => setSalaryMax(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={`scur-${grade.id}`}>{t("currency")}</Label>
+            <Input
+              id={`scur-${grade.id}`}
+              data-testid={`specialization-grade-form-${grade.id}-salary-currency`}
+              maxLength={3}
+              value={salaryCurrency}
+              onChange={(e) =>
+                setSalaryCurrency(e.target.value.toUpperCase().slice(0, 3))
+              }
+            />
+          </div>
         </div>
-        <div className="space-y-2">
-          <Label htmlFor={`smax-${grade.id}`}>{t("salaryMax")}</Label>
-          <Input
-            id={`smax-${grade.id}`}
-            data-testid={`specialization-grade-form-${grade.id}-salary-max`}
-            type="number"
-            min={0}
-            value={salaryMax}
-            onChange={(e) => setSalaryMax(e.target.value)}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor={`scur-${grade.id}`}>{t("currency")}</Label>
-          <Input
-            id={`scur-${grade.id}`}
-            data-testid={`specialization-grade-form-${grade.id}-salary-currency`}
-            maxLength={3}
-            value={salaryCurrency}
-            onChange={(e) =>
-              setSalaryCurrency(e.target.value.toUpperCase().slice(0, 3))
-            }
-          />
-        </div>
-      </div>
+      ) : null}
 
       <div className="flex justify-between">
         {specId ? (

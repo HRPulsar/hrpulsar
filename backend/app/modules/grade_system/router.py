@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access_scope import can_see_compensation, trim_position_fields
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
@@ -19,6 +20,11 @@ from app.modules.grade_system.schemas import (
 router = APIRouter(tags=["grade-system"])
 
 
+def _without_bands(chains: list[dict], current_user: User) -> list[dict]:
+    show_salary = can_see_compensation(current_user)
+    return [trim_position_fields(chain, show_salary=show_salary) for chain in chains]
+
+
 @router.get(
     "/grade-system/specializations/{specialization_id}",
     response_model=list[GradeSpecializationRead],
@@ -28,8 +34,14 @@ async def list_chains(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await service.list_by_specialization(
-        db, current_user.tenant_id, specialization_id
+    # HRP-637: a chain is the specialization's grade ladder, open to the
+    # workspace; the band bolted onto each rung is not. Same cut as
+    # ``GET /specializations/{id}/grades``, which serves these rows too.
+    return _without_bands(
+        await service.list_by_specialization(
+            db, current_user.tenant_id, specialization_id
+        ),
+        current_user,
     )
 
 
@@ -60,7 +72,10 @@ async def list_chains_by_division(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await service.list_by_division(db, current_user.tenant_id, division_id)
+    return _without_bands(
+        await service.list_by_division(db, current_user.tenant_id, division_id),
+        current_user,
+    )
 
 
 @router.post(

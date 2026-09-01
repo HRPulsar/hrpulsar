@@ -9,6 +9,7 @@ when ``from-parsed`` finalises a batch.
 from __future__ import annotations
 
 import asyncio
+import copy
 import uuid
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -712,6 +713,80 @@ class TestLLMSchema:
         assert third["end_date"] == "2017"
         assert third["description"] == "kept as-is"
 
+    async def test_prompt_education_and_certificates_match_card_contract(self):
+        # HRP-686: the editor renders education start_date/end_date and
+        # certificate name/issued_at; the prompt used to ask for ``year``
+        # and ``title``, so both blocks reached the card empty.
+        assert '"issued_at"' in PARSE_RESUME
+        assert '"year"' not in PARSE_RESUME
+        assert '"title"' not in PARSE_RESUME
+
+    async def test_normalise_maps_legacy_education_and_certificates(self):
+        # HRP-686: a stored payload from the old prompt still has to reach
+        # the card — a lone year is the graduation / issue date.
+        payload = {
+            "education": [
+                {"institution": "TU Berlin", "degree": "MSc", "year": 2016},
+                {"institution": "MIT", "start_date": "2010", "end_date": "2014"},
+            ],
+            "certificates": [
+                {"title": "CKAD", "issuer": "CNCF", "year": 2021},
+                {"name": "AWS SAA", "issued_at": "2022", "title": "ignored"},
+            ],
+        }
+        ai_service._normalise_resume_payload(payload)
+        first, second = payload["education"]
+        assert first["end_date"] == "2016"
+        assert "start_date" not in first
+        assert (second["start_date"], second["end_date"]) == ("2010", "2014")
+        cert_legacy, cert_new = payload["certificates"]
+        assert cert_legacy["name"] == "CKAD"
+        assert cert_legacy["issued_at"] == "2021"
+        # Explicit new-style keys win over legacy ones.
+        assert cert_new["name"] == "AWS SAA"
+        assert cert_new["issued_at"] == "2022"
+
+    async def test_normalise_is_idempotent_and_survives_junk(self):
+        # A payload already in the card's shape must come back byte-equal,
+        # and a malformed section must not raise (HRP-686).
+        payload = {
+            "current_position": "Backend Engineer",
+            "location": "Berlin",
+            "experience": [
+                {
+                    "position": "Backend Engineer",
+                    "role": "Backend Engineer",
+                    "company": "Klarna",
+                    "start_date": "2020",
+                    "end_date": None,
+                    "description": "Reconciliation pipeline",
+                }
+            ],
+            "education": [
+                {
+                    "institution": "TU Berlin",
+                    "degree": "MSc",
+                    "field": "CS",
+                    "start_date": "2013",
+                    "end_date": "2016",
+                }
+            ],
+            "certificates": [{"name": "AWS SAA", "issuer": "AWS", "issued_at": "2022"}],
+        }
+        once = copy.deepcopy(payload)
+        ai_service._normalise_resume_payload(once)
+        assert once == payload
+        ai_service._normalise_resume_payload(once)
+        assert once == payload
+
+        junk = {
+            "experience": "not a list",
+            "education": ["string", None, {"year": None}, 42],
+            "certificates": {"not": "a list"},
+        }
+        ai_service._normalise_resume_payload(junk)
+        assert junk["education"][2] == {"year": None}
+
     async def test_split_period_edge_cases(self):
         # Review finding: a naive split broke month names containing "to"
         # and intra-date hyphens.
@@ -747,6 +822,23 @@ class TestLLMSchema:
         assert out["experience"][0]["end_date"] == "2021"
         assert out["experience"][0]["description"] == "Did X"
         assert "start_date" not in stored["experience"][0]
+
+    async def test_canonical_read_normalises_education_and_certificates(self):
+        # HRP-686: the same read path has to cover the other two lists —
+        # a payload with no experience key at all still needs mapping.
+        from app.modules.recruitment.candidate_service import (
+            _normalised_parsed_resume,
+        )
+
+        stored = {
+            "education": [{"institution": "TU Berlin", "year": 2016}],
+            "certificates": [{"title": "CKAD", "year": 2021}],
+        }
+        out = _normalised_parsed_resume(stored)
+        assert out["education"][0]["end_date"] == "2016"
+        assert out["certificates"][0]["name"] == "CKAD"
+        assert out["certificates"][0]["issued_at"] == "2021"
+        assert "end_date" not in stored["education"][0]
 
 
 # ---------------------------------------------------------------------------

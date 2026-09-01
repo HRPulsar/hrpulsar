@@ -9,7 +9,8 @@ resolves - including any billing/audit wrapper installed on this module.
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import date, datetime, timezone
 
 from fastapi import UploadFile, status
 from sqlalchemy import ColumnElement, func, select
@@ -117,6 +118,8 @@ def _vacancy_to_read(
         "candidates_count": len(vacancy.candidates) if vacancy.candidates else 0,
         "has_profile": has_profile,
         "active_invites_count": active_invites_count,
+        # HRP-678
+        "internal_search_allowed": vacancy.internal_search_allowed,
     }
 
 
@@ -666,8 +669,13 @@ async def set_vacancy_competences(
     Caller sends the desired final set; rows not present are removed.
     Existing rows for the same ``competence_id`` are updated in place so
     audit and history stay attached.
+
+    HRP-693: a vacancy already posted to the internal talent market keeps
+    its twin in step — the card's Required Competences follow the new set
+    and the candidate pool is recomputed, so the internal shortlist never
+    answers a question the requisition stopped asking.
     """
-    await _get_vacancy(db, tenant_id, vacancy_id)
+    vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
 
     incoming: dict[uuid.UUID, dict] = {}
     for spec in data.competences:
@@ -710,7 +718,37 @@ async def set_vacancy_competences(
         if competence_id not in incoming:
             await db.delete(row)
 
+    # HRP-693: the card's requirements and the vacancy's commit together,
+    # the pool recompute runs after the commit — the same order the bridge
+    # uses, so a crash can never leave the card half-synced.
+    # HRP-678: an excluded vacancy is never re-matched — the switch gates
+    # the sync exactly like it gates the first post; the existing card
+    # keeps its last state instead of being rebuilt behind the switch.
+    card_id = (
+        await _linked_card_id(db, tenant_id, vacancy)
+        if vacancy.internal_search_allowed
+        else None
+    )
+    if card_id is not None:
+        await db.flush()
+        comp_rows = await _vacancy_competence_rows(db, tenant_id, vacancy_id)
+        if not comp_rows:
+            # A posted card synced to zero competences flips the matcher
+            # to spec-only mode — the whole specialization pools in as
+            # ``matched``, the exact state the bridge refuses to create.
+            # The floor the bridge enforces at posting time holds for as
+            # long as the vacancy stays posted.
+            raise AppError(
+                "vacancy_competences_required_while_posted",
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        await _sync_card_competences(db, card_id, comp_rows)
+
     await db.commit()
+    if card_id is not None:
+        from app.modules.talent_market.matching import _auto_populate_candidates
+
+        await _auto_populate_candidates(db, tenant_id, card_id)
     return await list_vacancy_competences(db, tenant_id, vacancy_id)
 
 
@@ -1197,6 +1235,12 @@ async def update_vacancy(
 
     old_owner_id = vacancy.owner_id
     for field, value in updates.items():
+        # An explicit ``"internal_search_allowed": null`` would hit the
+        # NOT NULL column as an IntegrityError (500); treat it as
+        # "unchanged" instead. The older nullable-typed fields share the
+        # blind-setattr shape but their columns tolerate NULL.
+        if field == "internal_search_allowed" and value is None:
+            continue
         setattr(vacancy, field, value)
 
     if spec_ids_provided or grade_ids_provided:
@@ -1769,3 +1813,342 @@ async def replace_vacancy_stages_override(
         await db.refresh(s)
     out.sort(key=lambda s: s.sort_order)
     return [_stage_to_read_dict(s) for s in out]  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# HRP-667: post a vacancy to the internal talent market
+#
+# Hiring outside starts with a question nobody was asked: is there
+# somebody inside who already fits? The talent market answers it — it has
+# the requirement blocks, the deterministic matcher and the employee pool
+# — but nothing connected the two modules, so a recruiter had to know the
+# other product existed and retype the requirements by hand.
+#
+# The bridge copies the vacancy's library-linked competences and its
+# spec/grade selection onto a ``vacancy``-type TalentCard and lets that
+# module's own auto-pool find the employees. It deliberately stops at
+# Draft: publishing a card mails every matched employee, which is the
+# recruiter's call to make in the talent market, not a side effect of
+# pressing a button in recruitment.
+# ---------------------------------------------------------------------------
+
+
+async def _vacancy_competence_rows(
+    db: AsyncSession, tenant_id: uuid.UUID, vacancy_id: uuid.UUID
+) -> Sequence[VacancyCompetence]:
+    """Every competence row of the vacancy, regardless of ``source``.
+
+    The card sync copies all of them — hand-added rows included — which
+    is byte-identical to the inline query the bridge used before HRP-693.
+    Filter by source in BOTH callers or in neither.
+    """
+    return (
+        (
+            await db.execute(
+                select(VacancyCompetence).where(
+                    VacancyCompetence.vacancy_id == vacancy_id,
+                    VacancyCompetence.tenant_id == tenant_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _linked_card_id(
+    db: AsyncSession, tenant_id: uuid.UUID, vacancy: Vacancy
+) -> uuid.UUID | None:
+    """The vacancy's talent card, or ``None`` when the link is dead.
+
+    A card deleted in the talent market leaves ``talent_card_id`` behind
+    (``ON DELETE SET NULL`` only fires on the row, not on a cross-tenant
+    read), so every caller has to ask whether the card is still there.
+    """
+    from app.modules.talent_market.models import TalentCard
+
+    if vacancy.talent_card_id is None:
+        return None
+    card = await db.get(TalentCard, vacancy.talent_card_id)
+    if card is None or card.tenant_id != tenant_id:
+        return None
+    return card.id
+
+
+async def _sync_card_competences(
+    db: AsyncSession,
+    card_id: uuid.UUID,
+    comp_rows: Sequence[VacancyCompetence],
+) -> None:
+    """Make a talent card's Required Competences equal the vacancy's set.
+
+    Used twice: by the bridge, where the card is brand new and the sync is
+    a plain insert, and by ``set_vacancy_competences`` (HRP-693), where an
+    already-posted card must not keep matching against requirements the
+    requisition no longer asks for.
+
+    ``TalentCardCompetence`` carries one target level while a vacancy
+    competence may list several — the first is the one the vacancy form
+    writes, and the matcher reads a single (competence, level) pair.
+
+    ponytail: ``TalentCardCompetence`` has no ``source`` column, so a
+    requirement typed by hand in the talent market cannot be told apart
+    from a copied one and the sync owns the whole set — a manual row on a
+    vacancy-linked card is dropped on the next competence edit. Add a
+    ``source`` column if manual rows must survive.
+    """
+    from app.modules.talent_market.models import TalentCardCompetence
+
+    desired: set[tuple[uuid.UUID, uuid.UUID | None]] = {
+        (
+            row.competence_id,
+            uuid.UUID(str(row.skill_level_ids[0])) if row.skill_level_ids else None,
+        )
+        for row in comp_rows
+    }
+    existing = (
+        (
+            await db.execute(
+                select(TalentCardCompetence).where(
+                    TalentCardCompetence.card_id == card_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in existing:
+        key = (row.competence_id, row.skill_level_id)
+        if key in desired:
+            desired.discard(key)  # already on the card, leave it alone
+        else:
+            await db.delete(row)
+    for competence_id, skill_level_id in desired:
+        db.add(
+            TalentCardCompetence(
+                card_id=card_id,
+                competence_id=competence_id,
+                skill_level_id=skill_level_id,
+            )
+        )
+
+
+async def post_vacancy_to_talent_market(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    vacancy_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> dict:
+    """Create the internal-mobility twin of a vacancy and match employees.
+
+    Requires the vacancy to carry at least one library-linked
+    ``VacancyCompetence``: the matcher scores against ``competences`` /
+    ``skill_levels`` rows, and the AI-generated profile competences are
+    free-text slugs it cannot read. A card built from nothing matches
+    nobody, so we refuse instead of shipping an empty one.
+
+    HRP-683: the vacancy's spec/grade selection crosses over as Required
+    Specializations, which is what makes the card's Experience axis
+    measure anything.
+
+    HRP-678: refuses while the vacancy's own internal-search switch is
+    off — a replacement hire the team has not been told about is the case
+    the switch exists for.
+    """
+    from app.modules.grade_system.models import GradeSpecialization
+    from app.modules.talent_market.matching import _auto_populate_candidates
+    from app.modules.talent_market.models import (
+        TalentCard,
+        TalentCardSpecialization,
+    )
+
+    vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+
+    if not vacancy.internal_search_allowed:
+        raise AppError(
+            "vacancy_internal_search_disabled",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    if vacancy.talent_card_id is not None:
+        if await _linked_card_id(db, tenant_id, vacancy) is not None:
+            raise AppError("vacancy_already_in_talent_market", status.HTTP_409_CONFLICT)
+        # The card was deleted from the talent market — drop the stale
+        # link and fall through so the recruiter can post it again.
+        vacancy.talent_card_id = None
+
+    comp_rows = await _vacancy_competence_rows(db, tenant_id, vacancy_id)
+    if not comp_rows:
+        raise AppError(
+            "vacancy_has_no_library_competences",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    # The card, its competences, its specializations and the back-link
+    # commit as one transaction. ``card_service.create_card`` commits on
+    # its own, so delegating to it left a window where a crash stranded an
+    # unlinked draft in the talent market and the next press made a second
+    # one. The billing entry moved with the construction: the bridge is
+    # BILLABLE as ``talent_card.create`` itself (same action, same price,
+    # charged only when the whole bridge succeeds).
+    card = TalentCard(
+        tenant_id=tenant_id,
+        author_id=user_id,
+        # TalentCard.title is 100 chars, Vacancy.title is 255.
+        title=vacancy.title[:100],
+        description=vacancy.description[:250] if vacancy.description else None,
+        card_type="vacancy",
+        division_id=vacancy.division_id,
+        start_date=date.today(),
+    )
+    db.add(card)
+    await db.flush()
+
+    await _sync_card_competences(db, card.id, comp_rows)
+    # HRP-683: carry the spec/grade selection over as Required
+    # Specializations. The vacancy holds two independent multi-selects
+    # (plus the legacy single-value FKs), while the card and the matcher
+    # read a *pair* — so we keep the combinations the grade ladder
+    # actually configures, the same rule the talent market's own dialog
+    # enforces via ``_validate_spec_grade``. Nothing configured → no spec
+    # rows, and the card falls back to competences-only matching.
+    # ``min_experience_years`` stays NULL: a vacancy carries no tenure
+    # floor to copy.
+    spec_ids = {item.id for item in vacancy.specializations}
+    if vacancy.specialization_id:
+        spec_ids.add(vacancy.specialization_id)
+    grade_ids = {item.id for item in vacancy.grades}
+    if vacancy.grade_id:
+        grade_ids.add(vacancy.grade_id)
+    if spec_ids and grade_ids:
+        pairs = (
+            (
+                await db.execute(
+                    select(GradeSpecialization).where(
+                        GradeSpecialization.tenant_id == tenant_id,
+                        GradeSpecialization.specialization_id.in_(spec_ids),
+                        GradeSpecialization.grade_id.in_(grade_ids),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for pair in pairs:
+            db.add(
+                TalentCardSpecialization(
+                    card_id=card.id,
+                    specialization_id=pair.specialization_id,
+                    grade_id=pair.grade_id,
+                )
+            )
+
+    vacancy.talent_card_id = card.id
+    await db.commit()
+
+    card_id = card.id
+    try:
+        await _auto_populate_candidates(db, tenant_id, card_id)
+    except Exception:
+        # The card and back-link are already committed, so without cleanup
+        # a matcher failure leaves a posted-but-empty card that every
+        # retry answers 409 for — and the only repair endpoint
+        # (/talent-market/{id}/recompute) is behind roles the recruiter
+        # does not have. Undo the posting and rethrow so the retry starts
+        # clean. The EE billing wrapper re-raises before consume_credits,
+        # so the failed post is never charged.
+        logger.exception(
+            "internal-market matcher failed for card %s; rolling the posting back",
+            card_id,
+        )
+        try:
+            await db.rollback()
+            stale = await db.get(TalentCard, card_id)
+            if stale is not None:
+                await db.delete(stale)
+            fresh = await _get_vacancy(db, tenant_id, vacancy_id)
+            fresh.talent_card_id = None
+            await db.commit()
+        except Exception:
+            logger.exception(
+                "posting cleanup failed; card %s stays linked to vacancy %s",
+                card_id,
+                vacancy_id,
+            )
+        raise
+    return await get_vacancy_internal_candidates(db, tenant_id, vacancy_id)
+
+
+async def get_vacancy_internal_candidates(
+    db: AsyncSession, tenant_id: uuid.UUID, vacancy_id: uuid.UUID
+) -> dict:
+    """Employees the talent-market matcher found for this vacancy.
+
+    ``talent_card_id is None`` is the answer the UI needs most: it means
+    the vacancy has never been offered internally, so the block shows the
+    offer instead of an empty list. Scoping is the vacancy's own — if the
+    caller may read the requisition they may see who inside fits it.
+    """
+    from app.modules.talent_market.models import TalentCandidate, TalentCard
+
+    vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+    payload: dict = {
+        "talent_card_id": None,
+        "talent_card_status": None,
+        "has_library_competences": False,
+        # HRP-678: the block needs the reason, not just a dead button.
+        "internal_search_allowed": vacancy.internal_search_allowed,
+        "items": [],
+    }
+    payload["has_library_competences"] = bool(
+        (
+            await db.execute(
+                select(func.count(VacancyCompetence.id)).where(
+                    VacancyCompetence.vacancy_id == vacancy_id,
+                    VacancyCompetence.tenant_id == tenant_id,
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    if vacancy.talent_card_id is None:
+        return payload
+
+    card = await db.get(TalentCard, vacancy.talent_card_id)
+    if card is None or card.tenant_id != tenant_id:
+        return payload
+    payload["talent_card_id"] = card.id
+    payload["talent_card_status"] = card.status
+
+    rows = (
+        (
+            await db.execute(
+                select(TalentCandidate)
+                .options(selectinload(TalentCandidate.employee))
+                .where(TalentCandidate.card_id == card.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    items = []
+    for row in rows:
+        emp = row.employee
+        user = emp.user if emp is not None else None
+        items.append(
+            {
+                "employee_id": row.employee_id,
+                "employee_name": (
+                    f"{user.first_name} {user.last_name}".strip() if user else None
+                ),
+                "position_title": emp.position_title if emp is not None else None,
+                "match_score": row.match_score,
+                "status": row.status,
+            }
+        )
+    # Best fit first; unscored manual picks sink to the bottom.
+    items.sort(
+        key=lambda i: (-int(i["match_score"] or 0), str(i["employee_name"] or ""))
+    )
+    payload["items"] = items
+    return payload

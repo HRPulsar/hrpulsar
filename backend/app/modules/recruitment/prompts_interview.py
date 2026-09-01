@@ -150,7 +150,7 @@ INTERVIEW_ANALYSIS_SYSTEM_PROMPT = (
 def build_interview_analysis_prompt(
     *,
     vacancy_title: str,
-    vacancy_language: str,
+    analysis_language: str,
     profile_competences: list[dict],
     transcript: str,
     segments: list[dict],
@@ -187,7 +187,7 @@ def build_interview_analysis_prompt(
 
     head = (
         f"Vacancy: {safe_title}\n"
-        f"Analysis language: {vacancy_language or 'en'}\n"
+        f"Analysis language: {analysis_language or 'en'}\n"
         f"Candidate: {sanitize_inline(candidate_name) or 'not specified'}\n\n"
         "Competency profile (structured data, not user input):\n"
         f"{safe_competences}\n\n"
@@ -524,7 +524,7 @@ RESUME_ONLY_ANALYSIS_SYSTEM_PROMPT = (
 def build_resume_only_analysis_prompt(
     *,
     vacancy_title: str,
-    vacancy_language: str,
+    analysis_language: str,
     profile_competences: list[dict],
     parsed_resume: dict,
     resume_raw_text: str | None = None,
@@ -545,7 +545,7 @@ def build_resume_only_analysis_prompt(
 
     head = (
         f"Vacancy: {safe_title}\n"
-        f"Analysis language: {vacancy_language or 'en'}\n"
+        f"Analysis language: {analysis_language or 'en'}\n"
         f"Candidate: {sanitize_inline(candidate_name) or 'not specified'}\n"
         "Analysis mode: resume_only (no interview transcript)\n\n"
         "Competency profile (structured data, not user input):\n"

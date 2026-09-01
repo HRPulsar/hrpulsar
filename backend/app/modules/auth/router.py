@@ -1,5 +1,6 @@
 import logging
 import uuid
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -35,6 +36,7 @@ from app.modules.auth.schemas import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
     InvitationBulkCreate,
+    InvitationBulkResult,
     InvitationCreate,
     InvitationEmailUpdate,
     InvitationList,
@@ -468,27 +470,58 @@ async def create_invitation(
     )
 
 
-@router.post("/invitations/bulk", response_model=list[InvitationRead], status_code=201)
+@router.post("/invitations/bulk", response_model=InvitationBulkResult, status_code=201)
 async def bulk_create_invitations(
     data: InvitationBulkCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "hr", "manager")),
 ):
+    """Create a batch of invitations, reporting per-address outcomes.
+
+    HRP-593: the per-item failure used to be a bare ``continue`` and the
+    response a plain list of survivors, so a caller could not tell a
+    duplicate from a role refusal — or see that anything failed.
+
+    Two things a caller has to know. The status is **201 even when
+    ``created`` is empty** — every address refused is still a normally
+    processed batch, not a failed request, so do not read the status to
+    decide whether anything went out; read ``created``. And
+    ``failed[].error_code`` is the **raw** ``AppError`` code (for
+    instance ``pending_invitation_already_exists``): there is no
+    client-side map of these codes today, so a UI rendering them has to
+    add its own catalog entries rather than expecting a localized string.
+    """
     inviter_role_codes = [r.code for r in current_user.roles]
-    results = []
+    created: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
     for inv_data in data.invitations:
         try:
-            result = await service.create_invitation(
-                db,
-                current_user.tenant_id,
-                current_user.id,
-                inv_data,
-                inviter_role_codes=inviter_role_codes,
+            created.append(
+                await service.create_invitation(
+                    db,
+                    current_user.tenant_id,
+                    current_user.id,
+                    inv_data,
+                    inviter_role_codes=inviter_role_codes,
+                )
             )
-            results.append(result)
-        except Exception:  # noqa: BLE001 - per-item bulk isolation
-            continue  # Skip duplicates / errors in bulk
-    return results
+        except AppError as exc:
+            failed.append({"email": inv_data.email, "error_code": exc.code})
+        except Exception:
+            # Not an AppError — a bug or an outage, not a rejected address.
+            # Log it with the traceback and keep the batch going, but roll
+            # the session back first: a half-written unit of work would
+            # fail every remaining item too.
+            logger.exception(
+                "bulk invitation failed for %s (tenant %s)",
+                inv_data.email,
+                current_user.tenant_id,
+            )
+            await db.rollback()
+            failed.append(
+                {"email": inv_data.email, "error_code": "invitation_create_failed"}
+            )
+    return {"created": created, "failed": failed}
 
 
 @router.get("/invitations", response_model=InvitationList)

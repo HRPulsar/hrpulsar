@@ -1010,11 +1010,19 @@ def _derive_readiness(has_resume: bool, has_transcript: bool) -> str:
     last analysis that happened to run — ``resume_only`` as soon as a
     resume is parsed, ``resume_and_transcript`` once an interview for
     this vacancy is transcribed.
+
+    HRP-681: a transcript is an input in its own right. The full
+    analysis prompt takes the parsed resume as an *optional* summary, so
+    a candidate interviewed without ever uploading a resume gets a real
+    analysis — and used to be reported as ``none`` ("no data") right
+    next to the verdict that analysis produced.
     """
-    if has_transcript and has_resume:
+    if has_resume and has_transcript:
         return "resume_and_transcript"
     if has_resume:
         return "resume_only"
+    if has_transcript:
+        return "transcript_only"
     return "none"
 
 

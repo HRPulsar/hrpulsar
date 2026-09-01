@@ -12,26 +12,38 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
+from app.core.errors import AppError
 from app.modules.assessment.models import (
+    PDP,
     Assessment,
     AssessmentCompetence,
     AssessmentResult,
     AssessmentStatus,
     AssessmentType,
+    PDPItem,
 )
 from app.modules.auth.models import User
 from app.modules.competence.models import Competence, CompetenceGroup, SkillLevel
 from app.modules.dictionary.models import DictionaryItem
 from app.modules.employee.models import Employee, WorkExperience
+from app.modules.grade_system.models import GradeCompetenceLink, GradeSpecialization
 from app.modules.position.models import Position
 from app.modules.talent_market import service
+from app.modules.talent_market.matching import (
+    _fetch_match_inputs,
+    _unique_comp_rows,
+)
 from app.modules.talent_market.models import (
     TalentCandidate,
     TalentCardSpecialization,
 )
 from app.modules.talent_market.schemas import (
+    CandidateAdd,
+    CandidateDevelopmentPlanCreate,
     RequiredCompetenceBulkCreate,
     RequiredCompetenceItem,
+    RequiredSpecializationCreate,
     TalentCardCreate,
     TalentCardUpdate,
 )
@@ -136,7 +148,7 @@ async def _add_done_assessment(
     employee_id: uuid.UUID,
     initiator_id: uuid.UUID,
     competence_id: uuid.UUID,
-    skill_level_id: uuid.UUID,
+    skill_level_id: uuid.UUID | None,
     percent: int,
     *,
     finished_at: datetime | None = None,
@@ -187,19 +199,13 @@ class TestAutoMatchCompetence:
             db,
             tenant.id,
             user.id,
-            TalentCardCreate(
-                title="V", card_type="vacancy", match_percent=70
-            ),
+            TalentCardCreate(title="V", card_type="vacancy", match_percent=70),
         )
         sl = await _make_skill_level(db, tenant.id, sort_index=1, title="Mid")
-        comps = [
-            await _make_competence(db, tenant.id, f"C{i}") for i in range(4)
-        ]
+        comps = [await _make_competence(db, tenant.id, f"C{i}") for i in range(4)]
         emp = await _make_employee(db, tenant.id, name="Full")
         for c, pct in zip(comps, [100, 80, 70, 30], strict=False):
-            await _add_done_assessment(
-                db, tenant.id, emp.id, user.id, c.id, sl.id, pct
-            )
+            await _add_done_assessment(db, tenant.id, emp.id, user.id, c.id, sl.id, pct)
 
         await service.add_required_competences(
             db,
@@ -216,9 +222,7 @@ class TestAutoMatchCompetence:
         rows = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -237,19 +241,13 @@ class TestAutoMatchCompetence:
             db,
             tenant.id,
             user.id,
-            TalentCardCreate(
-                title="V", card_type="vacancy", match_percent=50
-            ),
+            TalentCardCreate(title="V", card_type="vacancy", match_percent=50),
         )
         sl = await _make_skill_level(db, tenant.id, sort_index=1)
-        comps = [
-            await _make_competence(db, tenant.id, f"C{i}") for i in range(4)
-        ]
+        comps = [await _make_competence(db, tenant.id, f"C{i}") for i in range(4)]
         emp = await _make_employee(db, tenant.id, name="Partial")
         for c, pct in zip(comps[:3], [100, 80, 70], strict=False):
-            await _add_done_assessment(
-                db, tenant.id, emp.id, user.id, c.id, sl.id, pct
-            )
+            await _add_done_assessment(db, tenant.id, emp.id, user.id, c.id, sl.id, pct)
 
         await service.add_required_competences(
             db,
@@ -266,9 +264,7 @@ class TestAutoMatchCompetence:
         row = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -276,9 +272,7 @@ class TestAutoMatchCompetence:
         )
         assert row.match_score == 63
 
-    async def test_no_coverage_excludes_candidate(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_no_coverage_excludes_candidate(self, db: AsyncSession, tenant, user):
         """Spec example 3: not a single matching assessment → match% is
         not computed and the employee never lands in the auto-pool."""
         card = await service.create_card(
@@ -303,9 +297,7 @@ class TestAutoMatchCompetence:
         rows = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -338,9 +330,7 @@ class TestAutoMatchCompetence:
             card["id"],
             RequiredCompetenceBulkCreate(
                 items=[
-                    RequiredCompetenceItem(
-                        competence_id=c.id, skill_level_id=sl_mid.id
-                    )
+                    RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl_mid.id)
                 ]
             ),
         )
@@ -348,9 +338,7 @@ class TestAutoMatchCompetence:
         rows = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -373,9 +361,7 @@ class TestAutoMatchCompetence:
         sl_adv = await _make_skill_level(db, tenant.id, sort_index=2, title="Adv")
         c = await _make_competence(db, tenant.id, "C")
         emp = await _make_employee(db, tenant.id, name="High")
-        await _add_done_assessment(
-            db, tenant.id, emp.id, user.id, c.id, sl_adv.id, 84
-        )
+        await _add_done_assessment(db, tenant.id, emp.id, user.id, c.id, sl_adv.id, 84)
 
         await service.add_required_competences(
             db,
@@ -383,9 +369,7 @@ class TestAutoMatchCompetence:
             card["id"],
             RequiredCompetenceBulkCreate(
                 items=[
-                    RequiredCompetenceItem(
-                        competence_id=c.id, skill_level_id=sl_mid.id
-                    )
+                    RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl_mid.id)
                 ]
             ),
         )
@@ -393,9 +377,7 @@ class TestAutoMatchCompetence:
         row = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -445,18 +427,14 @@ class TestAutoMatchCompetence:
             tenant.id,
             card["id"],
             RequiredCompetenceBulkCreate(
-                items=[
-                    RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl.id)
-                ]
+                items=[RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl.id)]
             ),
         )
 
         row = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -483,18 +461,14 @@ class TestAutoMatchCompetence:
             tenant.id,
             card["id"],
             RequiredCompetenceBulkCreate(
-                items=[
-                    RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl.id)
-                ]
+                items=[RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl.id)]
             ),
         )
 
         rows = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -508,9 +482,7 @@ class TestAutoMatchCompetence:
         rows = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -522,14 +494,10 @@ class TestAutoMatchCompetence:
 
 
 class TestAutoMatchSpecialization:
-    async def test_presence_only_match_qualifies(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_presence_only_match_qualifies(self, db: AsyncSession, tenant, user):
         """Required Specialization without min_experience → any
         WorkExperience row with matching (spec_id, grade_id) qualifies."""
-        spec = DictionaryItem(
-            type="specialization", tenant_id=tenant.id, title="Spec"
-        )
+        spec = DictionaryItem(type="specialization", tenant_id=tenant.id, title="Spec")
         grade = DictionaryItem(type="grade", tenant_id=tenant.id, title="G")
         db.add_all([spec, grade])
         await db.commit()
@@ -570,9 +538,7 @@ class TestAutoMatchSpecialization:
         row = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -580,14 +546,10 @@ class TestAutoMatchSpecialization:
         )
         assert row.employee_id == emp.id
 
-    async def test_years_sum_meets_min_experience(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_years_sum_meets_min_experience(self, db: AsyncSession, tenant, user):
         """Two WorkExperience spells on matching positions sum past the
         Required min_experience_years floor → qualifies."""
-        spec = DictionaryItem(
-            type="specialization", tenant_id=tenant.id, title="S2"
-        )
+        spec = DictionaryItem(type="specialization", tenant_id=tenant.id, title="S2")
         grade = DictionaryItem(type="grade", tenant_id=tenant.id, title="G2")
         db.add_all([spec, grade])
         await db.commit()
@@ -639,9 +601,7 @@ class TestAutoMatchSpecialization:
         row = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -653,9 +613,7 @@ class TestAutoMatchSpecialization:
         self, db: AsyncSession, tenant, user
     ):
         """One year on the role, requirement is 5 → no candidate."""
-        spec = DictionaryItem(
-            type="specialization", tenant_id=tenant.id, title="S3"
-        )
+        spec = DictionaryItem(type="specialization", tenant_id=tenant.id, title="S3")
         grade = DictionaryItem(type="grade", tenant_id=tenant.id, title="G3")
         db.add_all([spec, grade])
         await db.commit()
@@ -696,9 +654,7 @@ class TestAutoMatchSpecialization:
         rows = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -708,9 +664,7 @@ class TestAutoMatchSpecialization:
 
 
 class TestAutoMatchRecompute:
-    async def test_recompute_on_competence_update(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_recompute_on_competence_update(self, db: AsyncSession, tenant, user):
         """Changing Required Competences in-place re-runs the matcher."""
         card = await service.create_card(
             db,
@@ -723,12 +677,8 @@ class TestAutoMatchRecompute:
         c2 = await _make_competence(db, tenant.id, "C2")
         emp_a = await _make_employee(db, tenant.id, name="A")
         emp_b = await _make_employee(db, tenant.id, name="B")
-        await _add_done_assessment(
-            db, tenant.id, emp_a.id, user.id, c1.id, sl.id, 90
-        )
-        await _add_done_assessment(
-            db, tenant.id, emp_b.id, user.id, c2.id, sl.id, 90
-        )
+        await _add_done_assessment(db, tenant.id, emp_a.id, user.id, c1.id, sl.id, 90)
+        await _add_done_assessment(db, tenant.id, emp_b.id, user.id, c2.id, sl.id, 90)
 
         # First the card only requires c1 — only A qualifies.
         await service.add_required_competences(
@@ -744,9 +694,7 @@ class TestAutoMatchRecompute:
         rows = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -768,9 +716,7 @@ class TestAutoMatchRecompute:
         rows = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -778,9 +724,7 @@ class TestAutoMatchRecompute:
         )
         assert {r.employee_id for r in rows} == {emp_b.id}
 
-    async def test_recompute_on_threshold_lowered(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_recompute_on_threshold_lowered(self, db: AsyncSession, tenant, user):
         """Lowering the card match% promotes a borderline employee from
         not-a-candidate to nominated."""
         card = await service.create_card(
@@ -792,25 +736,19 @@ class TestAutoMatchRecompute:
         sl = await _make_skill_level(db, tenant.id, sort_index=1)
         c = await _make_competence(db, tenant.id, "C")
         emp = await _make_employee(db, tenant.id, name="Border")
-        await _add_done_assessment(
-            db, tenant.id, emp.id, user.id, c.id, sl.id, 84
-        )
+        await _add_done_assessment(db, tenant.id, emp.id, user.id, c.id, sl.id, 84)
         await service.add_required_competences(
             db,
             tenant.id,
             card["id"],
             RequiredCompetenceBulkCreate(
-                items=[
-                    RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl.id)
-                ]
+                items=[RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl.id)]
             ),
         )
         rows = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -827,9 +765,7 @@ class TestAutoMatchRecompute:
         rows = (
             (
                 await db.execute(
-                    select(TalentCandidate).where(
-                        TalentCandidate.card_id == card["id"]
-                    )
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
                 )
             )
             .scalars()
@@ -839,9 +775,7 @@ class TestAutoMatchRecompute:
         assert rows[0].employee_id == emp.id
         assert rows[0].match_score == 84
 
-    async def test_detail_exposes_basis_and_score(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_detail_exposes_basis_and_score(self, db: AsyncSession, tenant, user):
         """`GET /talent-market/{id}` includes `basis` per candidate row."""
         card = await service.create_card(
             db,
@@ -852,17 +786,13 @@ class TestAutoMatchRecompute:
         sl = await _make_skill_level(db, tenant.id, sort_index=1)
         c = await _make_competence(db, tenant.id, "C")
         emp = await _make_employee(db, tenant.id, name="Score")
-        await _add_done_assessment(
-            db, tenant.id, emp.id, user.id, c.id, sl.id, 84
-        )
+        await _add_done_assessment(db, tenant.id, emp.id, user.id, c.id, sl.id, 84)
         await service.add_required_competences(
             db,
             tenant.id,
             card["id"],
             RequiredCompetenceBulkCreate(
-                items=[
-                    RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl.id)
-                ]
+                items=[RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl.id)]
             ),
         )
 
@@ -870,3 +800,413 @@ class TestAutoMatchRecompute:
         assert len(detail["candidates"]) == 1
         assert detail["candidates"][0]["match_score"] == 84
         assert detail["candidates"][0]["basis"] == "competence"
+
+
+class TestUnlevelledAssessment:
+    """HRP-657: a Done assessment that never pinned a target level."""
+
+    async def test_unlevelled_assessment_counts(self, db: AsyncSession, tenant, user):
+        """``AssessmentCompetenceItem.skill_level_id`` is optional and the
+        `competences` criteria type leaves it NULL. Such an assessment
+        covers the competence's whole ladder — dropping it made every
+        Required Competence read as "no assessment"."""
+        card = await service.create_card(
+            db,
+            tenant.id,
+            user.id,
+            TalentCardCreate(title="V", card_type="vacancy", match_percent=80),
+        )
+        sl_mid = await _make_skill_level(db, tenant.id, sort_index=1, title="Mid")
+        c = await _make_competence(db, tenant.id, "C")
+        emp = await _make_employee(db, tenant.id, name="NoLevel")
+        await _add_done_assessment(db, tenant.id, emp.id, user.id, c.id, None, 84)
+
+        await service.add_required_competences(
+            db,
+            tenant.id,
+            card["id"],
+            RequiredCompetenceBulkCreate(
+                items=[
+                    RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl_mid.id)
+                ]
+            ),
+        )
+
+        row = (
+            (
+                await db.execute(
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
+                )
+            )
+            .scalars()
+            .one()
+        )
+        assert row.match_score == 84
+
+
+class TestGapDevelopmentPlan:
+    """HRP-665: development plan built from required-vs-current gaps."""
+
+    async def _card_with_three_competences(self, db, tenant, user):
+        card = await service.create_card(
+            db,
+            tenant.id,
+            user.id,
+            TalentCardCreate(title="V", card_type="vacancy", match_percent=80),
+        )
+        sl = await _make_skill_level(db, tenant.id, sort_index=1)
+        passed = await _make_competence(db, tenant.id, "Passed")
+        low = await _make_competence(db, tenant.id, "Low")
+        never = await _make_competence(db, tenant.id, "Never")
+        emp = await _make_employee(db, tenant.id, name="Gap")
+        await _add_done_assessment(db, tenant.id, emp.id, user.id, passed.id, sl.id, 90)
+        await _add_done_assessment(db, tenant.id, emp.id, user.id, low.id, sl.id, 40)
+        await service.add_required_competences(
+            db,
+            tenant.id,
+            card["id"],
+            RequiredCompetenceBulkCreate(
+                items=[
+                    RequiredCompetenceItem(
+                        competence_id=passed.id, skill_level_id=sl.id
+                    ),
+                    RequiredCompetenceItem(competence_id=low.id, skill_level_id=sl.id),
+                    RequiredCompetenceItem(
+                        competence_id=never.id, skill_level_id=sl.id
+                    ),
+                ]
+            ),
+        )
+        candidate = await service.add_candidate(
+            db, tenant.id, card["id"], CandidateAdd(employee_id=emp.id)
+        )
+        return card, candidate
+
+    async def test_plan_items_are_only_the_gaps(self, db: AsyncSession, tenant, user):
+        card, candidate = await self._card_with_three_competences(db, tenant, user)
+        row = await service.create_candidate_development_plan(
+            db,
+            tenant.id,
+            card["id"],
+            candidate["id"],
+            user.id,
+            CandidateDevelopmentPlanCreate(title="Gap plan"),
+        )
+        assert row["pdp_id"] is not None
+        assert row["pdp_status"] == "draft"
+        items = (
+            (await db.execute(select(PDPItem).where(PDPItem.pdp_id == row["pdp_id"])))
+            .scalars()
+            .all()
+        )
+        # "Passed" cleared the 80% bar; the other two are the gap.
+        assert {i.title for i in items} == {"Low", "Never"}
+
+    async def test_second_plan_is_rejected(self, db: AsyncSession, tenant, user):
+        card, candidate = await self._card_with_three_competences(db, tenant, user)
+        await service.create_candidate_development_plan(
+            db,
+            tenant.id,
+            card["id"],
+            candidate["id"],
+            user.id,
+            CandidateDevelopmentPlanCreate(),
+        )
+        with pytest.raises(AppError) as exc:
+            await service.create_candidate_development_plan(
+                db,
+                tenant.id,
+                card["id"],
+                candidate["id"],
+                user.id,
+                CandidateDevelopmentPlanCreate(),
+            )
+        assert exc.value.code == "tm_candidate_plan_exists"
+
+    async def test_no_gaps_rejected(self, db: AsyncSession, tenant, user):
+        card = await service.create_card(
+            db,
+            tenant.id,
+            user.id,
+            TalentCardCreate(title="V", card_type="vacancy", match_percent=80),
+        )
+        sl = await _make_skill_level(db, tenant.id, sort_index=1)
+        c = await _make_competence(db, tenant.id, "C")
+        emp = await _make_employee(db, tenant.id, name="Clear")
+        await _add_done_assessment(db, tenant.id, emp.id, user.id, c.id, sl.id, 95)
+        await service.add_required_competences(
+            db,
+            tenant.id,
+            card["id"],
+            RequiredCompetenceBulkCreate(
+                items=[RequiredCompetenceItem(competence_id=c.id, skill_level_id=sl.id)]
+            ),
+        )
+        candidate = (
+            (
+                await db.execute(
+                    select(TalentCandidate).where(TalentCandidate.card_id == card["id"])
+                )
+            )
+            .scalars()
+            .one()
+        )
+        with pytest.raises(AppError) as exc:
+            await service.create_candidate_development_plan(
+                db,
+                tenant.id,
+                card["id"],
+                candidate.id,
+                user.id,
+                CandidateDevelopmentPlanCreate(),
+            )
+        assert exc.value.code == "tm_no_competence_gaps"
+
+    async def test_appointed_candidate_can_still_get_a_plan(
+        self, db: AsyncSession, tenant, user
+    ):
+        """Ticket scenario 1: appointed first, then walks the plan."""
+        card, candidate = await self._card_with_three_competences(db, tenant, user)
+        await service.appoint_candidate(db, tenant.id, card["id"], candidate["id"])
+        row = await service.create_candidate_development_plan(
+            db,
+            tenant.id,
+            card["id"],
+            candidate["id"],
+            user.id,
+            CandidateDevelopmentPlanCreate(),
+        )
+        assert row["status"] == "appointed"
+        assert row["pdp_id"] is not None
+
+    async def test_plan_survives_a_later_appointment(
+        self, db: AsyncSession, tenant, user
+    ):
+        """Ticket scenario 2: walks the plan first, gets appointed after."""
+        card, candidate = await self._card_with_three_competences(db, tenant, user)
+        planned = await service.create_candidate_development_plan(
+            db,
+            tenant.id,
+            card["id"],
+            candidate["id"],
+            user.id,
+            CandidateDevelopmentPlanCreate(),
+        )
+        appointed = await service.appoint_candidate(
+            db, tenant.id, card["id"], candidate["id"]
+        )
+        assert appointed["status"] == "appointed"
+        assert appointed["pdp_id"] == planned["pdp_id"]
+
+
+class TestDuplicateRequiredCompetences:
+    """HRP-665: a competence required twice is one competence.
+
+    A card assembled from two grade ladders of the same specialization
+    lists the same competence at two levels. Every surface that speaks
+    about *competences* — the "N of M" reason on the Match cell, the gap
+    list, the generated plan — has to collapse those rows, and keep the
+    strictest of the two levels so the material cap stays honest.
+    """
+
+    async def _card_with_duplicate_requirement(self, db, tenant, user):
+        card = await service.create_card(
+            db,
+            tenant.id,
+            user.id,
+            TalentCardCreate(title="Dup", card_type="vacancy", match_percent=80),
+        )
+        l3 = await _make_skill_level(db, tenant.id, sort_index=3, title="L3")
+        l4 = await _make_skill_level(db, tenant.id, sort_index=4, title="L4")
+        dup = await _make_competence(db, tenant.id, "Dup")
+        cleared = await _make_competence(db, tenant.id, "Cleared")
+        emp = await _make_employee(db, tenant.id, name="Dup")
+        # Cleared is above the bar, Dup was never assessed — exactly one
+        # gap *competence*, spread over two requirement rows.
+        await _add_done_assessment(
+            db, tenant.id, emp.id, user.id, cleared.id, l3.id, 95
+        )
+        await service.add_required_competences(
+            db,
+            tenant.id,
+            card["id"],
+            RequiredCompetenceBulkCreate(
+                items=[
+                    RequiredCompetenceItem(competence_id=dup.id, skill_level_id=l3.id),
+                    RequiredCompetenceItem(competence_id=dup.id, skill_level_id=l4.id),
+                    RequiredCompetenceItem(
+                        competence_id=cleared.id, skill_level_id=l3.id
+                    ),
+                ]
+            ),
+        )
+        candidate = await service.add_candidate(
+            db, tenant.id, card["id"], CandidateAdd(employee_id=emp.id)
+        )
+        return card, candidate, emp, dup, l4
+
+    async def test_dedup_keeps_the_strictest_level(
+        self, db: AsyncSession, tenant, user
+    ):
+        card, _cand, _emp, dup, l4 = await self._card_with_duplicate_requirement(
+            db, tenant, user
+        )
+        comp_rows, _spec_rows = await _fetch_match_inputs(db, card["id"])
+        assert len(comp_rows) == 3
+        unique = await _unique_comp_rows(db, comp_rows)
+        assert len(unique) == 2
+        kept = next(r for r in unique if r.competence_id == dup.id)
+        assert kept.skill_level_id == l4.id
+
+    async def test_counts_are_per_competence_on_both_surfaces(
+        self, db: AsyncSession, tenant, user
+    ):
+        card, _cand, emp, _dup, _l4 = await self._card_with_duplicate_requirement(
+            db, tenant, user
+        )
+        # Candidates table (card_service._compute_candidates_breakdown).
+        detail = await service.get_card_detail(db, tenant.id, card["id"])
+        row = next(c for c in detail["candidates"] if c["employee_id"] == emp.id)
+        assert (row["comp_met"], row["comp_total"]) == (1, 2)
+
+        # Picker (candidate_service.list_candidate_pool) must agree.
+        pool = await service.list_candidate_pool(
+            db, tenant.id, card["id"], include_attached=True
+        )
+        picked = next(i for i in pool if i["employee_id"] == emp.id)
+        assert (picked["comp_met"], picked["comp_total"]) == (1, 2)
+
+    async def test_plan_gets_one_item_per_competence(
+        self, db: AsyncSession, tenant, user
+    ):
+        card, candidate, _emp, _dup, _l4 = await self._card_with_duplicate_requirement(
+            db, tenant, user
+        )
+        plan = await service.create_candidate_development_plan(
+            db,
+            tenant.id,
+            card["id"],
+            candidate["id"],
+            user.id,
+            CandidateDevelopmentPlanCreate(title="Dup plan"),
+        )
+        items = (
+            (await db.execute(select(PDPItem).where(PDPItem.pdp_id == plan["pdp_id"])))
+            .scalars()
+            .all()
+        )
+        assert [i.title for i in items] == ["Dup"]
+
+
+class TestPlanTargetSpecialization:
+    """HRP-665: the plan's target Specialization is chosen, not stumbled on.
+
+    It selects the material override set, so a card with two Required
+    Specializations must not depend on planner row order.
+    """
+
+    async def _ladder(self, db, tenant, *, title: str, competences, skill_level):
+        spec = DictionaryItem(
+            type="specialization", tenant_id=tenant.id, title=title, is_active=True
+        )
+        grade = DictionaryItem(
+            type="grade", tenant_id=tenant.id, title=f"G-{title}", is_active=True
+        )
+        db.add_all([spec, grade])
+        await db.flush()
+        gs = GradeSpecialization(
+            tenant_id=tenant.id, grade_id=grade.id, specialization_id=spec.id
+        )
+        db.add(gs)
+        await db.flush()
+        for comp in competences:
+            db.add(
+                GradeCompetenceLink(
+                    grade_specialization_id=gs.id,
+                    competence_id=comp.id,
+                    skill_level_id=skill_level.id,
+                )
+            )
+        await db.commit()
+        return spec, grade
+
+    async def _card_with_two_specializations(self, db, tenant, user, *, employees):
+        sl = await _make_skill_level(db, tenant.id, sort_index=1)
+        gap_comp = await _make_competence(db, tenant.id, "GapComp")
+        cleared_comp = await _make_competence(db, tenant.id, "ClearedComp")
+        card = await service.create_card(
+            db,
+            tenant.id,
+            user.id,
+            TalentCardCreate(title="Two", card_type="vacancy", match_percent=80),
+        )
+        # Added first, so it is the row an unordered "take the first spec"
+        # was free to land on — and it covers none of the gaps.
+        cleared_spec, cleared_grade = await self._ladder(
+            db, tenant, title="Cleared", competences=[cleared_comp], skill_level=sl
+        )
+        gap_spec, gap_grade = await self._ladder(
+            db, tenant, title="Gap", competences=[gap_comp], skill_level=sl
+        )
+        for spec, grade in ((cleared_spec, cleared_grade), (gap_spec, gap_grade)):
+            await service.add_required_specialization(
+                db,
+                tenant.id,
+                card["id"],
+                RequiredSpecializationCreate(
+                    specialization_id=spec.id, grade_id=grade.id
+                ),
+            )
+        candidates = []
+        for name in employees:
+            emp = await _make_employee(db, tenant.id, name=name)
+            await _add_done_assessment(
+                db, tenant.id, emp.id, user.id, cleared_comp.id, sl.id, 95
+            )
+            candidates.append(
+                await service.add_candidate(
+                    db, tenant.id, card["id"], CandidateAdd(employee_id=emp.id)
+                )
+            )
+        return card, candidates, gap_spec
+
+    async def test_target_specialization_covers_the_gaps(
+        self, db: AsyncSession, tenant, user
+    ):
+        card, candidates, gap_spec = await self._card_with_two_specializations(
+            db, tenant, user, employees=["One"]
+        )
+        plan = await service.create_candidate_development_plan(
+            db,
+            tenant.id,
+            card["id"],
+            candidates[0]["id"],
+            user.id,
+            CandidateDevelopmentPlanCreate(),
+        )
+        pdp = (
+            await db.execute(select(PDP).where(PDP.id == plan["pdp_id"]))
+        ).scalar_one()
+        assert pdp.specialization_id == gap_spec.id
+
+    async def test_target_specialization_is_stable_across_plans(
+        self, db: AsyncSession, tenant, user
+    ):
+        card, candidates, gap_spec = await self._card_with_two_specializations(
+            db, tenant, user, employees=["One", "Two"]
+        )
+        picked = []
+        for candidate in candidates:
+            plan = await service.create_candidate_development_plan(
+                db,
+                tenant.id,
+                card["id"],
+                candidate["id"],
+                user.id,
+                CandidateDevelopmentPlanCreate(),
+            )
+            pdp = (
+                await db.execute(select(PDP).where(PDP.id == plan["pdp_id"]))
+            ).scalar_one()
+            picked.append(pdp.specialization_id)
+        assert picked == [gap_spec.id, gap_spec.id]

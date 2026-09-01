@@ -10,9 +10,11 @@ Names are picked from an international, PII-safe pool; emails are
 ``<first>.<last>@demo.example.com`` lowercased, with the apostrophe in
 Irish surnames stripped to avoid breaking the unique constraint.
 
-Hire dates are spaced deterministically (1..5 years) so the Employee
-list shows a realistic tenure spread without re-randomising on each
-seed run.
+Hire dates are spaced deterministically (2..6.5 years, minus the
+flagged recent hires) so the Employee list shows a realistic tenure
+spread without re-randomising on each seed run. The seed lays down one
+``WorkExperience`` spell per employee starting on that date, so the
+hire date doubles as the tenure the talent-market matcher reads.
 """
 
 from __future__ import annotations
@@ -194,8 +196,12 @@ def hire_days_back(idx: int, status: str, recent_hire: bool = False) -> int:
     if status == "inactive":
         # Inactive rows look like multi-year tenure that ended.
         return 365 * 3 + (idx * 11) % 180
-    # Linear-ish spread from ~6 months to ~5 years.
-    return 180 + (idx * 47) % 1640
+    # Linear-ish spread from ~2 to ~6.5 years. HRP-682 moved the floor up
+    # from six months: the seeded WorkExperience spell starts on the hire
+    # date, so tenure *is* the experience the matcher reads, and a Staff
+    # engineer with seven months on the ladder made every years floor on a
+    # talent card unmatchable.
+    return 365 * 2 + (idx * 47) % 1640
 
 
 EMPLOYEE_EMAIL_DOMAIN = "demo.example.com"

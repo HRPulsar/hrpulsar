@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link2, Loader2, Search, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
+import { materialFormatLabel } from "@/lib/competences/material-options";
 
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -615,7 +616,9 @@ export function MaterialsAIDialog({
                       </div>
                       <p className="text-xs leading-snug">{it.comment}</p>
                       <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-                        {it.format && <span>{it.format}</span>}
+                        {it.format && (
+                          <span>{materialFormatLabel(t, it.format)}</span>
+                        )}
                         {it.study_time != null && <span>{it.study_time}h</span>}
                         {it.link && (
                           <a

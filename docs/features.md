@@ -16,6 +16,8 @@ A central record for every person in the company: position, division, hire date,
 - Goals progress averages completion across the employee's open development plans; a hint next to the tile explains the formula
 - Edit rights follow the role matrix: admins and HR edit any record, division managers edit only employees in their own subtree, the employee role is read-only
 - Assigning someone as a division manager or deputy upgrades their role automatically; removing the assignment asks for confirmation before the downgrade
+- The card header repeats the same issue badges the directory shows for that person, so opening a profile says what is wrong before any tab is clicked
+- An actions menu on the header starts anything that is about this person — a development plan, an assessment, a career event — on the screen that owns the flow, with the employee already filled in
 
 ### Employee Directory
 
@@ -76,6 +78,8 @@ A snapshot of the employee's competence profile in two blocks.
 - **Other competences**: everything the employee was assessed on at a different level than the position requires, so results above or below the requirement stay visible
 - Every row opens a per-level score breakdown from the latest completed assessment
 - Score chips are color-coded: green at 75% and above, yellow from 50 to 74%, red below 50%
+- A competence scored below the passing bar of its assessment is labelled as a gap, in the same wording the directory and the dashboard use
+- A "Create development plan" action sits on the block, prefilled with the employee and the specialization and grade of their position. When the employee is already at the three-plan cap the action opens the newest active plan instead and says why
 
 ---
 
@@ -108,13 +112,14 @@ Structured job positions linked to grades, specializations, and divisions.
 - The position page shows the resolved competence matrix as a compact tree with required skill levels, plus a deep link to configure the matrix
 - Positions can be generated with AI from a text brief, with a mandatory draft review before anything is saved
 - A dedicated admin view lists employees without a position for bulk assignment
+- The catalogue is readable workspace-wide, but a rank-and-file employee sees it without the grade, specialization, matrix and salary columns — the page hides them rather than showing a column of dashes, and it decides from the viewer's role and the workspace switch, not from whatever rows the current page happens to hold
 
 ### Specializations
 
 Each specialization is a full profile, not just a dictionary entry.
 
 - List view with grade count, position count, headcount, and an Active/Inactive status matching the dictionary; detail page with Grades and Positions tabs
-- Per grade: description, requirements, and a salary range in the installation currency (`BILLING_CURRENCY`, USD by default)
+- Per grade: description, requirements, and a salary range in the installation currency (`BILLING_CURRENCY`, USD by default), shown to admins, HR and managers
 - The competence matrix editor is a competence-by-grade table with per-cell skill levels, a heat-map tint by level, indicator tooltips, and warnings on competences that lack indicators or materials
 - Matrix consistency is guaranteed: a higher grade never requires a lower level than the grade below it, both in the editor and on the server
 - A matrix can be generated with AI from a structured brief (responsibilities, tasks, KPIs, requirements) plus uploaded files (PDF, DOCX, XLSX, RTF, TXT). The result opens in a review screen where every suggestion can be edited or dropped before saving
@@ -172,6 +177,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Generate a vacancy's competence profile with AI from the description, tasks, and attachments; a clarification note passes straight into the prompt
 - The review screen supports keep/drop per competence, inline edits to names, indicators, and interview questions, and shows previously saved rows as locked
 - Nothing writes to the profile until the recruiter saves the reviewed selection
+- Alongside the generated profile, competences can be picked straight from the company library through the same group tree the assessments use; those are the ones the internal match is scored against, and they are listed on the section
 
 ### Candidate Pipeline
 
@@ -179,7 +185,18 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Duplicate emails are caught before import with a link-or-create choice per file
 - The candidate page carries contact details, the parsed resume with per-section inline editing, files, and every vacancy application with its scores
 - Funnel stages ship with a 9-stage default (new through hired, rejected, withdrew) and can be customized per workspace or per vacancy; stage changes into a terminal state ask for confirmation
-- The vacancy table shows last position, experience, current stage, manager score, AI score, and AI verdict, and flags rows where the manager and AI diverge
+- The vacancy table shows last position, experience, current stage, and the two assessments side by side: how much of the vacancy profile the manager scored and how much the AI scored, each as a percentage so the two are directly comparable. The AI verdict comes with the reason for it in the row itself, not only behind a popover
+- A candidate nobody has assessed yet says so — "not assessed yet", with the reason in a tooltip — instead of an unexplained dash. Rows where the manager and the AI disagree carry a count of the competences they disagree on, and one definition of "disagree" is used everywhere: the workspace divergence threshold, applied per competence
+- Candidates who already work here are marked as such wherever candidates are read — the global list, the vacancy table (with the row tinted), and the candidate page — so an internal applicant is never mistaken for an outside one
+
+### Internal Candidates
+
+- Before hiring outside, the vacancy offers to look inside: one action posts the requisition to the internal talent market as a vacancy card, carrying its required competences across
+- The talent market's own competence matcher then fills the shortlist, and the vacancy shows those employees with their percentage match next to the external pipeline. There is no second matcher and no second copy of the requirements — the card is the vacancy's twin, and the link leads to it
+- Posting needs required competences picked from the company library: the AI-generated profile describes a candidate in prose, while the internal match is scored against library competences and assessment results
+- The card is created as a draft, so nothing is announced to employees until someone publishes it from the talent market
+- Internal matching is part of the employment relationship — it reads competence and assessment data the employer already holds for its own staffing decisions (legitimate interest), so it needs no separate employee consent. A per-vacancy switch lets the recruiter who owns a requisition keep a sensitive one out of the internal search; it is on by default and off means the vacancy cannot be posted to the talent market at all
+- Changing a vacancy's required competences updates the card it was posted to and re-runs the match, so the internal shortlist never answers a question the requisition stopped asking. Employees added to the card by hand who do not clear the bar are labelled as such instead of showing an empty score
 
 ### Interview Questions
 
@@ -219,10 +236,12 @@ Reference data shared across the platform: specializations, grades, skill levels
 - The recording is prepared before it is sent out: the video track is dropped and the audio re-encoded, so an hour of interview travels as a few megabytes instead of half a gigabyte, and a recording still above a provider's request-size limit is split into overlapping parts and stitched back into one transcript
 - When the provider that transcribed the interview does not separate speakers, the turns are split into interviewer and candidate from the transcript itself, so the analysis still knows whose words it is scoring
 - The analysis pipeline reports data completeness, competence scores, blind spots, process findings, red flags, and a verdict
+- The analysis, its questions, the generated competency profile and the candidate reports are written in the workspace's content language whatever language the interview was conducted in; a workspace that never opened the setting falls back to the language the vacancy was created in, and opening the settings page does not count as answering
 - Two modes: resume-only (a fast pre-screen that never returns "recommended") and full (interview-anchored, with citations from the transcript). A prior resume-only run upgrades to full for the price difference
-- Progress renders stage by stage with a cancel option; resume citations click through to the matching resume section
+- Progress renders stage by stage with a cancel option; resume citations click through to the matching resume section, and the quoted fragments are marked in the parsed resume and click back to their citation
+- The analysis card spells out, in words, where the manager and the AI disagreed — which competence, both scores, and which way the AI leaned — or says that the two agree, or that no manager has scored the candidate yet, so the AI verdict is never the only voice on the page
 - The platform flags an analysis that no longer matches its inputs — a re-parsed resume, edited vacancy competences, a run past 30 days, or an interview transcript the analysis never saw — and offers the re-run that fixes it. A stale baseline also closes the discounted upgrade, so a full analysis is never built on findings that have moved
-- The candidates table reports what the model can see (resume, resume + interview) and whether an analysis is running right now, both derived from the data rather than from the last run
+- The candidates table reports whether an analysis is running right now, derived from the data rather than from the last run
 - Where a manager's scores and the AI's disagree by the workspace threshold, the candidates table counts those competences and names them on hover — including the ones scored in an assessment round or judged by a resume-only analysis — and opens the canvas filtered to exactly those cells
 - Everyone the analysis concerns gets an email when it finishes or fails, naming the candidate and linking straight to the result
 - Bulk analyze queues a resume-only run for every candidate that has a parsed resume but no verdict yet
@@ -284,6 +303,7 @@ What to evaluate is chosen in a dedicated panel, on single and mass assessments 
 - Status flow: Draft → Sent → In progress → On review → Done, with Cancelled reachable from any state
 - The first submitted answer moves the assessment to In progress automatically; review starts when every participant finishes, or earlier by hand once at least one participant is done
 - Deadline tracking with email reminders; past dates are rejected at creation and at launch
+- Sending is refused when the selected evaluation criteria resolve to zero indicators, so an assessment can never go out with an empty questionnaire
 - Each employee can have at most 3 active assessments. Mass launches skip employees at the cap and report how many were created
 - Participants get an email when the assessment goes live, when it completes, and when it is cancelled after launch
 
@@ -403,7 +423,8 @@ Knowledge testing with configurable questions and pass criteria.
 
 An internal job board for open positions and project opportunities.
 
-- Card types for different opportunity categories, with a start date, optional end date, and rich descriptions
+- Three card types, explained where they are used: **Vacancy** — an open position to fill; **Talent** — a bench for a role that is not open yet; **Project** — a time-boxed piece of work people join while keeping their position. The type is an organizing label: matching, statuses and appointment work the same on all three
+- Each card carries a start date, an optional end date, and a rich description
 - Status flow: Draft → Published → Completed or Cancelled. A card publishes only when it has at least one required competence and one candidate
 - Published cards freeze their requirements; edits require unpublishing
 
@@ -412,16 +433,18 @@ An internal job board for open positions and project opportunities.
 - **Required specializations**: rows of specialization, grade, and an optional minimum of years of experience
 - **Required competences**: rows of competence and skill level. Picking a specialization prefills its competences from the grade ladder
 - A match threshold per card (50–100%) controls how strict the competence matcher is
-- The candidate pool fills automatically: an employee qualifies on work experience at matching positions and on assessment results for the required competences. Results from higher-level assessments project down to the required level
-- The match cell shows competence and experience scores as separate chips; clicking it opens a breakdown with the exact numbers the matcher used
+- The candidate pool fills automatically: an employee qualifies on work experience at matching positions and on assessment results for the required competences. Results from higher-level assessments project down to the required level. An assessment that was run without a target level counts against every required level of that competence
+- The match cell shows competence and experience scores as separate chips plus how many required competences the employee actually clears. The whole cell opens a breakdown that names the verdict — met, or how many competences sit below the card's bar — and lists the required-versus-current numbers per row
 
 ### Candidate Pool
 
 - Candidate statuses: matched, not matched, appointed. Manual nominees and appointed candidates survive automatic recomputes
 - Employees on a published card can react to express interest; their manager gets an email, and reactions break ties in the ranking
+- A development plan can be built straight from the breakdown: its items are exactly the required competences the candidate is short on, with the learning materials for each, and the plan is linked from the candidate row. Appointment and the plan are independent — a candidate can be appointed and then work the plan, or finish the plan and be appointed afterwards
 - Appointment asks for confirmation, so a stray click cannot pin a candidate
 - Emails go out on every lifecycle event: publish, being added to a live card, appointment, completion, cancellation, and removal from a published card
 - Regular employees see only published cards and cards where they are a candidate; all write controls stay hidden
+- A vacancy card can also come from recruitment: posting a requisition to the talent market creates one with the vacancy's required competences already on it (see Recruitment → Internal Candidates)
 
 ---
 
@@ -445,7 +468,7 @@ Per-workspace configuration that applies to every AI call.
 
 - Effort tiers: fast, balanced (default), and thorough, each mapping to a model and a retry budget; a custom tier opens model, temperature, and retry controls
 - Models come from a managed allow list, so only vetted models can be selected
-- A content language setting (English or German) controls the language the AI generates competences, indicators, positions, learning materials, and development plans in — independent of the interface language
+- A content language setting (English or German) controls the language the AI generates competences, indicators, positions, learning materials, development plans, and recruitment analyses in — independent of the interface language. The workspace is only recorded as having answered once someone saves the page; reading it leaves the choice open, so a workspace that never set one keeps falling back per feature
 - A company context field (up to 2000 characters) is appended to every prompt
 - Supported providers: Anthropic, OpenAI, Google Gemini, YandexGPT (Yandex Foundation Models), and any OpenAI-compatible server (Ollama, vLLM, LM Studio) via a custom endpoint URL
 - The provider selector offers only providers with working credentials: a platform-wide key, a workspace key (bring your own key), or a configured local endpoint — workspace credentials take priority over platform keys in every AI call
@@ -475,6 +498,9 @@ Per-workspace configuration that applies to every AI call.
 - Every action in the Admin area is admin-only on the API too, so a hidden section is never merely hidden (reference data stays readable across the product, as the rest of the app depends on it)
 - Reading is scoped as tightly as writing: hiring data (candidates, resumes, interviews, reports) is reserved for the roles that do hiring, and the sections under an employee card — competences, timeline, education, employment history, compensation — open only for the person themselves, their division manager, and admins
 - Everyone can still look a colleague up: the employee list is a company directory for rank-and-file staff, showing name, job title and department with no HR data attached. Grades appear there only if the workspace switches them on
+- The positions catalogue answers to the same switch: a rank-and-file employee browses positions, divisions and headcounts, but a position's grade and specialization arrive only when the workspace has switched grades on — otherwise the directory and the catalogue together would rebuild the grade the directory withholds. Filtering by grade or specialization is closed for them too, since a filter answers the same question the column would
+- Recruiters and hiring managers always see a position's grade and specialization: a requisition cannot be raised without them
+- Salary ranges are a separate line and a shorter one: positions and specialization grades show them to admins, HR and managers only — not to recruiters, and not to anyone else whatever the grade switch says
 - The same holds wherever else a list of people appears — the employees on a position or a specialization, and the headcount drill-down: colleagues see the directory columns there too, not hire dates, employment status or HR alerts
 - "My profile" in the header menu and on the dashboard opens the person's own card in full — the directory view is only what colleagues see of each other
 - Inside hiring, a division manager sees their own department: a vacancy opens for them when it belongs to a division they manage, names them as its hiring manager, or was created by them — and candidates, resumes, interviews and reports inherit that same boundary. Admins, HR and recruiters keep the whole workspace
@@ -501,10 +527,12 @@ Per-workspace configuration that applies to every AI call.
 - Full dark mode: light, dark, or system preference, persisted across sessions
 - Responsive layout tested on phone, tablet, and desktop sizes
 - Global search on Cmd+K / Ctrl+K across employees, assessments, plans, and exams
+- Every section reachable from the sidebar carries a question mark next to its page heading explaining what the section is for and what belongs in it
 - Interface languages: English and German ship with the product; the deployment configures the offered languages, the onboarding wizard records the workspace default, and every member can pick a personal language in their profile or the header language switcher; the wizard also sets the AI content language separately
 - Backend error messages follow the interface language too, and every error carries a stable machine-readable code; adding a community language is a translation-catalog pull request — see the contributing guide
 - Outbound email arrives in the recipient's language — their personal preference, else the workspace default — for both built-in templates and database notification templates, falling back to English where a translation is missing
 - Built-in reference data follows the interface language too: shipped grades, specializations, competence types, skill levels, assessment statuses and types, and the default answer scale translate with the UI, while entries your team creates always display exactly as typed
+- Enum-valued fields — employee event types, development-plan material formats — show a translated label while the stored value stays the code, and a value the catalog does not know still renders as it is rather than disappearing
 
 ### Waitlist
 
@@ -561,7 +589,7 @@ A first-login wizard for newly registered organizations.
 
 - Invite colleagues by email with a pre-assigned role, division, and position; accepting creates the user account and the employee card in one step
 - Invitation links expire after 7 days; an inviter can never grant a role above their own
-- Bulk invite up to 100 people at once
+- Bulk invite up to 100 people at once; the response lists every address that could not be invited together with the reason
 - A management page tracks all invitations with status filters (pending, accepted, cancelled, expired), resend and cancel actions, and inline editing of pending invites; the page and the registry API behind it are admin-only
 - Changing the email on a pending invite issues a fresh link, resets the expiry, and disables the old link
 - The accept page introduces itself from the invitation: the invited address is shown read-only and the name entered by the inviter is split into first and last name, both still editable
@@ -605,6 +633,8 @@ A first-login wizard for newly registered organizations.
 - A management dashboard built around the development loop — assess, find gaps, develop, close: four clickable stages show assessment coverage, employees scoring below their grade bar, open development plans, and gaps confirmed closed by a re-assessment in the last quarter
 - An action queue that turns detected problems into next steps: employees below the bar with no development plan, overdue plans, plans stuck in review, and falling assessment coverage — each row deep-links into the module that fixes it
 - Every tile and queue row opens the list already filtered to the people it counted, so the number on the dashboard and the rows on the page always match; the names listed under a finding link straight to the person's card
+- The gaps stage only turns red when nobody is working on the gap — gaps that already have an open development plan read as amber, and a red chip on the tile counts the ones still without a plan
+- Every stage of the loop, the action queue and the assessment-cycle card carry a question mark that explains exactly what the number counts, including the time windows and the passing bar behind it
 - Dashboard figures follow the reader's scope: a division manager sees their own subtree, not the whole company
 - A personal dashboard for employees: my loop stages (latest assessment, my gaps, my active plan, confirmed closures), a personal to-do queue (pending surveys, returned or overdue plans, gaps without a plan), strengths with rare-skill highlights, growth direction to the next grade, and an assessment-score sparkline
 - An on-demand AI summary of the loop state — one click explains what is going on and what to do first; employees get a coach-style personal summary on their own dashboard (cached per data state)

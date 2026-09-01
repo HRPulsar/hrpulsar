@@ -47,6 +47,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Hint } from "@/components/ui/hint";
 import { cn } from "@/lib/utils";
 
 const USE_PRESET_DEFAULT = "__preset__";
@@ -83,6 +84,7 @@ export default function AISettingsPage() {
 
 function AISettingsPageContent() {
   const t = useTranslations("settings");
+  const tSections = useTranslations("sections");
   const isSaas = useIsSaas();
   const [settings, setSettings] = useState<AISettings | null>(null);
   const [presets, setPresets] = useState<EffortPreset[]>([]);
@@ -292,7 +294,13 @@ function AISettingsPageContent() {
   return (
     <div className="mx-auto max-w-3xl space-y-6 pb-24">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{t("aiTitle")}</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight">{t("aiTitle")}</h1>
+          <Hint
+            text={tSections("aiSettings.hint")}
+            data-testid="ai-settings-hint-title"
+          />
+        </div>
         <p className="text-sm text-muted-foreground">{t("aiDescription")}</p>
       </div>
 

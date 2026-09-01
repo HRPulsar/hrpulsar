@@ -11,10 +11,14 @@ import {
 
 const API_BASE = "http://localhost:8100/api";
 
-// HRP-172 redo: the breakdown drawer now opens from a dedicated chevron
-// icon (chips are no longer the click target), surfaces a separate
-// "Match / Below" qualifies chip next to the level percent, and stays
-// scrollable when the requirement list overflows the viewport.
+// HRP-172 redo: the breakdown drawer surfaces the level percent per
+// required competence and stays scrollable when the requirement list
+// overflows the viewport.
+// HRP-657: the click target grew back to the whole Match cell. The
+// chips-inert rule from HRP-172 hid the affordance — operators read the
+// coloured chips as a static readout and never reached the explanation.
+// The chevron is now the trailing icon of that one button and keeps the
+// `-match-trigger` testid, so the click path below is unchanged.
 test.describe("HRP-172 redo: Talent Market match drawer", () => {
   let accessToken: string;
   let refreshToken: string;
@@ -117,7 +121,7 @@ test.describe("HRP-172 redo: Talent Market match drawer", () => {
     await setAuthTokens(page, accessToken, refreshToken);
   });
 
-  test("chevron icon opens the drawer; chips stay inert", async ({ page }) => {
+  test("the whole match cell opens the drawer", async ({ page }) => {
     await page.goto(`/talent-market/${cardId}`);
     const trigger = page
       .getByTestId("talent-market-candidate-match-trigger")
@@ -138,5 +142,49 @@ test.describe("HRP-172 redo: Talent Market match drawer", () => {
         .getByTestId("talent-market-match-drawer-competence-percent")
         .first(),
     ).toBeVisible();
+    // HRP-657: the verdict states in words why this candidate does or
+    // does not match, so the operator does not decode chip colours.
+    await expect(
+      page.getByTestId("talent-market-match-drawer-verdict"),
+    ).toBeVisible();
+  });
+
+  test("clicking the competence chip opens the drawer too", async ({
+    page,
+  }) => {
+    // HRP-657: the chips used to be deliberately inert. They are inside
+    // the trigger button now — a click anywhere on the indicator explains
+    // the verdict.
+    await page.goto(`/talent-market/${cardId}`);
+    const chip = page
+      .getByTestId("talent-market-candidate-match-competence")
+      .first();
+    await expect(chip).toBeVisible({ timeout: 10000 });
+    await chip.click();
+    await expect(page.getByTestId("talent-market-match-drawer")).toBeVisible({
+      timeout: 5000,
+    });
+  });
+
+  test("the gap plan is created from the drawer", async ({ page }) => {
+    // HRP-665: the employee has no Done assessment on the required
+    // competence, so it is a gap and the plan action is offered.
+    await page.goto(`/talent-market/${cardId}`);
+    const trigger = page
+      .getByTestId("talent-market-candidate-match-trigger")
+      .first();
+    await expect(trigger).toBeVisible({ timeout: 10000 });
+    await trigger.click();
+
+    const createPlan = page.getByTestId(
+      "talent-market-match-drawer-create-plan",
+    );
+    await expect(createPlan).toBeVisible({ timeout: 5000 });
+    await createPlan.click();
+
+    // The row picks up the plan badge once the card reloads.
+    await expect(
+      page.getByTestId("talent-market-candidate-plan").first(),
+    ).toBeVisible({ timeout: 10000 });
   });
 });

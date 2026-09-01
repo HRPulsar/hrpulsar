@@ -25,6 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Hint } from "@/components/ui/hint";
 import { Pagination } from "@/components/pagination";
 import { usePermissions } from "@/hooks/use-permissions";
 import { RecruitmentBreadcrumbs, RecruitmentTabs } from "@/components/recruitment";
@@ -42,6 +43,7 @@ const PAGE_SIZE = 25;
 export default function VacancyListPage() {
   const router = useRouter();
   const t = useTranslations("recruitment");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const [vacancies, setVacancies] = useState<Vacancy[]>([]);
   const [total, setTotal] = useState(0);
@@ -122,9 +124,15 @@ export default function VacancyListPage() {
       <RecruitmentTabs />
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t("vacanciesTitle")}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {t("vacanciesTitle")}
+            </h1>
+            <Hint
+              text={tSections("recruitment.hint")}
+              data-testid="recruitment-hint-title"
+            />
+          </div>
           {/* HRP-290: counter respects active filters (Assessments parity). */}
           <p
             className="text-sm text-muted-foreground"

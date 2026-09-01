@@ -549,14 +549,18 @@ class TestPositionDrilldown:
             db, tenant.id, PositionCreate(title="Empty Pos")
         )
         items = await service.list_position_employees(
-            db, tenant.id, created["id"], visible_employee_ids=None
+            db, tenant.id, created["id"], visible_employee_ids=None, show_grades=True
         )
         assert items == []
 
     async def test_list_position_employees_returns_assigned(self, db, tenant, employee):
         # employee fixture has position_id set
         items = await service.list_position_employees(
-            db, tenant.id, employee.position_id, visible_employee_ids=None
+            db,
+            tenant.id,
+            employee.position_id,
+            visible_employee_ids=None,
+            show_grades=True,
         )
         assert len(items) == 1
         assert items[0]["id"] == employee.id
@@ -565,7 +569,7 @@ class TestPositionDrilldown:
     async def test_list_position_employees_not_found(self, db, tenant):
         with pytest.raises(HTTPException) as exc:
             await service.list_position_employees(
-                db, tenant.id, uuid.uuid4(), visible_employee_ids=None
+                db, tenant.id, uuid.uuid4(), visible_employee_ids=None, show_grades=True
             )
         assert exc.value.status_code == 404
 
@@ -579,7 +583,11 @@ class TestPositionDrilldown:
 
         with pytest.raises(HTTPException) as exc:
             await service.list_position_employees(
-                db, other.id, employee.position_id, visible_employee_ids=None
+                db,
+                other.id,
+                employee.position_id,
+                visible_employee_ids=None,
+                show_grades=True,
             )
         assert exc.value.status_code == 404
 
@@ -612,7 +620,11 @@ class TestPositionDrilldown:
         db.expunge_all()
 
         items = await service.list_position_employees(
-            db, tenant.id, employee.position_id, visible_employee_ids=None
+            db,
+            tenant.id,
+            employee.position_id,
+            visible_employee_ids=None,
+            show_grades=True,
         )
         assert len(items) == 1
         row = items[0]
@@ -622,6 +634,21 @@ class TestPositionDrilldown:
         # HRP-175: division_id surfaces so the unified EmployeeList can
         # turn the Division cell into a deep-link.
         assert row["division_id"] == div.id
+
+        # HRP-637 (HRP-654 review): the drill-down is the same
+        # "position -> grade" join every other position payload trims, so
+        # a caller can_see_position_grades refuses gets both fields blank
+        # — including on their own row.
+        hidden = await service.list_position_employees(
+            db,
+            tenant.id,
+            employee.position_id,
+            visible_employee_ids=None,
+            show_grades=False,
+        )
+        assert hidden[0]["specialization_title"] is None
+        assert hidden[0]["grade_title"] is None
+        assert hidden[0]["division_name"] == "Engineering"
 
 
 class TestPositionCompetenceMatrix:

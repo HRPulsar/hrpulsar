@@ -824,6 +824,58 @@ class TestUpdateValidationUnion:
         assert row.llm_model == model_id
 
 
+class TestCuratedWhitelistGuard:
+    """HRP-573 — a moderated upsert must not displace a curated entry."""
+
+    async def test_curated_entry_survives_a_moderation_upsert(
+        self, _registry_guard
+    ) -> None:
+        # The mine: a moderated catalog row carrying a curated model id.
+        # Unreachable through the API today (both callers filter first), so
+        # this drives the service directly — the guard has to hold there.
+        model_id = f"claude-curated-{uuid.uuid4().hex[:6]}"
+        _price_in_config(model_id, 3.0)
+
+        ai_settings_service.upsert_allowed_model(
+            {
+                "provider": "anthropic",
+                "model": model_id,
+                "label": "Moderated",
+                "credit_multiplier": 1.0,
+            }
+        )
+
+        entry = ai_settings_service._model_lookup(model_id)
+        assert entry is not None
+        assert entry["credit_multiplier"] == pytest.approx(3.0)
+        assert entry["label"] == model_id
+        assert [e["model"] for e in ai_settings_service.list_allowed_models()].count(
+            model_id
+        ) == 1
+
+    async def test_non_curated_model_still_upserts_and_replaces(
+        self, _registry_guard
+    ) -> None:
+        # The other direction: the moderation path itself must keep working,
+        # including the "replace" half of insert-or-replace.
+        model_id = f"claude-discovered-{uuid.uuid4().hex[:6]}"
+        for multiplier in (2.5, 4.0):
+            ai_settings_service.upsert_allowed_model(
+                {
+                    "provider": "anthropic",
+                    "model": model_id,
+                    "label": "Moderated",
+                    "credit_multiplier": multiplier,
+                }
+            )
+            entry = ai_settings_service._model_lookup(model_id)
+            assert entry is not None
+            assert entry["credit_multiplier"] == pytest.approx(multiplier)
+        assert [e["model"] for e in ai_settings_service.list_allowed_models()].count(
+            model_id
+        ) == 1
+
+
 class TestEffectiveMultiplierAsync:
     async def test_catalog_row_fallback_when_registry_misses(
         self, db: AsyncSession, tenant, _registry_guard
@@ -1113,6 +1165,9 @@ class TestCatalogAsSourceOfTruth:
         )
         row = await ai_settings_service.get_or_default(db, tenant.id)
         row.llm_model = model_id
+        # HRP-628: a read hands back an unsaved row — persisting is the
+        # caller's move now, exactly as ``service.update`` does it.
+        db.add(row)
         await db.commit()
         await db.refresh(row)
 

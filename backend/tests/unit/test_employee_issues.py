@@ -420,3 +420,27 @@ async def test_gaps_tile_equals_the_competence_gap_list(
     )
 
     assert payload["stages"]["gaps"]["employees"] == total == 2
+
+
+# ---------------------------------------------------------------------------
+# HRP-660: the card speaks the same language as the list row
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_card_codes_match_the_list_row(db: AsyncSession, tenant, loop_fixtures):
+    """One employee's card badges must equal the badges on their list row."""
+    from app.modules.employee import service as employee_service
+
+    statuses, types = loop_fixtures
+    emp = await _make_employee(db, tenant, last_name="Carded")
+    await _make_employee(db, tenant, last_name="Bystander")
+    await _done_assessment(db, tenant, emp, statuses, types, percent=40)
+
+    card = await employee_service.get_employee(db, tenant.id, emp.id, with_issues=True)
+    rows, _ = await employee_service.list_employees(db, tenant.id, with_alerts=True)
+    row = next(r for r in rows if r["id"] == emp.id)
+
+    codes = [i["code"] for i in card["issues"]]
+    assert codes == [i["code"] for i in row["issues"]]
+    assert "gaps_without_plan" in codes

@@ -1134,6 +1134,81 @@ class TestGenerateReportTask:
         # visible to the reader even though it no longer drives the verdict.
         assert ws.cell(row=7, column=3).value == "5.0/20.0 (25.0%)"
 
+    async def test_full_analysis_without_a_resume_is_not_full_data(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """HRP-685 — the report must derive readiness, not read the mirror.
+
+        A candidate interviewed without ever uploading a resume gets a real
+        full analysis (the prompt takes ``resume_summary`` as optional), and
+        that run stamps ``candidate_vacancies.ai_readiness =
+        'resume_and_transcript'``. Reading the mirror printed "Full data" for
+        a candidate the model never saw a resume for.
+        """
+        from app.config import settings as app_settings
+        from app.modules.recruitment.models import CandidateVacancy, Interview
+
+        from tests.conftest import TEST_DB_URL
+
+        monkeypatch.setattr(app_settings, "database_url", TEST_DB_URL)
+
+        from app.modules.recruitment.tasks import generate_report_task
+
+        vac = await _make_vacancy(db, tenant, user, title="NoResume")
+        vacancy_id = uuid.UUID(str(vac["id"]))
+        cand = await _make_candidate(db, tenant, user)
+        cv = await service.attach_candidate(
+            db,
+            tenant.id,
+            user.id,
+            CandidateVacancyCreate(
+                candidate_id=uuid.UUID(str(cand["id"])), vacancy_id=vacancy_id
+            ),
+        )
+        cv_id = uuid.UUID(str(cv["id"]))
+        cv_row = await db.get(CandidateVacancy, cv_id)
+        # What a completed full run leaves behind (tasks/analysis.py:775) —
+        # unconditionally, resume or no resume.
+        cv_row.ai_readiness = "resume_and_transcript"
+        db.add(
+            Interview(
+                tenant_id=tenant.id,
+                candidate_vacancy_id=cv_id,
+                transcript="Interviewer: tell me about yourself.",
+                transcription_status="completed",
+            )
+        )
+        await db.flush()
+
+        with patch(
+            "app.modules.recruitment.tasks.generate_report_task.delay"
+        ) as mock_delay:
+            mock_delay.return_value.id = "tid"
+            res = await service.enqueue_report(
+                db,
+                tenant.id,
+                user.id,
+                vacancy_id,
+                ReportGenerateRequest(sections=["summary_ranking"]),
+            )
+        await db.commit()
+
+        captured: dict[str, bytes] = {}
+
+        def _fake_upload(data: bytes, path: str, content_type: str) -> str:
+            captured["bytes"] = data
+            return f"http://example/{path}"
+
+        monkeypatch.setattr("app.core.s3.upload_file", _fake_upload, raising=True)
+        monkeypatch.setattr("app.core.s3.get_s3_client", lambda: None, raising=True)
+
+        result = generate_report_task.run(str(res["export_id"]), str(tenant.id))
+        assert result["status"] == "completed", result
+
+        ws = load_workbook(io.BytesIO(captured["bytes"]))["Summary"]
+        assert ws.cell(row=6, column=5).value == "AI data"
+        assert ws.cell(row=7, column=5).value == "No resume"
+
     async def test_task_writes_xlsx_and_marks_completed(
         self, db: AsyncSession, tenant, user, monkeypatch
     ) -> None:

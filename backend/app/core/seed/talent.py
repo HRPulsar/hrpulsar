@@ -89,8 +89,13 @@ async def seed_talent_market(ctx: SeedContext) -> None:
             id=uid(),
             card_id=card_vacancy.id,
             employee_id=ctx.employees[3].id,
-            status="interested",
-            match_score=78,
+            # HRP-675: the domain has known `matched` / `not_matched` /
+            # `appointed` since HRP-214 — the legacy `interested` /
+            # `nominated` codes have no label on any surface.
+            status="matched",
+            # Above the card's 80% bar, like every `matched` row the
+            # matcher writes (HRP-675).
+            match_score=82,
             response_at=past_dt(10),
         )
     )
@@ -99,7 +104,7 @@ async def seed_talent_market(ctx: SeedContext) -> None:
             id=uid(),
             card_id=card_vacancy.id,
             employee_id=ctx.employees[4].id,
-            status="nominated",
+            status="matched",
             match_score=85,
         )
     )
@@ -178,13 +183,19 @@ async def seed_talent_market(ctx: SeedContext) -> None:
     for emp in random.sample(
         ctx.employees[: min(15, len(ctx.employees))], min(4, len(ctx.employees))
     ):
+        # HRP-675: the status follows the score against the card's Match%
+        # bar, the way the matcher assigns it. Rolling the two independently
+        # produced rows the product can never produce — `not_matched` at
+        # 93% next to `matched` at 61%.
+        score = random.randint(60, 95)
+        qualifies = score >= card_project.match_percent
         ctx.db.add(
             TalentCandidate(
                 id=uid(),
                 card_id=card_project.id,
                 employee_id=emp.id,
-                status=random.choice(["nominated", "interested", "matched"]),
-                match_score=random.randint(60, 95),
+                status="matched" if qualifies else "not_matched",
+                match_score=score,
             )
         )
 

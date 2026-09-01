@@ -646,6 +646,7 @@ class BulkStatusSkipReasons(BaseModel):
     already_cancelled: int = 0
     missing_criteria_or_scale: int = 0
     deadline_in_past: int = 0
+    no_indicators: int = 0
     no_completed_participant: int = 0
     not_in_on_review: int = 0
     manual_in_progress_not_allowed: int = 0
@@ -754,6 +755,12 @@ class PDPCreate(BaseModel):
     specialization_id: uuid.UUID | None = None
     grade_id: uuid.UUID | None = None
     deadline: datetime | None = None
+    # HRP-665: explicit item list. When set, the plan is built from exactly
+    # these competences (the Talent Market gap plan: required vs current)
+    # instead of the whole (specialization, grade) matrix. Each entry may
+    # carry the target level so materials stop at it, as HRP-189 does for
+    # the grade-driven path.
+    competences: list[CompetenceCriteriaItem] | None = None
 
     _validate_deadline = field_validator("deadline")(not_past_deadline)
 

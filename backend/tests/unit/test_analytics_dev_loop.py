@@ -187,7 +187,11 @@ async def test_empty_tenant_returns_zeroes(db: AsyncSession, tenant):
         "total_active": 0,
         "percent": 0,
     }
-    assert payload["stages"]["gaps"] == {"employees": 0, "competences": 0}
+    assert payload["stages"]["gaps"] == {
+        "employees": 0,
+        "competences": 0,
+        "without_plan": 0,
+    }
     assert payload["findings"] == []
     assert payload["data_version"]
 
@@ -202,7 +206,11 @@ async def test_gap_below_bar_without_plan(
     payload = await analytics_service.dev_loop(db, tenant.id, None)
 
     assert payload["stages"]["assessed"]["covered"] == 1
-    assert payload["stages"]["gaps"] == {"employees": 1, "competences": 1}
+    assert payload["stages"]["gaps"] == {
+        "employees": 1,
+        "competences": 1,
+        "without_plan": 1,
+    }
     finding = _finding(payload, "gaps_without_plan")
     assert finding is not None
     assert finding["count"] == 1
@@ -218,7 +226,11 @@ async def test_result_at_the_bar_is_not_a_gap(
     await _make_done_assessment(db, tenant, emp, status_done, type_self, percent=75)
 
     payload = await analytics_service.dev_loop(db, tenant.id, None)
-    assert payload["stages"]["gaps"] == {"employees": 0, "competences": 0}
+    assert payload["stages"]["gaps"] == {
+        "employees": 0,
+        "competences": 0,
+        "without_plan": 0,
+    }
     assert _finding(payload, "gaps_without_plan") is None
 
 
@@ -233,6 +245,9 @@ async def test_gap_with_open_pdp_not_flagged(
 
     payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert _finding(payload, "gaps_without_plan") is None
+    # HRP-656: the gap is real but planned — the tile must not go red.
+    assert payload["stages"]["gaps"]["employees"] == 1
+    assert payload["stages"]["gaps"]["without_plan"] == 0
     assert payload["stages"]["developing"]["gap_employees_with_plan"] == 1
     assert payload["stages"]["developing"]["open_pdps"] == 1
 
@@ -319,7 +334,11 @@ async def test_gap_closed_by_reassessment(
     payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["closed"]["gaps_closed_90d"] == 1
     # the fresh result sits above the bar — no current gap either
-    assert payload["stages"]["gaps"] == {"employees": 0, "competences": 0}
+    assert payload["stages"]["gaps"] == {
+        "employees": 0,
+        "competences": 0,
+        "without_plan": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -633,7 +652,11 @@ async def test_zero_passing_bar_is_respected(
     )
 
     payload = await analytics_service.dev_loop(db, tenant.id, None)
-    assert payload["stages"]["gaps"] == {"employees": 0, "competences": 0}
+    assert payload["stages"]["gaps"] == {
+        "employees": 0,
+        "competences": 0,
+        "without_plan": 0,
+    }
     assert _finding(payload, "gaps_without_plan") is None
 
     personal = await analytics_service.my_loop(db, tenant.id, emp.user_id)

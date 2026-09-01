@@ -76,6 +76,10 @@ class VacancyCreate(BaseModel):
     conditions: str | None = None
     # HRP-131
     library_refs: VacancyLibraryRefs | None = None
+    # HRP-678: the create form carries the switch too — a sensitive
+    # requisition must be able to start excluded, not become excluded on
+    # a second save.
+    internal_search_allowed: bool = True
 
 
 class VacancyUpdate(BaseModel):
@@ -103,6 +107,8 @@ class VacancyUpdate(BaseModel):
     responsibilities: str | None = None
     conditions: str | None = None
     library_refs: VacancyLibraryRefs | None = None
+    # HRP-678: opt a sensitive requisition out of the internal search.
+    internal_search_allowed: bool | None = None
 
 
 # --- HRP-136 vacancy competences ---
@@ -201,6 +207,8 @@ class VacancyRead(BaseModel):
     candidates_count: int = 0
     has_profile: bool = False
     active_invites_count: int = 0
+    # HRP-678
+    internal_search_allowed: bool = True
 
     model_config = {"from_attributes": True}
 
@@ -370,6 +378,11 @@ class CandidateCanonicalRead(BaseModel):
     notes: str | None = None
     parsed_resume_jsonb: dict | None = None
     archived_at: datetime | None = None
+    # HRP-663: this candidate is one of our own — their Person row is
+    # linked to a User with an Employee profile in this tenant. Already
+    # on ``CandidateRead``; the card and the vacancy table could not show
+    # it because it never reached their schemas.
+    is_employee: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -454,23 +467,25 @@ class DivergentCompetencePreview(BaseModel):
 class CandidateVacancyEnrichedRead(BaseModel):
     """List row for the vacancy candidates table (FR-09).
 
-    ``score_divergence`` is precomputed server-side off the spec threshold
-    (1.0 on the tenant assessment scale, comparing ``manager_score`` with
-    ``ai_score_normalized`` — see ``compute_score_divergence``) so the UI
-    does not need to recheck.
-
     HRP-267 added the % match aggregates: ``manager_percent`` /
     ``ai_percent`` mirror what the Compact matrix shows so the candidates
     table can sort by either side; ``divergence_count`` counts cells
     where ``abs(manager_avg - ai_score) >= tenant.divergence_threshold``;
     ``divergence_top`` previews up to 5 of those cells for the tooltip
     on the Divergence column badge.
+
+    HRP-662: ``score_divergence`` is no longer a second opinion with its
+    own hard-coded threshold — it is ``divergence_count > 0``, so the
+    highlight and the count in one row always tell the same story.
+    Both are populated by ``candidate_service.apply_matrix_aggregates``.
     """
 
     id: uuid.UUID
     candidate_id: uuid.UUID
     vacancy_id: uuid.UUID
     candidate_name: str
+    # HRP-663: internal candidate marker — see ``CandidateCanonicalRead``.
+    is_employee: bool = False
     last_position: str | None = None
     years_of_experience: int | None = None
     stage_id: uuid.UUID | None = None
@@ -508,6 +523,36 @@ class CandidateVacancyEnrichedRead(BaseModel):
     ai_analysis_in_progress: bool = False
     version: int
     added_at: datetime
+
+
+class VacancyInternalCandidateRead(BaseModel):
+    """One employee the talent-market matcher scored for this vacancy."""
+
+    employee_id: uuid.UUID
+    employee_name: str | None = None
+    position_title: str | None = None
+    match_score: int | None = None
+    status: str
+
+
+class VacancyInternalCandidatesRead(BaseModel):
+    """HRP-667 / HRP-663: who inside already fits this requisition.
+
+    ``talent_card_id is None`` means the vacancy has never been posted to
+    the internal talent market — the UI shows the offer to post it rather
+    than an empty list. ``has_library_competences`` says whether posting
+    is even possible: the matcher reads library-linked competences, not
+    the AI profile's free-text slugs.
+    """
+
+    talent_card_id: uuid.UUID | None = None
+    talent_card_status: str | None = None
+    has_library_competences: bool = False
+    # HRP-678: the recruiter's per-vacancy switch. False means the Post
+    # button stays disabled with the reason next to it, the same shape the
+    # block already uses for "no permission" and "no competences".
+    internal_search_allowed: bool = True
+    items: list[VacancyInternalCandidateRead] = Field(default_factory=list)
 
 
 class CandidateVacancyPatch(BaseModel):

@@ -40,7 +40,8 @@ Return a JSON object with these fields:
       "institution": "string",
       "degree": "string",
       "field": "string",
-      "year": "integer or null"
+      "start_date": "string or null (as written in the resume, e.g. '2013' or 'Sep 2013')",
+      "end_date": "string or null (graduation, as written; null if still studying)"
     }}
   ],
   "skills": ["string"],
@@ -52,9 +53,9 @@ Return a JSON object with these fields:
   ],
   "certificates": [
     {{
-      "title": "string",
+      "name": "string (certificate name)",
       "issuer": "string or null",
-      "year": "integer or null"
+      "issued_at": "string or null (as written in the resume, e.g. '2022' or 'Mar 2022')"
     }}
   ],
   "summary": "2-3 sentence professional summary"
@@ -74,6 +75,10 @@ Important rules:
 - ``start_date`` / ``end_date`` keep the resume's own wording; do not
   reformat dates. ``description`` collects the role's responsibilities
   and achievements text
+- The same holds for education ``start_date`` / ``end_date`` and
+  certificate ``issued_at``: copy the resume's own wording, and emit
+  null for any date the resume does not state (a single graduation or
+  issue year goes into ``end_date`` / ``issued_at``)
 - Do NOT invent information not present in the resume
 - If a field is not found, use null or empty array
 - Do NOT extract sensitive PII (passport numbers, tax IDs, etc.)
@@ -146,13 +151,15 @@ Rules:
 - Keep the top-level ``indicator_question`` / ``good_answer`` / ``acceptable_answer``
   / ``poor_answer`` mirrors in sync with ``questions[0]`` — older UIs still
   read those legacy fields
-- The `id` must be a stable kebab-case slug derived from the English name
-  (e.g. "Senior Python skills" → "senior-python-skills"); same id = same
-  competence across regenerations
+- The `id` must be a stable kebab-case slug in Latin characters — translate
+  the competence name to English for the slug only (e.g. "Senior Python
+  skills" → "senior-python-skills"); same id = same competence across
+  regenerations. The slug rule does NOT change the output language of any
+  human-readable field
 - Criticality distribution: ~30% critical, ~40% important, ~30% desirable
 - Questions should be behavioral (STAR format) or situational
 - Good/acceptable/poor answers should be realistic and distinguishable
-- Respond in {language} language
+- {language_directive}
 """
 
 GENERATE_QUESTIONS = """Generate individual interview questions for a specific candidate based on their resume and the vacancy's competency profile.
@@ -200,5 +207,5 @@ Rules:
 - Questions should be open-ended (STAR, behavioral, situational)
 - Good/acceptable/poor answers should be specific to THIS candidate's background
 - Do NOT generate generic questions — every question must be personalized
-- Respond in {language} language
+- {language_directive}
 """

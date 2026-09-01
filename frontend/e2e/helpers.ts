@@ -685,3 +685,144 @@ export async function setupFullTenant(page: Page): Promise<TenantSetup> {
     employeeId: employee.id,
   };
 }
+
+export interface BelowBarResult {
+  competenceId: string;
+  competenceTitle: string;
+  assessmentId: string;
+}
+
+/**
+ * Drive one employee to a competence result under the passing bar.
+ *
+ * The whole development loop — the dashboard gap tile, the
+ * `competence_gap` / `gaps_without_plan` issue badges, the gap badge in
+ * the employee's competence tree — hangs off "a done assessment scored
+ * below the bar", and there is no API shortcut for it: the score has to
+ * come out of real answers. The scale below has three scoring options, so
+ * answering with the lowest lands the competence percent well under the
+ * default 75% bar.
+ */
+export async function seedBelowBarResult(
+  opts: ApiHelperOpts,
+  employeeId: string,
+  /**
+   * Score a competence the caller already wired up — needed whenever the
+   * gap has to show on the Competences tab, whose "current position" block
+   * lists what the employee's grade-specialization requires and nothing
+   * else. Omit it and the helper mints a throwaway competence instead.
+   */
+  target?: { competenceId: string; skillLevelId: string },
+  label: string = "Gap",
+): Promise<BelowBarResult> {
+  const { page } = opts;
+  const auth = { headers: { Authorization: `Bearer ${opts.accessToken}` } };
+  const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+  let level: { id: string };
+  let comp: { id: string; title: string };
+  if (target) {
+    level = { id: target.skillLevelId };
+    comp = await (
+      await page.request.get(`${API_BASE}/competences/${target.competenceId}`, auth)
+    ).json();
+  } else {
+    level = await pickFirstSkillLevel(opts);
+    const group = await createCompetenceGroup(opts, `${label}Group-${stamp}`);
+    comp = await createCompetence(opts, group.id, `${label}Comp-${stamp}`);
+    await createIndicator(opts, comp.id, `${label}Ind-${stamp}`, level.id);
+  }
+
+  const scaleResp = await page.request.post(`${API_BASE}/answer-scales`, {
+    ...auth,
+    data: {
+      title: `${label} scale ${stamp}`,
+      options: [
+        { title: "Low", sort_index: 0, is_neutral: false },
+        { title: "Mid", sort_index: 1, is_neutral: false },
+        { title: "Top", sort_index: 2, is_neutral: false },
+      ],
+      levels: [
+        { percent_from: 0, percent_to: 50, system_title: "Growth area", sort_index: 0 },
+        { percent_from: 51, percent_to: 100, system_title: "On target", sort_index: 1 },
+      ],
+    },
+  });
+  if (!scaleResp.ok()) {
+    throw new Error(`answer-scale failed (${scaleResp.status()}): ${await scaleResp.text()}`);
+  }
+  const scale = await scaleResp.json();
+
+  const assessment = await createAssessment(
+    opts,
+    employeeId,
+    `${label} review ${stamp}`,
+    "self",
+  );
+  await page.request.put(`${API_BASE}/assessments/${assessment.id}/scale`, {
+    ...auth,
+    data: { scale_id: scale.id },
+  });
+  await page.request.put(`${API_BASE}/assessments/${assessment.id}/criteria`, {
+    ...auth,
+    data: {
+      criteria_type: "competences",
+      competences: [{ competence_id: comp.id, skill_level_id: level.id }],
+    },
+  });
+  await page.request.post(`${API_BASE}/assessments/${assessment.id}/status`, {
+    ...auth,
+    data: { status_code: "sent" },
+  });
+
+  const detail = await (
+    await page.request.get(`${API_BASE}/assessments/${assessment.id}`, auth)
+  ).json();
+  const participant = detail.participants.find(
+    (p: { role: string }) => p.role === "self",
+  );
+  if (!participant) throw new Error("self participant missing on the assessment");
+
+  // The scale is snapshotted onto the assessment, so the option ids the
+  // answer must carry come from the snapshot, not from the source scale.
+  const snapshot = await (
+    await page.request.get(`${API_BASE}/answer-scales/${detail.scale_id}`, auth)
+  ).json();
+  const lowest = [...snapshot.options]
+    .filter((o: { is_neutral: boolean }) => !o.is_neutral)
+    .sort((a: { weight: number }, b: { weight: number }) => a.weight - b.weight)[0];
+
+  const compDetail = await (
+    await page.request.get(`${API_BASE}/competences/${comp.id}`, auth)
+  ).json();
+
+  await page.request.post(`${API_BASE}/assessments/${assessment.id}/status`, {
+    ...auth,
+    data: { status_code: "in_progress" },
+  });
+  const answer = await page.request.post(
+    `${API_BASE}/assessments/${assessment.id}/answers`,
+    {
+      ...auth,
+      data: {
+        participant_id: participant.id,
+        indicator_id: compDetail.indicators[0].id,
+        answer_option_id: lowest.id,
+        score: lowest.weight,
+      },
+    },
+  );
+  if (!answer.ok()) {
+    throw new Error(`answer failed (${answer.status()}): ${await answer.text()}`);
+  }
+  await page.request.post(`${API_BASE}/assessments/${assessment.id}/status`, {
+    ...auth,
+    data: { status_code: "done" },
+  });
+
+  return {
+    competenceId: comp.id,
+    competenceTitle: comp.title,
+    assessmentId: assessment.id,
+  };
+}

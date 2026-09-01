@@ -33,6 +33,7 @@ const VERDICT_CONFIG: Record<AiVerdict, VerdictConfig> = {
 const READINESS_TEXT_KEYS: Record<AiReadiness, string> = {
   none: "verdictReadinessNone",
   resume_only: "verdictReadinessResumeOnly",
+  transcript_only: "verdictReadinessTranscriptOnly",
   resume_and_transcript: "verdictReadinessResumeAndTranscript",
 };
 

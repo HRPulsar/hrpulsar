@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
+from app.models import Person
 from app.modules.assessment.models import (
     PDP,
     AnswerOption,
@@ -56,10 +57,13 @@ from app.modules.competence.models import (
 from app.modules.demo.seed_data import (
     ELENA_INTERVIEW_ANALYSIS,
     INVESTOR_MARKER,
+    PARSED_RESUMES,
+    PRIYA_RESUME_ANALYSIS,
     TOMAS_INTERVIEW_ANALYSIS,
     VACANCIES,
     candidates,
     load_transcript,
+    parse_transcript_segments,
 )
 from app.modules.demo.seed_data_assessments import (
     ASSESSMENTS,
@@ -99,7 +103,7 @@ from app.modules.demo.seed_data_recruitment_extras import (
 from app.modules.demo.seed_data_talent_market import TALENT_CARDS
 from app.modules.demo.seed_i18n import localize, seed_locale, translate
 from app.modules.dictionary.models import DictionaryItem
-from app.modules.employee.models import Employee
+from app.modules.employee.models import Employee, WorkExperience
 from app.modules.exam.models import (
     Exam,
     ExamAnswer,
@@ -128,13 +132,44 @@ from app.modules.talent_market.models import (
 # normalisation drift on names like "Tomás Becker".
 _ELENA_KEY = "elena.volkov@example.com"
 _TOMAS_KEY = "tomas.becker@example.com"
+# HRP-680: the resume-only analysis lands on Priya — no interview to
+# read, and ``not_recommended`` is a verdict this mode is allowed to
+# reach (``apply_resume_only_verdict_guard`` rewrites ``recommended``).
+_PRIYA_KEY = "priya.shah@example.com"
+
+
+def _seed_currency() -> str:
+    """Salary currency of the seeded workspace.
+
+    The ru catalog paints a Moscow-based company (HRP-696), and its
+    market quotes salaries in roubles; every other locale keeps the
+    annual-EUR figures the fixtures carry.
+    """
+    return "RUB" if seed_locale() == "ru" else "EUR"
+
+
+def _localized_salary(amount: int | None) -> int | None:
+    """Fixture salary figure rendered in the seed locale's convention.
+
+    Fixtures store annual EUR. The Russian market quotes monthly RUB, so
+    the ru seed maps with a single factor — x4, rounded to 10k — which
+    lands the fixtures' 75-115k EUR ranges on plausible 300-460k RUB
+    monthly bands. A market-rate feed would be overkill for demo data.
+    """
+    if amount is None or seed_locale() != "ru":
+        return amount
+    return round(amount * 4 / 10_000) * 10_000
 from app.modules.recruitment.models import (
+    AIAnalysisRun,
     AIAssessment,
     Candidate,
     CandidateVacancy,
     Interview,
+    InterviewSegment,
     Vacancy,
+    VacancyCompetence,
     VacancyProfile,
+    VacancyStage,
 )
 
 logger = logging.getLogger(__name__)
@@ -385,9 +420,9 @@ async def _seed_company_structure(
             grade_id=grade.id,
             specialization_id=specialization.id,
             description=spec.get("description"),
-            salary_min=spec.get("salary_min"),
-            salary_max=spec.get("salary_max"),
-            salary_currency="EUR",
+            salary_min=_localized_salary(spec.get("salary_min")),
+            salary_max=_localized_salary(spec.get("salary_max")),
+            salary_currency=_seed_currency(),
             passing_score=spec.get("passing_score"),
             # Ladder order mirrors the grade dictionary — my_loop walks
             # the next rung by GradeSpecialization.sort_index.
@@ -724,6 +759,26 @@ async def _seed_employees(
         db.add(employee)
         await db.flush()
         ctx.employees.append(employee)
+
+        # HRP-682: the Current Employment spell the employee is actually
+        # in. The talent-market experience axis reads WorkExperience rows
+        # (position → specialization × grade) and nothing else, so without
+        # one no card can carry an experience floor and the Match cell
+        # falls back to the HRP-210 "current position matches" chip. Left
+        # open-ended (``end_date=None``) so tenure equals time since hire —
+        # except for a former teammate, whose spell is closed on the day
+        # the seed marks them inactive (``status_changed_at``): an
+        # "Inactive" card showing "hire date — present" contradicts itself.
+        db.add(
+            WorkExperience(
+                tenant_id=tenant_id,
+                employee_id=employee.id,
+                division_id=division.id,
+                position_id=position.id,
+                start_date=hire_date_value,
+                end_date=today if status_value == "inactive" else None,
+            )
+        )
 
     # ── Wire division leadership ────────────────────────────────────────
     for assignment, employee in zip(EMPLOYEE_ASSIGNMENTS, ctx.employees, strict=True):
@@ -1506,9 +1561,9 @@ async def _seed_recruitment_extras(
             language=spec["language"],
             location=spec["location"],
             employment_type=spec["employment_type"],
-            salary_min=spec["salary_min"],
-            salary_max=spec["salary_max"],
-            salary_currency=spec["salary_currency"],
+            salary_min=_localized_salary(spec["salary_min"]),
+            salary_max=_localized_salary(spec["salary_max"]),
+            salary_currency=_seed_currency(),
             division_id=anchor_division.id if anchor_division is not None else None,
             tasks_main={"demo_investor": True, "key": spec["key"]},
         )
@@ -1536,28 +1591,67 @@ async def _seed_recruitment_extras(
     # name; the shapes are intentionally different so don't unify the
     # two locals without rewriting both call sites.
     cv_for_interview: dict[str, tuple[CandidateVacancy, dict]] = {}
+    stage_ids = await _seed_funnel_stages(db, tenant_id)
     for spec in localize(EXTRA_CANDIDATES):
         extra_vac = extra_vacancies.get(spec["vacancy_key"])
         if extra_vac is None:
             # Legacy vacancy key the base seed didn't carry — skip
             # rather than fan out a misleading orphan candidate.
             continue
+        # HRP-679: an ``employee_index`` spec is the internal applicant —
+        # someone already on staff here applying for an open role. Both
+        # halves of his identity come off the seeded ``User`` rather than
+        # the spec: ``localized_name_pool`` translates the name *and* the
+        # email, so a de/ru demo would otherwise pair an English candidate
+        # with a localized employee and the two would read as strangers.
+        employee_index = spec.get("employee_index")
+        internal_user = (
+            ctx.employee_users[employee_index] if employee_index is not None else None
+        )
+        if internal_user is not None:
+            cand_email = internal_user.email
+            cand_name = f"{internal_user.first_name} {internal_user.last_name}"
+        else:
+            cand_email = spec["email"]
+            # HRP-666: localized display name, ASCII email (see
+            # ``_create_candidates``).
+            cand_name = translate(f"{spec['first_name']} {spec['last_name']}")
         existing_cand = (
             await db.execute(
                 select(Candidate).where(
                     Candidate.tenant_id == tenant_id,
-                    Candidate.email == spec["email"],
+                    Candidate.email == cand_email,
                     Candidate.archived_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
         if existing_cand is not None:
             continue
+        # HRP-679: ``is_employee`` is a join Candidate.person_id →
+        # persons.id ← User.person_id, so the badge needs one Person row
+        # shared by the candidate and the employee's user. Reusing an
+        # already-linked Person keeps a re-seed of the same tenant from
+        # minting a second one. Everyone else stays NULL (HRP-276 / H2
+        # below): Person is a tenant-less registry, and only rows a
+        # demo Candidate points at get swept by
+        # ``purge_expired_demo_tenants``.
+        person_id = None
+        if internal_user is not None:
+            if internal_user.person_id is None:
+                person = Person(
+                    email=cand_email,
+                    first_name=internal_user.first_name,
+                    last_name=internal_user.last_name,
+                )
+                db.add(person)
+                await db.flush()
+                internal_user.person_id = person.id
+            person_id = internal_user.person_id
         candidate = Candidate(
             tenant_id=tenant_id,
-            person_id=None,
-            full_name=f"{spec['first_name']} {spec['last_name']}",
-            email=spec["email"],
+            person_id=person_id,
+            full_name=cand_name,
+            email=cand_email,
             location=spec.get("location"),
             current_position=spec.get("current_position"),
             years_of_experience=spec.get("years"),
@@ -1585,6 +1679,7 @@ async def _seed_recruitment_extras(
             candidate_id=candidate.id,
             vacancy_id=extra_vac.id,
             status=spec["status"],
+            stage_id=stage_ids.get(_STATUS_TO_STAGE_CODE.get(spec["status"], "new")),
             attached_by=owner_user_id,
             ai_score=spec["ai_score"],
             # HRP-274: identity rebase — demo tenants carry no active
@@ -1601,7 +1696,7 @@ async def _seed_recruitment_extras(
         await db.flush()
 
         if spec["interview_kind"] is not None:
-            cv_for_interview[spec["email"]] = (cv, spec)
+            cv_for_interview[cand_email] = (cv, spec)
 
     if not with_interviews:
         return (vacancy_count, candidate_count, 0)
@@ -1612,7 +1707,9 @@ async def _seed_recruitment_extras(
         interview_date = now - timedelta(days=shape["days_ago"])
         duration_minutes = shape["duration_minutes"]
         duration_seconds = duration_minutes * 60 if duration_minutes else None
-        title = f"{shape['title_prefix']}{spec['first_name']} {spec['last_name']}"
+        title = f"{shape['title_prefix']}" + translate(
+            f"{spec['first_name']} {spec['last_name']}"
+        )
         # interview_service filters archived rows by archived_at IS NULL
         # (not by status), so a seeded 'archived' row needs both columns
         # set to stay out of normal list/detail responses.
@@ -1784,6 +1881,7 @@ async def _already_seeded(db: AsyncSession, tenant_id: uuid.UUID) -> bool:
 async def _create_vacancies(
     db: AsyncSession,
     tenant_id: uuid.UUID,
+    ctx: CompanyContext,
     *,
     owner_user_id: uuid.UUID,
     anchor_division_id: uuid.UUID | None,
@@ -1799,9 +1897,9 @@ async def _create_vacancies(
             language=spec["language"],
             location=spec["location"],
             employment_type=spec["employment_type"],
-            salary_min=spec["salary_min"],
-            salary_max=spec["salary_max"],
-            salary_currency=spec["salary_currency"],
+            salary_min=_localized_salary(spec["salary_min"]),
+            salary_max=_localized_salary(spec["salary_max"]),
+            salary_currency=_seed_currency(),
             # Only anchor the headline role to the engineering division;
             # the supporting roles stay unscoped so the demo still works
             # on a tenant with a single division.
@@ -1825,8 +1923,62 @@ async def _create_vacancies(
             )
         )
 
+        # HRP-667: library-linked requirements, so "search inside first"
+        # has something the talent-market matcher can score employees on.
+        for c_spec in spec.get("library_competences", []):
+            competence = ctx.competences.get(c_spec["competence_key"])
+            skill_level = ctx.skill_levels.get(c_spec["skill_level_key"])
+            if competence is None or skill_level is None:
+                continue
+            db.add(
+                VacancyCompetence(
+                    tenant_id=tenant_id,
+                    vacancy_id=vacancy.id,
+                    competence_id=competence.id,
+                    skill_level_ids=[str(skill_level.id)],
+                    source="manual",
+                )
+            )
+
     await db.flush()
     return vacancy_objs
+
+
+# HRP-666: the demo tenant is created outside ``auth.service.register``,
+# so nothing ever seeded its funnel — every demo candidate sat in a Stage
+# dropdown with zero options and an empty cell. Fixture ``status`` values
+# map onto the canonical default funnel codes
+# (``vacancy_service.DEFAULT_RECRUITMENT_STAGES``).
+_STATUS_TO_STAGE_CODE: dict[str, str] = {
+    "new": "new",
+    "screen": "screening",
+    "interview": "tech_interview",
+    "offer": "offer",
+}
+
+
+async def _seed_funnel_stages(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> dict[str, uuid.UUID]:
+    """Seed the tenant default funnel and return ``code -> stage id``."""
+    from app.modules.recruitment.vacancy_service import (
+        seed_default_recruitment_stages,
+    )
+
+    await seed_default_recruitment_stages(db, tenant_id)
+    rows = (
+        (
+            await db.execute(
+                select(VacancyStage).where(
+                    VacancyStage.tenant_id == tenant_id,
+                    VacancyStage.vacancy_id.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {row.code: row.id for row in rows}
 
 
 async def _create_candidates(
@@ -1836,7 +1988,16 @@ async def _create_candidates(
     owner_user_id: uuid.UUID,
     vacancy_objs: dict[str, Vacancy],
 ) -> dict[str, CandidateVacancy]:
-    cv_for_interview: dict[str, CandidateVacancy] = {}
+    """Seed the base candidates; returns every ``CandidateVacancy`` by email.
+
+    HRP-666: the caller needs the rows for two follow-up passes (the
+    completed interviews and the manager assessment rounds), so this
+    returns all of them rather than only the interviewed ones — the
+    ``interview`` / ``manager_scores`` flags on the spec decide who gets
+    what.
+    """
+    cv_by_email: dict[str, CandidateVacancy] = {}
+    stage_ids = await _seed_funnel_stages(db, tenant_id)
     for spec in localize(candidates()):
         # HRP-276 / H2: do not mint Person rows for demo seed candidates.
         # Person is a tenant-less global registry — every demo session
@@ -1848,7 +2009,11 @@ async def _create_candidates(
         candidate = Candidate(
             tenant_id=tenant_id,
             person_id=None,
-            full_name=f"{spec['first_name']} {spec['last_name']}",
+            # HRP-666: candidate names are display text, same as employee
+            # names — a ru/de demo staffed by a Latin cast reads as a bug.
+            # The catalog carries the whole name; the ASCII email stays
+            # the structural key (lookups, dedupe, the analysis killswitch).
+            full_name=translate(f"{spec['first_name']} {spec['last_name']}"),
             email=spec["email"],
             phone=spec.get("phone"),
             location=spec.get("location"),
@@ -1860,6 +2025,22 @@ async def _create_candidates(
                 key=spec["vacancy_key"]
             ),
         )
+        # HRP-680: the resume-only citation chips are click-to-locate
+        # into this payload — without it the drill-down had nowhere to
+        # go. ``full_name`` and ``contacts`` come off the row rather
+        # than the fixture, so the localized name does not need a second
+        # set of catalog entries.
+        resume = PARSED_RESUMES.get(spec["email"])
+        if resume is not None:
+            candidate.parsed_resume_jsonb = {
+                **localize(resume),
+                "full_name": candidate.full_name,
+                "contacts": {
+                    "email": spec["email"],
+                    "phone": spec.get("phone"),
+                    "linkedin": spec.get("linkedin"),
+                },
+            }
         db.add(candidate)
         await db.flush()
 
@@ -1868,6 +2049,7 @@ async def _create_candidates(
             candidate_id=candidate.id,
             vacancy_id=vacancy_objs[spec["vacancy_key"]].id,
             status=spec["status"],
+            stage_id=stage_ids.get(_STATUS_TO_STAGE_CODE.get(spec["status"], "new")),
             attached_by=owner_user_id,
             ai_score=spec["ai_score"],
             # HRP-274: identity rebase — demo tenants carry no active
@@ -1885,13 +2067,98 @@ async def _create_candidates(
         db.add(cv)
         await db.flush()
 
-        if spec["interview"]:
-            # Key by the ASCII-only email instead of the display name so
-            # any future Unicode normalisation on Person.first_name /
-            # Candidate.full_name can't silently break the lookup below.
-            cv_for_interview[spec["email"]] = cv
+        # Key by the ASCII-only email instead of the display name so
+        # locale-dependent ``Candidate.full_name`` (HRP-666) can't
+        # silently break the lookups below.
+        cv_by_email[spec["email"]] = cv
 
-    return cv_for_interview
+    return cv_by_email
+
+
+async def _seed_manager_rounds(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    owner_user_id: uuid.UUID,
+    cv_by_email: dict[str, CandidateVacancy],
+    now: datetime,
+) -> int:
+    """Lay down completed manager assessment rounds (HRP-666).
+
+    Without these the MANAGER column, the % match and the whole
+    manager-vs-AI divergence story are empty on every demo row — the AI
+    was the only voice in the product's headline comparison.
+
+    Everything goes through the production path: a round, one submitted
+    evaluation sheet per evaluator, ``AssessmentCompetenceScore`` rows,
+    then ``recompute_manager_score`` — the same function the Submit
+    button calls. The vacancy's scale is snapshotted first (also the
+    production behaviour, ``_snapshot_vacancy_scale``): the Compact
+    matrix rebases round levels through that snapshot, so without it a
+    manager's ``4`` and the AI's ``4.5`` would be compared as if they
+    lived on the same scale and every scored cell would read divergent.
+    """
+    from app.modules.recruitment.common import normalize_competence_id
+    from app.modules.recruitment.manager_assessment_models import (
+        AssessmentCompetenceScore,
+        AssessmentRound,
+        RecruitmentAssessment,
+    )
+    from app.modules.recruitment.manager_assessment_service import (
+        _snapshot_vacancy_scale,
+        recompute_manager_score,
+    )
+
+    scored = 0
+    for spec in candidates():
+        levels: dict[str, int] = spec.get("manager_scores") or {}
+        cv = cv_by_email.get(spec["email"])
+        if not levels or cv is None:
+            continue
+        vacancy = await db.get(Vacancy, cv.vacancy_id)
+        if vacancy is None:
+            continue
+        await _snapshot_vacancy_scale(db, vacancy)
+
+        rd = AssessmentRound(
+            tenant_id=tenant_id,
+            candidate_vacancy_id=cv.id,
+            type="interview",
+            round_number=1,
+            status="complete",
+            created_by=owner_user_id,
+            completed_at=now - timedelta(days=1),
+        )
+        db.add(rd)
+        await db.flush()
+        sheet = RecruitmentAssessment(
+            tenant_id=tenant_id,
+            round_id=rd.id,
+            evaluator_type="user",
+            evaluator_user_id=owner_user_id,
+            status="submitted",
+            submitted_at=now - timedelta(days=1),
+        )
+        db.add(sheet)
+        await db.flush()
+        for slug, level in levels.items():
+            comp_uuid = normalize_competence_id(slug)
+            if comp_uuid is None:
+                logger.warning("demo seed: unknown manager-score slug %r", slug)
+                continue
+            db.add(
+                AssessmentCompetenceScore(
+                    tenant_id=tenant_id,
+                    assessment_id=sheet.id,
+                    competence_id=comp_uuid,
+                    score_value=level,
+                    score_source="manual",
+                )
+            )
+        await db.flush()
+        await recompute_manager_score(db, tenant_id, cv.id)
+        scored += 1
+    return scored
 
 
 def _build_elena_interview(
@@ -1950,31 +2217,27 @@ def _build_tomas_interview(
 def _build_seed_assessment_rows(analysis: dict) -> list[dict]:
     """AIAssessment payload rows for one seeded interview analysis.
 
-    Single source for both writers: the rows persisted on the seeded
+    Single source for the three writers: the rows persisted on the seeded
     interview (so the compact matrix is populated before anyone clicks
-    Analyze — HRP-250) and the pre-populated cache payload a re-analyze
-    replays (HRP-276 / L3). ``competence_id`` is minted from the profile
-    slug, the namespace the matrix reads back (HRP-275).
+    Analyze — HRP-250), the pre-populated cache payload a re-analyze
+    replays (HRP-276 / L3), and the killswitch replay. The fixture is in
+    the same shape the real LLM path writes (HRP-598), so score / status /
+    citations / reasoning copy straight across; only ``competence_id`` is
+    minted from the profile slug into the namespace the matrix reads back
+    (HRP-275).
     """
     from app.modules.recruitment.common import normalize_competence_id
-    from app.modules.recruitment.tasks.demo_analysis import (
-        _DEMO_VERDICT_TO_SCORE,
-        _DEMO_VERDICT_TO_STATUS,
-    )
 
     rows: list[dict] = []
     for ca in analysis.get("competence_assessments", []) or []:
-        label = (ca.get("competence") or "").strip()
         slug = (ca.get("competence_id") or "").strip()
-        verdict = (ca.get("verdict") or "unknown").lower()
         if not slug:
             # HRP-275: every writer must key off the same slug the
             # killswitch and the Compact matrix use; without it the
             # cache-hit branch would resurrect the label-derived UUIDs
             # the rest of the system stopped recognising.
             logger.warning(
-                "demo seed: skipping assessment for %r — missing competence_id slug",
-                label,
+                "demo seed: skipping assessment without a competence_id slug"
             )
             continue
         comp_uuid = normalize_competence_id(slug)
@@ -1983,16 +2246,10 @@ def _build_seed_assessment_rows(analysis: dict) -> list[dict]:
         rows.append(
             {
                 "competence_id": str(comp_uuid),
-                "score": _DEMO_VERDICT_TO_SCORE.get(verdict, 0.0),
-                "status": _DEMO_VERDICT_TO_STATUS.get(verdict, "not_covered"),
-                "citations": [
-                    {
-                        "competence": label,
-                        "quote": ca.get("evidence") or "",
-                        "verdict": verdict,
-                    }
-                ],
-                "reasoning": ca.get("evidence") or "",
+                "score": ca.get("score"),
+                "status": ca.get("status") or "not_covered",
+                "citations": ca.get("citations") or [],
+                "reasoning": ca.get("reasoning"),
             }
         )
     return rows
@@ -2025,6 +2282,125 @@ def _seed_ai_assessments(
             )
         )
     return rows
+
+
+def _seed_ai_analysis_run(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    cv: CandidateVacancy,
+    interview: Interview,
+    owner_user_id: uuid.UUID,
+    next_step: str,
+) -> None:
+    """Persist the finished ``AIAnalysisRun`` behind a seeded interview.
+
+    The candidate card's AI Insights block is driven by runs, so a demo
+    without them offered "Analyze" on a candidate who had already been
+    analysed. Mode is ``full`` because the run is interview-backed; the
+    raw ``analysis_data`` is the same payload the real finalizer writes,
+    and ``AIAnalysisRunRead`` keeps its role-filtered halves (red flags,
+    process findings) server-side.
+    """
+    analysis = interview.analysis_data or {}
+    # Mirror columns on the candidate row — the same two the real
+    # finalizer stamps, so the candidates table renders the "full" mode
+    # sub-badge next to the verdict instead of a bare chip.
+    cv.ai_analysis_mode = "full"
+    cv.ai_data_completeness = analysis.get("data_completeness")
+    db.add(
+        AIAnalysisRun(
+            tenant_id=tenant_id,
+            candidate_vacancy_id=cv.id,
+            mode="full",
+            status="completed",
+            data_completeness=analysis.get("data_completeness"),
+            interview_id=interview.id,
+            verdict=analysis.get("verdict"),
+            verdict_summary=analysis.get("verdict_summary"),
+            key_strength=analysis.get("key_strength"),
+            key_risk=analysis.get("key_risk"),
+            risk_mitigation=analysis.get("risk_mitigation"),
+            recommendation_for_next_step=next_step,
+            ai_score=cv.ai_score,
+            analysis_data=analysis,
+            credits_charged=0.0,
+            created_by_id=owner_user_id,
+        )
+    )
+
+
+def _seed_resume_only_run(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    cv: CandidateVacancy,
+    owner_user_id: uuid.UUID,
+) -> None:
+    """Persist the finished resume-only ``AIAnalysisRun`` (HRP-680).
+
+    The candidate card's resume citation chips only render for a run in
+    this mode — ``extract_resume_excerpts`` returns ``[]`` for ``full``
+    by design, because a full run cites the transcript instead. Every
+    seeded run was ``full``, so the whole click-to-locate drill-down was
+    unreachable on the demo.
+
+    No ``interview_id`` (there is no interview — that is the point) and
+    no ``resume_snapshot_hash``: the seed writes the parsed resume onto
+    ``Candidate`` without a ``CandidateFile``, so the staleness check
+    has no current hash to compare against and correctly stays quiet.
+    """
+    analysis = localize(PRIYA_RESUME_ANALYSIS)
+    cv.ai_analysis_mode = "resume_only"
+    cv.ai_data_completeness = analysis.get("data_completeness")
+    db.add(
+        AIAnalysisRun(
+            tenant_id=tenant_id,
+            candidate_vacancy_id=cv.id,
+            mode="resume_only",
+            status="completed",
+            data_completeness=analysis.get("data_completeness"),
+            verdict=analysis.get("verdict"),
+            verdict_summary=analysis.get("verdict_summary"),
+            key_strength=analysis.get("key_strength"),
+            key_risk=analysis.get("key_risk"),
+            risk_mitigation=analysis.get("risk_mitigation"),
+            recommendation_for_next_step=analysis.get(
+                "recommendation_for_next_step"
+            ),
+            ai_score=cv.ai_score,
+            analysis_data=analysis,
+            credits_charged=0.0,
+            created_by_id=owner_user_id,
+        )
+    )
+
+
+def _seed_interview_segments(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview: Interview,
+) -> int:
+    """Lay down the diarized segments of a seeded interview (HRP-275).
+
+    The demo ships a transcript, not a recording, so nothing ever ran a
+    provider over it — without these rows the transcript panel falls
+    back to one undifferentiated blob and the progress checklist leaves
+    "Diarization" unticked on an interview it calls transcribed.
+    """
+    rows = parse_transcript_segments(interview.transcript or "")
+    for row in rows:
+        db.add(
+            InterviewSegment(
+                tenant_id=tenant_id,
+                interview_id=interview.id,
+                speaker=row["speaker"],
+                start_sec=row["start_sec"],
+                end_sec=row["end_sec"],
+                text=row["text"],
+            )
+        )
+    return len(rows)
 
 
 async def _maybe_seed_analysis_cache(
@@ -2209,21 +2585,45 @@ async def clone_seed_into_demo_tenant(
     vacancy_objs = await _create_vacancies(
         db,
         tenant_id,
+        company_ctx,
         owner_user_id=owner_user_id,
         anchor_division_id=anchor_division_id,
     )
-    cv_for_interview = await _create_candidates(
+    cv_by_email = await _create_candidates(
         db,
         tenant_id,
         owner_user_id=owner_user_id,
         vacancy_objs=vacancy_objs,
     )
+    # HRP-666: manager rounds before the interviews so the Compact matrix,
+    # the Divergence badge and ``candidate_vacancies.manager_score`` are
+    # populated on the vacancy the demo opens on.
+    await _seed_manager_rounds(
+        db,
+        tenant_id,
+        owner_user_id=owner_user_id,
+        cv_by_email=cv_by_email,
+        now=now,
+    )
+
+    # HRP-680: the one resume-only run. Outside the interview branch on
+    # purpose — Priya has no interview in any configuration, and the
+    # resume citation chips are the only place the demo shows the AI
+    # pointing back at a source document.
+    priya_cv = cv_by_email.get(_PRIYA_KEY)
+    if priya_cv is not None:
+        _seed_resume_only_run(
+            db,
+            tenant_id,
+            cv=priya_cv,
+            owner_user_id=owner_user_id,
+        )
 
     interview_count = 0
     elena_interview = None
     if with_completed_interviews:
         transcript = load_transcript()
-        elena_cv = cv_for_interview.get(_ELENA_KEY)
+        elena_cv = cv_by_email.get(_ELENA_KEY)
         if elena_cv is not None:
             elena_interview = _build_elena_interview(
                 tenant_id=tenant_id,
@@ -2234,7 +2634,7 @@ async def clone_seed_into_demo_tenant(
             )
             db.add(elena_interview)
             interview_count += 1
-        tomas_cv = cv_for_interview.get(_TOMAS_KEY)
+        tomas_cv = cv_by_email.get(_TOMAS_KEY)
         tomas_interview = None
         if tomas_cv is not None:
             tomas_interview = _build_tomas_interview(
@@ -2254,6 +2654,25 @@ async def clone_seed_into_demo_tenant(
         for seeded_interview in (elena_interview, tomas_interview):
             if seeded_interview is not None:
                 _seed_ai_assessments(db, tenant_id, seeded_interview)
+                _seed_interview_segments(db, tenant_id, seeded_interview)
+
+        # HRP-666: the AI Insights block on the candidate card reads
+        # ``AIAnalysisRun`` rows, not the interview. Without one the demo
+        # showed an "Analyze this candidate" empty state on the very
+        # candidate whose finished analysis the tour is about to discuss.
+        for seeded_cv, seeded_interview, next_step in (
+            (elena_cv, elena_interview, "final_decision"),
+            (tomas_cv, tomas_interview, "second_interview"),
+        ):
+            if seeded_cv is not None and seeded_interview is not None:
+                _seed_ai_analysis_run(
+                    db,
+                    tenant_id,
+                    cv=seeded_cv,
+                    interview=seeded_interview,
+                    owner_user_id=owner_user_id,
+                    next_step=next_step,
+                )
 
         # HRP-276 / L3: pre-populate the analysis cache for Elena so a
         # re-analyze from the demo SPA hits the cache instead of either

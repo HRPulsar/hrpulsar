@@ -1741,8 +1741,15 @@ async def get_assessment_matrix(
     vacancy_id: uuid.UUID,
     *,
     round_filter: str = "latest",
+    only_cv_ids: list[uuid.UUID] | None = None,
 ) -> dict:
     """Compact-view aggregates: per-cell M vs AI + per-candidate %.
+
+    ``only_cv_ids`` scopes the candidate axis to the given rows — every
+    per-candidate load (interviews, AI assessments, manager cell scores)
+    shrinks with it, so a caller that needs one row's aggregates (the
+    candidate PATCH, HRP-662) stops paying for the whole vacancy grid.
+    Cell/aggregate semantics are per-candidate and unaffected.
 
     Returns the shape consumed by the new Assessments tab and the future
     Sort by % match column. For every (candidate, competence) we surface:
@@ -1788,25 +1795,19 @@ async def get_assessment_matrix(
         (profile_row.profile_data or {}).get("competences", []) if profile_row else []
     )
 
-    cvs = (
-        (
-            await db.execute(
-                select(CandidateVacancy)
-                .options(
-                    selectinload(CandidateVacancy.candidate).selectinload(
-                        Candidate.person
-                    )
-                )
-                .where(
-                    CandidateVacancy.vacancy_id == vacancy_id,
-                    CandidateVacancy.tenant_id == tenant_id,
-                )
-            )
+    cvs_query = (
+        select(CandidateVacancy)
+        .options(
+            selectinload(CandidateVacancy.candidate).selectinload(Candidate.person)
         )
-        .scalars()
-        .unique()
-        .all()
+        .where(
+            CandidateVacancy.vacancy_id == vacancy_id,
+            CandidateVacancy.tenant_id == tenant_id,
+        )
     )
+    if only_cv_ids is not None:
+        cvs_query = cvs_query.where(CandidateVacancy.id.in_(only_cv_ids))
+    cvs = (await db.execute(cvs_query)).scalars().unique().all()
 
     threshold = await settings_service.get_divergence_threshold(db, tenant_id)
     active_scale = await settings_service.get_active_scale(db, tenant_id)

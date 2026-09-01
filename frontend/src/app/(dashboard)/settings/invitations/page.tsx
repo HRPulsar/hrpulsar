@@ -48,6 +48,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Hint } from "@/components/ui/hint";
 import { toast } from "sonner";
 import { Mail, Pencil, Plus, RotateCw, X } from "lucide-react";
 import { BADGE_COLOR } from "@/lib/badge-tones";
@@ -100,6 +101,7 @@ export default function InvitationsPage() {
 
 function InvitationsPageContent() {
   const t = useTranslations("settings");
+  const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const { user } = useAuth();
   const isAdmin = !!(
@@ -290,9 +292,15 @@ function InvitationsPageContent() {
       </Suspense>
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t("inviteTitle")}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {t("inviteTitle")}
+            </h1>
+            <Hint
+              text={tSections("invitations.hint")}
+              data-testid="invitations-hint-title"
+            />
+          </div>
           <p className="text-sm text-muted-foreground">
             {t("inviteSubtitle")}
           </p>

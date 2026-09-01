@@ -51,6 +51,97 @@ async def directory_show_grades(db: AsyncSession, tenant_id: uuid.UUID) -> bool:
     )
 
 
+# HRP-637: the two field classes answer to two different role sets, so they
+# get two predicates rather than one ``is_employee_only()`` used twice.
+# Hiring cannot raise a requisition without the grade and specialization of
+# the position it is filling (the requisition form fills its pickers from
+# them — HRP-180), but compensation is not theirs to read.
+GRADE_ROLE_CODES = ADMIN_ROLE_CODES | MANAGER_ROLE_CODES | {
+    "recruiter",
+    "hiring_manager",
+}
+
+
+async def can_see_position_grades(db: AsyncSession, current_user: User) -> bool:
+    """HRP-637: may this caller read a position's grade and specialization?
+
+    The positions catalogue publishes "position -> grade", and the employee
+    directory publishes "colleague -> position". Joining the two rebuilt a
+    colleague's grade whatever ``directory_show_grades`` said, so the flag
+    closed the copy of the field and not the fact. Same flag, one more
+    payload: off means a rank-and-file caller sees neither the grade nor the
+    specialization of a position, on means they see both.
+
+    Deliberately not ``is_employee_only()``: the hiring roles read the pair
+    and not the band, so the two predicates carry different role sets.
+    """
+    if any(r.code in GRADE_ROLE_CODES for r in current_user.roles):
+        return True
+    return await directory_show_grades(db, current_user.tenant_id)
+
+
+# HRP-637: the two classes of field a position-shaped payload carries that
+# a rank-and-file caller may not read. ``grade_specialization_id`` sits in
+# the first group because the specialization page turns it straight back
+# into a grade title.
+_GRADE_FIELDS = (
+    "specialization_id",
+    "specialization_title",
+    "grade_id",
+    "grade_title",
+    "grade_specialization_id",
+)
+# Dropped rather than blanked: every schema carrying these gives them a
+# default (``[]``, ``None``, the installation currency), and
+# ``SpecializationGradeRead.salary_currency`` is a bare ``str`` that a
+# ``None`` would fail validation on.
+_SALARY_FIELDS = ("salary_min", "salary_max", "salary_currency")
+_GRADE_LIST_FIELDS = ("specializations", "grades")
+# HRP-637: "this position's pair has competence links" is the pair showing
+# through a boolean. It travels with the pair, and so does the predicate
+# that selects on it.
+_GRADE_DERIVED_FIELDS = ("matrix_configured",)
+
+
+def trim_position_fields(
+    row: dict, *, show_grades: bool = True, show_salary: bool = True
+) -> dict:
+    """HRP-637: drop the fields the caller may not read, in place.
+
+    Narrows the full row rather than building a second payload — the shape
+    ``employee.service.directory_rows`` already uses — so a field added to a
+    position payload stays visible here until someone adds it to the tuples
+    above, and the payloads sharing these keys (the catalogue row, the
+    position detail, the two matrix reads, the specialization drill-down)
+    share one rule instead of five copies of it. Keys the row does not
+    carry are skipped, which is what lets one call serve all of them.
+    """
+    if not show_salary:
+        for field in _SALARY_FIELDS:
+            row.pop(field, None)
+    if not show_grades:
+        for field in _GRADE_FIELDS:
+            if field in row:
+                row[field] = None
+        for field in _GRADE_LIST_FIELDS:
+            row.pop(field, None)
+        for field in _GRADE_DERIVED_FIELDS:
+            row.pop(field, None)
+    return row
+
+
+def can_see_compensation(current_user: User) -> bool:
+    """HRP-637: may this caller read salary bands?
+
+    Compensation is not structure: it stays with admin / hr / manager
+    whatever ``directory_show_grades`` is set to, so there is no tenant flag
+    to consult and no async work to do. Narrower than
+    ``can_see_position_grades`` on purpose — the hiring roles get the pair
+    but not the band.
+    """
+    return not is_employee_only(current_user)
+
+
 async def get_managed_division_ids(
     db: AsyncSession, tenant_id: uuid.UUID, employee_id: uuid.UUID
 ) -> list[uuid.UUID]:

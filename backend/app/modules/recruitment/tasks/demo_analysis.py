@@ -12,52 +12,6 @@ import uuid as _uuid
 logger = logging.getLogger(__name__)
 
 
-_DEMO_VERDICT_TO_SCORE = {
-    "strong": 0.85,
-    "partial": 0.55,
-    "weak": 0.25,
-    "unknown": 0.0,
-}
-
-
-# Demo seed verdicts predate the typed schema; map them onto the
-# Literal["assessed", "not_covered", "insufficient"] values that
-# ``AIAssessment.status`` actually carries in production so UI badges
-# and GROUP-BY-status queries don't see a parallel vocabulary.
-_DEMO_VERDICT_TO_STATUS = {
-    "strong": "assessed",
-    "partial": "assessed",
-    "weak": "insufficient",
-    "unknown": "not_covered",
-}
-
-
-def _wrap_demo_finding_strings(items: list, finding_type: str) -> list[dict]:
-    """Coerce seed string entries into the dict shape real LLM output emits.
-
-    ``_role_filter_analysis`` and the frontend both call ``.get()`` on
-    each item — string entries crash the HM-role filter and the
-    rendered card alike. Real-path keys are kept (``finding_type``,
-    ``positive_reframe``); the seed sentence lands in ``evidence`` so
-    it isn't lost.
-
-    PII redaction is assumed to be done at fixture-curation time.
-    """
-    out: list[dict] = []
-    for s in items or []:
-        if isinstance(s, dict):
-            out.append(s)
-            continue
-        out.append(
-            {
-                "finding_type": finding_type,
-                "evidence": s,
-                "positive_reframe": s,
-            }
-        )
-    return out
-
-
 def _apply_demo_killswitch_analysis(db, interview, tenant_id: _uuid.UUID) -> dict:
     """Persist a deterministic seed-based analysis without calling the LLM.
 
@@ -78,7 +32,6 @@ def _apply_demo_killswitch_analysis(db, interview, tenant_id: _uuid.UUID) -> dic
         ELENA_INTERVIEW_ANALYSIS,
         TOMAS_INTERVIEW_ANALYSIS,
     )
-    from app.modules.recruitment.common import normalize_competence_id
     from app.modules.recruitment.models import (
         AIAssessment,
         Candidate,
@@ -118,20 +71,13 @@ def _apply_demo_killswitch_analysis(db, interview, tenant_id: _uuid.UUID) -> dic
 
     seed_src = localize_seed(seed_src)
 
-    # Build a writable copy with the same shape as the real LLM payload:
-    # list[str] entries in process_findings / blind_spots / red_flags are
-    # promoted to dicts so ``_role_filter_analysis`` and the frontend
-    # cards don't crash on ``.get()``.
+    # HRP-598: the fixture already carries the shape the real LLM path
+    # writes (``InterviewAnalysisResult``), so it goes onto the row as-is
+    # — the coercion pass that used to sit here existed only because the
+    # seed held a legacy shape. Still copied: on the English locale
+    # ``localize`` hands back the module-level fixture itself, which must
+    # never become the JSONB value some later writer could mutate.
     seed = dict(seed_src)
-    seed["process_findings"] = _wrap_demo_finding_strings(
-        seed_src.get("process_findings") or [], finding_type="positive"
-    )
-    seed["blind_spots"] = _wrap_demo_finding_strings(
-        seed_src.get("blind_spots") or [], finding_type="positive"
-    )
-    seed["red_flags"] = _wrap_demo_finding_strings(
-        seed_src.get("red_flags") or [], finding_type="risk"
-    )
 
     interview.analysis_data = seed
     interview.analysis_status = "completed"
@@ -143,42 +89,21 @@ def _apply_demo_killswitch_analysis(db, interview, tenant_id: _uuid.UUID) -> dic
             AIAssessment.tenant_id == tenant_id,
         )
     )
-    for ca in seed.get("competence_assessments", []):
-        label = ca.get("competence") or ""
-        # The seed carries slug ids (e.g. ``python-advanced``) under
-        # ``competence_id`` so the UUID minted here matches what
-        # ``VacancyProfile.competences`` records, and the Compact matrix
-        # (HRP-265) can resolve every column. A missing slug means the
-        # fixture drifted from the vacancy profile — refuse to silently
-        # fall back to the label-derived UUID (the exact pre-HRP-275
-        # bug) and log the drift instead.
-        slug = (ca.get("competence_id") or "").strip()
-        verdict = (ca.get("verdict") or "unknown").lower()
-        evidence = ca.get("evidence") or ""
-        if not slug:
-            logger.warning(
-                "demo killswitch: skipping competence %r — missing competence_id slug",
-                label,
-            )
-            continue
-        comp_uuid = normalize_competence_id(slug)
-        if comp_uuid is None:
-            continue
+    # HRP-598: one row builder for every writer of the demo fixture
+    # (seed, cache pre-population, this replay) so the matrix reads back
+    # the same slug-derived competence UUIDs from all three.
+    from app.modules.demo.seed import _build_seed_assessment_rows
+
+    for row in _build_seed_assessment_rows(seed):
         db.add(
             AIAssessment(
                 tenant_id=tenant_id,
                 interview_id=interview.id,
-                competence_id=comp_uuid,
-                score=_DEMO_VERDICT_TO_SCORE.get(verdict, 0.0),
-                status=_DEMO_VERDICT_TO_STATUS.get(verdict, "not_covered"),
-                citations=[
-                    {
-                        "competence": label,
-                        "quote": evidence,
-                        "verdict": verdict,
-                    }
-                ],
-                reasoning=evidence,
+                competence_id=_uuid.UUID(row["competence_id"]),
+                score=row["score"],
+                status=row["status"],
+                citations=row["citations"],
+                reasoning=row["reasoning"],
             )
         )
 

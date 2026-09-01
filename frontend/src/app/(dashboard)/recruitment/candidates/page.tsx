@@ -26,6 +26,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Pagination } from "@/components/pagination";
+import { BADGE_OUTLINE } from "@/lib/badge-tones";
+import { cn } from "@/lib/utils";
 import { usePermissions } from "@/hooks/use-permissions";
 import { RecruitmentBreadcrumbs, RecruitmentTabs } from "@/components/recruitment";
 import { Search, UserPlus, X } from "lucide-react";
@@ -201,6 +203,13 @@ export default function CandidateListPage() {
                   <TableRow
                     key={candidate.id}
                     data-testid={`recruitment-candidate-row-${candidate.id}`}
+                    // HRP-663: the all-candidates list marks internal
+                    // candidates the same way the vacancy table does —
+                    // one badge, one tint, no second visual language.
+                    className={cn(
+                      candidate.is_employee &&
+                        "bg-indigo-50/60 dark:bg-indigo-950/20",
+                    )}
                   >
                     <TableCell className="font-medium">
                       <Link
@@ -216,8 +225,15 @@ export default function CandidateListPage() {
                         ).trim() || t("candidateParsing")}
                       </Link>
                       {candidate.is_employee && (
-                        <Badge variant="outline" className="ml-2 text-[10px]">
-                          {tc("employee")}
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "ml-2 border text-[10px]",
+                            BADGE_OUTLINE.indigo,
+                          )}
+                          data-testid={`recruitment-candidate-row-${candidate.id}-internal-badge`}
+                        >
+                          {t("internalCandidateBadge")}
                         </Badge>
                       )}
                     </TableCell>

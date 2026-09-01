@@ -208,7 +208,9 @@ class TestInvitationCreateStillFollowsHierarchy:
             },
         )
         assert resp.status_code == 201
-        assert len(resp.json()) == 1
+        body = resp.json()
+        assert len(body["created"]) == 1
+        assert body["failed"] == []
 
     async def test_manager_can_still_create_employee_invitation(
         self,
@@ -312,6 +314,88 @@ class TestInvitationCreateStillFollowsHierarchy:
             },
         )
         assert resp.status_code == 403
+
+
+class TestBulkInvitationReportsPerItemFailures:
+    """HRP-593: the batch answers with per-address outcomes.
+
+    The old response was a plain list of the invitations that made it, so a
+    refused address left no trace at all — the caller could not tell a
+    duplicate from a role refusal, or notice that anything was missing.
+    """
+
+    async def test_duplicate_address_lands_in_failed_with_its_code(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        user,
+        tenant,
+        admin_role,
+        employee_role,
+        access_token,
+    ):
+        dup = f"dup-{uuid.uuid4().hex[:6]}@test.com"
+        fresh = f"fresh-{uuid.uuid4().hex[:6]}@test.com"
+        client.headers["Authorization"] = f"Bearer {access_token}"
+        resp = await client.post(
+            "/api/invitations/bulk",
+            json={
+                "invitations": [
+                    {"email": dup, "name": "First", "role_code": "employee"},
+                    {"email": dup, "name": "Again", "role_code": "employee"},
+                    {"email": fresh, "name": "Third", "role_code": "employee"},
+                ]
+            },
+        )
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert [inv["email"] for inv in body["created"]] == [dup, fresh]
+        assert body["failed"] == [
+            {"email": dup, "error_code": "pending_invitation_already_exists"}
+        ]
+
+    async def test_batch_with_nothing_created_still_answers_with_the_object(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        user,
+        tenant,
+        admin_role,
+        employee_role,
+        access_token,
+    ):
+        # Every address refused: the caller still gets the same shape, with
+        # the reasons in it, rather than an empty list and no explanation.
+        taken = f"taken-{uuid.uuid4().hex[:6]}@test.com"
+        client.headers["Authorization"] = f"Bearer {access_token}"
+        first = await client.post(
+            "/api/invitations",
+            json={"email": taken, "name": "Taken", "role_code": "employee"},
+        )
+        assert first.status_code == 201
+
+        resp = await client.post(
+            "/api/invitations/bulk",
+            json={
+                "invitations": [
+                    {"email": taken, "name": "Taken", "role_code": "employee"},
+                    {
+                        "email": f"nosuchrole-{uuid.uuid4().hex[:6]}@test.com",
+                        "name": "Bad Role",
+                        "role_code": "no_such_role",
+                    },
+                ]
+            },
+        )
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["created"] == []
+        assert [f["error_code"] for f in body["failed"]] == [
+            "pending_invitation_already_exists",
+            "role_code_not_found",
+        ]
 
 
 class TestRequireAdminUsesRbacSeam:

@@ -14,6 +14,7 @@ just like ``test_recruitment_notifications.py`` does.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -238,9 +239,14 @@ async def test_transcribe_killswitch_uses_bundled_transcript(
 async def test_transcribe_killswitch_wipes_stale_segments(
     db: AsyncSession, killswitch_on, monkeypatch
 ):
-    """Killswitch transcribe must remove any existing InterviewSegment rows
-    so ``analyze_interview_task`` doesn't see a transcript / segment
-    mismatch from a prior real run."""
+    """Killswitch transcribe must replace any existing InterviewSegment
+    rows so ``analyze_interview_task`` doesn't see a transcript / segment
+    mismatch from a prior real run.
+
+    HRP-275: the replacement is the bundled transcript's own diarized
+    lines — leaving none at all is what made the demo show a wall of
+    text where the product shows speakers and timecodes.
+    """
     interview, tenant = await _make_demo_setup(db, is_demo=True)
     interview.transcription_status = "pending"
     interview.transcript = None
@@ -273,13 +279,29 @@ async def test_transcribe_killswitch_wipes_stale_segments(
     assert result["status"] == "completed"
 
     segments = (
-        await db.execute(
-            select(InterviewSegment).where(
-                InterviewSegment.interview_id == interview.id
-            ).execution_options(populate_existing=True)
+        (
+            await db.execute(
+                select(InterviewSegment)
+                .where(InterviewSegment.interview_id == interview.id)
+                .execution_options(populate_existing=True)
+            )
         )
-    ).scalars().all()
-    assert segments == []
+        .scalars()
+        .all()
+    )
+    assert not [s for s in segments if s.text.startswith("stale")], (
+        "stale segments from a prior real run must not survive"
+    )
+    assert segments, "the bundled transcript is diarized — segments must land"
+    # Two speakers, whatever the seed locale calls them: the de/ru
+    # transcripts label them in their own language ("Kandidatin", a
+    # Cyrillic "Interviewer"), so the labels are not something a test
+    # may pin.
+    assert len({s.speaker for s in segments}) == 2
+    assert all(s.end_sec >= s.start_sec for s in segments)
+    # Ordered by timecode, so the player's sync-scroll has a window.
+    starts = [s.start_sec for s in sorted(segments, key=lambda s: s.start_sec)]
+    assert starts == sorted(starts)
 
 
 @pytest.mark.asyncio
@@ -544,3 +566,239 @@ async def test_killswitch_transcribe_sends_notification(
     assert any(
         c.get("event") == "recruitment.interview.transcript_ready" for c in calls
     )
+
+
+@pytest.mark.asyncio
+async def test_killswitch_transcribe_chains_the_analysis(
+    db: AsyncSession, killswitch_on, monkeypatch
+):
+    """HRP-275 retest: on the demo the analysis never started.
+
+    A recording uploaded with "transcribe & analyze" chains the analyze
+    hop from the transcribe task. The kill-switch branch used to return
+    before that block, so on a demo tenant transcription finished and
+    nothing followed — the interview page showed a transcript and an AI
+    analysis that stayed empty. The one-shot ``auto_process`` flag was
+    never consumed either, so a later manual re-transcribe would have
+    fired a billed analysis from stale upload intent.
+    """
+    interview, tenant = await _make_demo_setup(db, is_demo=True)
+    interview.transcription_status = "pending"
+    interview.transcript = None
+    interview.auto_process = True
+    await db.commit()
+
+    hops: list[str] = []
+
+    def _capture_chain(interview_id: str, tenant_id: str, step: str) -> bool:
+        hops.append(step)
+        return True
+
+    monkeypatch.setattr(
+        "app.modules.recruitment.tasks.analysis.auto_chain_step", _capture_chain
+    )
+
+    result = transcribe_interview_task.run(str(interview.id), str(tenant.id))
+    assert result.get("demo_killswitch") is True
+    assert hops == ["analyze"]
+
+    refreshed = (
+        await db.execute(
+            select(Interview)
+            .where(Interview.id == interview.id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert refreshed.auto_process is False, "the flag is one-shot"
+
+
+@pytest.mark.asyncio
+async def test_killswitch_transcribe_without_auto_process_chains_nothing(
+    db: AsyncSession, killswitch_on, monkeypatch
+):
+    """A manual Transcribe click must not start a billed analysis."""
+    interview, tenant = await _make_demo_setup(db, is_demo=True)
+    interview.transcription_status = "pending"
+    interview.transcript = None
+    interview.auto_process = False
+    await db.commit()
+
+    hops: list[str] = []
+    monkeypatch.setattr(
+        "app.modules.recruitment.tasks.analysis.auto_chain_step",
+        lambda *a, **k: hops.append(a[-1]) or True,
+    )
+
+    transcribe_interview_task.run(str(interview.id), str(tenant.id))
+    assert hops == []
+
+
+# ---------------------------------------------------------------------------
+# HRP-275 — the real (billed) transcription path, kill-switch OFF.
+#
+# This is the branch that spends a live tenant's credits, and the auto-chain
+# refactor moved its flag handling. Stub the provider chain so the real path
+# runs end to end without a transcription vendor.
+# ---------------------------------------------------------------------------
+
+
+def _stub_real_transcription(monkeypatch, *, speakers=("speaker_0", "speaker_1")):
+    """Make the non-killswitch path complete without a provider."""
+    from app.modules.recruitment import media_prep, transcription_service
+
+    monkeypatch.setattr(
+        transcription_service, "get_transcription_chain_sync", lambda *a, **k: ["stub"]
+    )
+    monkeypatch.setattr(
+        "app.core.s3.get_presigned_url", lambda *a, **k: "http://example.invalid/rec"
+    )
+    monkeypatch.setattr(media_prep, "fetch_to_file", lambda url, dest: dest)
+    monkeypatch.setattr(media_prep, "extract_audio", lambda src, dest: None)
+
+    result = transcription_service.TranscriptionResult(
+        full_text="Hello there. General Kenobi.",
+        segments=[
+            transcription_service.TranscriptSegment(
+                speaker=speakers[0], start=0.0, end=2.0, text="Hello there."
+            ),
+            transcription_service.TranscriptSegment(
+                speaker=speakers[1], start=2.0, end=4.0, text="General Kenobi."
+            ),
+        ],
+        duration_seconds=4.0,
+        provider="stub-provider",
+    )
+
+    async def _chain(*_args, **_kwargs):
+        return result, None
+
+    monkeypatch.setattr(transcription_service, "transcribe_with_chain", _chain)
+    return result
+
+
+async def _attach_media(db: AsyncSession, interview: Interview, tenant_id) -> None:
+    """Give the interview a recording, so the real path has something to fetch."""
+    from app.core.security import hash_password
+    from app.modules.auth.models import User
+    from app.modules.storage.models import File
+
+    uploader = User(
+        tenant_id=tenant_id,
+        email=f"uploader-{uuid.uuid4().hex[:6]}@example.com",
+        password_hash=hash_password("x"),
+        first_name="Up",
+        last_name="Loader",
+    )
+    db.add(uploader)
+    await db.commit()
+    await db.refresh(uploader)
+
+    media = File(
+        tenant_id=tenant_id,
+        name=f"{interview.id}.mp3",
+        original_name="rec.mp3",
+        path=f"interviews/{interview.id}.mp3",
+        size=1024,
+        mime_type="audio/mpeg",
+        uploaded_by=uploader.id,
+    )
+    db.add(media)
+    await db.commit()
+    await db.refresh(media)
+    interview.audio_file_id = media.id
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_real_path_chains_the_analysis_and_consumes_the_flag(
+    db: AsyncSession, killswitch_off, monkeypatch
+):
+    """The billed path must chain exactly once and drop the one-shot flag."""
+    interview, tenant = await _make_demo_setup(db, is_demo=False)
+    interview.transcription_status = "pending"
+    interview.transcript = None
+    interview.auto_process = True
+    await db.commit()
+    await _attach_media(db, interview, tenant.id)
+
+    _stub_real_transcription(monkeypatch)
+
+    hops: list[str] = []
+    flag_when_hop_ran: list[bool] = []
+
+    def _capture_chain(interview_id: str, tenant_id: str, step: str) -> bool:
+        hops.append(step)
+        # HRP-275 ordering: the one-shot flag must already be committed
+        # false by the time the billed hop runs, so a crash here cannot
+        # buy the tenant a second analysis.
+        from sqlalchemy import create_engine
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import Session as SyncSession
+
+        engine = create_engine(
+            app_settings.database_url.replace("+asyncpg", "+psycopg2")
+        )
+        try:
+            with SyncSession(engine) as probe:
+                flag_when_hop_ran.append(
+                    probe.execute(
+                        sa_select(Interview.auto_process).where(
+                            Interview.id == uuid.UUID(interview_id)
+                        )
+                    ).scalar_one()
+                )
+        finally:
+            engine.dispose()
+        return True
+
+    monkeypatch.setattr(
+        "app.modules.recruitment.tasks.analysis.auto_chain_step", _capture_chain
+    )
+
+    # The real branch calls ``asyncio.run`` internally, so it needs a
+    # thread of its own — this test function already owns an event loop.
+    result = await asyncio.to_thread(
+        transcribe_interview_task.run, str(interview.id), str(tenant.id)
+    )
+    assert result["status"] == "completed"
+    assert result.get("demo_killswitch") is not True, "real path expected"
+    assert hops == ["analyze"]
+    assert flag_when_hop_ran == [False], "flag must be consumed before the hop"
+
+    refreshed = (
+        await db.execute(
+            select(Interview)
+            .where(Interview.id == interview.id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert refreshed.auto_process is False
+    assert refreshed.transcription_status == "completed"
+    assert refreshed.transcription_provider == "stub-provider"
+
+
+@pytest.mark.asyncio
+async def test_real_path_without_auto_process_chains_nothing(
+    db: AsyncSession, killswitch_off, monkeypatch
+):
+    """A manual Transcribe on a live tenant must not spend analysis credits."""
+    interview, tenant = await _make_demo_setup(db, is_demo=False)
+    interview.transcription_status = "pending"
+    interview.transcript = None
+    interview.auto_process = False
+    await db.commit()
+    await _attach_media(db, interview, tenant.id)
+
+    _stub_real_transcription(monkeypatch)
+
+    hops: list[str] = []
+    monkeypatch.setattr(
+        "app.modules.recruitment.tasks.analysis.auto_chain_step",
+        lambda *a, **k: hops.append(a[-1]) or True,
+    )
+
+    result = await asyncio.to_thread(
+        transcribe_interview_task.run, str(interview.id), str(tenant.id)
+    )
+    assert result["status"] == "completed"
+    assert hops == []

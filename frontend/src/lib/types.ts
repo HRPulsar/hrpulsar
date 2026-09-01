@@ -1,3 +1,5 @@
+import type { DemoPersona } from "./demo";
+
 export interface User {
   id: string;
   email: string;
@@ -14,10 +16,16 @@ export interface User {
   tenant_is_demo?: boolean;
   /** ISO timestamp at which the demo tenant + its data are purged. */
   tenant_expires_at?: string | null;
+  /** HRP-676: which persona the demo session is currently viewing as, as
+   *  told by the backend. Absent outside a demo session. */
+  demo_persona?: DemoPersona | null;
   /** i18n (F0): personal interface locale; null → tenant/deployment default. */
   language?: string | null;
   /** Tenant-default interface locale, echoed by /auth/me. */
   tenant_default_locale?: string | null;
+  /** HRP-637: tenant switch deciding whether a rank-and-file caller gets
+   *  grade / specialization on positions. Mirrors `directory_show_grades`. */
+  tenant_directory_show_grades?: boolean;
 }
 
 export interface TokenResponse {
@@ -312,6 +320,8 @@ export interface EmployeeCompetenceRow {
   skill_level_title: string;
   skill_level_sort_index: number;
   percent: number | null;
+  // HRP-660: the bar `percent` is judged against — see isCompetenceGap().
+  passing_score: number;
   assessment_id: string | null;
   completed_at: string | null;
   level_breakdown: EmployeeCompetenceLevelBreakdown[];
@@ -1099,6 +1109,10 @@ export interface TalentCandidate {
   /** HRP-173: per-axis breakdown mirroring CandidatePoolItem. */
   comp_match?: number | null;
   comp_qualifies?: boolean;
+  /** HRP-657: required competences cleared / asked for — the reason
+   * behind the average percent, shown next to it on the Match cell. */
+  comp_met?: number | null;
+  comp_total?: number | null;
   exp_months?: number | null;
   exp_qualifies?: boolean;
   has_comp_requirement?: boolean;
@@ -1116,6 +1130,11 @@ export interface TalentCandidate {
    * renders a chip when it is not ``active``. */
   position_title?: string | null;
   employee_status?: string | null;
+  /** HRP-665: development plan built from this candidate's competence
+   * gaps. `pdp_status` carries its state so the row can tell "walking a
+   * plan" from "plan completed" without a second request. */
+  pdp_id?: string | null;
+  pdp_status?: string | null;
 }
 
 // HRP-87 — structured Requirements rows.
@@ -1817,9 +1836,9 @@ export interface AssessmentMatrixAIEntry {
   score: number | null;
   status: AssessmentMatrixAIStatus;
   reasoning: string | null;
-  // CompetenceAssessment citations are persisted as
-  // ``{competence, quote, verdict}`` on the canonical Pydantic schema;
-  // ``text`` is kept as a fallback so older payloads still render.
+  // Canonical ``Citation`` (prompts_interview.py) is
+  // ``{segment_id, start_sec, end_sec, quote}``; ``text`` / ``competence``
+  // are kept as fallbacks so payloads written before HRP-598 still render.
   citations: { text?: string; quote?: string; competence?: string }[];
   interview_id: string;
   updated_at: string | null;

@@ -11,6 +11,7 @@ from app.modules.talent_market.schemas import (
     CandidateAdd,
     CandidateBreakdown,
     CandidateBulkAdd,
+    CandidateDevelopmentPlanCreate,
     CandidatePoolList,
     CandidateRead,
     CompetenceLink,
@@ -371,6 +372,30 @@ async def appoint_candidate(
 ):
     return await service.appoint_candidate(
         db, current_user.tenant_id, card_id, candidate_id
+    )
+
+
+@router.post(
+    "/talent-market/{card_id}/candidates/{candidate_id}/development-plan",
+    response_model=CandidateRead,
+    status_code=201,
+)
+async def create_candidate_development_plan(
+    card_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    data: CandidateDevelopmentPlanCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "manager")),
+    _scope: None = Depends(card_scope),
+):
+    """HRP-665: create a development plan from the candidate's competence gaps.
+
+    Items are the card's Required Competences the employee is short on
+    (required vs current), not the whole grade matrix. The new plan id
+    lands on ``TalentCandidate.pdp_id`` so the Candidates row can link it.
+    """
+    return await service.create_candidate_development_plan(
+        db, current_user.tenant_id, card_id, candidate_id, current_user.id, data
     )
 
 

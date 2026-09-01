@@ -172,7 +172,12 @@ async def get_own_employee(
     emp = await get_current_employee(db, current_user)
     if emp is None:
         raise AppError("employee_profile_not_found", 404)
-    return await service.get_employee(db, current_user.tenant_id, emp.id)
+    # HRP-660: the only caller resolves the id and redirects to
+    # ``/employees/{id}``, which computes the issues itself. Scanning the
+    # alerts here just to throw the result away costs a query per click.
+    return await service.get_employee(
+        db, current_user.tenant_id, emp.id, with_issues=False
+    )
 
 
 @router.get(
@@ -189,8 +194,14 @@ async def get_employee(
     subtree) keep the full record; everyone else gets the directory row.
     Sub-resources stay behind ``read_scope_user``.
     """
-    row = await service.get_employee(db, current_user.tenant_id, employee_id)
-    if await is_employee_in_read_scope(db, current_user, employee_id):
+    # HRP-660: the card names the employee's problems, so the scope check
+    # runs first — the directory row hides them anyway, and computing them
+    # for a caller who will not see them is pure waste.
+    in_scope = await is_employee_in_read_scope(db, current_user, employee_id)
+    row = await service.get_employee(
+        db, current_user.tenant_id, employee_id, with_issues=in_scope
+    )
+    if in_scope:
         return row
     return (await service.directory_rows(db, current_user.tenant_id, [row]))[0]
 

@@ -14,6 +14,10 @@ export type AiVerdict =
 export type AiReadiness =
   | "none"
   | "resume_only"
+  // HRP-681 — interviewed without a resume on file. Analysis is
+  // possible (the resume is an optional prompt input), so this is not
+  // the same as "none".
+  | "transcript_only"
   | "resume_and_transcript";
 
 export type StageType =
@@ -55,6 +59,9 @@ export interface CandidateVacancyEnrichedRow {
   candidate_id: string;
   vacancy_id: string;
   candidate_name: string;
+  // HRP-663 — this candidate already works here (their Person row maps
+  // to a User with an Employee profile in this tenant).
+  is_employee?: boolean;
   last_position: string | null;
   years_of_experience: number | null;
   stage_id: string | null;
@@ -100,6 +107,8 @@ export interface CandidateCanonical {
   id: string;
   tenant_id: string;
   full_name: string;
+  // HRP-663 — see CandidateVacancyEnrichedRow.is_employee.
+  is_employee?: boolean;
   email: string | null;
   phone: string | null;
   linkedin_url: string | null;
@@ -350,14 +359,36 @@ export const AI_ANALYSIS_STAGE_LABEL_KEYS: Record<AiAnalysisStage, string> = {
   verdict: "aiStageVerdict",
 };
 
-/** Translated pipeline-stage label with a raw-code fallback. */
-export function aiAnalysisStageLabel(
-  t: (key: string) => string,
-  stage: string,
-): string {
-  const key = AI_ANALYSIS_STAGE_LABEL_KEYS[stage as AiAnalysisStage];
-  return key ? t(key) : stage;
+/**
+ * Build a `(t, code) => label` resolver over a wire-code → i18n-key map.
+ *
+ * Six of these were written out by hand (HRP-596). They differ in exactly
+ * one thing — what an unknown code prints — so that is the parameter, and
+ * the fallbacks stay as they were: `asIs` keeps the wire code, `deSlugged`
+ * prints a readable form ("escalated_to_lead" → "escalated to lead") on the
+ * surfaces whose catalogs are expected to catch up with the backend.
+ */
+function labelResolver<Code extends string>(
+  keys: Record<Code, string>,
+  fallback: (code: string) => string,
+) {
+  return (
+    t: (key: string) => string,
+    code: string | null | undefined,
+  ): string => {
+    const key = keys[code as Code];
+    return key ? t(key) : fallback(code ?? "");
+  };
 }
+
+const asIs = (code: string) => code;
+const deSlugged = (code: string) => code.replaceAll("_", " ");
+
+/** Translated pipeline-stage label with a raw-code fallback. */
+export const aiAnalysisStageLabel = labelResolver(
+  AI_ANALYSIS_STAGE_LABEL_KEYS,
+  asIs,
+);
 
 // HRP-550: the verdict → i18n key relation is owned here so every surface
 // that shows a verdict resolves the same wording. It used to live inside
@@ -379,13 +410,7 @@ export const AI_VERDICT_LABEL_KEYS: Record<AiVerdict, string> = {
  * "escalated_to_lead" reads better than the raw token while the catalogs
  * catch up.
  */
-export function aiVerdictLabel(
-  t: (key: string) => string,
-  verdict: string | null | undefined,
-): string {
-  const key = AI_VERDICT_LABEL_KEYS[verdict as AiVerdict];
-  return key ? t(key) : (verdict ?? "").replaceAll("_", " ");
-}
+export const aiVerdictLabel = labelResolver(AI_VERDICT_LABEL_KEYS, deSlugged);
 
 // HRP-550: mirrors the backend Literal on ``recommendation_for_next_step``
 // (``prompts_interview.py``) — keep the four codes in sync.
@@ -403,13 +428,7 @@ export const AI_NEXT_STEP_LABEL_KEYS: Record<AiNextStep, string> = {
 };
 
 /** Translated next-step recommendation with a raw-code fallback. */
-export function aiNextStepLabel(
-  t: (key: string) => string,
-  step: string,
-): string {
-  const key = AI_NEXT_STEP_LABEL_KEYS[step as AiNextStep];
-  return key ? t(key) : step;
-}
+export const aiNextStepLabel = labelResolver(AI_NEXT_STEP_LABEL_KEYS, asIs);
 
 // HRP-579 review fix: the analysis verdict is the same flat
 // ``recommended | needs_check | not_recommended`` enum every other AI
@@ -434,13 +453,10 @@ export const PROCESS_FINDING_LABEL_KEYS: Record<ProcessFindingType, string> = {
 };
 
 /** Translated interview process finding type with a de-slugged fallback. */
-export function processFindingLabel(
-  t: (key: string) => string,
-  findingType: string | null | undefined,
-): string {
-  const key = PROCESS_FINDING_LABEL_KEYS[findingType as ProcessFindingType];
-  return key ? t(key) : (findingType ?? "").replaceAll("_", " ");
-}
+export const processFindingLabel = labelResolver(
+  PROCESS_FINDING_LABEL_KEYS,
+  deSlugged,
+);
 
 // HRP-579: mirrors ``RedFlag.flag_type`` (prompts_interview.py).
 export type RedFlagType =
@@ -457,13 +473,7 @@ export const RED_FLAG_LABEL_KEYS: Record<RedFlagType, string> = {
 };
 
 /** Translated interview red-flag type with a de-slugged fallback. */
-export function redFlagLabel(
-  t: (key: string) => string,
-  flagType: string | null | undefined,
-): string {
-  const key = RED_FLAG_LABEL_KEYS[flagType as RedFlagType];
-  return key ? t(key) : (flagType ?? "").replaceAll("_", " ");
-}
+export const redFlagLabel = labelResolver(RED_FLAG_LABEL_KEYS, deSlugged);
 
 // HRP-579: mirrors ``InterviewQuestionSet.generation_mode`` (models.py).
 export type QuestionSetGenerationMode =
@@ -483,14 +493,10 @@ export const QUESTION_SET_GENERATION_MODE_LABEL_KEYS: Record<
 };
 
 /** Translated question-set generation mode with a de-slugged fallback. */
-export function questionSetGenerationModeLabel(
-  t: (key: string) => string,
-  mode: string,
-): string {
-  const key =
-    QUESTION_SET_GENERATION_MODE_LABEL_KEYS[mode as QuestionSetGenerationMode];
-  return key ? t(key) : mode.replaceAll("_", " ");
-}
+export const questionSetGenerationModeLabel = labelResolver(
+  QUESTION_SET_GENERATION_MODE_LABEL_KEYS,
+  deSlugged,
+);
 
 // HRP-271: verbatim resume quote anchored to a parsed-resume section.
 // Mirrors backend ``ResumeExcerptRead`` (schemas.py) — keep the section
@@ -645,3 +651,26 @@ export const AI_ANALYSIS_PRICING = {
   full: 40,
   topup_to_full: 20,
 } as const;
+
+// HRP-667 / HRP-663 — the internal-mobility view of a vacancy.
+// `talent_card_id === null` means it was never posted to the talent
+// market, so the block offers to post it instead of showing an empty
+// shortlist. `has_library_competences` says whether posting is possible
+// at all: the matcher scores against library competences, not the AI
+// profile's free-text slugs.
+export interface VacancyInternalCandidate {
+  employee_id: string;
+  employee_name: string | null;
+  position_title: string | null;
+  match_score: number | null;
+  status: string;
+}
+
+export interface VacancyInternalCandidates {
+  talent_card_id: string | null;
+  talent_card_status: string | null;
+  has_library_competences: boolean;
+  /** HRP-678 — the vacancy's own internal-search switch. */
+  internal_search_allowed: boolean;
+  items: VacancyInternalCandidate[];
+}
