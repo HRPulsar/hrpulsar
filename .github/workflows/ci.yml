@@ -82,6 +82,9 @@ jobs:
   # content that can never reach the public repo fails the build the day
   # it lands instead of aborting a release sync.
   public-guards:
+    # The sync script and the internal tree exist only in the monorepo; the
+    # synced copy of this workflow must not run it in the public repo.
+    if: github.repository == 'maximberg/hrpulsar'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
