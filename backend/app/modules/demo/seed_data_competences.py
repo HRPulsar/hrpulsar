@@ -1296,6 +1296,34 @@ INDICATORS: list[dict] = [
 # ---------------------------------------------------------------------------
 
 
+# HRP-713 — the three GTM competences carry real, locale-neutral links.
+# The sales demo creates a development plan on stage and opens a material
+# from it, so "Open" has to land on something that exists. Keyed by
+# (competence, level) rather than folded into the catalogue tuples below
+# so the other ~40 competences keep their three-element rows. Every URL
+# was checked for a 200 before it landed here; ``link`` is not a
+# TRANSLATABLE_KEY, so these never reach the locale catalogs.
+_MATERIAL_LINKS: dict[tuple[str, str], str] = {
+    ("c-sales-discovery", "sl-l1"): "https://en.wikipedia.org/wiki/Sales_process",
+    ("c-sales-discovery", "sl-l2"): "https://en.wikipedia.org/wiki/Neil_Rackham",
+    ("c-sales-discovery", "sl-l3"): "https://en.wikipedia.org/wiki/Needs_assessment",
+    ("c-product-knowledge", "sl-l1"): "https://hrpulsar.com/docs/features",
+    ("c-product-knowledge", "sl-l2"): "https://hrpulsar.com/docs/cloud",
+    ("c-product-knowledge", "sl-l3"): (
+        "https://en.wikipedia.org/wiki/Competitor_analysis"
+    ),
+    ("c-objection-handling", "sl-l1"): (
+        "https://en.wikipedia.org/wiki/Active_listening"
+    ),
+    ("c-objection-handling", "sl-l2"): (
+        "https://en.wikipedia.org/wiki/Value-based_pricing"
+    ),
+    ("c-objection-handling", "sl-l3"): (
+        "https://en.wikipedia.org/wiki/Practice_(learning_method)"
+    ),
+}
+
+
 def _build_materials() -> list[dict]:
     catalogue: dict[str, tuple[tuple[str, str, str, int], ...]] = {
         "c-python": (
@@ -1603,6 +1631,7 @@ def _build_materials() -> list[dict]:
                     "format": fmt,
                     "material_type": mtype,
                     "study_time": minutes,
+                    "link": _MATERIAL_LINKS.get((c_key, level_key)),
                 }
             )
     return items

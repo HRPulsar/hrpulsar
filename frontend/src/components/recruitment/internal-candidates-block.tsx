@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Building2, Loader2 } from "lucide-react";
+import { Building2, Loader2, UserPlus } from "lucide-react";
 
 import { ApiError, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -29,11 +29,15 @@ import type { VacancyInternalCandidates } from "@/lib/recruitment-types";
 export function InternalCandidatesBlock({
   vacancyId,
   reloadToken = 0,
+  onAdded,
 }: {
   vacancyId: string;
   /** HRP-687: bumped when the vacancy's library competences change, so
    *  `has_library_competences` (and the Post button) refresh without an F5. */
   reloadToken?: number;
+  /** HRP-711: an employee just became a candidate — the table below this
+   *  block is now one row out of date. */
+  onAdded?: () => void;
 }) {
   const t = useTranslations("recruitment");
   // HRP-667: POST /talent-card is require_role("admin", "recruiter") — the
@@ -43,6 +47,9 @@ export function InternalCandidatesBlock({
   const canPost = isAdmin || isRecruiter;
   const [data, setData] = useState<VacancyInternalCandidates | null>(null);
   const [busy, setBusy] = useState(false);
+  // Per-row, not shared: two Add clicks in a row are a normal thing to do
+  // and a single flag would freeze the whole list on the first one.
+  const [adding, setAdding] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -79,6 +86,32 @@ export function InternalCandidatesBlock({
       setBusy(false);
     }
   }, [vacancyId, t]);
+
+  const addToCandidates = useCallback(
+    async (employeeId: string) => {
+      setAdding(employeeId);
+      try {
+        await api.post(
+          `/recruitment/vacancies/${vacancyId}/internal-candidates/${employeeId}/add`,
+          {},
+        );
+        toast.success(t("internalCandidatesAddSuccess"));
+        // Reload this block so the row flips to the link, and tell the
+        // section so the candidates table picks up the new row.
+        await load();
+        onAdded?.();
+      } catch (err) {
+        toast.error(
+          err instanceof ApiError && err.message
+            ? err.message
+            : t("internalCandidatesAddFailed"),
+        );
+      } finally {
+        setAdding(null);
+      }
+    },
+    [vacancyId, t, load, onAdded],
+  );
 
   if (!data) return null;
 
@@ -201,6 +234,44 @@ export function InternalCandidatesBlock({
                 ) : (
                   item.status !== "not_matched" && (
                     <span className="text-muted-foreground">{"—"}</span>
+                  )
+                )}
+                {/* HRP-711: the shortlist was read-only, so a recruiter who
+                    wanted one of these people had to retype a colleague the
+                    system already knows. Once added, the row stops offering
+                    the action and points at the candidate instead. */}
+                {item.candidate_id ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    render={
+                      <Link
+                        href={`/recruitment/candidates/${item.candidate_id}`}
+                      />
+                    }
+                    data-testid={`vacancy-internal-candidate-${item.employee_id}-added-link`}
+                  >
+                    {t("internalCandidatesInCandidates")}
+                  </Button>
+                ) : (
+                  canPost && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={adding !== null}
+                      onClick={() => addToCandidates(item.employee_id)}
+                      data-testid={`vacancy-internal-candidate-${item.employee_id}-add-btn`}
+                    >
+                      {adding === item.employee_id ? (
+                        <Loader2
+                          className="mr-1 size-3.5 animate-spin"
+                          aria-hidden
+                        />
+                      ) : (
+                        <UserPlus className="mr-1 size-3.5" aria-hidden />
+                      )}
+                      {t("internalCandidatesAddToCandidates")}
+                    </Button>
                   )
                 )}
               </span>

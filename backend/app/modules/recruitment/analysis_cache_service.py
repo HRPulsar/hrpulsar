@@ -268,11 +268,14 @@ async def _load_vacancy_cache_inputs(
     analysis_language = await resolve_analysis_language(db, tenant_id, vacancy)
 
     # Same "latest parsed resume" pick as the analysis task's prompt build.
+    # HRP-704: ``file_type`` included — candidate_files is polymorphic, and
+    # an audio row's id keyed the cache to a file that is not the resume.
     resume_file_id = (
         await db.execute(
             select(CandidateFile.id)
             .where(
                 CandidateFile.candidate_id == cv.candidate_id,
+                CandidateFile.file_type == "resume",
                 CandidateFile.parse_status == "completed",
             )
             .order_by(CandidateFile.created_at.desc())
@@ -314,10 +317,12 @@ def _load_vacancy_cache_inputs_sync(
     analysis_language = resolve_analysis_language_sync(db, tenant_id, vacancy)
 
     # Same "latest parsed resume" pick as the analysis task's prompt build.
+    # HRP-704: ``file_type`` included — see the async twin above.
     resume_file_id = db.execute(
         select(CandidateFile.id)
         .where(
             CandidateFile.candidate_id == cv.candidate_id,
+            CandidateFile.file_type == "resume",
             CandidateFile.parse_status == "completed",
         )
         .order_by(CandidateFile.created_at.desc())

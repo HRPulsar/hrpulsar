@@ -79,6 +79,7 @@ AUDITED: dict[str, list[tuple[str, str]]] = {
     "app.modules.recruitment.candidate_service": [
         # HRP-181 REDO Stage 2 — canonical candidate flow
         ("add_candidate_to_vacancy_manual", "candidate.add"),
+        ("add_internal_candidate_to_vacancy", "candidate.add"),
         ("finalize_candidates_from_parsed", "candidate.add_from_resume"),
         ("patch_candidate_vacancy", "candidate.update_stage"),
         ("patch_candidate", "candidate.update"),
@@ -138,6 +139,9 @@ AUDITED: dict[str, list[tuple[str, str]]] = {
         ("create_consent_template", "consent.template_create"),
         ("update_consent_template", "consent.template_update"),
         ("send_consent_request", "consent.send"),
+        # HRP-684: a resend is its own event — the trail has to show that
+        # the candidate was mailed twice, not just once.
+        ("resend_consent_request", "consent.resend"),
     ],
     "app.modules.recruitment.report_service": [
         ("enqueue_report", "report.generate"),

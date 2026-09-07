@@ -109,6 +109,11 @@ class EmployeeIssue(BaseModel):
 
     code: EmployeeAlertCodeLiteral | IssueCode
     label: str
+    # HRP-720: when this problem is scheduled to resolve — an open plan's
+    # deadline for the ``pdp_*`` codes, an open assessment's end date for the
+    # ``assessment_*`` ones. ``None`` where nothing is scheduled yet, which is
+    # itself the answer: nobody has put a date on it.
+    deadline: date | None = None
 
 
 class EmployeeRead(BaseModel):

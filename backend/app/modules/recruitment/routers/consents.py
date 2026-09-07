@@ -107,6 +107,22 @@ async def send_consent_request(
     )
 
 
+@router.post(
+    "/recruitment/candidates/{candidate_id}/consent/resend",
+    response_model=ConsentRequestRead,
+    status_code=202,
+)
+async def resend_consent_request(
+    candidate_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "recruiter")),
+):
+    """HRP-684: send the pending consent link again (same link)."""
+    return await service.resend_consent_request(
+        db, current_user.tenant_id, candidate_id
+    )
+
+
 @router.get(
     "/recruitment/consent/{token}",
     response_model=ConsentTokenView,

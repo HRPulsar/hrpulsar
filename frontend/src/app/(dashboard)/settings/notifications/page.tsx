@@ -32,6 +32,14 @@ const statusColors: Record<string, string> = {
   failed: BADGE_COLOR.red,
 };
 
+// HRP-671: delivery status of the notification row; the code stays the wire
+// value, only the badge label is translated.
+const STATUS_KEYS: Record<string, string> = {
+  pending: "notifStatusPending",
+  sent: "notifStatusSent",
+  failed: "notifStatusFailed",
+};
+
 export default function NotificationsPage() {
   const t = useTranslations("settings");
   const tc = useTranslations("common");
@@ -143,15 +151,19 @@ export default function NotificationsPage() {
                             (n.context?.message as string) ||
                             tc("notification")}
                         </p>
+                        {/* HRP-714: TableCell is whitespace-nowrap, so a
+                            multi-sentence body ran off the table instead of
+                            wrapping — and pushed the Status/Date columns out
+                            of view with it. */}
                         {typeof n.context?.description === "string" && (
-                          <p className="mt-0.5 text-xs text-muted-foreground">
+                          <p className="mt-0.5 max-w-prose whitespace-normal text-xs text-muted-foreground">
                             {n.context.description}
                           </p>
                         )}
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary" className={statusColors[n.status] || ""}>
-                          {n.status}
+                          {STATUS_KEYS[n.status] ? t(STATUS_KEYS[n.status]) : n.status}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm">

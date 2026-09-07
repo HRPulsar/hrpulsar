@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import type { MassExam } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LoadErrorState } from "@/components/load-error-state";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
@@ -76,6 +77,7 @@ function ManagerExamsView() {
   const tc = useTranslations("common");
   const [exams, setExams] = useState<MassExam[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -93,8 +95,9 @@ function ManagerExamsView() {
   async function load() {
     try {
       setExams(await api.get<MassExam[]>("/mass-exams"));
+      setLoadError(false);
     } catch {
-      // ignore
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -221,7 +224,15 @@ function ManagerExamsView() {
         )}
       </div>
 
-      {exams.length === 0 ? (
+      {loadError ? (
+        <LoadErrorState
+          testIdPrefix="exams"
+          onRetry={() => {
+            setLoading(true);
+            void load();
+          }}
+        />
+      ) : exams.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="exams-empty">{t("empty")}</div>
       ) : filtered.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="exams-empty-filtered">{t("emptyFiltered")}</div>
@@ -368,6 +379,7 @@ function EmployeeExamsView() {
   const tc = useTranslations("common");
   const [exams, setExams] = useState<EmployeeExamRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   // HRP-328: take/review side sheets. The icon of the row whose sheet is
   // open stays highlighted (hover-style) so the active exam is obvious.
   const [takeExamId, setTakeExamId] = useState<string | null>(null);
@@ -382,9 +394,15 @@ function EmployeeExamsView() {
     const seq = ++loadSeq.current;
     try {
       const rows = await api.get<EmployeeExamRow[]>("/exams");
-      if (seq === loadSeq.current) setExams(rows);
+      if (seq === loadSeq.current) {
+        setExams(rows);
+        setLoadError(false);
+      }
     } catch {
-      if (seq === loadSeq.current) toast.error(t("errorLoadExams"));
+      if (seq === loadSeq.current) {
+        setLoadError(true);
+        toast.error(t("errorLoadExams"));
+      }
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
@@ -410,7 +428,15 @@ function EmployeeExamsView() {
         </p>
       </div>
 
-      {exams.length === 0 ? (
+      {loadError ? (
+        <LoadErrorState
+          testIdPrefix="exams"
+          onRetry={() => {
+            setLoading(true);
+            void load();
+          }}
+        />
+      ) : exams.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="exams-empty">{t("empty")}</div>
       ) : (
         <div className="rounded-lg border">

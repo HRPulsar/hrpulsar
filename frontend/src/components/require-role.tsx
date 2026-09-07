@@ -13,10 +13,12 @@ interface RequireRoleProps {
   manage?: boolean;
   /** Require admin role */
   admin?: boolean;
+  /** HRP-732: require admin, manager or HR (the analytics page). */
+  analytics?: boolean;
 }
 
-export function RequireRole({ children, manage, admin }: RequireRoleProps) {
-  const { canManage, isAdmin } = usePermissions();
+export function RequireRole({ children, manage, admin, analytics }: RequireRoleProps) {
+  const { canManage, isAdmin, canViewAnalytics } = usePermissions();
   const { user, loading } = useAuth();
   const router = useRouter();
   const t = useTranslations("common");
@@ -25,7 +27,13 @@ export function RequireRole({ children, manage, admin }: RequireRoleProps) {
   // still null — an aborted /auth/me leaves exactly that state — and reading
   // "no roles" as "not permitted" would bounce an entitled admin off the page.
   const undecided = loading || !user;
-  const allowed = admin ? isAdmin : manage ? canManage : true;
+  const allowed = admin
+    ? isAdmin
+    : analytics
+      ? canViewAnalytics
+      : manage
+        ? canManage
+        : true;
 
   useEffect(() => {
     if (!undecided && !allowed) {

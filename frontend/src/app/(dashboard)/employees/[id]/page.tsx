@@ -17,6 +17,7 @@ import {
 import {
   assessmentStatusTitle,
   assessmentTypeTitle,
+  skillLevelTitleLabel,
 } from "@/lib/reference-labels";
 import {
   MAX_ACTIVE_PDPS_PER_EMPLOYEE,
@@ -26,7 +27,10 @@ import {
 } from "@/lib/pdp-status";
 import { sortPdpsForList } from "@/lib/pdp-filters";
 import {
+  daysSinceCompleted,
   goalsProgressPercent,
+  isRunningAssessment,
+  latestDoneAssessment,
   openAssessmentCount,
   openPdpCount,
 } from "@/lib/employee-kpis";
@@ -118,6 +122,17 @@ const statusColors: Record<string, string> = {
 
 const statusOptions = ["active", "inactive", "on_leave", "terminated"];
 
+// HRP-724: the profile shows one fixed window. The period switch lives on
+// the dashboards, where a tile has room for it; a fourth control in the KPI
+// row would be noise on a screen that is already dense.
+const DEV_DYNAMICS_DAYS = 90;
+
+interface DevDynamics {
+  days: number;
+  plans_completed: number;
+  competences_improved: number;
+}
+
 const degreeOptions = [
   "Secondary",
   "Vocational",
@@ -185,6 +200,11 @@ export default function EmployeeDetailPage() {
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [competenceOverview, setCompetenceOverview] =
     useState<EmployeeCompetenceOverview | null>(null);
+  // HRP-724: the same dynamics the employee sees on their own dashboard,
+  // read from the loop endpoint rather than a second one computing it a
+  // different way. Null while loading, and for a card the caller may only
+  // see in the trimmed directory shape (the endpoint answers 403 there).
+  const [devDynamics, setDevDynamics] = useState<DevDynamics | null>(null);
   // GF1
   const [workExperiences, setWorkExperiences] = useState<WorkExperience[]>([]);
   const [prevEmployments, setPrevEmployments] = useState<PreviousEmployment[]>([]);
@@ -324,6 +344,27 @@ export default function EmployeeDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Keyed on the resolved employee id, not the route param: /employees/me
+  // reaches this page with a literal "me" the analytics route cannot parse.
+  const employeeId = isDirectoryCard ? undefined : employee?.id;
+  useEffect(() => {
+    // No id also means the trimmed HRP-623 card: that viewer is outside the
+    // read scope and the endpoint would answer 403 every time.
+    if (!employeeId) return;
+    let live = true;
+    api
+      .get<{ dynamics: DevDynamics }>(
+        `/analytics/my-loop?employee_id=${employeeId}&days=${DEV_DYNAMICS_DAYS}`,
+      )
+      .then((loop) => {
+        if (live) setDevDynamics(loop.dynamics);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [employeeId]);
 
   async function changeRole(roleCode: string) {
     if (!employee || roleCode === resolveAssignableRoleCode(employee.roles))
@@ -873,21 +914,34 @@ export default function EmployeeDetailPage() {
       : t("kpiMonthsShort", { months: Math.max(0, Math.round(years * 12)) });
   })();
 
-  const latestAssessment = [...assessments].sort(
+  // HRP-736: the tile used to show the newest *created* assessment in any
+  // status, so an unapproved re-assessment read as "today" right next to
+  // the "No recent assessment" chip. Only a completed one answers the
+  // question the tile asks; a running one is its own state, not the
+  // absence of one.
+  const latestAssessment = latestDoneAssessment(assessments);
+  const runningAssessments = assessments.filter(isRunningAssessment);
+  const latestRunningAssessment = [...runningAssessments].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   )[0];
   const lastAssessmentLabel = latestAssessment
     ? (() => {
-        const days = Math.max(
-          0,
-          Math.floor(
-            (Date.now() - new Date(latestAssessment.created_at).getTime()) /
-              (24 * 3600 * 1000),
-          ),
-        );
+        const days = daysSinceCompleted(latestAssessment);
         return days === 0 ? t("kpiToday") : t("kpiDaysShort", { days });
       })()
-    : "—";
+    : latestRunningAssessment
+      ? t("kpiAssessmentRunning")
+      : "—";
+  // The running-count marker leads the sub-line: it is short and fixed
+  // width, so it survives the truncation that eats a long assessment title.
+  const lastAssessmentSub = (() => {
+    const shown = latestAssessment ?? latestRunningAssessment;
+    if (!shown) return t("kpiNoRecords");
+    const title = shown.title || assessmentTypeTitle(tRef, shown);
+    return latestAssessment && runningAssessments.length > 0
+      ? `${t("kpiAssessmentsRunning", { count: runningAssessments.length })} · ${title}`
+      : title;
+  })();
 
   // HRP-247 / HRP-246: shared helpers — "open" means not yet Done or
   // Cancelled. The legacy filter compared against ``"completed"`` (no
@@ -914,6 +968,9 @@ export default function EmployeeDetailPage() {
     value: string;
     sub: string;
     info?: string;
+    // HRP-736 review: the tile capitalizes every word, which is right for
+    // one-word statuses and wrong for a sentence (a title-cased "assessment running" reads wrong).
+    valuePlain?: boolean;
   }[] = [
     {
       key: "status",
@@ -956,15 +1013,28 @@ export default function EmployeeDetailPage() {
       // plan's progress is items completed / items total.
       info: t("kpiGoalsProgressInfo"),
     },
+    // HRP-724: next to Goals progress on purpose — that tile says how far
+    // the current plans got, this one says what the finished ones changed.
+    ...(devDynamics
+      ? [
+          {
+            key: "dev-dynamics",
+            label: t("kpiDevDynamics"),
+            value: t("kpiDevDynamicsValue", {
+              plans: devDynamics.plans_completed,
+              competences: devDynamics.competences_improved,
+            }),
+            sub: t("kpiDevDynamicsSub", { days: devDynamics.days }),
+            info: t("kpiDevDynamicsInfo", { days: devDynamics.days }),
+          },
+        ]
+      : []),
     {
       key: "last-assessment",
       label: t("kpiLastAssessment"),
       value: lastAssessmentLabel,
-      sub:
-        latestAssessment?.title ||
-        (latestAssessment
-          ? assessmentTypeTitle(tRef, latestAssessment)
-          : t("kpiNoRecords")),
+      sub: lastAssessmentSub,
+      valuePlain: !latestAssessment && !!latestRunningAssessment,
     },
   ];
 
@@ -1143,6 +1213,17 @@ export default function EmployeeDetailPage() {
                 data-testid={`employee-issue-${issue.code}`}
               >
                 {t(`issue_${issue.code}`)}
+                {/* HRP-720: "there is a problem -> when does it resolve?".
+                    Only the codes with something scheduled carry a date;
+                    the rest stay a bare badge rather than inventing one. */}
+                {issue.deadline && (
+                  <span
+                    className="ml-1 opacity-80"
+                    data-testid={`employee-issue-${issue.code}-deadline`}
+                  >
+                    &middot; {t("issueDeadline", { date: formatDate(issue.deadline) })}
+                  </span>
+                )}
               </Badge>
             ))}
           </div>
@@ -1176,7 +1257,12 @@ export default function EmployeeDetailPage() {
                   </Tooltip>
                 )}
               </div>
-              <div className="mt-1.5 truncate text-lg font-bold capitalize tracking-[-0.02em]">
+              <div
+                className={cn(
+                  "mt-1.5 truncate text-lg font-bold tracking-[-0.02em]",
+                  !k.valuePlain && "capitalize",
+                )}
+              >
                 {k.value}
               </div>
               <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
@@ -1932,7 +2018,7 @@ export default function EmployeeDetailPage() {
                           <div className="flex flex-1 items-center gap-2 text-sm">
                             <span className="truncate">{row.competence_title}</span>
                             <Badge variant="secondary" className="shrink-0 text-xs">
-                              {row.skill_level_title}
+                              {skillLevelTitleLabel(tRef, row.skill_level_title)}
                             </Badge>
                           </div>
                           <div className="flex items-center gap-2">

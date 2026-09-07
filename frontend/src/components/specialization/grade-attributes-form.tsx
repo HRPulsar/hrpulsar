@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { usePermissions } from "@/hooks/use-permissions";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 type Props = {
   grade: SpecializationGrade;
@@ -21,6 +22,7 @@ type Props = {
 
 export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
   const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   // HRP-637: salary bands are compensation — admin / hr / manager only. The
   // API drops them for everyone else, so the fields would render empty and a
   // save would post those blanks back over a band the form never showed.
@@ -74,7 +76,7 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
     >
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold">
-          {grade.grade_title}
+          {gradeTitleLabel(tRef, grade.grade_title)}
           {/* HRP-288: chain still references a grade that has been
               deactivated — surface the Inactive chip so the reviewer
               sees the state at a glance. */}

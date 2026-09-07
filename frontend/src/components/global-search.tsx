@@ -8,7 +8,9 @@ import type { AssessmentList, CandidateList, EmployeeList, VacancyList } from "@
 import {
   assessmentStatusTitle,
   assessmentTypeTitle,
+  gradeTitleLabel,
 } from "@/lib/reference-labels";
+import { vacancyStatusBadgeLabel } from "@/lib/vacancy-status";
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
 
@@ -23,6 +25,7 @@ interface SearchResult {
 export function GlobalSearch() {
   const t = useTranslations("common");
   const tRef = useTranslations("reference");
+  const tRec = useTranslations("recruitment");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -81,7 +84,7 @@ export function GlobalSearch() {
           type: "vacancy" as const,
           id: v.id,
           title: v.title,
-          subtitle: `${v.specialization_title || ""} ${v.grade_title || ""} — ${v.status}`.trim(),
+          subtitle: `${v.specialization_title || ""} ${gradeTitleLabel(tRef, v.grade_title)} — ${vacancyStatusBadgeLabel(tRec, v.status)}`.trim(),
           href: `/recruitment/requisitions/${v.id}`,
         }));
 
@@ -118,7 +121,7 @@ export function GlobalSearch() {
     } finally {
       setLoading(false);
     }
-  }, [t, tRef]);
+  }, [t, tRef, tRec]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);

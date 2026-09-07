@@ -34,8 +34,12 @@ class TestDetailedEmployeeEvents:
         assert len(events) == 1
         event = events[0]
         assert event["event_type"] == "position_change"
-        assert event["old_value"] == {"position_title": "Software Engineer"}
-        assert event["new_value"] == {"position_title": "Senior Engineer"}
+        assert event["old_value"]["position_title"] == "Software Engineer"
+        assert event["new_value"]["position_title"] == "Senior Engineer"
+        # HRP-732: the diff also carries ids, so a later report can ask
+        # "did the grade move?" without matching on a renameable title.
+        assert event["new_value"]["position_id"] == str(new_pos.id)
+        assert "grade_id" in event["new_value"]
 
     async def test_division_change_creates_event_with_diff(
         self, db: AsyncSession, employee, tenant, user

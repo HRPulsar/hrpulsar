@@ -24,7 +24,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { skillLevelLabel } from "@/lib/reference-labels";
+import { skillLevelLabel, skillLevelTitleLabel } from "@/lib/reference-labels";
 import type { Material, SkillLevel } from "@/lib/types";
 
 /**
@@ -751,6 +751,7 @@ function IndicatorsSection({
   onToggle: (id: string) => void;
 }) {
   const t = useTranslations("competences");
+  const tRef = useTranslations("reference");
   if (indicators.length === 0) {
     return (
       <section
@@ -785,11 +786,11 @@ function IndicatorsSection({
       <div className="space-y-2">
         {Array.from(indicatorsByLevel.entries()).map(([levelKey, list]) => {
           // `skill_level_title` is a flat string denormalized into the
-          // context payload (no i18n_key) — it stays verbatim.
+          // context payload (no i18n_key), so HRP-735 localizes it by title.
           const levelTitle =
             levelLabelById.get(levelKey) ??
-            list[0]?.skill_level_title ??
-            t("matAiLevelOther");
+            (skillLevelTitleLabel(tRef, list[0]?.skill_level_title) ||
+              t("matAiLevelOther"));
           const levelActive =
             levelKey === "_unknown" || selectedLevelIds.has(levelKey);
           return (

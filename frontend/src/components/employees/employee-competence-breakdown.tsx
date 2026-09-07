@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import type { EmployeeCompetenceLevelBreakdown } from "@/lib/types";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { skillLevelTitleLabel } from "@/lib/reference-labels";
 
 interface EmployeeCompetenceBreakdownProps {
   competenceId: string;
@@ -35,6 +36,7 @@ export function EmployeeCompetenceBreakdown({
   testIdPrefix,
 }: EmployeeCompetenceBreakdownProps) {
   const t = useTranslations("employees");
+  const tRef = useTranslations("reference");
   const [open, setOpen] = useState(false);
   // No breakdown rows yet -> render an inert placeholder so the row
   // alignment doesn't jump around when some rows have data and others
@@ -87,7 +89,7 @@ export function EmployeeCompetenceBreakdown({
                 className="border-b last:border-0"
                 data-testid={`${testIdPrefix}-breakdown-row-${row.skill_level_id}`}
               >
-                <td className="py-2">{row.skill_level_title}</td>
+                <td className="py-2">{skillLevelTitleLabel(tRef, row.skill_level_title)}</td>
                 <td className="py-2 text-right">
                   <span
                     className={`rounded-md px-2 py-0.5 text-xs font-medium ${levelTone(row.percent)}`}

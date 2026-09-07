@@ -10,6 +10,16 @@ Names are picked from an international, PII-safe pool; emails are
 ``<first>.<last>@demo.example.com`` lowercased, with the apostrophe in
 Irish surnames stripped to avoid breaking the unique constraint.
 
+Five of the forty carry the sales script's story in their surname
+(HRP-713): Anna Rising (2, the closed plan), Kate Highmore (19, the
+promotion candidate), Victor Redd (34, every competence red), Sean Best
+(35, the top seller) and Will Gapp (38, the stale gap without a plan —
+the demo's "view as employee" persona). Each locale catalog carries the
+same reading in a native surname (de: Steiger, Hoch, Roth, Stern, Lücke;
+ru likewise, in ``ee/demo_seed``); the other 35 stay neutral. Surnames
+describe the situation, not a verdict — Gapp closes his gap by the end
+of the demo and the name still reads as a name.
+
 Hire dates are spaced deterministically (2..6.5 years, minus the
 flagged recent hires) so the Employee list shows a realistic tenure
 spread without re-randomising on each seed run. The seed lays down one
@@ -26,7 +36,7 @@ from __future__ import annotations
 NAME_POOL: list[tuple[str, str]] = [
     ("Adam", "Kovacs"),
     ("Bella", "Martins"),
-    ("Carlos", "Mendez"),
+    ("Anna", "Rising"),
     ("Daria", "Volkova"),
     ("Ethan", "Williams"),
     ("Fatima", "Al-Rashid"),
@@ -43,7 +53,7 @@ NAME_POOL: list[tuple[str, str]] = [
     ("Quinn", "O'Connor"),
     ("Rafael", "Costa"),
     ("Sara", "Lindberg"),
-    ("Theo", "Bauer"),
+    ("Kate", "Highmore"),
     ("Uma", "Patel"),
     ("Victor", "Dubois"),
     ("Wilma", "Hansen"),
@@ -58,11 +68,11 @@ NAME_POOL: list[tuple[str, str]] = [
     ("Farah", "Khoury"),
     ("Greg", "Murphy"),
     ("Hannah", "Adler"),
-    ("Igor", "Sokolov"),
-    ("Jana", "Vargas"),
+    ("Victor", "Redd"),
+    ("Sean", "Best"),
     ("Kira", "Tanaka"),
     ("Liam", "O'Sullivan"),
-    ("Mira", "Bianchi"),
+    ("Will", "Gapp"),
     ("Noah", "Larsson"),
 ]
 
@@ -99,7 +109,7 @@ EMPLOYEE_ASSIGNMENTS: list[dict] = [
     {"division_key": "eng-backend", "position_key": "p-em-backend", "status": "active", "manager_role": "division_head"},
     # 1 — Bella Martins — Engineering, Backend L4 Staff
     {"division_key": "eng-backend", "position_key": "p-be-l4", "status": "active", "manager_role": "division_deputy"},
-    # 2 — Carlos Mendez — Backend L3 Senior
+    # 2 — Anna Rising — Backend L3 Senior
     {"division_key": "eng-backend", "position_key": "p-be-l3", "status": "active", "manager_role": None},
     # 3 — Daria Volkova — Backend L3 Senior
     # Runs the hiring loop for the open backend roles. Deliberately not a
@@ -136,7 +146,7 @@ EMPLOYEE_ASSIGNMENTS: list[dict] = [
     {"division_key": "eng-frontend", "position_key": "p-fe-l1", "status": "active", "manager_role": None, "recent_hire": True},
     # 18 — Sara Lindberg — Senior PM (division_head Product)
     {"division_key": "product", "position_key": "p-pm-senior", "status": "active", "manager_role": "division_head"},
-    # 19 — Theo Bauer — Senior PM
+    # 19 — Kate Highmore — Senior PM
     {"division_key": "product", "position_key": "p-pm-senior", "status": "active", "manager_role": "division_deputy"},
     # 20 — Uma Patel — PM
     {"division_key": "product", "position_key": "p-pm-mid", "status": "active", "manager_role": None},
@@ -166,15 +176,15 @@ EMPLOYEE_ASSIGNMENTS: list[dict] = [
     {"division_key": "people", "position_key": "p-recruiter", "status": "inactive", "manager_role": None, "rbac_role": "recruiter"},
     # 33 — Hannah Adler — Account Executive (division_head GTM)
     {"division_key": "gtm", "position_key": "p-ae", "status": "active", "manager_role": "division_head"},
-    # 34 — Igor Sokolov — Account Executive
+    # 34 — Victor Redd — Account Executive
     {"division_key": "gtm", "position_key": "p-ae", "status": "active", "manager_role": "division_deputy"},
-    # 35 — Jana Vargas — Account Executive
+    # 35 — Sean Best — Account Executive
     {"division_key": "gtm", "position_key": "p-ae", "status": "active", "manager_role": None},
     # 36 — Kira Tanaka — SDR (recent hire)
     {"division_key": "gtm", "position_key": "p-sdr", "status": "active", "manager_role": None, "recent_hire": True},
     # 37 — Liam O'Sullivan — SDR
     {"division_key": "gtm", "position_key": "p-sdr", "status": "active", "manager_role": None},
-    # 38 — Mira Bianchi — SDR
+    # 38 — Will Gapp — SDR
     {"division_key": "gtm", "position_key": "p-sdr", "status": "active", "manager_role": None},
     # 39 — Noah Larsson — SDR
     {"division_key": "gtm", "position_key": "p-sdr", "status": "active", "manager_role": None},
@@ -221,7 +231,7 @@ def localized_name_pool(locale: str | None = None) -> list[tuple[str, str, str]]
     Employee names are display text: a white-label install running its
     demo in ru/de shows visitors people whose names read as local, not a
     Latin cast with translated job titles. The catalog carries the full
-    name (``"Carlos Mendez"`` → the locale's own cast) and the email as
+    name (``"Anna Rising"`` → the locale's own cast) and the email as
     a second entry — /employees renders the email in its own column, so
     it has to follow the name, and an explicit catalog entry keeps it
     ASCII and unique without a transliteration table. A locale with no

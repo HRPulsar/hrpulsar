@@ -131,12 +131,16 @@ async def _pair_competence_keys(
     tenant_id: uuid.UUID,
     specialization_id: uuid.UUID,
     grade_id: uuid.UUID | None,
-) -> list[tuple[uuid.UUID, uuid.UUID | None]]:
+) -> list[tuple[uuid.UUID, uuid.UUID | None]] | None:
     """(competence, skill level) keys a configured (spec, grade) pair implies.
 
-    Empty when the pair isn't configured in the grade ladder — the card
-    can carry such a row (the ladder may have changed underneath it), it
-    simply implies nothing.
+    ``None`` when the pair isn't configured in the grade ladder at all —
+    the card can carry such a row (the ladder may have changed underneath
+    it), and the caller cannot know what it used to imply. An empty list
+    is the different, weaker answer: the pair exists and implies nothing,
+    which ``grade_system.create_grade_specialization`` allows (a pair may
+    be created with no competence links). HRP-709 turns on the
+    difference, so the two must not collapse into one value.
     """
     pair = (
         await db.execute(
@@ -150,7 +154,7 @@ async def _pair_competence_keys(
         )
     ).scalar_one_or_none()
     if pair is None:
-        return []
+        return None
     return [(link.competence_id, link.skill_level_id) for link in pair.competence_links]
 
 
@@ -177,11 +181,22 @@ async def _recompute_required_competences(
     card without a "who wrote this row" column. The ConfirmDialog copy
     stays honest — competences are still recomputed from the specs.
 
-    Known ceiling: if the ``dropped`` pair has since been removed from
-    the ladder we can't tell what it contributed, so its competences stay
-    on the card for the recruiter to delete. Callers that need the
-    surrounding ``_auto_populate_candidates`` recompute must invoke it
-    themselves; this helper only owns the competence block.
+    HRP-709: when the ``dropped`` pair has since been removed from the
+    ladder it implies nothing, so there is no key list to delete by and
+    its competences used to stay on the card — still gating the matcher
+    while the card no longer showed them. That case (and only that case —
+    a pair still on the ladder with no competence links keeps the
+    targeted delete) falls back to the pre-HRP-683 full diff: delete
+    every row no current pair implies. It is the only way to reach those
+    rows, and the price is that the rows nobody derived go with them —
+    the hand-added ones, and on a card posted from a vacancy the
+    bridge-synced ones too, which leaves the card asking for less than
+    the requisition until the next ``set_vacancy_competences`` re-syncs
+    it. Deliberate per HRP-709: a stale requirement that silently gates
+    the matcher is worse than one the recruiter can re-add. Callers that
+    need the surrounding
+    ``_auto_populate_candidates`` recompute must invoke it themselves;
+    this helper only owns the competence block.
     """
     spec_rows = list(
         (
@@ -197,8 +212,13 @@ async def _recompute_required_competences(
 
     desired: dict[tuple[uuid.UUID, uuid.UUID | None], None] = {}
     for spec in spec_rows:
-        for key in await _pair_competence_keys(
-            db, tenant_id, spec.specialization_id, spec.grade_id
+        # A spec whose pair left the ladder implies nothing here — same as
+        # a pair with no competence links.
+        for key in (
+            await _pair_competence_keys(
+                db, tenant_id, spec.specialization_id, spec.grade_id
+            )
+            or ()
         ):
             desired[key] = None
 
@@ -216,10 +236,21 @@ async def _recompute_required_competences(
     existing_by_key = {(r.competence_id, r.skill_level_id): r for r in existing_rows}
 
     if dropped is not None:
-        for key in await _pair_competence_keys(db, tenant_id, *dropped):
-            row = existing_by_key.get(key)
-            if row is not None and key not in desired:
-                await db.delete(row)
+        dropped_keys = await _pair_competence_keys(db, tenant_id, *dropped)
+        if dropped_keys is None:
+            # HRP-709: the pair is gone from the ladder, so there is no key
+            # list to delete by — diff the whole set instead. A pair that
+            # still exists with no competence links returns [] and keeps
+            # the targeted delete (which then deletes nothing), so a card
+            # whose ladder pair was simply left unwired is untouched.
+            for key, stale in existing_by_key.items():
+                if key not in desired:
+                    await db.delete(stale)
+        else:
+            for key in dropped_keys:
+                row = existing_by_key.get(key)
+                if row is not None and key not in desired:
+                    await db.delete(row)
 
     for key in desired:
         if key in existing_by_key:

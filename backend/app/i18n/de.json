@@ -754,6 +754,7 @@
     "question_move_cross_candidate_vacancy": "Eine Frage kann nicht in ein Fragenset einer anderen Kandidat-Stelle-Zuordnung verschoben werden",
     "question_not_found": "Frage nicht gefunden",
     "question_set_not_found": "Fragenset nicht gefunden",
+    "recruitment_internal_candidate_not_found": "Diese Mitarbeiterin bzw. dieser Mitarbeiter steht nicht auf der internen Vorauswahl der Stelle",
     "report_candidate_ids_required": "Mindestens eine Kandidaten-ID ist erforderlich",
     "report_candidate_selection_empty": "Wählen Sie mindestens einen Kandidaten für den Bericht aus",
     "report_file_missing": "Die Berichtsdatei fehlt",
@@ -847,9 +848,13 @@
     "tm_match_percent_read_only": "Match% ist nach der Veröffentlichung schreibgeschützt.",
     "tm_no_competence_gaps": "Keine Kompetenzlücken: Der Kandidat erfüllt bereits alle geforderten Kompetenzen.",
     "tm_no_employee_profile": "Kein Mitarbeiterprofil",
+    "tm_no_manager": "Diese Abteilung hat noch keine Führungskraft, daher gibt es niemanden für die Anfrage. Bitten Sie Ihr HR-Team um einen Entwicklungsplan.",
     "tm_no_required_competences": "Die Karte hat keine geforderten Kompetenzen, aus denen ein Plan gebaut werden kann.",
     "tm_publish_requires_candidate": "Veröffentlichen nicht möglich: Mindestens ein Kandidat muss zugeordnet sein.",
+    "tm_plan_request_needs_reaction": "Reagieren Sie zuerst auf die Karte, danach können Sie einen Entwicklungsplan anfragen.",
+    "tm_plan_request_no_gap": "Dieser Kandidat erfüllt die Anforderungen bereits; ein Entwicklungsplan ist nicht nötig.",
     "tm_publish_requires_competence": "Veröffentlichen nicht möglich: Mindestens eine erforderliche Kompetenz muss festgelegt sein.",
+    "tm_self_managed_no_request": "Sie leiten diese Abteilung selbst, es gibt also niemanden zu fragen. Sie können den Entwicklungsplan direkt aus der Match-Auswertung erstellen.",
     "tm_skill_level_id_not_found": "Level {skill_level_id} nicht gefunden",
     "tm_specialization_link_not_found": "Spezialisierungsverknüpfung nicht gefunden",
     "tm_start_date_required": "start_date ist erforderlich",
@@ -929,6 +934,7 @@
       "uuid_parsing": "Eingabe muss eine gültige UUID sein, {error}",
       "llm_yandex_model_not_self_contained": "Das Yandex-Modell muss eine vollständige gpt://<folder>/<model>-URI sein, sofern keine Basis-URL konfiguriert ist."
     },
-    "llm_yandex_model_not_dispatchable": "Das Yandex-Modell {model} benötigt eine vollständige gpt://<folder>/<model>-URI, sofern keine Basis-URL konfiguriert ist."
+    "llm_yandex_model_not_dispatchable": "Das Yandex-Modell {model} benötigt eine vollständige gpt://<folder>/<model>-URI, sofern keine Basis-URL konfiguriert ist.",
+    "no_pending_consent_request": "Keine offene Einwilligungsanfrage zum erneuten Senden"
   }
 }

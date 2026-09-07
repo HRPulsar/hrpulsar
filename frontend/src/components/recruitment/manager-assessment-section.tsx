@@ -192,6 +192,9 @@ interface Props {
   /** HRP-361/366: the vacancy the user navigated from — it becomes the
    * default tab instead of the most recent application. */
   initialVacancyId?: string;
+  /** HRP-418 REDO: fired when a round is created, so the blocks that
+   *  resolve round names from their own copy of the list can re-read it. */
+  onRoundsChanged?: () => void;
 }
 
 const AUTOSAVE_MS = 1500;
@@ -199,6 +202,7 @@ const AUTOSAVE_MS = 1500;
 export function ManagerAssessmentSection({
   vacancies,
   initialVacancyId,
+  onRoundsChanged,
 }: Props) {
   const [activeCvId, setActiveCvId] = useState<string | null>(
     vacancies.find((v) => v.vacancy_id === initialVacancyId)?.id ??
@@ -524,6 +528,7 @@ export function ManagerAssessmentSection({
       // (a late Pre-interview belongs first), not append to the end.
       setRounds((prev) => sortRounds([...prev, r]));
       selectRound(r.id);
+      onRoundsChanged?.();
     } catch (err) {
       toast.error(
         err instanceof Error

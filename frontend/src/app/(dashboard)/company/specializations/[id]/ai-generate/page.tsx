@@ -19,9 +19,11 @@ import { resolveApplyToast } from "@/lib/matrix-apply-toast";
 import { specializationsApi, type SpecializationDetail } from "@/lib/api/specializations";
 import { api } from "@/lib/api";
 import type { Position } from "@/lib/types";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 export default function SpecializationAIGeneratePage() {
   const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -250,7 +252,7 @@ export default function SpecializationAIGeneratePage() {
                   : "positionBannerBody",
                 {
                   position: effectivePosition.title,
-                  grade: effectivePosition.grade_title ?? "",
+                  grade: gradeTitleLabel(tRef, effectivePosition.grade_title),
                   positionName: (chunks) => (
                     <span className="font-medium text-foreground">
                       {chunks}

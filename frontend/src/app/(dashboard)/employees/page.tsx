@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { flattenTree } from "@/lib/utils";
-import { dictionaryItemLabel } from "@/lib/reference-labels";
+import { dictionaryItemLabel, gradeTitleLabel } from "@/lib/reference-labels";
 import { ASSIGNABLE_ROLE_CODES, resolveRoleLabel } from "@/lib/user-role-label";
 import type {
   AssessmentList,
@@ -19,6 +19,7 @@ import type {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LoadErrorState } from "@/components/load-error-state";
 import { PositionCombobox } from "@/components/position-combobox";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Input } from "@/components/ui/input";
@@ -94,6 +95,29 @@ const FILTER_KEYS = [
 
 type FilterKey = (typeof FILTER_KEYS)[number];
 
+// HRP-729: how the issue-filtered list is ordered. Severity is the default and
+// stays out of the URL; only an explicit switch to the old ordering is written
+// down. Offered for a single issue type only — severity scores are comparable
+// within one kind of problem, not between "3 competences below the bar" and
+// "21 days stuck in review".
+const SORT_VALUES = ["severity", "created"] as const;
+type SortValue = (typeof SORT_VALUES)[number];
+const DEFAULT_SORT: SortValue = "severity";
+
+function readSortFromQuery(params: URLSearchParams): SortValue {
+  const raw = params.get("sort");
+  return SORT_VALUES.includes(raw as SortValue) ? (raw as SortValue) : DEFAULT_SORT;
+}
+
+/**
+ * Severity ranks people inside one kind of problem, so it is only offered for
+ * one. With several issue types selected the backend falls back to newest-first
+ * too — the control disappearing and the order changing are the same rule.
+ */
+function sortApplies(filters: Filters): boolean {
+  return filters.issue.length === 1;
+}
+
 type Filters = Record<FilterKey, string[]>;
 
 const emptyFilters: Filters = {
@@ -135,13 +159,19 @@ function readFiltersFromQuery(params: URLSearchParams): Filters {
   return next;
 }
 
-function buildQuery(page: number, filters: Filters, search: string): string {
+function buildQuery(
+  page: number,
+  filters: Filters,
+  search: string,
+  sort: SortValue,
+): string {
   const params = new URLSearchParams();
   params.set("page", String(page));
   if (search) params.set("q", search);
   for (const key of FILTER_KEYS) {
     for (const v of filters[key]) params.append(key, v);
   }
+  if (sortApplies(filters) && sort !== DEFAULT_SORT) params.set("sort", sort);
   return params.toString();
 }
 
@@ -158,6 +188,7 @@ function buildBackendQuery(
   filters: Filters,
   search: string,
   withAlerts: boolean,
+  sort: SortValue,
 ): URLSearchParams {
   const params = new URLSearchParams();
   params.set("skip", String((page - 1) * PAGE_SIZE));
@@ -170,6 +201,9 @@ function buildBackendQuery(
   for (const key of FILTER_KEYS) {
     for (const v of filters[key]) params.append(key, v);
   }
+  // Omitted at the default: the backend already orders an issue-filtered list
+  // by severity, so sending it would only repeat the server's own answer.
+  if (sortApplies(filters) && sort !== DEFAULT_SORT) params.set("sort", sort);
   return params;
 }
 
@@ -191,6 +225,10 @@ export default function EmployeesPage() {
   const [grades, setGrades] = useState<DictionaryItem[]>([]);
   const [assessedEmployees, setAssessedEmployees] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  // HRP-728: an API failure must render as an error with a retry, not as
+  // the empty state ("no employees yet") the list used to fall back to.
+  const [loadError, setLoadError] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   const initialFilters = useMemo(
     () => readFiltersFromQuery(new URLSearchParams(searchParams.toString())),
@@ -205,6 +243,9 @@ export default function EmployeesPage() {
   const [searchQuery, setSearchQuery] = useState(initialSearch);
   const [debouncedSearch, setDebouncedSearch] = useState(initialSearch);
   const [page, setPage] = useState(initialPage);
+  const [sort, setSort] = useState<SortValue>(() =>
+    readSortFromQuery(new URLSearchParams(searchParams.toString())),
+  );
 
   // Create
   const [createOpen, setCreateOpen] = useState(false);
@@ -232,16 +273,24 @@ export default function EmployeesPage() {
   const loadRequestId = useRef(0);
 
   const loadEmployees = useCallback(
-    async (p: number, f: Filters, search: string, withAlerts: boolean) => {
+    async (
+      p: number,
+      f: Filters,
+      search: string,
+      withAlerts: boolean,
+      order: SortValue,
+    ) => {
       const requestId = ++loadRequestId.current;
       try {
-        const params = buildBackendQuery(p, f, search, withAlerts);
+        const params = buildBackendQuery(p, f, search, withAlerts, order);
         const empData = await api.get<EmployeeList>(`/employees?${params}`);
         if (loadRequestId.current !== requestId) return;
         setEmployees(empData.items);
         setTotal(empData.total);
+        setLoadError(false);
       } catch {
-        // ignore
+        if (loadRequestId.current !== requestId) return;
+        setLoadError(true);
       }
     },
     [],
@@ -285,8 +334,22 @@ export default function EmployeesPage() {
   }, [loadMeta]);
 
   useEffect(() => {
-    loadEmployees(page, filters, debouncedSearch, canViewHrData);
-  }, [page, filters, debouncedSearch, canViewHrData, loadEmployees]);
+    loadEmployees(page, filters, debouncedSearch, canViewHrData, sort);
+  }, [page, filters, debouncedSearch, canViewHrData, sort, loadEmployees]);
+
+  // HRP-728: retry re-runs the list and its lookups together; a second
+  // click while the first is in flight is ignored.
+  async function retryLoad() {
+    setRetrying(true);
+    try {
+      await Promise.all([
+        loadEmployees(page, filters, debouncedSearch, canViewHrData, sort),
+        loadMeta(),
+      ]);
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   // HRP-120: debounce the search input so typing doesn't fire a request per
   // keystroke; resetting to page 1 keeps results aligned with the query.
@@ -301,13 +364,13 @@ export default function EmployeesPage() {
 
   // Sync URL when filters / page / search change
   useEffect(() => {
-    const qs = buildQuery(page, filters, debouncedSearch);
+    const qs = buildQuery(page, filters, debouncedSearch, sort);
     const current = searchParams.toString();
     if (qs !== current) {
       router.replace(`/employees?${qs}`, { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, filters, debouncedSearch]);
+  }, [page, filters, debouncedSearch, sort]);
 
   const flatDivisions = useMemo(() => flattenTree(divisions), [divisions]);
 
@@ -379,6 +442,7 @@ export default function EmployeesPage() {
     setSearchQuery("");
     setDebouncedSearch("");
     setFilters(emptyFilters);
+    setSort(DEFAULT_SORT);
     setPage(1);
   }
 
@@ -417,7 +481,7 @@ export default function EmployeesPage() {
       toast.success(t("toastCreated"));
       setCreateOpen(false);
       setCreateForm(emptyCreateForm);
-      await loadEmployees(page, filters, debouncedSearch, canViewHrData);
+      await loadEmployees(page, filters, debouncedSearch, canViewHrData, sort);
     } catch (err) {
       setCreateError(
         parseFormError(err, ["user_id", "position_id", "division_id", "hire_date"]),
@@ -469,7 +533,7 @@ export default function EmployeesPage() {
       });
       toast.success(t("toastUpdated"));
       setEditOpen(false);
-      await loadEmployees(page, filters, debouncedSearch, canViewHrData);
+      await loadEmployees(page, filters, debouncedSearch, canViewHrData, sort);
     } catch (err) {
       setEditError(parseFormError(err));
     } finally {
@@ -489,7 +553,7 @@ export default function EmployeesPage() {
       await api.delete(`/employees/${deletingEmp.id}`);
       toast.success(t("toastDeleted"));
       setDeleteOpen(false);
-      await loadEmployees(page, filters, debouncedSearch, canViewHrData);
+      await loadEmployees(page, filters, debouncedSearch, canViewHrData, sort);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("toastDeleteFailed"));
     } finally {
@@ -622,6 +686,34 @@ export default function EmployeesPage() {
           className="w-44"
         />
         )}
+        {/* HRP-729: only with a single issue selected — see sortApplies. */}
+        {canViewHrData && sortApplies(filters) && (
+          <Select
+            value={sort}
+            onValueChange={(val) => {
+              setSort((val as SortValue) ?? DEFAULT_SORT);
+              setPage(1);
+            }}
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label={t("sortLabel")}
+              data-testid="employees-select-sort"
+            >
+              <SelectValue>
+                {t("sortLabel")}: {t(`sort_${sort}`)}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="severity" data-testid="employees-select-sort-severity">
+                {t("sort_severity")}
+              </SelectItem>
+              <SelectItem value="created" data-testid="employees-select-sort-created">
+                {t("sort_created")}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        )}
         {hasFilters && (
           <Button data-testid="employees-btn-clear-filters" variant="ghost" size="sm" onClick={clearFilters}>
             <X className="mr-1 h-3 w-3" />
@@ -630,7 +722,13 @@ export default function EmployeesPage() {
         )}
       </div>
 
-      {filtered.length === 0 ? (
+      {loadError ? (
+        <LoadErrorState
+          testIdPrefix="employees"
+          retrying={retrying}
+          onRetry={() => void retryLoad()}
+        />
+      ) : filtered.length === 0 ? (
         <div data-testid="employees-empty" className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
           {hasFilters ? t("emptyFiltered") : t("empty")}
         </div>
@@ -694,7 +792,10 @@ export default function EmployeesPage() {
                       data-testid={`employees-row-${emp.id}-spec-grade`}
                       className="text-muted-foreground"
                     >
-                      {formatSpecGrade(emp.specialization_title, emp.grade_title)}
+                      {formatSpecGrade(
+                        emp.specialization_title,
+                        gradeTitleLabel(tRef, emp.grade_title),
+                      )}
                     </TableCell>
                     {canViewHrData && (
                       <TableCell

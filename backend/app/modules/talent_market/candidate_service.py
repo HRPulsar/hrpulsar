@@ -400,7 +400,11 @@ async def get_candidate_breakdown(
         rows = (
             await db.execute(
                 select(Competence.id, Competence.title).where(
-                    Competence.id.in_(comp_ids)
+                    Competence.id.in_(comp_ids),
+                    # Origin rows (tenant NULL) are shared; anything else
+                    # must be this tenant's own.
+                    (Competence.tenant_id == tenant_id)
+                    | Competence.tenant_id.is_(None),
                 )
             )
         ).all()
@@ -570,12 +574,32 @@ async def get_candidate_breakdown(
             }
         )
 
+    # HRP-714/734: the card page's verdict on this employee, from the inputs
+    # this pass already loaded — the average over every required row
+    # (``_comp_percent_from_map``) and the one-spec-suffices experience
+    # check (``_employee_spec_match``), exactly as
+    # ``card_service._compute_candidates_breakdown`` scores the Candidates
+    # table. The reply to a reaction and the plan-request guard read these
+    # so they agree with what the row shows; ``CandidateBreakdown`` does
+    # not declare them, so the API response drops them.
+    comp_match = _comp_percent_from_map(comp_rows, per_comp)
+    exp_qualifies = False
+    if spec_rows:
+        exp_qualifies = await _employee_spec_match(
+            db,
+            employee_id,
+            spec_rows,
+            work_exp_cache={employee_id: work_exps},
+            current_pos_cache=current_pos_cache,
+        )
     return {
         "employee_id": employee_id,
         "employee_name": emp_name,
         "card_match_percent": threshold,
         "competences": competences_payload,
         "specializations": specs_payload,
+        "comp_qualifies": comp_match is not None and comp_match >= threshold,
+        "exp_qualifies": exp_qualifies,
     }
 
 
@@ -1104,6 +1128,242 @@ async def react_to_card(
                             tenant_id=str(card.tenant_id) if card.tenant_id else None,
                             template_code="talent_market.lifecycle",
                         )
+
+    # HRP-714: the soft auto-reply. A reaction from someone below the
+    # card's bar used to be answered by silence, which reads as a
+    # rejection nobody sent. Say the true thing instead — the reaction
+    # stands, the row keeps its place on the candidate list, and the gap
+    # is something a development plan closes.
+    with _cl.suppress(Exception):
+        await _send_reaction_gap_reply(db, card, row, user)
+
+    emp_name = f"{emp.user.first_name} {emp.user.last_name}" if emp.user else None
+    return _candidate_to_read(
+        row,
+        emp_name,
+        is_me=True,
+        position_title=emp.position_title,
+        employee_status=emp.status,
+    )
+
+
+# ---------------------------------------------------------------------------
+# HRP-714 — below-the-bar reaction: the auto-reply and the plan request
+# ---------------------------------------------------------------------------
+
+# Only these two card types are a selection someone can fail. A `talent`
+# card is a reserve pool for a role that does not exist yet, so there is
+# no bar to fall below and nothing to soften.
+_GAP_REPLY_CARD_TYPES = ("vacancy", "project")
+
+
+async def _live_verdict(
+    db: AsyncSession, card: TalentCard, row: TalentCandidate
+) -> tuple[list[str] | None, list[str]]:
+    """What the card page says about this row, and the competences it names.
+
+    Judged live on every call, the way the Candidates table is (HRP-734):
+    the stored ``match_score`` is refreshed only by a pool recompute, so
+    answering off it told people who had since closed the gap that they
+    still had one — and named no competence, because the live list was
+    empty. Returns the row's ``blocked_by`` codes (``[]`` for nothing in
+    the way or an appointed row, ``None`` for a card with no requirements)
+    and the titles of the required competences the employee is short on.
+    """
+    breakdown = await get_candidate_breakdown(
+        db, card.tenant_id, card.id, row.employee_id
+    )
+    blocked_by = common._blocked_by_codes(
+        status=row.status,
+        has_comp=bool(breakdown["competences"]),
+        has_spec=bool(breakdown["specializations"]),
+        comp_qualifies=breakdown["comp_qualifies"],
+        exp_qualifies=breakdown["exp_qualifies"],
+    )
+    gaps = [
+        c["competence_title"] for c in breakdown["competences"] if not c["qualifies"]
+    ]
+    return blocked_by, gaps
+
+
+async def _reply_context(
+    db: AsyncSession,
+    recipient: User,
+    template_code: str,
+    link: str,
+    extra: dict,
+) -> dict:
+    """Notification context whose ``title``/``message`` are the letter itself.
+
+    The bell renders ``context.title or context.message`` as text. Left
+    as the card title both were the same string, so the in-app entry said
+    only which card it was about — and email is dropped for demo tenants
+    (``core/email.py``), which is exactly where this reply has to be
+    readable. So the template is rendered here, in the recipient's
+    locale, and its subject and body ride in the context.
+
+    ``link_url`` is deliberately absent from the render values: the bell
+    wraps the whole row in ``link`` already, so the template's
+    click-through paragraph would only repeat it in the text.
+    """
+    from app.core.email_templates import frontend_url
+    from app.modules.notification.service import (
+        get_template_for_locale,
+        render_db_template_preview,
+        resolve_recipient_locale,
+    )
+
+    context: dict = {"link": link, "link_url": f"{frontend_url()}{link}", **extra}
+    locale = await resolve_recipient_locale(db, recipient.id)
+    template = await get_template_for_locale(db, template_code, locale)
+    if template is not None:
+        title, message = render_db_template_preview(
+            template, {**context, "link_url": None}
+        )
+    else:
+        # No row for the code at all — the migration has not run. Fall
+        # back to something addressed rather than to nothing.
+        title = message = str(extra.get("card_title") or "")
+    context["title"] = title
+    context["message"] = message
+    # HRP-714 live check: the bell dropdown and the notifications list both
+    # render ``context.title or context.message`` — with a title present the
+    # body never showed anywhere, and demo tenants get no email to read it in
+    # (``core/email.py``). ``description`` is the one key the notifications
+    # list renders underneath the title, so the reply's own words land there.
+    context["description"] = message
+    context["_locale"] = locale
+    return context
+
+
+async def _send_reaction_gap_reply(
+    db: AsyncSession,
+    card: TalentCard,
+    row: TalentCandidate,
+    user: User,
+) -> None:
+    """In-app + email answer to a reaction that will not clear the bar.
+
+    Sent exactly when the card page shows the request-a-plan CTA the
+    letter points at: the row's live ``blocked_by`` is non-empty.
+    """
+    if card.card_type not in _GAP_REPLY_CARD_TYPES:
+        return
+    blocked_by, gaps = await _live_verdict(db, card, row)
+    if not blocked_by:
+        return
+
+    link = f"/talent-market/{card.id}"
+    context = await _reply_context(
+        db,
+        user,
+        "talent_market.reaction_gap",
+        link,
+        {"card_title": card.title, "gaps": gaps},
+    )
+    from app.modules.notification.service import send_notification
+
+    await send_notification(
+        db,
+        card.tenant_id,
+        "talent_market.reaction_gap",
+        user.id,
+        # A user without an address still gets the bell entry —
+        # send_notification gates the email on its own preference check,
+        # and the in-app copy is the only place a demo tenant (where mail
+        # is dropped outright) can read the reply at all.
+        user.email or "",
+        context,
+        event_type="talent_market",
+        locale=context.pop("_locale"),
+    )
+
+
+async def request_development_plan(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    card_id: uuid.UUID,
+    user: User,
+) -> dict:
+    """HRP-714: ask the manager for a plan closing the card's gaps.
+
+    The CTA the auto-reply above points at. An employee cannot create a
+    development plan for themselves — only admin/manager may — so the
+    button is a request, and the manager lands on the same Match drawer
+    whose Create-plan action (HRP-665) builds the plan from exactly the
+    competences below the bar.
+
+    No request row is persisted, so asking twice notifies twice.
+    # ponytail: no request row; add a column if managers complain about repeats
+    """
+    card = await db.get(TalentCard, card_id)
+    if not card or card.tenant_id != tenant_id:
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
+    if card.status != "published":
+        raise AppError("tm_card_not_open_for_reactions", status.HTTP_409_CONFLICT)
+
+    from app.core.access_scope import get_current_employee
+
+    emp = await get_current_employee(db, user)
+    if emp is None:
+        raise AppError("tm_no_employee_profile", status.HTTP_403_FORBIDDEN)
+    row = (
+        await db.execute(
+            select(TalentCandidate).where(
+                TalentCandidate.card_id == card_id,
+                TalentCandidate.employee_id == emp.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise AppError("candidate_not_found", status.HTTP_404_NOT_FOUND)
+    if row.response_at is None:
+        raise AppError("tm_plan_request_needs_reaction", status.HTTP_409_CONFLICT)
+    if row.pdp_id is not None:
+        raise AppError("tm_candidate_plan_exists", status.HTTP_409_CONFLICT)
+    # The CTA is hidden when the live verdict has nothing blocking the row
+    # (HRP-734) — an appointed candidate included — so the server refuses
+    # the same cases rather than asking a manager to plan for zero gaps.
+    blocked_by, _ = await _live_verdict(db, card, row)
+    if not blocked_by:
+        raise AppError("tm_plan_request_no_gap", status.HTTP_409_CONFLICT)
+
+    manager = await common.resolve_manager_user(db, emp)
+    if manager is not None and manager.id == user.id:
+        # The division head asking themselves. Distinct from "nobody
+        # manages this division" — the answer the employee needs is
+        # different, so it does not share that message.
+        raise AppError("tm_self_managed_no_request", status.HTTP_409_CONFLICT)
+    if manager is None:
+        raise AppError("tm_no_manager", status.HTTP_409_CONFLICT)
+
+    employee_name = (
+        f"{user.first_name} {user.last_name}".strip()
+        or (emp.position_title or "")
+        or str(emp.id)
+    )
+    # Deep link straight to this candidate's row, so the manager opens the
+    # Match drawer that already knows how to build the plan.
+    link = f"/talent-market/{card.id}?candidate={row.id}"
+    context = await _reply_context(
+        db,
+        manager,
+        "talent_market.plan_requested",
+        link,
+        {"card_title": card.title, "employee_name": employee_name},
+    )
+    from app.modules.notification.service import send_notification
+
+    await send_notification(
+        db,
+        tenant_id,
+        "talent_market.plan_requested",
+        manager.id,
+        manager.email or "",
+        context,
+        event_type="talent_market",
+        locale=context.pop("_locale"),
+    )
 
     emp_name = f"{emp.user.first_name} {emp.user.last_name}" if emp.user else None
     return _candidate_to_read(

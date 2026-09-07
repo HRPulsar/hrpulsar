@@ -50,11 +50,23 @@ const importTypes = [
   { value: "dictionaries", labelKey: "importTypeDictionaries" },
 ];
 
+// HRP-671: history rows render the same labels as the upload picker above.
+const IMPORT_TYPE_KEYS: Record<string, string> = Object.fromEntries(
+  importTypes.map((item) => [item.value, item.labelKey]),
+);
+
 const statusColors: Record<string, string> = {
   pending: BADGE_COLOR.yellow,
   processing: BADGE_COLOR.blue,
   completed: BADGE_COLOR.green,
   failed: BADGE_COLOR.red,
+};
+
+const STATUS_KEYS: Record<string, string> = {
+  pending: "importStatusPending",
+  processing: "importStatusProcessing",
+  completed: "importStatusCompleted",
+  failed: "importStatusFailed",
 };
 
 const templates: Record<string, { columns: string[]; required: string[]; example: string[][] }> = {
@@ -553,10 +565,14 @@ export default function ImportPage() {
                   {jobs.map((job) => (
                     <TableRow key={job.id}>
                       <TableCell className="font-medium">{job.file_name}</TableCell>
-                      <TableCell className="capitalize">{job.import_type}</TableCell>
+                      <TableCell>
+                        {IMPORT_TYPE_KEYS[job.import_type]
+                          ? t(IMPORT_TYPE_KEYS[job.import_type])
+                          : job.import_type}
+                      </TableCell>
                       <TableCell>
                         <Badge variant="secondary" className={statusColors[job.status] || ""}>
-                          {job.status}
+                          {STATUS_KEYS[job.status] ? t(STATUS_KEYS[job.status]) : job.status}
                         </Badge>
                       </TableCell>
                       <TableCell>

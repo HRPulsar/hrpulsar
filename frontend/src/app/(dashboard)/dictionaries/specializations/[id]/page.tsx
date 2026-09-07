@@ -21,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 // HRP-436: guard the whole component, not just its JSX, so the page's
 // effects never fire for someone who is about to be redirected.
@@ -34,6 +35,7 @@ export default function SpecializationDetailPage() {
 
 function SpecializationDetailPageContent() {
   const t = useTranslations("dictionaries");
+  const tRef = useTranslations("reference");
   const { id } = useParams<{ id: string }>();
   const [specialization, setSpecialization] = useState<DictionaryItem | null>(null);
   const [chains, setChains] = useState<GradeSpecialization[]>([]);
@@ -157,7 +159,7 @@ function SpecializationDetailPageContent() {
                         return (
                           <TableRow key={chain.id}>
                             <TableCell className="font-medium">
-                              {chain.grade_title}
+                              {gradeTitleLabel(tRef, chain.grade_title)}
                             </TableCell>
                             <TableCell className="text-muted-foreground">
                               {chain.competence_links.length}

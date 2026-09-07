@@ -86,10 +86,14 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
     data.negative_stage_names.length > 0
       ? data.negative_stage_names.join(", ")
       : t("analyticsTabRejected");
+  const withdrewLabel =
+    data.neutral_stage_names.length > 0
+      ? data.neutral_stage_names.join(", ")
+      : t("analyticsTabWithdrew");
 
   return (
     <div className="space-y-6" data-testid="recruitment-vacancy-analytics">
-      <div className="grid gap-4 sm:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader>
             <CardTitle className="text-sm text-muted-foreground">
@@ -127,6 +131,19 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
             data-testid="recruitment-vacancy-analytics-rejected"
           >
             {data.win_loss.rejected}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm text-muted-foreground">
+              {withdrewLabel}
+            </CardTitle>
+          </CardHeader>
+          <CardContent
+            className="text-2xl font-semibold text-amber-700"
+            data-testid="recruitment-vacancy-analytics-withdrew"
+          >
+            {data.win_loss.withdrew}
           </CardContent>
         </Card>
         <Card>

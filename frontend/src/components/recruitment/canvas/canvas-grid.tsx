@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { CompetenceItem } from "@/lib/types";
+import { candidateVacancyStatusLabel, type CompetenceItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { History, Loader2, Save, Undo2 } from "lucide-react";
@@ -85,7 +85,7 @@ function renderRow(
       <td className="sticky left-0 z-10 border-r bg-card px-3 py-2 font-medium">
         {cand.name}
         <span className="ml-2 text-[10px] uppercase text-muted-foreground">
-          {cand.status}
+          {candidateVacancyStatusLabel(t, cand.status)}
         </span>
       </td>
       {competences.map((c) =>

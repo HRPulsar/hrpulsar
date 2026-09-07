@@ -122,6 +122,12 @@ class UserRead(BaseModel):
     # with its grade columns. Inferring that from the rows on the current
     # page guesses wrong on any page whose rows happen to have no pair.
     tenant_directory_show_grades: bool = False
+    # HRP-710: the question that switch is one input to — "may this caller
+    # read a position's grade and specialization" — answered by
+    # ``access_scope.can_see_position_grades`` so the SPA does not keep its
+    # own copy of the role set. The switch above stays: it is a public
+    # property of the tenant and other surfaces read it.
+    can_view_job_profile: bool = False
 
     model_config = {"from_attributes": True}
 

@@ -156,10 +156,25 @@ async def test_open_plan_clears_gaps_without_plan(
 
 
 @pytest.mark.asyncio
-async def test_result_at_the_bar_is_not_a_gap(db: AsyncSession, tenant, loop_fixtures):
+async def test_result_at_the_bar_is_a_gap(db: AsyncSession, tenant, loop_fixtures):
+    # HRP-731: the bar itself is a growth zone. One inclusive rule across
+    # the product — the one the campaign analytics always used.
     statuses, types = loop_fixtures
     emp = await _make_employee(db, tenant)
     await _done_assessment(db, tenant, emp, statuses, types, percent=75)
+
+    cohorts = await _cohorts(db, tenant)
+
+    assert cohorts["competence_gap"] == {emp.id}
+
+
+@pytest.mark.asyncio
+async def test_result_above_the_bar_is_not_a_gap(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    statuses, types = loop_fixtures
+    emp = await _make_employee(db, tenant)
+    await _done_assessment(db, tenant, emp, statuses, types, percent=76)
 
     cohorts = await _cohorts(db, tenant)
 
@@ -208,9 +223,7 @@ async def test_pdp_stuck_in_review(db: AsyncSession, tenant, loop_fixtures):
     await _add_pdp(db, tenant, fresh, status="review")
     plan = await _add_pdp(db, tenant, stale, status="review")
     # updated_at is server-managed; age it explicitly past the 14-day line.
-    plan.updated_at = datetime.now(UTC) - timedelta(
-        days=issues.STUCK_REVIEW_DAYS + 1
-    )
+    plan.updated_at = datetime.now(UTC) - timedelta(days=issues.STUCK_REVIEW_DAYS + 1)
     await db.commit()
 
     cohorts = await _cohorts(db, tenant)
@@ -279,9 +292,7 @@ async def test_empty_scope_yields_nothing(db: AsyncSession, tenant, loop_fixture
     emp = await _make_employee(db, tenant)
     await _done_assessment(db, tenant, emp, statuses, types, percent=50)
 
-    facts = await issues.collect_issue_facts(
-        db, tenant.id, visible_employee_ids=set()
-    )
+    facts = await issues.collect_issue_facts(db, tenant.id, visible_employee_ids=set())
 
     assert facts.total_active == 0
     assert issues.issue_cohorts(facts)["competence_gap"] == set()
@@ -333,6 +344,252 @@ def test_every_code_has_a_label_and_a_priority():
 
 
 # ---------------------------------------------------------------------------
+# HRP-720: "there is a problem -> what was done -> when does it resolve?"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pdp_codes_carry_the_open_plan_deadline(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    from app.modules.employee.service import get_employee
+
+    statuses, types = loop_fixtures
+    emp = await _make_employee(db, tenant, last_name="Overdue")
+    await _done_assessment(db, tenant, emp, statuses, types, percent=30)
+    due = datetime.now(UTC) - timedelta(days=5)
+    await _add_pdp(db, tenant, emp, status="in_progress", deadline=due)
+    # A finished plan is not what the badge is about, and its later deadline
+    # must not win the "nearest" pick.
+    await _add_pdp(
+        db,
+        tenant,
+        emp,
+        status="done",
+        deadline=datetime.now(UTC) + timedelta(days=1),
+    )
+
+    card = await get_employee(db, tenant.id, emp.id, with_issues=True)
+    by_code = {i["code"]: i["deadline"] for i in card["issues"]}
+
+    assert by_code["pdp_overdue"] == due.date()
+    # A gap is not a scheduled event -- nobody promised a date for it.
+    assert by_code["competence_gap"] is None
+
+
+@pytest.mark.asyncio
+async def test_assessment_codes_carry_the_open_assessment_due_date(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    from app.modules.employee.service import get_employee
+
+    statuses, types = loop_fixtures
+    emp = await _make_employee(db, tenant, last_name="Stale")
+    await _done_assessment(
+        db, tenant, emp, statuses, types, percent=90, finished_days_ago=400
+    )
+    ends = datetime.now(UTC) + timedelta(days=7)
+    a = Assessment(
+        tenant_id=tenant.id,
+        title="Re-assess",
+        employee_id=emp.id,
+        type_id=types["self"].id,
+        status_id=statuses["sent"].id,
+        initiator_id=emp.user_id,
+        ended_at=ends,
+    )
+    db.add(a)
+    await db.commit()
+
+    card = await get_employee(db, tenant.id, emp.id, with_issues=True)
+    by_code = {i["code"]: i["deadline"] for i in card["issues"]}
+
+    assert by_code["assessment_stale"] == ends.date()
+
+
+@pytest.mark.asyncio
+async def test_stale_without_an_open_assessment_has_no_date(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    """Nothing scheduled is the honest answer -- not "due today"."""
+    from app.modules.employee.service import get_employee
+
+    statuses, types = loop_fixtures
+    emp = await _make_employee(db, tenant, last_name="Forgotten")
+    await _done_assessment(
+        db, tenant, emp, statuses, types, percent=90, finished_days_ago=400
+    )
+
+    card = await get_employee(db, tenant.id, emp.id, with_issues=True)
+    by_code = {i["code"]: i["deadline"] for i in card["issues"]}
+
+    assert by_code["assessment_stale"] is None
+
+
+async def _open_assessment(
+    db: AsyncSession, tenant, emp: Employee, types, status, *, ended_at=None
+) -> Assessment:
+    a = Assessment(
+        tenant_id=tenant.id,
+        title=f"Open {uuid.uuid4().hex[:6]}",
+        employee_id=emp.id,
+        type_id=types["self"].id,
+        status_id=status.id,
+        initiator_id=emp.user_id,
+        ended_at=ended_at,
+    )
+    db.add(a)
+    await db.commit()
+    return a
+
+
+async def _await_result_status(db: AsyncSession):
+    """The finalisation status the shared fixture does not seed."""
+    from app.modules.assessment.models import AssessmentStatus
+    from sqlalchemy import select
+
+    row = (
+        await db.execute(
+            select(AssessmentStatus).where(AssessmentStatus.code == "await_result")
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = AssessmentStatus(code="await_result", title="Await result", sequence=4)
+        db.add(row)
+        await db.commit()
+    return row
+
+
+@pytest.mark.asyncio
+async def test_pending_finalisation_carries_no_date(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    """``assessment_pending`` fires on an ``await_result`` assessment, which has
+    nothing left to schedule -- another open assessment's end date must not be
+    pinned onto it."""
+    from app.modules.employee.service import get_employee
+
+    statuses, types = loop_fixtures
+    emp = await _make_employee(db, tenant, last_name="Pending")
+    await _open_assessment(db, tenant, emp, types, await _await_result_status(db))
+    await _open_assessment(
+        db,
+        tenant,
+        emp,
+        types,
+        statuses["sent"],
+        ended_at=datetime.now(UTC) + timedelta(days=7),
+    )
+
+    card = await get_employee(db, tenant.id, emp.id, with_issues=True)
+    by_code = {i["code"]: i["deadline"] for i in card["issues"]}
+
+    assert "assessment_pending" in by_code
+    assert by_code["assessment_pending"] is None
+
+
+@pytest.mark.asyncio
+async def test_review_codes_carry_the_reviewed_plan_deadline(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    """The plan sitting in review is the one the review codes are about, even
+    when another open plan resolves sooner."""
+    from app.modules.employee.service import get_employee
+
+    emp = await _make_employee(db, tenant, last_name="Reviewed")
+    await _add_pdp(
+        db,
+        tenant,
+        emp,
+        status="in_progress",
+        deadline=datetime.now(UTC) + timedelta(days=3),
+    )
+    review_due = datetime.now(UTC) + timedelta(days=90)
+    plan = await _add_pdp(db, tenant, emp, status="review", deadline=review_due)
+    plan.updated_at = datetime.now(UTC) - timedelta(days=issues.STUCK_REVIEW_DAYS + 1)
+    await db.commit()
+
+    card = await get_employee(db, tenant.id, emp.id, with_issues=True)
+    by_code = {i["code"]: i["deadline"] for i in card["issues"]}
+
+    assert by_code["pdp_stuck_review"] == review_due.date()
+    assert by_code["pdp_pending_review"] == review_due.date()
+
+
+@pytest.mark.asyncio
+async def test_pending_review_reads_only_the_plan_in_review(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    """``pdp_pending_review`` fires on a ``review`` plan alone; a ``returned``
+    plan belongs to the stuck set and must not lend it an earlier date."""
+    from app.modules.employee.service import get_employee
+
+    emp = await _make_employee(db, tenant, last_name="Returned")
+    returned_due = datetime.now(UTC) + timedelta(days=10)
+    review_due = datetime.now(UTC) + timedelta(days=40)
+    returned = await _add_pdp(db, tenant, emp, status="returned", deadline=returned_due)
+    review = await _add_pdp(db, tenant, emp, status="review", deadline=review_due)
+    for plan in (returned, review):
+        plan.updated_at = datetime.now(UTC) - timedelta(
+            days=issues.STUCK_REVIEW_DAYS + 1
+        )
+    await db.commit()
+
+    card = await get_employee(db, tenant.id, emp.id, with_issues=True)
+    by_code = {i["code"]: i["deadline"] for i in card["issues"]}
+
+    assert by_code["pdp_pending_review"] == review_due.date()
+    assert by_code["pdp_stuck_review"] == returned_due.date()
+
+
+@pytest.mark.asyncio
+async def test_stuck_plan_without_a_deadline_has_no_date(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    from app.modules.employee.service import get_employee
+
+    emp = await _make_employee(db, tenant, last_name="Undated")
+    await _add_pdp(
+        db,
+        tenant,
+        emp,
+        status="in_progress",
+        deadline=datetime.now(UTC) + timedelta(days=3),
+    )
+    plan = await _add_pdp(db, tenant, emp, status="review")
+    plan.updated_at = datetime.now(UTC) - timedelta(days=issues.STUCK_REVIEW_DAYS + 1)
+    await db.commit()
+
+    card = await get_employee(db, tenant.id, emp.id, with_issues=True)
+    by_code = {i["code"]: i["deadline"] for i in card["issues"]}
+
+    assert by_code["pdp_stuck_review"] is None
+
+
+@pytest.mark.asyncio
+async def test_stale_with_only_an_overdue_open_assessment_has_no_date(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    """A missed end date answers ``assessment_overdue``; it is not a date the
+    stale badge can promise."""
+    from app.modules.employee.service import get_employee
+
+    statuses, types = loop_fixtures
+    emp = await _make_employee(db, tenant, last_name="Missed")
+    await _done_assessment(
+        db, tenant, emp, statuses, types, percent=90, finished_days_ago=400
+    )
+    missed = datetime.now(UTC) - timedelta(days=30)
+    await _open_assessment(db, tenant, emp, types, statuses["sent"], ended_at=missed)
+
+    card = await get_employee(db, tenant.id, emp.id, with_issues=True)
+    by_code = {i["code"]: i["deadline"] for i in card["issues"]}
+
+    assert by_code["assessment_stale"] is None
+    assert by_code["assessment_overdue"] == missed.date()
+
+
+# ---------------------------------------------------------------------------
 # The contract this whole change exists for
 # ---------------------------------------------------------------------------
 
@@ -351,9 +608,7 @@ async def test_finding_count_equals_the_filtered_list_total(
     from app.modules.employee import service as employee_service
 
     statuses, types = loop_fixtures
-    with_gap = [
-        await _make_employee(db, tenant, last_name=f"Gap{i}") for i in range(3)
-    ]
+    with_gap = [await _make_employee(db, tenant, last_name=f"Gap{i}") for i in range(3)]
     for emp in with_gap:
         await _done_assessment(db, tenant, emp, statuses, types, percent=40)
     planned = with_gap[0]
@@ -361,9 +616,7 @@ async def test_finding_count_equals_the_filtered_list_total(
     await _make_employee(db, tenant, last_name="Clean")
 
     payload = await analytics_service.dev_loop(db, tenant.id, None)
-    finding = next(
-        f for f in payload["findings"] if f["code"] == "gaps_without_plan"
-    )
+    finding = next(f for f in payload["findings"] if f["code"] == "gaps_without_plan")
 
     _, total = await employee_service.list_employees(
         db, tenant.id, issue=["gaps_without_plan"]
@@ -389,9 +642,7 @@ async def test_scoped_finding_count_equals_the_scoped_list_total(
     scope = {mine.id}
 
     payload = await analytics_service.dev_loop(db, tenant.id, scope)
-    finding = next(
-        f for f in payload["findings"] if f["code"] == "gaps_without_plan"
-    )
+    finding = next(f for f in payload["findings"] if f["code"] == "gaps_without_plan")
     _, total = await employee_service.list_employees(
         db, tenant.id, visible_employee_ids=scope, issue=["gaps_without_plan"]
     )
@@ -444,3 +695,111 @@ async def test_card_codes_match_the_list_row(db: AsyncSession, tenant, loop_fixt
     codes = [i["code"] for i in card["issues"]]
     assert codes == [i["code"] for i in row["issues"]]
     assert "gaps_without_plan" in codes
+
+
+# ---------------------------------------------------------------------------
+# HRP-706: the card's issue scan is bounded to the employee it describes
+# ---------------------------------------------------------------------------
+
+
+# Tables that hold per-employee rows. A statement reading any of them on the
+# card path must say which employee it is about.
+_EMPLOYEE_SCOPED_TABLES = ("assessments", "pdps", "assessment_results", "employees")
+
+# The restrictions that make it about one employee. ``employees.id IN`` is the
+# alerts collector reading the cohort rows themselves; the ``employee_id IN``
+# pair is every signal query hanging off them.
+_COHORT_PREDICATES = (
+    "assessments.employee_id IN",
+    "pdps.employee_id IN",
+    "employees.id IN",
+)
+
+
+@pytest.mark.asyncio
+async def test_card_issue_scan_names_the_employee_in_every_query(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    """HRP-706: every query behind one employee card names that employee.
+
+    The review read ``employee_issue_codes`` as running two tenant-scale
+    collectors per card open. It does not: ``compute_employee_alerts_bulk_all``
+    restricts each of its queries by ``employee_ids`` and ``collect_issue_facts``
+    by ``cohort``. Nothing was changed here -- this pins the claim.
+
+    What is asserted is the cohort predicate itself. A statement count alone
+    would not pin it: strip the WHERE out of either collector and the count
+    does not move, the same queries just come back with the whole roster in
+    them. So every statement touching employee-scoped tables has to carry an
+    ``employee_id IN`` / ``employees.id IN`` restriction, and that assertion
+    is what goes red if a filter is dropped.
+
+    The roster-invariance of the count is asserted underneath, where it does
+    earn its keep: it catches an N+1 opening up per bystander.
+    """
+    from app.modules.employee.service import employee_issue_codes
+    from sqlalchemy import event
+
+    statuses, types = loop_fixtures
+    emp = await _make_employee(db, tenant, last_name="Carded")
+    await _done_assessment(db, tenant, emp, statuses, types, percent=30)
+    await db.commit()
+
+    emp_id = emp.id
+
+    async def _capture() -> list[str]:
+        """The SQL employee_issue_codes issues for this one employee."""
+        # Same starting point both times: a warm identity map would let the
+        # second run skip relationship loads the first one paid for. The
+        # re-fetch happens before the listener attaches, so it is not part
+        # of what is captured.
+        db.expunge_all()
+        fresh = await db.get(Employee, emp_id)
+        assert fresh is not None
+        seen: list[str] = []
+
+        def _on_exec(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+            seen.append(" ".join(statement.split()))
+
+        bind = db.bind
+        event.listen(bind.sync_engine, "before_cursor_execute", _on_exec)
+        try:
+            await employee_issue_codes(db, tenant.id, fresh)
+        finally:
+            event.remove(bind.sync_engine, "before_cursor_execute", _on_exec)
+        return seen
+
+    def _assert_every_read_is_scoped(statements: list[str]) -> int:
+        scoped = [
+            s
+            for s in statements
+            if any(table in s for table in _EMPLOYEE_SCOPED_TABLES)
+        ]
+        # Sanity: if this ever drops to zero the capture broke, and an
+        # all-green vacuous pass is exactly what this test exists to avoid.
+        assert len(scoped) == 8, [f"{len(scoped)} scoped reads", *scoped]
+        for sql in scoped:
+            assert any(p in sql for p in _COHORT_PREDICATES), (
+                "a collector query reads employee-scoped rows without naming "
+                f"the employee -- it now scans the tenant: {sql}"
+            )
+        return len(statements)
+
+    alone = _assert_every_read_is_scoped(await _capture())
+
+    for i in range(10):
+        other = await _make_employee(db, tenant, last_name=f"Bystander{i}")
+        await _done_assessment(db, tenant, other, statuses, types, percent=30)
+    await db.commit()
+
+    # Ten bystanders, all carrying the same signals: a collector that lost
+    # its cohort would now be pulling their rows too.
+    crowded = _assert_every_read_is_scoped(await _capture())
+
+    assert alone == crowded, (
+        f"opening one card cost {alone} queries on a 1-employee roster and "
+        f"{crowded} on an 11-employee one -- an N+1 opened up per bystander"
+    )
+    # 8 scoped collector reads (HRP-720 added the open-assessment due date)
+    # plus the two selectin loads (user, roles) on the single cohort row.
+    assert alone == 10, alone

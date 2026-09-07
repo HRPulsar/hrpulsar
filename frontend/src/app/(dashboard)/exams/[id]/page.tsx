@@ -23,6 +23,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { PeopleSelectList } from "@/components/people-select-list";
 import {
   Card,
   CardContent,
@@ -1254,7 +1255,10 @@ export default function ExamDetailPage() {
 
       {/* Assign employees dialog */}
       <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
-        <DialogContent className="max-w-lg">
+        {/* HRP-387 (NB): the base popup caps at ``sm:max-w-sm``, so the
+            unprefixed ``max-w-lg`` never applied and the three filters plus
+            the employee rows were squeezed into a 384px column. */}
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{t("selectEmployeesTitle")}</DialogTitle>
           </DialogHeader>
@@ -1321,52 +1325,30 @@ export default function ExamDetailPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="max-h-80 overflow-y-auto rounded-md border">
-              <div className="flex items-center gap-3 border-b p-2">
-                <Checkbox
-                  data-testid="exam-assign-checkbox-select-all"
-                  checked={allSelectableSelected}
-                  disabled={employeesLoading || selectableEmployees.length === 0}
-                  onCheckedChange={toggleAllSelectable}
-                />
-                <span className="text-sm text-muted-foreground">
-                  {t("selectAll", { count: selectableEmployees.length })}
-                </span>
-              </div>
-              {employeesLoading ? (
-                <p className="p-4 text-center text-sm text-muted-foreground">{tc("loading")}</p>
-              ) : filteredEmployees.length === 0 ? (
-                <p className="p-4 text-center text-sm text-muted-foreground">{t("noEmployeesMatch")}</p>
-              ) : (
-                <ul className="divide-y">
-                  {filteredEmployees.map((emp) => {
-                    const isAssigned = alreadyAssigned.has(emp.id);
-                    const isSelected = selectedEmployeeIds.has(emp.id);
-                    return (
-                      <li
-                        key={emp.id}
-                        className={`flex items-center gap-3 p-2 text-sm ${isAssigned ? "opacity-50" : ""}`}
-                      >
-                        <Checkbox
-                          checked={isSelected}
-                          disabled={isAssigned}
-                          onCheckedChange={() => toggleEmployee(emp.id)}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium">{emp.user_name ?? emp.user_email ?? emp.id.slice(0, 8)}</p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {[emp.position_title, emp.division_name].filter(Boolean).join(" · ")}
-                          </p>
-                        </div>
-                        {isAssigned && (
-                          <span className="text-xs text-muted-foreground">{t("alreadyAssigned")}</span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
+            <PeopleSelectList
+              rows={filteredEmployees.map((emp) => ({
+                id: emp.id,
+                name: emp.user_name ?? emp.user_email ?? emp.id.slice(0, 8),
+                subtitle: [emp.position_title, emp.division_name]
+                  .filter(Boolean)
+                  .join(" · "),
+                disabled: alreadyAssigned.has(emp.id),
+                disabledNote: t("alreadyAssigned"),
+              }))}
+              isSelected={(empId) => selectedEmployeeIds.has(empId)}
+              onToggle={toggleEmployee}
+              loading={employeesLoading}
+              loadingLabel={tc("loading")}
+              emptyLabel={t("noEmployeesMatch")}
+              selectAll={{
+                label: t("selectAll", { count: selectableEmployees.length }),
+                checked: allSelectableSelected,
+                disabled:
+                  employeesLoading || selectableEmployees.length === 0,
+                onToggle: toggleAllSelectable,
+                testId: "exam-assign-checkbox-select-all",
+              }}
+            />
             <p className="text-xs text-muted-foreground">
               {t("selectedCount", { count: selectedEmployeeIds.size })}
             </p>

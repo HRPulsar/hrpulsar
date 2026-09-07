@@ -4,9 +4,12 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  daysSinceCompleted,
   goalsProgressPercent,
   isOpenAssessment,
   isOpenPdp,
+  isRunningAssessment,
+  latestDoneAssessment,
   openAssessmentCount,
   openPdpCount,
 } from "@/lib/employee-kpis";
@@ -119,5 +122,81 @@ describe("isOpenAssessment / openAssessmentCount (HRP-246)", () => {
         { status_code: "cancelled" },
       ]),
     ).toBe(2);
+  });
+});
+
+describe("isRunningAssessment (HRP-736 review)", () => {
+  // The backend's running set is sent / in_progress: a Draft was never
+  // sent, and On review is waiting on the reviewer, not the participants.
+  it.each([{ status_code: "sent" }, { status_code: "in_progress" }])(
+    "treats $status_code as running",
+    (a) => {
+      expect(isRunningAssessment(a)).toBe(true);
+    },
+  );
+
+  it.each([
+    { status_code: "draft" },
+    { status_code: "on_review" },
+    { status_code: "done" },
+    { status_code: "cancelled" },
+  ])("does not treat $status_code as running", (a) => {
+    expect(isRunningAssessment(a)).toBe(false);
+  });
+});
+
+describe("latestDoneAssessment", () => {
+  const iso = (daysAgo: number) =>
+    new Date(Date.now() - daysAgo * 24 * 3600 * 1000).toISOString();
+
+  it("ignores assessments that are not Done", () => {
+    // HRP-736: the header used to show this on_review row as "today" while
+    // the chip two lines above said "no recent assessment".
+    expect(
+      latestDoneAssessment([
+        { status_code: "on_review", created_at: iso(0) },
+        { status_code: "done", finished_at: iso(200), created_at: iso(210) },
+      ]),
+    ).toMatchObject({ status_code: "done" });
+  });
+
+  it("ignores cancelled assessments", () => {
+    expect(
+      latestDoneAssessment([
+        { status_code: "cancelled", finished_at: iso(1), created_at: iso(2) },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("picks the newest by finished_at, not created_at", () => {
+    const newest = {
+      status_code: "done",
+      finished_at: iso(5),
+      created_at: iso(400),
+    };
+    expect(
+      latestDoneAssessment([
+        { status_code: "done", finished_at: iso(50), created_at: iso(60) },
+        newest,
+      ]),
+    ).toBe(newest);
+  });
+
+  it("skips a done assessment the backend has not dated", () => {
+    // HRP-736 review: assessed_recent (employee/issues.py) ignores rows
+    // without finished_at, so dating one by created_at could put "3 d"
+    // next to an assessment_stale chip.
+    const dated = { status_code: "done", finished_at: iso(30), created_at: iso(40) };
+    const undated = { status_code: "done", finished_at: null, created_at: iso(3) };
+    expect(latestDoneAssessment([undated, dated])).toBe(dated);
+    expect(latestDoneAssessment([undated])).toBeUndefined();
+  });
+
+  it("returns undefined when nothing is done", () => {
+    expect(latestDoneAssessment([])).toBeUndefined();
+  });
+
+  it("counts age from the completion date", () => {
+    expect(daysSinceCompleted({ finished_at: iso(200) })).toBe(200);
   });
 });

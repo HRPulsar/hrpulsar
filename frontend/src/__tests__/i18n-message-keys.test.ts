@@ -174,6 +174,7 @@ const MESSAGE_KEY_MAPS: Record<string, string> = {
   "src/lib/question-enums.ts::SOURCE_LABEL_KEYS": "recruitment",
   "src/lib/talent-card-types.ts::TYPE_KEYS": "talentMarket",
   "src/lib/talent-card-types.ts::TYPE_HINT_KEYS": "talentMarket",
+  "src/lib/talent-card-types.ts::TYPE_COUNT_KEYS": "talentMarket",
   "src/lib/recruitment-types.ts::AI_ANALYSIS_STAGE_LABEL_KEYS": "recruitment",
   "src/lib/recruitment-types.ts::AI_VERDICT_LABEL_KEYS": "recruitment",
   "src/lib/recruitment-types.ts::AI_NEXT_STEP_LABEL_KEYS": "recruitment",
@@ -515,5 +516,75 @@ describe("scanner catches a violation", () => {
     expect(
       classifyKeyMap(["cancel", "back"], ["other", "common"], catalog),
     ).toEqual({ namespace: "common", missing: [] });
+  });
+});
+
+// --- 3. literal calls must pass the values their message interpolates ----
+
+/**
+ * HRP-724: `t("employees.kpiDevDynamicsInfo")` was called with no values
+ * while all three catalogs define the message with a `{days}` placeholder.
+ * next-intl raises FORMATTING_ERROR for that, renders the raw dotted key in
+ * place of the sentence and logs on every render — invisible to the key
+ * scan above, which only asks whether the key exists.
+ *
+ * Only argument-less literal calls are judged: a call that passes an object
+ * may legitimately supply the values dynamically. `.raw` / `.has` are
+ * excluded because they never format.
+ */
+const ICU_PLACEHOLDER = /\{\s*[A-Za-z_][\w]*\s*[,}]/;
+
+/** Dotted key → message text (the flatten above keeps only the names). */
+function flattenValues(tree: Catalog, prefix = ""): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [key, value] of Object.entries(tree)) {
+    const dotted = prefix ? `${prefix}.${key}` : key;
+    if (typeof value === "string") out.set(dotted, value);
+    else for (const [k, v] of flattenValues(value, dotted)) out.set(k, v);
+  }
+  return out;
+}
+
+const EN_MESSAGES = flattenValues(EN_TREE);
+
+/** Keys of literal calls made with no values object, e.g. `t("key")`. */
+export function argumentlessMessageKeys(source: string): string[] {
+  const keys: string[] = [];
+  for (const [binding, namespace] of translatorScopes(source)) {
+    const callRe = new RegExp(
+      `\\b${binding}(?:\\.rich|\\.markup)?\\s*\\(\\s*["']([A-Za-z0-9_.]+)["']\\s*\\)`,
+      "g",
+    );
+    for (const match of source.matchAll(callRe)) {
+      keys.push(namespace ? `${namespace}.${match[1]}` : match[1]);
+    }
+  }
+  return keys;
+}
+
+describe("literal t() calls supply every value their message needs", () => {
+  it("never formats a placeholder message without arguments", () => {
+    const offenders: string[] = [];
+    for (const file of FILES) {
+      for (const key of argumentlessMessageKeys(readFileSync(file, "utf8"))) {
+        const message = EN_MESSAGES.get(key);
+        if (message !== undefined && ICU_PLACEHOLDER.test(message)) {
+          offenders.push(`${rel(file)}: ${key} → "${message.slice(0, 60)}…"`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("spots a placeholder message called bare", () => {
+    const source = `const t = useTranslations("employees");\nt("kpiDevDynamicsInfo");`;
+    expect(argumentlessMessageKeys(source)).toEqual([
+      "employees.kpiDevDynamicsInfo",
+    ]);
+  });
+
+  it("ignores a call that passes values", () => {
+    const source = `const t = useTranslations("employees");\nt("kpiDevDynamicsInfo", { days: 90 });`;
+    expect(argumentlessMessageKeys(source)).toEqual([]);
   });
 });

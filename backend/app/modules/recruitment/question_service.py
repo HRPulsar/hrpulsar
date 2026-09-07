@@ -49,7 +49,6 @@ from app.modules.recruitment.common import (
 from app.modules.recruitment.models import (
     AIAssessment,
     Candidate,
-    CandidateFile,
     CandidateVacancy,
     HumanAssessment,
     Interview,
@@ -63,6 +62,7 @@ from app.modules.recruitment.prompts_interview import (
     GeneratedQuestionSet,
     build_question_set_prompt,
 )
+from app.modules.recruitment.resume_presence import load_parsed_resume
 from app.modules.recruitment.schemas import (
     GenerateQuestionSetRequest,
     QuestionCreate2,
@@ -323,29 +323,6 @@ async def _load_candidate_vacancy(
     if cv is None:
         raise AppError("candidate_vacancy_not_found", status.HTTP_404_NOT_FOUND)
     return cv
-
-
-async def _load_parsed_resume(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    candidate_id: uuid.UUID,
-) -> dict | None:
-    """Most recent parsed resume payload for a candidate, or None."""
-    resume = (
-        await db.execute(
-            select(CandidateFile)
-            .where(
-                CandidateFile.candidate_id == candidate_id,
-                CandidateFile.tenant_id == tenant_id,
-                CandidateFile.parse_status == "completed",
-            )
-            .order_by(CandidateFile.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if resume is None:
-        return None
-    return resume.parsed_data
 
 
 async def _load_profile_competences(
@@ -856,7 +833,11 @@ async def generate_question_set(
     if candidate is None or vacancy is None:
         raise AppError("candidate_or_vacancy_missing", status.HTTP_404_NOT_FOUND)
 
-    resume_data = await _load_parsed_resume(db, tenant_id, cv.candidate_id)
+    # HRP-704: the shared loader — filtered to ``file_type="resume"`` so
+    # an audio row's ``parsed_data`` cannot reach the prompt, and falling
+    # back to ``parsed_resume_jsonb`` so a manually entered candidate the
+    # UI offers Generate for does not answer 409 here.
+    resume_data = await load_parsed_resume(db, tenant_id, cv.candidate_id)
     if resume_data is None:
         raise AppError("parsed_resume_required", status.HTTP_409_CONFLICT)
 

@@ -62,13 +62,11 @@ export function normalisePeriod(value: string | null | undefined): string {
 /**
  * HRP-680 — which rendered resume item does this excerpt quote?
  *
- * The data-side twin of ``findExperienceTarget`` / ``findGenericTarget``
- * in parsed-resume-editor.tsx: those answer "given an excerpt, which DOM
- * node do I scroll to", this one answers "given the resume, which items
- * were cited" — the question the permanent mark needs and the DOM
- * matchers cannot answer without a node to start from. The two use the
- * same priority order on purpose; a rule that held here but not there
- * would mark an item the chip refuses to jump to.
+ * The only matcher (HRP-710). It answers both directions of the link:
+ * which items carry the permanent mark, and — via the returned key —
+ * which node the chip scrolls to, since parsed-resume-editor.tsx looks
+ * the item up by ``data-resume-item-key`` rather than walking the DOM
+ * with a second copy of these rules.
  *
  * Returns the ``data-resume-item-key`` of the match, or ``null`` when
  * the excerpt cannot be placed — an unplaceable quote gets no mark
@@ -184,9 +182,7 @@ function experienceItemText(entry: {
 // longer line). A short string (R, Go, C#) only counts as contained when
 // it matches a whole token — bare `includes` let the letter "r" inside
 // "redis" claim the citation for the "R" chip (HRP-654 review).
-// Exported so ``findGenericTarget`` in parsed-resume-editor.tsx applies
-// the identical rule to the DOM side of the link.
-export function overlaps(itemText: string, excerpt: string): boolean {
+function overlaps(itemText: string, excerpt: string): boolean {
   const item = itemText.trim().toLowerCase();
   const quote = excerpt.trim().toLowerCase();
   if (!item || !quote) return false;

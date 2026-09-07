@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { BADGE_COLOR } from "@/lib/badge-tones";
@@ -43,7 +43,11 @@ import {
 } from "@/components/ui/table";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/date-format";
-import { TYPE_HINT_KEYS, TYPE_KEYS } from "@/lib/talent-card-types";
+import {
+  TYPE_HINT_KEYS,
+  TYPE_KEYS,
+  storedCandidateStatusWins,
+} from "@/lib/talent-card-types";
 import { Hint } from "@/components/ui/hint";
 import {
   ArrowLeft,
@@ -169,6 +173,53 @@ function candidateStatusLabel(
 ): string {
   const key = CANDIDATE_STATUS_KEYS[value];
   return key ? t(key) : value;
+}
+
+// HRP-734: the status word alone cannot say *why* someone does not qualify.
+// Once a re-assessment closes the competence gaps, a bare "not matched" reads
+// as stale data when it is in fact correct — the blocker just moved to
+// experience. `blocked_by` names the axes; null means the card states no
+// requirements, so the stored status decides.
+//
+// Wording and colour come out of here together on purpose. `blocked_by` is
+// recomputed on every read while `status` only moves on a pool recompute, so
+// sourcing the tone from `candidateStatusColors[status]` let the two disagree:
+// a manual nominee who now clears every axis read "Matched" in grey next to
+// genuinely matched rows, and a stored `matched` whose assessment had lapsed
+// read "Competencies short" in green.
+function candidateStatusBadge(
+  t: (key: string) => string,
+  status: string,
+  blockedBy: string[] | null | undefined,
+  hasCompRequirement: boolean,
+): { label: string; tone: string } {
+  // Appointed and the legacy statuses are the fact, and a null means we
+  // have no verdict of our own — all defer to the stored status for wording
+  // and tone alike.
+  if (blockedBy == null || storedCandidateStatusWins(status)) {
+    return {
+      label: candidateStatusLabel(t, status),
+      tone: candidateStatusColors[status] || "",
+    };
+  }
+  const comp = blockedBy.includes("competences");
+  const exp = blockedBy.includes("experience");
+  if (!comp && !exp) {
+    return { label: t("candidateStatusMatched"), tone: BADGE_COLOR.green };
+  }
+  let label: string;
+  if (comp && exp) {
+    label = t("candidateReasonCompetencesAndExperience");
+  } else if (comp) {
+    label = t("candidateReasonCompetences");
+  } else {
+    // Competences cleared but experience did not — the case the sales script
+    // narrates as "the next step is a grade, not skills".
+    label = hasCompRequirement
+      ? t("candidateReasonCompetencesMetNoExperience")
+      : t("candidateReasonExperience");
+  }
+  return { label, tone: BADGE_COLOR.neutral };
 }
 
 // HRP-95 / HRP-173: picker row returned by GET /talent-market/{id}/candidate-pool.
@@ -445,6 +496,10 @@ export default function TalentCardDetailPage() {
   const t = useTranslations("talentMarket");
   const tc = useTranslations("common");
   const { id } = useParams<{ id: string }>();
+  // HRP-714: the manager arrives here from the plan-request
+  // notification, which names the candidate row to open.
+  const searchParams = useSearchParams();
+  const deepLinkCandidateId = searchParams.get("candidate");
   const [card, setCard] = useState<TalentCardDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [divisionName, setDivisionName] = useState<string | null>(null);
@@ -507,6 +562,10 @@ export default function TalentCardDetailPage() {
   // affordance on the UI.
   const [reactConfirmOpen, setReactConfirmOpen] = useState(false);
 
+  // HRP-714: same posture as React — one confirm, then the request
+  // goes to the manager and cannot be taken back.
+  const [planRequestOpen, setPlanRequestOpen] = useState(false);
+
   function openMatchDrawer(
     employeeId: string,
     name?: string | null,
@@ -560,6 +619,25 @@ export default function TalentCardDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // HRP-714: the manager's notification links to one candidate row.
+  // Open its Match drawer straight away — that drawer carries the
+  // Create-plan action (HRP-665) the request was asking for. Runs once
+  // per link: `opened` keeps a later reload from re-opening it after the
+  // manager has closed the drawer.
+  const [deepLinkOpened, setDeepLinkOpened] = useState(false);
+  useEffect(() => {
+    if (!deepLinkCandidateId || deepLinkOpened || !card || !canManage) return;
+    const target = card.candidates.find((c) => c.id === deepLinkCandidateId);
+    if (!target) return;
+    setDeepLinkOpened(true);
+    openMatchDrawer(target.employee_id, target.employee_name, {
+      id: target.id,
+      pdpId: target.pdp_id ?? null,
+    });
+    // openMatchDrawer is a plain local function; the guard above makes
+    // this effect idempotent, so re-running it is a no-op.
+  }, [deepLinkCandidateId, deepLinkOpened, card, canManage]);
 
   // One-off dictionaries — used by Required Spec / Required Comp blocks.
   useEffect(() => {
@@ -834,6 +912,22 @@ export default function TalentCardDetailPage() {
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("toastReactFailed"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // HRP-714: an employee cannot create their own development plan, so
+  // the CTA on the soft auto-reply is a request to the manager who can.
+  async function requestDevelopmentPlan() {
+    setSaving(true);
+    try {
+      await api.post(`/talent-market/${id}/request-development-plan`, {});
+      toast.success(t("toastPlanRequested"));
+      setPlanRequestOpen(false);
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("toastPlanRequestFailed"));
     } finally {
       setSaving(false);
     }
@@ -1425,13 +1519,23 @@ export default function TalentCardDetailPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge
-                            variant="secondary"
-                            className={candidateStatusColors[c.status] || ""}
-                            data-testid="talent-market-candidate-status"
-                          >
-                            {candidateStatusLabel(t, c.status)}
-                          </Badge>
+                          {(() => {
+                            const badge = candidateStatusBadge(
+                              t,
+                              c.status,
+                              c.blocked_by,
+                              c.has_comp_requirement ?? false,
+                            );
+                            return (
+                              <Badge
+                                variant="secondary"
+                                className={badge.tone}
+                                data-testid="talent-market-candidate-status"
+                              >
+                                {badge.label}
+                              </Badge>
+                            );
+                          })()}
                           {/* HRP-213: surface the reacted chip next to the
                               status badge so managers see who already
                               applied. The chip renders the same for the
@@ -1550,6 +1654,36 @@ export default function TalentCardDetailPage() {
                               data-testid="talent-market-candidate-react"
                             >
                               {t("react")}
+                            </Button>
+                          )}
+                        {/* HRP-714: the CTA the auto-reply points at.
+                            Shown to the employee on their own row once
+                            they have reacted to a vacancy or project they
+                            do not clear and have no plan yet — a `talent`
+                            card is a reserve pool with no bar to miss.
+                            "Do not clear" is the live `blocked_by` the
+                            status badge reads (`comp_qualifies` is false
+                            for every card with no required competences),
+                            and an appointed row has nothing left to ask
+                            for — the backend answers 409 for both. */}
+                        {!canManage &&
+                          c.is_me &&
+                          card.status === "published" &&
+                          (card.card_type === "vacancy" ||
+                            card.card_type === "project") &&
+                          !!c.response_at &&
+                          c.status !== "appointed" &&
+                          Array.isArray(c.blocked_by) &&
+                          c.blocked_by.length > 0 &&
+                          !c.pdp_id && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setPlanRequestOpen(true)}
+                              disabled={saving}
+                              data-testid="talent-market-candidate-request-plan"
+                            >
+                              {t("requestPlan")}
                             </Button>
                           )}
                       </TableCell>
@@ -1806,6 +1940,19 @@ export default function TalentCardDetailPage() {
         loadingLabel={t("sending")}
         confirmVariant="default"
         onConfirm={() => void sendReaction()}
+        loading={saving}
+      />
+
+      {/* HRP-714: the plan request reaches a person, so confirm it. */}
+      <ConfirmDialog
+        open={planRequestOpen}
+        onOpenChange={(o) => setPlanRequestOpen(o)}
+        title={t("requestPlanTitle")}
+        description={t("requestPlanConfirm", { title: card.title })}
+        confirmLabel={t("send")}
+        loadingLabel={t("sending")}
+        confirmVariant="default"
+        onConfirm={() => void requestDevelopmentPlan()}
         loading={saving}
       />
     </div>

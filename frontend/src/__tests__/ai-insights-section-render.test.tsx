@@ -329,6 +329,74 @@ describe("AI Insights — top-up callout (HRP-489)", () => {
     expect(upgrade.disabled).toBe(true);
   });
 
+  // HRP-489 REDO — QA rejected the block for stacking two amber
+  // banners that restated each other. These pin the layering itself,
+  // not just the predicate behind it.
+  it("hides the callout entirely when the resume was re-parsed (case 3.1)", async () => {
+    runs.push(mkRun());
+    eligibility = mkEligibility({
+      resume_outdated: true,
+      reason: "resume_changed",
+      transcribed_interview_id: "interview-1",
+    });
+    await render(true);
+
+    expect(byTestId("ai-analysis-outdated-banner")).not.toBeNull();
+    expect(byTestId("ai-analysis-topup-callout")).toBeNull();
+    // The +20-cr scenario is closed, so its button must be gone too.
+    expect(byTestId("ai-analysis-upgrade-to-full-btn")).toBeNull();
+  });
+
+  it("hides the callout when vacancy competences were edited (case 3.2)", async () => {
+    runs.push(mkRun());
+    eligibility = mkEligibility({
+      profile_outdated: true,
+      reason: "profile_changed",
+      transcribed_interview_id: "interview-1",
+    });
+    await render(true);
+
+    expect(byTestId("ai-analysis-outdated-banner")).not.toBeNull();
+    expect(byTestId("ai-analysis-topup-callout")).toBeNull();
+  });
+
+  it("keeps both banners past the 30-day window with no transcript (case 3.3)", async () => {
+    runs.push(mkRun());
+    eligibility = mkEligibility({
+      analysis_expired: true,
+      reason: "no_transcribed_interview",
+    });
+    await render(true);
+
+    const banner = byTestId("ai-analysis-outdated-banner")!;
+    expect(banner.getAttribute("data-staleness")).toBe("expired");
+    expect(banner.textContent).toContain("The current analysis is outdated");
+
+    const callout = byTestId("ai-analysis-topup-callout")!;
+    expect(callout.textContent).toContain(
+      "Upload and transcribe an interview to enable full analysis",
+    );
+    const upgrade = byTestId(
+      "ai-analysis-upgrade-to-full-btn",
+    ) as HTMLButtonElement;
+    expect(upgrade.disabled).toBe(true);
+  });
+
+  it("shows one banner when competences changed and the run expired (case 3.4)", async () => {
+    runs.push(mkRun());
+    eligibility = mkEligibility({
+      profile_outdated: true,
+      analysis_expired: true,
+      reason: "profile_changed",
+      transcribed_interview_id: "interview-1",
+    });
+    await render(true);
+
+    const banner = byTestId("ai-analysis-outdated-banner")!;
+    expect(banner.getAttribute("data-staleness")).toBe("profile");
+    expect(byTestId("ai-analysis-topup-callout")).toBeNull();
+  });
+
   it("enables the upgrade once a transcript makes it available", async () => {
     runs.push(mkRun());
     eligibility = mkEligibility({

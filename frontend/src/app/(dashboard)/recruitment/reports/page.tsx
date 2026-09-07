@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
   reportSectionLabel,
+  reportStatusLabel,
   type ReportExport,
   type ReportExportList,
   type ReportSectionCode,
@@ -240,7 +241,7 @@ export default function ReportsListPage() {
                       variant="secondary"
                       className={STATUS_COLORS[row.status] || ""}
                     >
-                      {row.status}
+                      {reportStatusLabel(t, row.status)}
                     </Badge>
                   </TableCell>
                   <TableCell>

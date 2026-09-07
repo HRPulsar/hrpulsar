@@ -1,11 +1,13 @@
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timezone
 from typing import Any
 
 from fastapi import status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, literal, or_, select
+from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -40,7 +42,9 @@ from app.modules.employee.issues import (
     ISSUE_PRIORITY,
     collect_issue_facts,
     issue_cohorts,
+    issue_deadlines,
     issues_by_employee,
+    sort_by_severity,
 )
 from app.modules.employee.models import (
     Compensation,
@@ -98,15 +102,26 @@ _ALL_ISSUE_LABELS: dict[str, str] = dict(
 )
 
 
-def _issue_payload(codes: list[str]) -> list[dict]:
-    """HRP-638: badge payloads, most urgent first."""
+def _issue_payload(
+    codes: list[str], deadlines: Mapping[str, date] | None = None
+) -> list[dict]:
+    """HRP-638: badge payloads, most urgent first.
+
+    HRP-720: each badge also carries the date its problem is scheduled to
+    resolve, where one exists. The list omits them — a row badge is a pointer
+    to the card, and the card is where the date has room to be read.
+    """
     ordered = sorted(
         codes,
         key=lambda c: (
             ISSUE_PRIORITY.index(c) if c in ISSUE_PRIORITY else len(ISSUE_PRIORITY)
         ),
     )
-    return [{"code": c, "label": _ALL_ISSUE_LABELS[c]} for c in ordered]
+    due = deadlines or {}
+    return [
+        {"code": c, "label": _ALL_ISSUE_LABELS[c], "deadline": due.get(c)}
+        for c in ordered
+    ]
 
 
 def _employee_to_read(
@@ -114,6 +129,7 @@ def _employee_to_read(
     avatar_url: str | None = None,
     alert: AlertCode | None = None,
     issues: list[str] | None = None,
+    deadlines: Mapping[str, date] | None = None,
 ) -> dict:
     pos = emp.position
     spec = pos.specialization if pos else None
@@ -146,7 +162,7 @@ def _employee_to_read(
         "division_name": emp.division.name if emp.division else None,
         "avatar_url": avatar_url,
         "alert": _alert_payload(alert),
-        "issues": _issue_payload(issues) if issues else [],
+        "issues": _issue_payload(issues, deadlines) if issues else [],
     }
 
 
@@ -367,6 +383,10 @@ async def create_employee(
     return _employee_to_read(emp)
 
 
+# HRP-729: the one ordering the list offers besides its default.
+SORT_SEVERITY = "severity"
+
+
 async def list_employees(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -384,6 +404,7 @@ async def list_employees(
     q: str | None = None,
     include_sub_divisions: bool = False,
     issue: Sequence[str] | str | None = None,
+    sort: str | None = None,
 ) -> tuple[list[dict], int]:
     division_ids = _coerce_filter_list(division_id)
     # HRP-58: opt-in widening of the division filter to the whole subtree.
@@ -418,6 +439,10 @@ async def list_employees(
     # dashboard counts — a tile's number and this list cannot disagree.
     # Several codes OR together, like every other multi-value filter here.
     issue_codes = _coerce_filter_list(issue)
+    # HRP-729: worst first once the list is about a problem. The order is
+    # resolved here, from the same tenant-wide pass the filter already needs,
+    # and handed to Postgres as a rank — paging stays in SQL.
+    severity_order: list[uuid.UUID] = []
     if issue_codes:
         facts = await collect_issue_facts(
             db, tenant_id, visible_employee_ids=visible_employee_ids
@@ -430,6 +455,20 @@ async def list_employees(
             return [], 0
         query = query.where(Employee.id.in_(matched))
         count_query = count_query.where(Employee.id.in_(matched))
+        # One code only. Severity is a score within a kind of problem, not
+        # across kinds: ranking a mixed list by each person's worst code would
+        # compare "3 competences below the bar" against "21 days in review",
+        # and park every never-assessed employee on top for good. The UI hides
+        # the control in that case; the API falls back the same way.
+        if sort in (None, SORT_SEVERITY) and len(issue_codes) == 1:
+            severity_order = [
+                e.id
+                for e in sort_by_severity(
+                    facts,
+                    [facts.active_by_id[i] for i in matched if i in facts.active_by_id],
+                    issue_codes,
+                )
+            ]
 
     if division_ids:
         query = query.where(Employee.division_id.in_(division_ids))
@@ -513,7 +552,18 @@ async def list_employees(
 
     # Stable order so paginated results don't drift when rows are inserted
     # concurrently or when the planner picks a different default order.
-    query = query.order_by(Employee.created_at.desc(), Employee.id)
+    if severity_order:
+        # array_position gives each row its precomputed rank, so LIMIT/OFFSET
+        # still happen in Postgres — pulling the whole cohort to slice a page
+        # in Python would scale with the tenant, not with the page.
+        query = query.order_by(
+            func.array_position(
+                literal(severity_order, PG_ARRAY(PG_UUID(as_uuid=True))), Employee.id
+            ),
+            Employee.id,
+        )
+    else:
+        query = query.order_by(Employee.created_at.desc(), Employee.id)
 
     total = (await db.execute(count_query)).scalar() or 0
     result = await db.execute(query.offset(skip).limit(limit))
@@ -605,7 +655,7 @@ async def _resolve_emp_avatars_bulk(
 
 async def employee_issue_codes(
     db: AsyncSession, tenant_id: uuid.UUID, emp: Employee
-) -> list[str]:
+) -> tuple[list[str], dict[str, date]]:
     """Every problem one employee has — hygiene alerts plus loop issues.
 
     Same two families, same codes and same suppression rules the employee
@@ -617,7 +667,9 @@ async def employee_issue_codes(
     alerts = await compute_employee_alerts_bulk_all(db, tenant_id, [emp])
     facts = await collect_issue_facts(db, tenant_id, employee_ids={emp.id})
     loop = issues_by_employee(issue_cohorts(facts))
-    return [*alerts.get(emp.id, []), *loop.get(emp.id, [])]
+    codes: list[str] = [*alerts.get(emp.id, []), *loop.get(emp.id, [])]
+    # HRP-720: same pass, second answer — "when does it resolve?".
+    return codes, issue_deadlines(facts, emp.id, codes)
 
 
 async def get_employee(
@@ -631,8 +683,10 @@ async def get_employee(
     url = await _resolve_emp_avatar(db, emp)
     # HRP-660: opt-in — the card wants the badges, the dozen internal
     # callers that just need the row should not pay for the scan.
-    issues = await employee_issue_codes(db, tenant_id, emp) if with_issues else None
-    return _employee_to_read(emp, url, _top_alert(issues), issues)
+    issues, deadlines = (
+        await employee_issue_codes(db, tenant_id, emp) if with_issues else (None, {})
+    )
+    return _employee_to_read(emp, url, _top_alert(issues), issues, deadlines)
 
 
 async def update_employee(
@@ -709,6 +763,7 @@ async def update_employee(
 
     # Resolve position_title when position_id changes
     if "position_id" in updates and updates["position_id"] != emp.position_id:
+        pos = None
         if updates["position_id"]:
             pos = await db.get(Position, updates["position_id"])
             if not pos or pos.tenant_id != tenant_id:
@@ -716,14 +771,30 @@ async def update_employee(
             updates["position_title"] = pos.title
         else:
             updates["position_title"] = None
+        # HRP-732: ids alongside the title. A title is not an identity — it is
+        # renamed, reused and duplicated — so "was this a promotion?" cannot be
+        # answered from one. Grade is what actually moves, and it only exists on
+        # the position, so it is recorded here or nowhere. JSONB columns, so this
+        # is a wider payload rather than a schema change.
+        old_pos = emp.position
         await _create_event(
             db,
             emp.id,
             "position_change",
             f"Position changed to {updates.get('position_title', '')}",
             today,
-            old_value={"position_title": emp.position_title},
-            new_value={"position_title": updates.get("position_title")},
+            old_value={
+                "position_title": emp.position_title,
+                "position_id": str(emp.position_id) if emp.position_id else None,
+                "grade_id": (
+                    str(old_pos.grade_id) if old_pos and old_pos.grade_id else None
+                ),
+            },
+            new_value={
+                "position_title": updates.get("position_title"),
+                "position_id": str(pos.id) if pos else None,
+                "grade_id": str(pos.grade_id) if pos and pos.grade_id else None,
+            },
         )
     if "status" in updates and updates["status"] != emp.status:
         old_status = emp.status

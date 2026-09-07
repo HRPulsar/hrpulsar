@@ -33,6 +33,7 @@ from app.modules.ai_settings.service import DEFAULT_LANGUAGE
 from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Tenant
 from app.modules.demo.seed import clone_seed_into_demo_tenant
+from app.modules.demo.seed_i18n import translate
 from app.modules.demo.turnstile import verify_turnstile_token
 from app.modules.demo.utils import DEMO_ADMIN_EMAIL_DOMAIN
 
@@ -41,12 +42,16 @@ logger = logging.getLogger(__name__)
 # Where a fresh (or resumed) demo session lands.
 DEMO_REDIRECT_URL = "/dashboard"
 
-# The employee persona for the demo "View as" switcher: Carlos Mendez
-# (NAME_POOL idx 2, renamed per locale by ``localized_name_pool``) — his
-# seed story has a done 360 with strengths and a distributed-systems gap
-# plus a completed Q3 plan, so the personal dashboard is alive from the
-# first render.
-DEMO_EMPLOYEE_PERSONA_INDEX = 2
+# The employee persona for the demo "View as" switcher: Will Gapp
+# (NAME_POOL idx 38, renamed per locale by ``localized_name_pool``) — the
+# SDR the sales script follows end to end. His seed story is a 200-day-old
+# done 360 with a red product-knowledge gap and no development plan, so
+# his personal dashboard opens on both the "gap without a plan" and the
+# "no recent assessment" findings and the growth block points one rung up
+# the sales ladder. The presenter creates his plan, walks it, approves his
+# re-assessment and files his Talent Market response — all from this
+# persona (HRP-713).
+DEMO_EMPLOYEE_PERSONA_INDEX = 38
 
 
 # Stable 64-bit integer key for ``pg_advisory_xact_lock`` so two
@@ -146,14 +151,18 @@ async def _peek_concurrent_capacity(db: AsyncSession, *, now: datetime) -> None:
 async def _create_demo_user(
     db: AsyncSession, tenant_id: uuid.UUID, *, now: datetime
 ) -> User:
+    # The admin persona of the sales script ("this is us, HR") — a named
+    # person per locale rather than "Demo User", translated through the
+    # seed catalog like the employee cast (HRP-713).
+    first, _, last = translate("Ian Steward").partition(" ")
     user = User(
         id=uuid.uuid4(),
         email=f"demo-{uuid.uuid4().hex[:12]}@{DEMO_ADMIN_EMAIL_DOMAIN}",
         # Long random secret nobody will ever type — the demo never
         # uses password auth, it logs in via the JWT pair we return.
         password_hash=hash_password(secrets.token_urlsafe(32)),
-        first_name="Demo",
-        last_name="User",
+        first_name=first,
+        last_name=last,
         tenant_id=tenant_id,
         email_verified_at=now,
     )
@@ -456,7 +465,7 @@ async def switch_demo_view(
     """Issue an access token for a demo persona of the same demo tenant.
 
     ``admin`` → the throw-away demo user; ``employee`` → the seeded
-    ``NAME_POOL`` idx 2 card (Carlos Mendez in English, his localized
+    ``NAME_POOL`` idx 38 card (Will Gapp in English, his localized
     counterpart elsewhere). No passwords, no EE impersonation — just a fresh
     demo-scoped JWT (TTL pinned to the tenant lifetime, like
     ``create_demo_session``). Only callable with a live demo-tenant

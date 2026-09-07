@@ -75,6 +75,7 @@ export function VacancyCandidatesSection({
         <InternalCandidatesBlock
           vacancyId={vacancyId}
           reloadToken={internalReloadToken}
+          onAdded={triggerReload}
         />
         <VacancyCandidatesTable
           vacancyId={vacancyId}

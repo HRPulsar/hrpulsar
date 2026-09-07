@@ -157,15 +157,19 @@ export function TranscriptViewer({
                 </button>
               </div>
               {!isEditing ? (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="opacity-0 transition-opacity group-hover:opacity-100"
-                  onClick={() => startEdit(seg)}
-                  aria-label={t("transcriptViewerEditSegment")}
-                >
-                  <Pencil className="size-3.5" />
-                </Button>
+                // No change callback = the caller may not edit segments
+                // (PUT .../segments/{id} is admin/recruiter) — no pencil.
+                onSegmentChange && (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="opacity-0 transition-opacity group-hover:opacity-100"
+                    onClick={() => startEdit(seg)}
+                    aria-label={t("transcriptViewerEditSegment")}
+                  >
+                    <Pencil className="size-3.5" />
+                  </Button>
+                )
               ) : (
                 <div className="flex items-center gap-1">
                   <Button

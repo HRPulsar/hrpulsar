@@ -16,7 +16,9 @@ import {
   scaleLevelLabel,
   scaleOptionDescription,
   scaleOptionLabel,
+  gradeTitleLabel,
   skillLevelLabel,
+  skillLevelTitleLabel,
   type ReferenceTranslator,
 } from "@/lib/reference-labels";
 
@@ -41,6 +43,7 @@ function makeT(catalog: Catalog): ReferenceTranslator {
 const en = enMessages as { reference: Catalog };
 const de = deMessages as { reference: Catalog };
 const t = makeT(en.reference);
+const tDe = makeT(de.reference);
 
 describe("dictionaryItemLabel / dictionaryItemDescription", () => {
   it("resolves origin items through the catalog", () => {
@@ -289,5 +292,68 @@ describe("reference catalog invariants", () => {
 
   it("keeps en/de reference parity", () => {
     expect(keySets(de.reference).sort()).toEqual(keySets(en.reference).sort());
+  });
+});
+
+// HRP-735: payloads that ship a denormalized title and no i18n_key.
+// The shipped de catalog leaves the grade ladder in English, so the
+// mapping itself is proven against a synthetic catalog and the de one is
+// only used where it really differs (the skill levels).
+const tSynthetic = makeT({
+  skillLevel: { basic: "L1", intermediate: "L2", advanced: "L3" },
+  dictionary: {
+    grade: {
+      junior: { label: "G1" },
+      middle: { label: "G2" },
+      senior: { label: "G3" },
+      lead: { label: "G4" },
+      principal: { label: "G5" },
+    },
+  },
+});
+
+describe("skillLevelTitleLabel / gradeTitleLabel", () => {
+  it("resolves each shipped ladder entry by its title", () => {
+    expect(skillLevelTitleLabel(tSynthetic, "Basic")).toBe("L1");
+    expect(skillLevelTitleLabel(tSynthetic, "Intermediate")).toBe("L2");
+    expect(skillLevelTitleLabel(tSynthetic, "Advanced")).toBe("L3");
+    expect(gradeTitleLabel(tSynthetic, "Junior")).toBe("G1");
+    expect(gradeTitleLabel(tSynthetic, "Middle")).toBe("G2");
+    expect(gradeTitleLabel(tSynthetic, "Senior")).toBe("G3");
+    expect(gradeTitleLabel(tSynthetic, "Lead")).toBe("G4");
+    expect(gradeTitleLabel(tSynthetic, "Principal")).toBe("G5");
+  });
+
+  it("uses the shipped catalog for the levels that actually differ", () => {
+    expect(skillLevelTitleLabel(tDe, "Basic")).toBe(tDe("skillLevel.basic"));
+    expect(skillLevelTitleLabel(tDe, "Advanced")).toBe(
+      tDe("skillLevel.advanced"),
+    );
+  });
+
+  it("leaves unknown titles untouched", () => {
+    // Tenant-authored ladders are already stored in the author's language.
+    expect(skillLevelTitleLabel(tSynthetic, "Wizard")).toBe("Wizard");
+    expect(skillLevelTitleLabel(tSynthetic, "Grundstufe")).toBe("Grundstufe");
+    expect(gradeTitleLabel(tSynthetic, "Chief Wizard")).toBe("Chief Wizard");
+    expect(gradeTitleLabel(tSynthetic, "Teamleiter")).toBe("Teamleiter");
+  });
+
+  it("matches case-insensitively and ignores surrounding whitespace", () => {
+    expect(skillLevelTitleLabel(tSynthetic, "  basic ")).toBe("L1");
+    expect(skillLevelTitleLabel(tSynthetic, "ADVANCED")).toBe("L3");
+    expect(gradeTitleLabel(tSynthetic, " MiDdLe  ")).toBe("G2");
+  });
+
+  it("returns an empty string for a missing title", () => {
+    expect(skillLevelTitleLabel(tSynthetic, null)).toBe("");
+    expect(skillLevelTitleLabel(tSynthetic, undefined)).toBe("");
+    expect(gradeTitleLabel(tSynthetic, "")).toBe("");
+  });
+
+  it("falls back to the stored title when the catalog lacks the key", () => {
+    const empty = makeT({});
+    expect(skillLevelTitleLabel(empty, "Basic")).toBe("Basic");
+    expect(gradeTitleLabel(empty, "Middle")).toBe("Middle");
   });
 });

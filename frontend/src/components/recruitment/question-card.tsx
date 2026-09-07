@@ -6,6 +6,7 @@ import type { CandidateQuestion, QuestionPriority } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Pencil, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { purposeOptions } from "./question-detail-sheet";
 
 const priorityClasses: Record<QuestionPriority, string> = {
   must: "bg-[color-mix(in_oklch,var(--rec-red-flag)_15%,transparent)] text-[var(--rec-red-flag)]",
@@ -46,6 +47,10 @@ export function QuestionCard({
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
   const priority = question.priority;
+  // HRP-672: same labels the question sheet offers when the purpose is picked.
+  const purposeKey = purposeOptions.find(
+    (p) => p.value === question.purpose,
+  )?.labelKey;
   return (
     <div
       data-testid={`question-card-${question.id}`}
@@ -92,7 +97,7 @@ export function QuestionCard({
       {!compact && (question.purpose || competenceName) && (
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
           {competenceName && <span>{competenceName}</span>}
-          <span className="capitalize">{question.purpose}</span>
+          <span>{purposeKey ? t(purposeKey) : question.purpose}</span>
         </div>
       )}
 

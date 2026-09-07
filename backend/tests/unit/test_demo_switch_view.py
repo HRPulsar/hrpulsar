@@ -80,12 +80,12 @@ async def test_switch_to_employee_and_back(
     employee_token = body["access_token"]
     assert employee_token != admin_token
 
-    # The employee token resolves to Carlos Mendez in the same tenant.
+    # The employee token resolves to Will Gapp in the same tenant.
     me = await client.get(
         "/api/auth/me", headers={"Authorization": f"Bearer {employee_token}"}
     )
     assert me.status_code == 200
-    assert me.json()["first_name"] == "Carlos"
+    assert me.json()["first_name"] == "Will"
     assert me.json()["demo_persona"] == "employee"
 
     # Round-trip back to the admin persona.

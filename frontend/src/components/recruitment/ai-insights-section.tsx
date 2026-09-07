@@ -38,6 +38,7 @@ import {
   aiVerdictLabel,
   analysisStalenessKind,
   extractResumeExcerpts,
+  showsTopupCallout,
 } from "@/lib/recruitment-types";
 import { ALERT_TONE, BADGE_COLOR } from "@/lib/badge-tones";
 import type {
@@ -743,7 +744,11 @@ function ActiveRunCard({
         <ResumeExcerptList candidateId={candidateId} excerpts={excerpts} />
       )}
 
-      {isResumeOnly && eligibility && (
+      {/* HRP-489 (REDO): the callout is the second banner layer, so it
+          only renders when it still has something of its own to say —
+          see ``showsTopupCallout``. A changed resume or changed
+          competences close the +20-cr path altogether. */}
+      {isResumeOnly && eligibility && showsTopupCallout(eligibility, staleness) && (
         <TopupCallout
           eligibility={eligibility}
           onTopup={onTopup}

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { analysisStalenessKind } from "@/lib/recruitment-types";
+import {
+  analysisStalenessKind,
+  showsTopupCallout,
+} from "@/lib/recruitment-types";
 import type { TopupEligibility } from "@/lib/recruitment-types";
 
 // HRP-489 / HRP-492: AI Insights shows at most one "this analysis no
@@ -133,5 +136,93 @@ describe("AI Insights staleness banner — which one shows", () => {
       current_version: null,
     } as TopupEligibility;
     expect(analysisStalenessKind(legacy)).toBeNull();
+  });
+});
+
+// HRP-489 REDO — the second banner layer. QA rejected the block for
+// showing two amber banners that said the same thing; these pin the
+// four cases from the REDO comment (3.1 … 3.4) plus the untouched
+// baseline from case 1.
+describe("AI Insights top-up callout — when it renders below the banner", () => {
+  function withStaleness(overrides: Partial<TopupEligibility>) {
+    const elig = mkEligibility(overrides);
+    return showsTopupCallout(elig, analysisStalenessKind(elig));
+  }
+
+  it("renders the mode-info line when nothing is stale (case 1)", () => {
+    // Fresh resume-only run, no interview yet: "Upload and transcribe
+    // an interview to enable full analysis." + disabled Upgrade.
+    expect(withStaleness({ reason: "no_transcribed_interview" })).toBe(true);
+  });
+
+  it("renders the actionable +20-cr upgrade", () => {
+    expect(
+      withStaleness({ eligible: true, transcribed_interview_id: "iv-1" }),
+    ).toBe(true);
+  });
+
+  it("hides the callout when the resume was re-parsed (case 3.1)", () => {
+    expect(
+      withStaleness({ resume_outdated: true, reason: "resume_changed" }),
+    ).toBe(false);
+  });
+
+  it("hides the callout with no transcript either (case 3.1, no interview)", () => {
+    // The backend reports the missing transcript first, but a diverged
+    // resume closes the upgrade scenario regardless — one banner.
+    expect(
+      withStaleness({
+        resume_outdated: true,
+        reason: "no_transcribed_interview",
+      }),
+    ).toBe(false);
+  });
+
+  it("hides the callout when competences were edited (case 3.2)", () => {
+    expect(
+      withStaleness({ profile_outdated: true, reason: "profile_changed" }),
+    ).toBe(false);
+  });
+
+  it("keeps the mode-info line past the 30-day window (case 3.3)", () => {
+    // Expired *and* no transcript: two banners on purpose — the second
+    // names a condition the first does not.
+    expect(
+      withStaleness({
+        analysis_expired: true,
+        reason: "no_transcribed_interview",
+      }),
+    ).toBe(true);
+  });
+
+  it("drops the restated 'window expired' line (case 3.3, transcript present)", () => {
+    expect(
+      withStaleness({
+        analysis_expired: true,
+        reason: "resume_only_too_old",
+        transcribed_interview_id: "iv-1",
+      }),
+    ).toBe(false);
+  });
+
+  it("shows one banner when competences changed and the run expired (case 3.4)", () => {
+    // Priority from the spec puts competences first; the callout adds
+    // nothing on top of it.
+    expect(
+      withStaleness({
+        profile_outdated: true,
+        analysis_expired: true,
+        reason: "profile_changed",
+      }),
+    ).toBe(false);
+  });
+
+  it("still explains a missing competence profile", () => {
+    // Not a staleness signal — nothing above the callout would say it.
+    expect(withStaleness({ reason: "profile_missing" })).toBe(true);
+  });
+
+  it("renders nothing before the eligibility payload arrives", () => {
+    expect(showsTopupCallout(null, null)).toBe(false);
   });
 });

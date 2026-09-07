@@ -219,11 +219,29 @@ async def test_gap_below_bar_without_plan(
 
 
 @pytest.mark.asyncio
-async def test_result_at_the_bar_is_not_a_gap(
+async def test_result_at_the_bar_is_a_gap(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    # HRP-731: the bar itself counts as a growth zone. One rule across the
+    # product, and it is the inclusive one the group analytics always used.
+    emp = await _make_employee(db, tenant)
+    await _make_done_assessment(db, tenant, emp, status_done, type_self, percent=75)
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
+    assert payload["stages"]["gaps"] == {
+        "employees": 1,
+        "competences": 1,
+        "without_plan": 1,
+    }
+    assert _finding(payload, "gaps_without_plan") is not None
+
+
+@pytest.mark.asyncio
+async def test_result_just_above_the_bar_is_not_a_gap(
     db: AsyncSession, tenant, status_done, type_self
 ):
     emp = await _make_employee(db, tenant)
-    await _make_done_assessment(db, tenant, emp, status_done, type_self, percent=75)
+    await _make_done_assessment(db, tenant, emp, status_done, type_self, percent=76)
 
     payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["gaps"] == {
@@ -1058,3 +1076,348 @@ async def test_coverage_finding_names_the_unassessed(db: AsyncSession, tenant):
     assert finding["count"] == 1
     assert [e["name"] for e in finding["employees"]] == ["Jane Unseen"]
     assert finding["href"] == "/employees?issue=assessment_stale"
+
+
+# ---------------------------------------------------------------------------
+# HRP-724: development dynamics over a period
+# ---------------------------------------------------------------------------
+
+
+async def _role_user(db: AsyncSession, tenant: Tenant, code: str) -> User:
+    """A user holding ``code``, with the roles relationship loaded."""
+    from app.modules.auth.models import Role, user_roles
+    from sqlalchemy.orm import selectinload
+
+    role = (await db.execute(select(Role).where(Role.code == code))).scalars().first()
+    if role is None:
+        role = Role(name=code.title(), code=code, is_system=True)
+        db.add(role)
+        await db.commit()
+        await db.refresh(role)
+    u = User(
+        email=f"dyn-{uuid.uuid4().hex[:8]}@example.com",
+        password_hash=hash_password("pw12345678"),
+        first_name="Dyn",
+        last_name=code.title(),
+        tenant_id=tenant.id,
+        email_verified_at=datetime.now(UTC),
+    )
+    db.add(u)
+    await db.commit()
+    await db.execute(user_roles.insert().values(user_id=u.id, role_id=role.id))
+    await db.commit()
+    db.expunge(u)
+    return (
+        await db.execute(
+            select(User).options(selectinload(User.roles)).where(User.id == u.id)
+        )
+    ).scalar_one()
+
+
+def _headers(u: User) -> dict[str, str]:
+    from app.core.security import create_access_token
+
+    return {
+        "Authorization": f"Bearer {create_access_token(str(u.id), str(u.tenant_id))}"
+    }
+
+
+@pytest.mark.asyncio
+async def test_dynamics_counts_plans_finished_inside_the_window(
+    db: AsyncSession, tenant
+):
+    emp = await _make_employee(db, tenant, last_name="Finisher")
+    now = datetime.now(UTC)
+    db.add(_pdp(tenant, emp, status="done", finished_at=now - timedelta(days=10)))
+    db.add(_pdp(tenant, emp, status="done", finished_at=now - timedelta(days=200)))
+    # Still running: finishing is what the number counts.
+    db.add(_pdp(tenant, emp, status="in_progress"))
+    await db.commit()
+
+    month = await analytics_service.dev_loop(db, tenant.id, None, days=30)
+    year = await analytics_service.dev_loop(db, tenant.id, None, days=365)
+
+    assert month["dynamics"] == {
+        "days": 30,
+        "plans_completed": 1,
+        "competences_improved": 0,
+    }
+    assert year["dynamics"]["plans_completed"] == 2
+
+
+@pytest.mark.asyncio
+async def test_dynamics_defaults_to_a_quarter(db: AsyncSession, tenant):
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
+    assert payload["dynamics"]["days"] == 90
+
+
+@pytest.mark.asyncio
+async def test_dynamics_counts_a_strict_rise_against_the_earlier_result(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    emp = await _make_employee(db, tenant, last_name="Riser")
+    comp = await _make_competence(db, tenant)
+    await _make_done_assessment(
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=40,
+        finished_days_ago=200,
+        competence=comp,
+    )
+    await _make_done_assessment(
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=55,
+        finished_days_ago=5,
+        competence=comp,
+    )
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None, days=90)
+
+    # Still under the bar, so no gap was closed -- but it moved, and moving
+    # is what this block reports.
+    assert payload["dynamics"]["competences_improved"] == 1
+    assert payload["stages"]["closed"]["gaps_closed_90d"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dynamics_ignores_a_score_that_held_or_fell(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    for last_name, later in (("Flat", 40), ("Fallen", 30)):
+        emp = await _make_employee(db, tenant, last_name=last_name)
+        comp = await _make_competence(db, tenant)
+        await _make_done_assessment(
+            db,
+            tenant,
+            emp,
+            status_done,
+            type_self,
+            percent=40,
+            finished_days_ago=200,
+            competence=comp,
+        )
+        await _make_done_assessment(
+            db,
+            tenant,
+            emp,
+            status_done,
+            type_self,
+            percent=later,
+            finished_days_ago=5,
+            competence=comp,
+        )
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None, days=90)
+
+    assert payload["dynamics"]["competences_improved"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dynamics_ignores_a_competence_measured_for_the_first_time(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    """No baseline, no gain -- a first reading is not an improvement."""
+    emp = await _make_employee(db, tenant, last_name="Newcomer")
+    await _make_done_assessment(
+        db, tenant, emp, status_done, type_self, percent=90, finished_days_ago=5
+    )
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None, days=90)
+
+    assert payload["dynamics"]["competences_improved"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dynamics_is_outside_the_ai_summary_fingerprint(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    """Flipping the period must not mint a new cache key for the same state."""
+    emp = await _make_employee(db, tenant, last_name="Steady")
+    await _make_done_assessment(db, tenant, emp, status_done, type_self, percent=60)
+
+    month = await analytics_service.dev_loop(db, tenant.id, None, days=30)
+    quarter = await analytics_service.dev_loop(db, tenant.id, None, days=90)
+
+    assert month["data_version"] == quarter["data_version"]
+
+
+@pytest.mark.asyncio
+async def test_my_loop_dynamics_counts_my_own_plans_and_rises(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    emp = await _make_employee(db, tenant, last_name="Mine")
+    other = await _make_employee(db, tenant, last_name="Theirs")
+    comp = await _make_competence(db, tenant)
+    await _make_done_assessment(
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=50,
+        finished_days_ago=200,
+        competence=comp,
+    )
+    await _make_done_assessment(
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=80,
+        finished_days_ago=5,
+        competence=comp,
+    )
+    now = datetime.now(UTC)
+    db.add(_pdp(tenant, emp, status="done", finished_at=now - timedelta(days=10)))
+    db.add(_pdp(tenant, other, status="done", finished_at=now - timedelta(days=10)))
+    await db.commit()
+
+    payload = await analytics_service.my_loop(db, tenant.id, emp.user_id, days=90)
+
+    assert payload["dynamics"] == {
+        "days": 90,
+        "plans_completed": 1,
+        "competences_improved": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_my_loop_reads_another_employee_when_asked(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    emp = await _make_employee(db, tenant, last_name="Subject")
+    viewer = await _make_employee(db, tenant, last_name="Viewer")
+    await _make_done_assessment(db, tenant, emp, status_done, type_self, percent=60)
+
+    payload = await analytics_service.my_loop(
+        db, tenant.id, viewer.user_id, employee_id=emp.id
+    )
+
+    assert payload["employee_id"] == str(emp.id)
+
+
+@pytest.mark.asyncio
+async def test_my_loop_route_rejects_an_employee_outside_the_read_scope(
+    db: AsyncSession, tenant, client
+):
+    """Own loop always; somebody else's only inside the caller's scope."""
+    admin = await _role_user(db, tenant, "admin")
+    plain = await _role_user(db, tenant, "employee")
+    subject = await _make_employee(db, tenant, last_name="Subject")
+    mine = Employee(
+        user_id=plain.id,
+        tenant_id=tenant.id,
+        hire_date=date(2024, 1, 15),
+        status="active",
+    )
+    db.add(mine)
+    await db.commit()
+    await db.refresh(mine)
+
+    denied = await client.get(
+        f"/api/analytics/my-loop?employee_id={subject.id}", headers=_headers(plain)
+    )
+    assert denied.status_code == 403
+
+    own = await client.get(
+        f"/api/analytics/my-loop?employee_id={mine.id}", headers=_headers(plain)
+    )
+    assert own.status_code == 200
+    assert own.json()["employee_id"] == str(mine.id)
+
+    allowed = await client.get(
+        f"/api/analytics/my-loop?employee_id={subject.id}", headers=_headers(admin)
+    )
+    assert allowed.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_my_loop_manager_reads_only_their_own_subtree(
+    db: AsyncSession, tenant, client
+):
+    """A manager is neither admin nor a stranger: the subtree is the line."""
+    from app.modules.company.models import Division
+
+    manager = await _role_user(db, tenant, "manager")
+    managed = Division(tenant_id=tenant.id, name=f"Managed {uuid.uuid4().hex[:6]}")
+    elsewhere = Division(tenant_id=tenant.id, name=f"Other {uuid.uuid4().hex[:6]}")
+    db.add_all([managed, elsewhere])
+    await db.commit()
+
+    boss = Employee(
+        user_id=manager.id,
+        tenant_id=tenant.id,
+        hire_date=date(2024, 1, 15),
+        status="active",
+        division_id=managed.id,
+    )
+    db.add(boss)
+    await db.commit()
+    await db.refresh(boss)
+    managed.manager_id = boss.id
+    await db.commit()
+
+    mine = await _make_employee(db, tenant, last_name="Mine")
+    theirs = await _make_employee(db, tenant, last_name="Theirs")
+    mine.division_id = managed.id
+    theirs.division_id = elsewhere.id
+    await db.commit()
+
+    inside = await client.get(
+        f"/api/analytics/my-loop?employee_id={mine.id}", headers=_headers(manager)
+    )
+    assert inside.status_code == 200, inside.text[:200]
+    assert inside.json()["employee_id"] == str(mine.id)
+
+    outside = await client.get(
+        f"/api/analytics/my-loop?employee_id={theirs.id}", headers=_headers(manager)
+    )
+    assert outside.status_code == 403, outside.text[:200]
+
+
+@pytest.mark.asyncio
+async def test_loop_routes_accept_every_listed_period(
+    db: AsyncSession, tenant, client
+):
+    """Asked-for periods must actually arrive.
+
+    A query parameter reaches the route as a string, so the first version of
+    this typed the periods as a literal of ints and answered 422 to every
+    ``?days=`` a caller wrote -- while the default, never parsed, worked. The
+    422 half of the contract passed on its own; only asserting the 200 half
+    catches it.
+    """
+    admin = await _role_user(db, tenant, "admin")
+    # my-loop is somebody's own loop: without an employee row it is a 404,
+    # which would hide the very status code this test is about.
+    db.add(
+        Employee(
+            user_id=admin.id,
+            tenant_id=tenant.id,
+            hire_date=date(2024, 1, 15),
+            status="active",
+        )
+    )
+    await db.commit()
+    for days in (30, 90, 365):
+        for route in ("dev-loop", "my-loop"):
+            r = await client.get(
+                f"/api/analytics/{route}?days={days}", headers=_headers(admin)
+            )
+            assert r.status_code == 200, (route, days, r.text[:200])
+            assert r.json()["dynamics"]["days"] == days
+
+
+@pytest.mark.asyncio
+async def test_loop_routes_reject_an_unlisted_period(db: AsyncSession, tenant, client):
+    admin = await _role_user(db, tenant, "admin")
+    for url in ("/api/analytics/dev-loop?days=45", "/api/analytics/my-loop?days=45"):
+        assert (await client.get(url, headers=_headers(admin))).status_code == 422

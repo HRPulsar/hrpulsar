@@ -560,7 +560,8 @@ async def apply_profile_session(
     ``profile_data`` together with the session that produced it. In one
     transaction the profile row is upserted — with the AI provenance
     fields the old inline save used to set (``generated_by="ai"``,
-    ``language`` from the vacancy on create, ``coverage_note`` column) —
+    ``language`` resolved the way the generator resolved it,
+    ``coverage_note`` column) —
     and the session flips to ``applied``, so the Review-for-save banner
     retires atomically with the save and the audit trail can tell an
     applied result from a discarded one.
@@ -608,11 +609,20 @@ async def apply_profile_session(
         )
     ).scalar_one_or_none()
 
+    # HRP-702: the profile was generated in the tenant's AI content
+    # language (HRP-690), so the column has to record the same resolution
+    # the generator used. ``vacancy.language`` alone claimed "en" for a
+    # profile written in Russian, and every consumer of the column
+    # (regeneration, export, report heading) would act on that.
+    # Re-stamped on re-apply too: a regenerated profile is written in
+    # whatever the content language is now, not what it was on create.
+    analysis_language = await resolve_analysis_language(db, tenant_id, vacancy)
     coverage_note = data.profile_data.get("coverage_note")
     if profile:
         profile.profile_data = data.profile_data
         profile.version = profile.version + 1
         profile.generated_by = "ai"
+        profile.language = analysis_language
         if coverage_note:
             profile.coverage_note = coverage_note
     else:
@@ -621,7 +631,7 @@ async def apply_profile_session(
             vacancy_id=vacancy_id,
             profile_data=data.profile_data,
             version=1,
-            language=vacancy.language or "en",
+            language=analysis_language,
             coverage_note=coverage_note,
             generated_by="ai",
         )

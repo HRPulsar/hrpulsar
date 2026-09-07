@@ -93,6 +93,11 @@ TRANSLATABLE_KEYS = frozenset(
         "position",
         "role",
         "skills",
+        # HRP-726 — a resume-only citation chip may quote one skill by
+        # name. It has to resolve through the same catalog entry as the
+        # ``skills`` list it points at, or the chip renders in English
+        # beside a translated resume and the anchor no longer matches.
+        "skill",
         "field",
         # HRP-666 — the candidate's background is display text too: a
         # Russian demo whose top candidate lives in Moscow but lists a
@@ -116,6 +121,8 @@ TRANSLATABLE_KEYS = frozenset(
 # directly (interview titles, notes templates). Kept here so the
 # coverage guard sees them alongside the fixture strings.
 EXTRA_STRINGS: tuple[str, ...] = (
+    # The demo admin's name (``service._create_demo_user``, HRP-713).
+    "Ian Steward",
     "Technical + system design — Elena Volkov",
     "Recruiter screen — Tomás Becker",
     "[Transcript redacted for demo brevity.]",
@@ -277,6 +284,7 @@ def localized_structures() -> list[Any]:
     from app.modules.demo.seed_data_misc import CUSTOM_DICTIONARIES, NOTIFICATIONS
     from app.modules.demo.seed_data_recruitment_extras import (
         EXTRA_CANDIDATES,
+        EXTRA_PARSED_RESUMES,
         EXTRA_VACANCIES,
         INTERVIEW_SHAPES,
     )
@@ -304,6 +312,7 @@ def localized_structures() -> list[Any]:
         NOTIFICATIONS,
         EXTRA_VACANCIES,
         EXTRA_CANDIDATES,
+        EXTRA_PARSED_RESUMES,
         INTERVIEW_SHAPES,
         TALENT_CARDS,
     ]
@@ -316,7 +325,7 @@ def employee_identity_strings() -> set[str]:
     never passes through :func:`localize`; the catalog localizes it via
     :func:`app.modules.demo.seed_data_employees.localized_name_pool`
     instead. Both halves land in the coverage guard so a locale cannot
-    ship a Russian demo staffed by Carlos Mendez.
+    ship a Russian demo staffed by Anna Mendez.
     """
     from app.modules.demo.seed_data_employees import NAME_POOL, email_for
 

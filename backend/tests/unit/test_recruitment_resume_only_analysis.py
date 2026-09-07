@@ -1129,3 +1129,80 @@ class TestReRunArchivesPriorActiveRun:
         ).scalar_one()
         assert archived.archived_at is not None
         assert str(archived.replaced_by_id) == run_id
+
+
+# ---------------------------------------------------------------------------
+# HRP-710 — the readiness mirror a cancel leaves behind
+# ---------------------------------------------------------------------------
+
+
+class TestCancelReadinessMirror:
+    """A cancelled run must leave a readiness the badge can render.
+
+    The rollback used to write ``pending`` when there was no earlier
+    completed run to restore — a value outside ``AiReadiness``, so the
+    AI DATA column had no label for it. It now derives the value from the
+    inputs, exactly as the candidates table does for the same row.
+    """
+
+    async def _cancel_first_run(
+        self, db: AsyncSession, tenant, user, cv_id
+    ) -> CandidateVacancy:
+        run = AIAnalysisRun(
+            tenant_id=tenant.id,
+            candidate_vacancy_id=cv_id,
+            mode="resume_only",
+            status="processing",
+            # Past the first LLM-spending stage on purpose: the cancel then
+            # takes the no-refund branch and never reaches ``ee.credits``,
+            # so this stays a core test.
+            current_stage="competences",
+        )
+        db.add(run)
+        cv = await db.get(CandidateVacancy, cv_id)
+        # What enqueue stamped optimistically and the cancel has to undo.
+        cv.ai_readiness = "resume_only"
+        await db.commit()
+        await db.refresh(run)
+
+        result = await resume_analysis_service.cancel_ai_analysis_run(
+            db, tenant.id, run.id, user.id
+        )
+        assert result["status"] == "cancelled"
+        await db.refresh(cv)
+        assert cv.ai_readiness in {
+            "none",
+            "resume_only",
+            "transcript_only",
+            "resume_and_transcript",
+        }, f"{cv.ai_readiness!r} is not an AiReadiness value"
+        return cv
+
+    async def test_candidate_with_a_parsed_resume_falls_back_to_resume_only(
+        self, db: AsyncSession, tenant, user, cv_pair
+    ):
+        cv = await self._cancel_first_run(db, tenant, user, cv_pair["cv_id"])
+        assert cv.ai_readiness == "resume_only"
+
+    async def test_candidate_without_a_resume_falls_back_to_none(
+        self, db: AsyncSession, tenant, user, vacancy_with_profile
+    ):
+        v, _profile = vacancy_with_profile
+        bare = await service.create_candidate(
+            db,
+            tenant.id,
+            user.id,
+            CandidateCreate(
+                first_name="Noe",
+                last_name="Resume",
+                email=f"bare-{uuid.uuid4().hex[:6]}@x.test",
+            ),
+        )
+        cv = await service.attach_candidate(
+            db,
+            tenant.id,
+            user.id,
+            CandidateVacancyCreate(candidate_id=bare["id"], vacancy_id=v["id"]),
+        )
+        row = await self._cancel_first_run(db, tenant, user, cv["id"])
+        assert row.ai_readiness == "none"

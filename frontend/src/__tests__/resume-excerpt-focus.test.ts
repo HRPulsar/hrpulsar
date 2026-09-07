@@ -5,9 +5,11 @@
 // Pinned here so the AI Insights → parsed-resume editor wiring keeps
 // working: ``extractResumeExcerpts`` must surface the backend-extracted
 // citations only for resume_only runs, and the focus event must reach
-// the right matched item via the dataset selectors the editor exposes
-// (``data-resume-section``, ``data-resume-item-key``,
-// ``data-resume-company``, ``data-resume-period``).
+// the right item. HRP-710: the editor no longer matches in the DOM — it
+// asks ``resumeItemKeyForExcerpt`` for a key and looks the node up by
+// ``data-resume-item-key`` inside ``data-resume-section``. So what needs
+// pinning is that the two agree: every key the matcher returns for this
+// resume is a key the editor renders.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -19,8 +21,34 @@ import {
 import {
   RESUME_EXCERPT_FOCUS_EVENT,
   dispatchResumeExcerptFocus,
+  resumeItemKeyForExcerpt,
   type ResumeExcerptFocusDetail,
 } from "@/lib/resume-excerpt-focus";
+import type { ParsedResumePayload } from "@/lib/recruitment-types";
+
+// The payload ``setupEditorDom`` below is the rendering of — the matcher
+// reads this, the editor renders that, and the keys have to line up.
+const PARSED: ParsedResumePayload = {
+  summary: null,
+  experience: [
+    {
+      position: "Engineer",
+      company: "Globex",
+      start_date: "2018",
+      end_date: "2021",
+      description: null,
+    },
+    {
+      position: "Lead engineer",
+      company: "Acme",
+      start_date: "2022",
+      end_date: "2024",
+      description: "Led a team of five engineers.",
+    },
+  ],
+  education: [],
+  skills: ["TypeScript", "Python"],
+};
 
 function mkRun(overrides: Partial<AiAnalysisRun> = {}): AiAnalysisRun {
   return {
@@ -143,8 +171,8 @@ describe("dispatchResumeExcerptFocus", () => {
   });
 });
 
-describe("parsed-resume editor dataset contract", () => {
-  it("exposes the section + item dataset markers the focus handler relies on", () => {
+describe("parsed-resume editor focus contract", () => {
+  it("renders the section and item markers the focus handler looks up", () => {
     const root = setupEditorDom();
     expect(
       root.querySelector('[data-resume-section="experience"]'),
@@ -154,46 +182,47 @@ describe("parsed-resume editor dataset contract", () => {
         '[data-resume-section="experience"] [data-resume-item-key]',
       ),
     ).toHaveLength(2);
-    const acme = root.querySelector<HTMLElement>(
-      '[data-resume-company="Acme"]',
-    );
-    expect(acme?.dataset.resumePeriod).toBe("2022 — 2024");
   });
 
-  it("matches an experience excerpt to the item with the same company+period", () => {
+  it("scrolls an experience excerpt to the key the matcher returns", () => {
     const root = setupEditorDom();
-    const section = root.querySelector<HTMLElement>(
-      '[data-resume-section="experience"]',
-    );
-    expect(section).not.toBeNull();
-    const items = Array.from(
-      section!.querySelectorAll<HTMLElement>("[data-resume-item-key]"),
-    );
-    const target = items.find(
-      (it) =>
-        it.dataset.resumeCompany === "Acme" &&
-        it.dataset.resumePeriod === "2022 — 2024",
-    );
-    expect(target?.dataset.resumeItemKey).toBe("experience-1");
+    const key = resumeItemKeyForExcerpt(PARSED, mkExcerpt());
+    expect(key).toBe("experience-1");
+    expect(
+      root.querySelector(`[data-resume-item-key="${key}"]`),
+    ).not.toBeNull();
   });
 
-  it("matches a skills excerpt whose text is wider than the chip via reverse-substring", () => {
+  it("places a skills excerpt wider than the chip via reverse-substring", () => {
     // HRP-271 (review): when the AI quote is a multi-skill sentence
-    // ("Strong TypeScript and Python background"), no single chip's
-    // textContent contains the whole quote; the matcher therefore
-    // accepts excerpt.includes(item) as well as item.includes(excerpt).
+    // ("Strong TypeScript and Python background"), no single chip
+    // contains the whole quote; the matcher therefore accepts
+    // excerpt.includes(item) as well as item.includes(excerpt).
     const root = setupEditorDom();
-    const section = root.querySelector<HTMLElement>(
-      '[data-resume-section="skills"]',
+    const key = resumeItemKeyForExcerpt(
+      PARSED,
+      mkExcerpt({
+        section: "skills",
+        excerpt_text: "Strong TypeScript and Python background",
+        source_company: null,
+        source_period: null,
+      }),
     );
-    const items = Array.from(
-      section!.querySelectorAll<HTMLElement>("[data-resume-item-key]"),
+    expect(key).toBe("skill-0");
+    expect(
+      root.querySelector(`[data-resume-item-key="${key}"]`),
+    ).not.toBeNull();
+  });
+
+  it("gives an unplaceable quote no key, so the editor falls back", () => {
+    const key = resumeItemKeyForExcerpt(
+      PARSED,
+      mkExcerpt({
+        excerpt_text: "Ran the Mars lander programme",
+        source_company: "Initech",
+        source_period: null,
+      }),
     );
-    const excerpt = "strong typescript and python background";
-    const target = items.find((it) => {
-      const text = (it.textContent ?? "").toLowerCase();
-      return text.includes(excerpt) || excerpt.includes(text);
-    });
-    expect(target?.dataset.resumeItemKey).toBe("skill-0");
+    expect(key).toBeNull();
   });
 });

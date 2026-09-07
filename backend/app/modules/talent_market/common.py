@@ -40,6 +40,27 @@ def assert_card_not_terminal(card: TalentCard) -> None:
         )
 
 
+async def resolve_manager_user(db: AsyncSession, emp: Employee | None) -> User | None:
+    """The user who manages this employee's division, if there is one.
+
+    Was written out twice — inside the lifecycle dispatch below and again
+    in ``react_to_card`` — and HRP-714 needs it a third time, so it lives
+    here once. Returns None whenever any link in
+    employee → division → manager → user is missing.
+    """
+    if emp is None or emp.division_id is None:
+        return None
+    from app.modules.company.models import Division
+
+    div = await db.get(Division, emp.division_id)
+    if div is None or div.manager_id is None:
+        return None
+    mgr_emp = await db.get(Employee, div.manager_id)
+    if mgr_emp is None or mgr_emp.user_id is None:
+        return None
+    return await db.get(User, mgr_emp.user_id)
+
+
 # ---------------------------------------------------------------------------
 # HRP-211 — lifecycle email dispatch
 # ---------------------------------------------------------------------------
@@ -180,17 +201,7 @@ async def _dispatch_lifecycle_emails(
     async def _resolve_manager_user(
         emp: Employee | None,
     ) -> User | None:
-        if emp is None or emp.division_id is None:
-            return None
-        from app.modules.company.models import Division
-
-        div = await db.get(Division, emp.division_id)
-        if div is None or div.manager_id is None:
-            return None
-        mgr_emp = await db.get(Employee, div.manager_id)
-        if mgr_emp is None or mgr_emp.user_id is None:
-            return None
-        return await db.get(User, mgr_emp.user_id)
+        return await resolve_manager_user(db, emp)
 
     if event in {"published", "candidate_added"}:
         for cand in candidates:
@@ -394,6 +405,45 @@ def _card_to_read(
     }
 
 
+def _blocked_by_codes(
+    *,
+    status: str,
+    has_comp: bool,
+    has_spec: bool,
+    comp_qualifies: bool,
+    exp_qualifies: bool,
+) -> list[str] | None:
+    """HRP-734: which axes keep this candidate off the card.
+
+    The word in the Status column ("matched" / "not_matched") cannot say
+    *why*, and after a re-assessment closes the competence gaps the plain
+    "not matched" reads as stale data when it is in fact correct — the
+    blocker simply moved to experience. These codes let the row say which.
+
+    Empty list: nothing blocks the candidate — appointed rows are terminal
+    and always land here, whatever the axes say. ``None`` means one thing
+    only: the card states no requirements at all, so the matcher qualifies
+    nobody and there is no honest reason to give; the caller falls back to
+    the stored status label for both the wording and its colour.
+
+    Specialization and its minimum years are a single axis in the matcher
+    (``_employee_spec_match``), which is why they share the "experience"
+    code the row already labels that way.
+    """
+    # Ordered before the no-requirements check so ``None`` is not overloaded:
+    # an appointed row reads the same on every card.
+    if status == "appointed":
+        return []
+    if not has_comp and not has_spec:
+        return None
+    codes: list[str] = []
+    if has_comp and not comp_qualifies:
+        codes.append("competences")
+    if has_spec and not exp_qualifies:
+        codes.append("experience")
+    return codes
+
+
 def _card_to_detail(
     c: TalentCard,
     *,
@@ -487,6 +537,13 @@ def _card_to_detail(
                 ),
                 position_title=ca.employee.position_title if ca.employee else None,
                 employee_status=ca.employee.status if ca.employee else None,
+                blocked_by=_blocked_by_codes(
+                    status=ca.status,
+                    has_comp=has_comp,
+                    has_spec=has_spec,
+                    comp_qualifies=bd.get("comp_qualifies", False),
+                    exp_qualifies=bd.get("exp_qualifies", False),
+                ),
             )
         )
 
@@ -550,6 +607,7 @@ def _candidate_to_read(
     is_me: bool = False,
     position_title: str | None = None,
     employee_status: str | None = None,
+    blocked_by: list[str] | None = None,
 ) -> dict:
     """Single shape for every endpoint that returns a TalentCandidate row.
 
@@ -597,4 +655,6 @@ def _candidate_to_read(
         "pdp_id": candidate.pdp_id,
         "response_at": candidate.response_at,
         "appointed_at": candidate.appointed_at,
+        # HRP-734: why this row does not qualify (see _blocked_by_codes).
+        "blocked_by": blocked_by,
     }

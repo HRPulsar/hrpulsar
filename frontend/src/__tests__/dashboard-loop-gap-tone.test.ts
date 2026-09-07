@@ -11,6 +11,7 @@ import { buildMyStages, buildStages } from "@/app/(dashboard)/dashboard/page";
 // there is no open PDP.
 
 const t = (key: string) => key;
+const DYNAMICS = { days: 90, plans_completed: 0, competences_improved: 0 };
 const formatDate = (iso: string) => iso;
 
 function devLoopStages(employees: number, withoutPlan: number) {
@@ -51,6 +52,7 @@ function myLoop(competences: number, hasPlan: boolean) {
     strengths: { top: [], rare_skills: [] },
     growth: null,
     history: [],
+    dynamics: DYNAMICS,
     data_version: "v1",
   };
 }
@@ -59,17 +61,21 @@ function gapTone(stages: ReturnType<typeof buildStages>) {
   return stages.find((s) => s.key === "gaps")?.tone;
 }
 
+function companyStages(employees: number, withoutPlan: number, dynamics = DYNAMICS) {
+  return buildStages(devLoopStages(employees, withoutPlan), dynamics, t);
+}
+
 describe("company loop hero: the gaps tile", () => {
   it("goes red only while some gap has no plan", () => {
-    expect(gapTone(buildStages(devLoopStages(3, 2), t))).toBe("attention");
+    expect(gapTone(companyStages(3, 2))).toBe("attention");
   });
 
   it("stays out of the red once every gap owner has a plan", () => {
-    expect(gapTone(buildStages(devLoopStages(3, 0), t))).not.toBe("attention");
+    expect(gapTone(companyStages(3, 0))).not.toBe("attention");
   });
 
   it("is untinted when there are no gaps at all", () => {
-    expect(gapTone(buildStages(devLoopStages(0, 0), t))).toBeUndefined();
+    expect(gapTone(companyStages(0, 0))).toBeUndefined();
   });
 });
 
@@ -98,6 +104,68 @@ describe("personal loop hero: hints", () => {
       "hintMyStageGaps",
       "hintMyStageDeveloping",
       "hintMyStageClosed",
+      "hintMyStageDynamics",
     ]);
+  });
+});
+
+// HRP-724: the dynamics tile is not a loop stage — it reports what moved in
+// a window the reader picks, so it names its own testid and only lights up
+// when something actually moved.
+
+describe("the dynamics tile", () => {
+  const moved = { days: 30, plans_completed: 2, competences_improved: 5 };
+  // The value carries a unit, so it is built from a plural message rather
+  // than a bare String(): echo the arguments to keep the assertion about
+  // the number and not just the key.
+  const tArgs = (key: string, values?: Record<string, string | number>) =>
+    values ? `${key}:${JSON.stringify(values)}` : key;
+
+  function dynamicsTile(stages: ReturnType<typeof buildStages>) {
+    return stages.find((s) => s.key === "dynamics");
+  }
+
+  it("reports finished plans on both heroes under a stable testid", () => {
+    const company = buildStages(devLoopStages(0, 0), moved, tArgs);
+    expect(dynamicsTile(company)).toMatchObject({
+      value: 'stageDynamicsValue:{"count":2}',
+      testid: "dashboard-loop-dynamics",
+      tone: "positive",
+    });
+    const mine = buildMyStages(
+      { ...myLoop(0, false), dynamics: moved },
+      tArgs,
+      formatDate,
+    );
+    expect(dynamicsTile(mine)).toMatchObject({
+      value: 'stageDynamicsValue:{"count":2}',
+      testid: "dashboard-my-dynamics",
+      tone: "positive",
+    });
+  });
+
+  it("drops the unassessed chip once everyone has been assessed", () => {
+    // HRP-730: the badge is a task ("assess 2"), so at zero there is no task
+    // and no chip — not a chip reading "0".
+    const someLeft = buildStages(devLoopStages(3, 2), DYNAMICS, tArgs);
+    expect(someLeft.find((s) => s.key === "assessed")?.badge).toBe(
+      'stageAssessedNoAssessment:{"count":2}',
+    );
+    const allDone = buildStages(
+      {
+        ...devLoopStages(3, 2),
+        assessed: { covered: 10, total_active: 10, percent: 100 },
+      },
+      DYNAMICS,
+      tArgs,
+    );
+    expect(allDone.find((s) => s.key === "assessed")?.badge).toBeUndefined();
+  });
+
+  it("stays untinted when nothing moved in the window", () => {
+    expect(dynamicsTile(companyStages(3, 2))?.tone).toBeUndefined();
+    expect(
+      dynamicsTile(buildMyStages(myLoop(2, false), t, formatDate))?.tone,
+    ).toBeUndefined();
   });
 });

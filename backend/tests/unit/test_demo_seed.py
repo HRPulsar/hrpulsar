@@ -9,9 +9,10 @@ analysis payload populated (the demo's first-screen promise).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
+from app.config import settings
 from app.models import Person
 from app.modules.assessment.models import (
     PDP,
@@ -21,6 +22,8 @@ from app.modules.assessment.models import (
     AssessmentResult,
     AssessmentStatus,
     AssessmentType,
+    PDPItem,
+    PDPItemMaterial,
 )
 from app.modules.company.models import Division
 from app.modules.competence.models import Competence, Indicator, Material, SkillLevel
@@ -28,6 +31,7 @@ from app.modules.demo.seed import (
     _seed_company_structure,
     _seed_employees,
     _seed_recruitment_extras,
+    _seed_salary,
     clone_seed_into_demo_tenant,
 )
 from app.modules.demo.seed_data import (
@@ -42,10 +46,15 @@ from app.modules.demo.seed_data_competences import (
     INDICATORS,
     MATERIALS,
 )
+from app.modules.demo.seed_data_recruitment_extras import (
+    EXTRA_CANDIDATES,
+    EXTRA_VACANCIES,
+)
 from app.modules.dictionary.models import DictionaryItem
 from app.modules.employee.issues import collect_issue_facts, issue_cohorts
-from app.modules.employee.models import Employee, WorkExperience
+from app.modules.employee.models import Compensation, Employee, WorkExperience
 from app.modules.exam.models import Exam, MassExam
+from app.modules.grade_system.models import GradeSpecialization
 from app.modules.notification.models import Notification
 from app.modules.recruitment.models import (
     Candidate,
@@ -299,6 +308,45 @@ async def test_clone_seed_without_interviews_skips_interview_rows(
         .all()
     )
     assert interviews == []
+
+
+@pytest.mark.asyncio
+async def test_clone_seed_without_interviews_leaves_headline_rows_unanalysed(
+    db: AsyncSession, tenant, user
+):
+    """HRP-726: the toggle governs the ``ai_*`` mirror on the two headline
+    rows too. With no Interview row behind them Elena and Tomás must read
+    as resume-only with no verdict — the extras and the spec-driven
+    funnels already do."""
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(
+        db, tenant.id, owner_user_id=user.id, with_completed_interviews=False
+    )
+    await db.commit()
+
+    rows = (
+        (
+            await db.execute(
+                select(CandidateVacancy)
+                .join(Candidate, Candidate.id == CandidateVacancy.candidate_id)
+                .where(
+                    CandidateVacancy.tenant_id == tenant.id,
+                    Candidate.email.in_(
+                        ["elena.volkov@example.com", "tomas.becker@example.com"]
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 2
+    for cv in rows:
+        assert cv.ai_readiness == "resume_only"
+        # ``ai_verdict`` is NOT NULL; ``pending`` is the row default.
+        assert cv.ai_verdict == "pending"
+        assert cv.ai_score is None
+        assert cv.ai_verdict_summary is None
 
 
 @pytest.mark.asyncio
@@ -835,11 +883,23 @@ async def test_seed_experience_axis_is_measured_not_assumed(
             db, card, [c.employee_id for c in card.candidates]
         )
         for bd in breakdown.values():
+            if bd["exp_months"] is None:
+                # HRP-713: a card may carry candidates from another ladder
+                # on purpose (the DACH vacancy ranks a product manager),
+                # and "no tenure on this card's specialization" is the
+                # honest answer for them — the Experience chip paints it
+                # red. What must never come back is the HRP-210
+                # "current position matches" fallback standing in for a
+                # measured number.
+                assert bd["exp_via_current_position"] is False
+                continue
             # A measured tenure, not the HRP-210 "current position matches"
             # fallback the demo was stuck on.
-            assert bd["exp_months"] is not None, f"{card.title}: no tenure to show"
             assert bd["exp_months"] > 0
             assert bd["exp_via_current_position"] is False
+        assert any(bd["exp_months"] is not None for bd in breakdown.values()), (
+            f"{card.title}: a years floor with nobody measured against it"
+        )
         # Whoever the card keeps as `matched` cleared the floor on tenure.
         for cand in card.candidates:
             if cand.status == "matched":
@@ -958,7 +1018,7 @@ async def test_seed_creates_assessments_across_statuses(
     status_rows = (await db.execute(select(AssessmentStatus))).scalars().all()
     code_by_id = {s.id: s.code for s in status_rows}
     seen_statuses = {code_by_id[a.status_id] for a in assessments}
-    for expected in {"draft", "in_progress", "done", "cancelled"}:
+    for expected in {"draft", "in_progress", "on_review", "done", "cancelled"}:
         assert (
             expected in seen_statuses
         ), f"Assessment status '{expected}' is missing — kanban will look empty"
@@ -1192,11 +1252,11 @@ async def test_seed_in_progress_and_done_assessments_have_answers(
     default_answer_scale,
     notification_templates,
 ):
-    """HRP-314: every in_progress / done cycle must produce at least one
-    AssessmentAnswer per resolvable competence_key. Draft / cancelled
-    cycles intentionally have no answers — asserted via the per-spec
-    answer count, not a blanket "any > 0" so a silent 80% drop in
-    answers still fails the test."""
+    """HRP-314: every in_progress / on_review / done cycle must produce
+    at least one AssessmentAnswer per resolvable competence_key. Draft /
+    cancelled cycles intentionally have no answers — asserted via the
+    per-spec answer count, not a blanket "any > 0" so a silent 80% drop
+    in answers still fails the test."""
     from app.modules.demo.seed_data_assessments import ASSESSMENTS
 
     await _flag_demo(db, tenant)
@@ -1223,7 +1283,7 @@ async def test_seed_in_progress_and_done_assessments_have_answers(
             .scalars()
             .all()
         )
-        if spec["status_code"] in {"in_progress", "done"}:
+        if spec["status_code"] in {"in_progress", "on_review", "done"}:
             assert answers, (
                 f"Assessment {spec['title']!r} ({spec['status_code']}) "
                 "must have AssessmentAnswer rows so the scoring form is "
@@ -1261,6 +1321,80 @@ async def test_seed_uses_origin_skill_levels_only(
     assert tenant_levels == [], (
         "demo seed should not create tenant-scoped SkillLevels (HRP-299); "
         f"got {[lvl.title for lvl in tenant_levels]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_seed_fills_plan_items_with_materials(
+    db: AsyncSession, tenant, user, skill_levels
+):
+    """HRP-713: a seeded development plan opens with something to study.
+
+    The seeder wrote PDPItem rows and stopped, so every in_progress /
+    review plan in the demo showed items with an empty Materials block —
+    while a plan created on stage through the product arrives full. Block
+    3 of the sales script walks somebody else's plan and clicks a
+    material, so the fixtures have to carry them too.
+    """
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    items = (
+        (
+            await db.execute(
+                select(PDPItem)
+                .join(PDP, PDP.id == PDPItem.pdp_id)
+                .where(PDP.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    competence_items = [i for i in items if i.competence_id is not None]
+    assert competence_items, "the demo ships plans built on competences"
+
+    materials_by_item: dict = {}
+    for row in (
+        (
+            await db.execute(
+                select(PDPItemMaterial).where(
+                    PDPItemMaterial.item_id.in_([i.id for i in competence_items])
+                )
+            )
+        )
+        .scalars()
+        .all()
+    ):
+        materials_by_item.setdefault(row.item_id, []).append(row)
+
+    empty = [i.title for i in competence_items if i.id not in materials_by_item]
+    assert not empty, f"plan items seeded without any material: {empty}"
+
+    # No seeded plan runs on the GTM ladder — the sales plan is the one
+    # the presenter builds on stage from Will's card, and it inherits
+    # these Material rows through the product's own filler. So pin the
+    # links where they live: every material behind the three sales
+    # competences has to open on something.
+    sales_titles = {
+        m["title"]
+        for m in MATERIALS
+        if m["competence_key"]
+        in {"c-sales-discovery", "c-product-knowledge", "c-objection-handling"}
+    }
+    sales_materials = [
+        m
+        for m in (
+            await db.execute(select(Material).where(Material.tenant_id == tenant.id))
+        )
+        .scalars()
+        .all()
+        if m.title in sales_titles
+    ]
+    assert len(sales_materials) == 9, "three GTM competences x three levels"
+    unlinked = [m.title for m in sales_materials if not m.link]
+    assert not unlinked, (
+        f"GTM material without a link — the demo opens one on stage: {unlinked}"
     )
 
 
@@ -1397,6 +1531,112 @@ def test_seed_analysis_payloads_match_writer_schemas():
 
 
 @pytest.mark.asyncio
+async def test_seed_parks_a_review_the_presenter_can_approve(
+    db: AsyncSession,
+    tenant,
+    user,
+    assessment_statuses,
+    assessment_types,
+    default_answer_scale,
+):
+    """HRP-713: the demo's climax is one assessment waiting on review.
+
+    The presenter opens it, reads the self/manager divergence and presses
+    Finish. That only works if the seed left exactly the state the
+    product's own ``_maybe_auto_move_to_on_review`` leaves — every
+    participant finished, preliminary results already computed, nothing
+    approved — and if the self column really does sit above the manager
+    column, which is the whole reason the checkpoint exists.
+    """
+    from app.modules.assessment.service import change_status
+    from app.modules.demo.seed_data_assessments import ASSESSMENTS
+
+    spec = next(a for a in ASSESSMENTS if a["status_code"] == "on_review")
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    review = (
+        await db.execute(
+            select(Assessment)
+            .join(AssessmentStatus, AssessmentStatus.id == Assessment.status_id)
+            .where(
+                Assessment.tenant_id == tenant.id,
+                AssessmentStatus.code == "on_review",
+            )
+        )
+    ).scalar_one()
+    assert review.finished_at is None, "nothing is approved yet"
+
+    participants = (
+        await db.execute(
+            select(AssessmentParticipant).where(
+                AssessmentParticipant.assessment_id == review.id
+            )
+        )
+    ).scalars().all()
+    assert {p.role for p in participants} == {"self", "manager"}
+    assert all(p.is_completed for p in participants), (
+        "on_review means everybody answered — an unfinished participant "
+        "would have left the cycle in in_progress"
+    )
+
+    results = (
+        await db.execute(
+            select(AssessmentResult).where(
+                AssessmentResult.assessment_id == review.id
+            )
+        )
+    ).scalars().all()
+    assert len(results) == len(spec["competence_keys"]), (
+        "the auto-transition computes preliminary results for every "
+        "competence — without them the On Review page is blank"
+    )
+
+    # ``self_bias``: the assessee rates themselves above their manager on
+    # every single indicator, so the comparison view has a divergence to
+    # show rather than two identical columns.
+    role_by_participant = {p.id: p.role for p in participants}
+    answers = (
+        await db.execute(
+            select(AssessmentAnswer).where(
+                AssessmentAnswer.assessment_id == review.id
+            )
+        )
+    ).scalars().all()
+    by_indicator: dict = {}
+    for ans in answers:
+        by_indicator.setdefault(ans.indicator_id, {})[
+            role_by_participant[ans.participant_id]
+        ] = ans.score
+    assert by_indicator
+    flat = [
+        (ind, scores)
+        for ind, scores in by_indicator.items()
+        if not scores["self"] > scores["manager"]
+    ]
+    assert not flat, f"self must outscore manager on every indicator: {flat}"
+
+    # Approving it changes the numbers on screen by nothing at all.
+    before = {r.competence_id: (r.percent, r.avg_score) for r in results}
+    await change_status(db, tenant.id, review.id, "done")
+    after = {
+        r.competence_id: (r.percent, r.avg_score)
+        for r in (
+            await db.execute(
+                select(AssessmentResult).where(
+                    AssessmentResult.assessment_id == review.id
+                )
+            )
+        ).scalars().all()
+    }
+    assert after == before, (
+        "pressing Finish rewrote the results the reviewer had just read"
+    )
+
+
+@pytest.mark.asyncio
 async def test_seeded_results_survive_a_recompute(
     db: AsyncSession,
     tenant,
@@ -1416,20 +1656,24 @@ async def test_seeded_results_survive_a_recompute(
     await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
     await db.commit()
 
-    done = (
+    scored = (
         await db.execute(
             select(Assessment)
             .join(AssessmentStatus, AssessmentStatus.id == Assessment.status_id)
             .where(
                 Assessment.tenant_id == tenant.id,
-                AssessmentStatus.code == "done",
+                # HRP-713: on_review carries preliminary results too, and it
+                # is the one assessment the presenter finishes on stage — a
+                # guard that skipped it would miss the only drift that shows
+                # up live.
+                AssessmentStatus.code.in_(["done", "on_review"]),
             )
         )
     ).scalars().all()
-    assert done
+    assert scored
 
     before: dict = {}
-    for a in done:
+    for a in scored:
         rows = (
             await db.execute(
                 select(AssessmentResult).where(
@@ -1438,14 +1682,14 @@ async def test_seeded_results_survive_a_recompute(
             )
         ).scalars().all()
         for r in rows:
-            before[(a.id, r.competence_id)] = r.percent
+            before[(a.id, r.competence_id)] = (r.percent, r.avg_score)
 
-    for a in done:
+    for a in scored:
         await _recompute_assessment_results(db, a)
     await db.commit()
 
     drifted = {}
-    for a in done:
+    for a in scored:
         rows = (
             await db.execute(
                 select(AssessmentResult).where(
@@ -1454,12 +1698,16 @@ async def test_seeded_results_survive_a_recompute(
             )
         ).scalars().all()
         for r in rows:
-            if before[(a.id, r.competence_id)] != r.percent:
+            # HRP-713: avg_score travels with percent. The seed stored the
+            # 0..4 scale mean while the engine stores the 0..1 ratio, so
+            # the Avg Score column jumped the first time anybody pressed
+            # Finish on a seeded assessment — live, mid-demo.
+            if before[(a.id, r.competence_id)] != (r.percent, r.avg_score):
                 drifted[(str(a.title), str(r.competence_id))] = (
                     before[(a.id, r.competence_id)],
-                    r.percent,
+                    (r.percent, r.avg_score),
                 )
-    assert not drifted, f"recompute changed seeded percents: {drifted}"
+    assert not drifted, f"recompute changed seeded results: {drifted}"
 
 
 async def test_seeded_tenant_tells_the_dev_loop_story(
@@ -1475,6 +1723,7 @@ async def test_seeded_tenant_tells_the_dev_loop_story(
     overdue plan and a stalled review — so a fresh demo session opens
     on real problems with real actions, not flat stats."""
     from app.modules.analytics.service import dev_loop
+    from app.modules.auth.models import User as AuthUser
 
     await _flag_demo(db, tenant)
     await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
@@ -1484,8 +1733,11 @@ async def test_seeded_tenant_tells_the_dev_loop_story(
     findings = {f["code"]: f for f in payload["findings"]}
 
     # Storyline A: sales team below the bar with no development plan.
+    # Floor is the GTM trio (Victor, Noah, Will) — HRP-737 moved Anna out
+    # of this cohort by giving her an open Q4 plan for the gap her closed
+    # Q3 plan did not cover.
     assert "gaps_without_plan" in findings
-    assert findings["gaps_without_plan"]["count"] >= 4
+    assert findings["gaps_without_plan"]["count"] >= 3
     # Storyline B: an overdue plan and a plan stuck in review/returned.
     assert findings["pdp_overdue"]["count"] >= 1
     assert findings["pdp_stuck_review"]["count"] >= 1
@@ -1494,30 +1746,63 @@ async def test_seeded_tenant_tells_the_dev_loop_story(
     assert 0 < payload["stages"]["assessed"]["percent"] < 100
     # Ivan Petrov: gap that HAS a plan — the plan is just going nowhere.
     assert payload["stages"]["developing"]["gap_employees_with_plan"] >= 1
-    # Storyline C: Bella Martins closed her Python gap in a re-assessment.
-    assert payload["stages"]["closed"]["gaps_closed_90d"] >= 1
-    # Carlos's Q3 plan finished before its deadline — the sub-line is alive.
-    assert payload["stages"]["closed"]["plans_done_on_time_90d"] >= 1
-
-    # The demo employee persona (Carlos Mendez, HRP-612 wave 2) opens a
-    # live personal dashboard: strengths, a gap without a plan, and a
-    # growth direction up the seeded backend ladder.
-    from app.modules.analytics.service import my_loop
-    from app.modules.auth.models import User as AuthUser
-
-    carlos = (
+    # HRP-737: Anna's closed Q3 plan left one competence under the bar, so
+    # she carries an OPEN Q4 plan for it — the demo shows the loop repeating
+    # instead of queueing her as unattended work. Assert the cohort itself,
+    # not the finding's employee list: that list is capped for display, so a
+    # truncated one would hide her absence rather than prove it.
+    anna = (
         await db.execute(
-            select(AuthUser).where(
-                AuthUser.tenant_id == tenant.id,
-                AuthUser.email == "carlos.mendez@demo.example.com",
+            select(Employee)
+            .join(AuthUser, Employee.user_id == AuthUser.id)
+            .where(
+                Employee.tenant_id == tenant.id,
+                AuthUser.email == "anna.rising@demo.example.com",
             )
         )
     ).scalar_one()
-    personal = await my_loop(db, tenant.id, carlos.id)
-    assert personal["strengths"]["top"]
-    assert any(f["code"] == "gap_without_plan" for f in personal["findings"])
+    anna_cohorts = issue_cohorts(await collect_issue_facts(db, tenant.id))
+    assert anna.id in anna_cohorts["competence_gap"], (
+        "Anna's remaining gap is the premise — without it the Q4 plan is noise"
+    )
+    assert anna.id not in anna_cohorts["gaps_without_plan"], (
+        "Anna's open Q4 plan must keep her out of the dashboard action queue"
+    )
+    assert payload["stages"]["developing"]["gap_employees_with_plan"] >= 3
+    # Storyline C: Bella Martins closed her Python gap in a re-assessment.
+    assert payload["stages"]["closed"]["gaps_closed_90d"] >= 1
+    # Anna's Q3 plan finished before its deadline — the sub-line is alive.
+    assert payload["stages"]["closed"]["plans_done_on_time_90d"] >= 1
+
+    # The demo employee persona (Will Gapp, HRP-713) opens a live
+    # personal dashboard: the two findings the sales script names, three
+    # named gaps and a growth direction one rung up the sales ladder.
+    from app.modules.analytics.service import my_loop
+
+    persona = (
+        await db.execute(
+            select(AuthUser).where(
+                AuthUser.tenant_id == tenant.id,
+                AuthUser.email == "will.gapp@demo.example.com",
+            )
+        )
+    ).scalar_one()
+    personal = await my_loop(db, tenant.id, persona.id)
+    codes = {f["code"] for f in personal["findings"]}
+    # Both chips at once is the whole point of the 200-day-old review.
+    assert {"gap_without_plan", "assessment_stale"} <= codes
+    assert personal["stages"]["gaps"]["competences"] == 3
+    assert personal["stages"]["developing"]["pdp"] is None, (
+        "the presenter creates this plan live — a seeded one steals the beat"
+    )
+    # ``my_loop`` only calls a competence a strength when it clears the
+    # passing bar, and every one of hers is a gap by construction — so the
+    # strengths block is empty until the re-assessment is approved on
+    # stage. Pin what the presenter actually sees, not what reads better.
+    assert personal["strengths"]["top"] == []
     assert personal["growth"] is not None
-    assert personal["growth"]["next_grade"] is not None
+    assert personal["growth"]["next_grade"]["title"] == "Middle"
+    assert len(personal["growth"]["missing"]) == 3
 
 
 @pytest.mark.asyncio
@@ -1603,14 +1888,18 @@ async def test_seeded_analysis_runs_back_the_candidate_card(
         .scalars()
         .all()
     )
-    assert len(runs) == 3
+    # HRP-726: one run per seeded candidate — the list columns are a
+    # summary of the card, so a row with a verdict must have a run.
+    assert len(runs) == len(candidates()) + len(EXTRA_CANDIDATES)
     for run in runs:
         assert run.status == "completed"
         assert run.verdict_summary
-        # HRP-680: the interview-backed runs stayed ``full``; the third
-        # is the resume-only one and has no interview by construction.
+        # HRP-680: the interview-backed runs are ``full``; a resume-only
+        # run has no interview by construction.
         assert (run.interview_id is not None) is (run.mode == "full")
-    assert sorted(r.mode for r in runs) == ["full", "full", "resume_only"]
+    modes = sorted(r.mode for r in runs)
+    assert modes.count("full") == 7, "two headline + one hero per supporting funnel"
+    assert set(modes) == {"full", "resume_only"}
 
 
 @pytest.mark.asyncio
@@ -1628,19 +1917,27 @@ async def test_seeded_resume_citations_open_the_resume(
     await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
     await db.commit()
 
-    run = (
-        await db.execute(
-            select(AIAnalysisRun).where(
-                AIAnalysisRun.tenant_id == tenant.id,
-                AIAnalysisRun.mode == "resume_only",
-            )
-        )
-    ).scalar_one()
     candidate = (
         await db.execute(
             select(Candidate).where(
                 Candidate.tenant_id == tenant.id,
                 Candidate.email == "priya.shah@example.com",
+            )
+        )
+    ).scalar_one()
+    # HRP-726: every supporting funnel has resume-only runs now, so pin
+    # the one this test is about instead of assuming it is the only one.
+    run = (
+        await db.execute(
+            select(AIAnalysisRun)
+            .join(
+                CandidateVacancy,
+                CandidateVacancy.id == AIAnalysisRun.candidate_vacancy_id,
+            )
+            .where(
+                AIAnalysisRun.tenant_id == tenant.id,
+                AIAnalysisRun.mode == "resume_only",
+                CandidateVacancy.candidate_id == candidate.id,
             )
         )
     ).scalar_one()
@@ -1662,3 +1959,197 @@ async def test_seeded_resume_citations_open_the_resume(
     for excerpt in read.resume_excerpts:
         if excerpt.section == "experience":
             assert excerpt.source_company in companies
+
+
+@pytest.mark.asyncio
+async def test_seeded_money_is_all_in_the_installation_currency(
+    db: AsyncSession, tenant, user, monkeypatch
+):
+    """HRP-708: one currency across the whole demo tenant.
+
+    The seed used to pick its currency off the interface locale, so a
+    USD flagship got EUR vacancies and EUR grade cells sitting next to
+    the USD compensations the column default writes — two currencies in
+    one demo workspace.
+    """
+    monkeypatch.setattr(settings, "billing_currency", "USD")
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    cells = (
+        (
+            await db.execute(
+                select(GradeSpecialization).where(
+                    GradeSpecialization.tenant_id == tenant.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    vacancies = (
+        (await db.execute(select(Vacancy).where(Vacancy.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
+    assert cells and vacancies
+    assert {cell.salary_currency for cell in cells} == {"USD"}
+    assert {vacancy.salary_currency for vacancy in vacancies} == {"USD"}
+
+    # The money the seed writes has to agree with the money the app
+    # writes afterwards: Compensation.currency defaults through the same
+    # installation_currency() the seed now reads.
+    employee = (
+        (await db.execute(select(Employee).where(Employee.tenant_id == tenant.id)))
+        .scalars()
+        .first()
+    )
+    assert employee is not None
+    compensation = Compensation(
+        tenant_id=tenant.id,
+        employee_id=employee.id,
+        type="salary",
+        amount=9_000_000,
+        effective_date=date(2026, 1, 1),
+    )
+    db.add(compensation)
+    await db.flush()
+    assert compensation.currency == "USD"
+    assert {cell.salary_currency for cell in cells} == {compensation.currency}
+
+
+@pytest.mark.parametrize("locale", ["en", "de", "ru"])
+def test_rouble_site_quotes_monthly_bands_whatever_the_locale(monkeypatch, locale):
+    """HRP-708: the rouble conversion follows the site's currency, so the
+    interface language no longer moves the salary figures either way."""
+    monkeypatch.setattr(settings, "billing_currency", "RUB")
+    monkeypatch.setattr(settings, "default_locale", locale)
+    assert _seed_salary(90_000) == 360_000
+    assert _seed_salary(None) is None
+
+    monkeypatch.setattr(settings, "billing_currency", "EUR")
+    assert _seed_salary(90_000) == 90_000
+
+
+@pytest.mark.asyncio
+async def test_every_seeded_vacancy_row_has_the_card_behind_it(
+    db: AsyncSession, tenant, user
+):
+    """HRP-726: the candidates table is a summary, not an independent claim.
+
+    The bug this pins: six of the seven demo vacancies printed an AI
+    score, a verdict and a manager score straight out of the
+    ``candidate_vacancies.ai_*`` mirror columns while nothing stood
+    behind them — clicking the row opened a blank card. So for every
+    vacancy the seed lays down, every row the vacancy table renders must
+    be backed by the record the card reads: a verdict by an
+    ``AIAnalysisRun``, a manager score by an ``AssessmentRound``, and
+    every candidate by a parsed resume the card can render.
+    """
+    from app.modules.demo.seed_i18n import translate
+    from app.modules.recruitment.candidate_service import (
+        get_candidate_full_card,
+        list_vacancy_candidates_enriched,
+    )
+    from app.modules.recruitment.manager_assessment_models import AssessmentRound
+    from app.modules.recruitment.models import AIAnalysisRun
+    from app.modules.recruitment.schemas import CandidateCanonicalCardRead
+
+    # The one vacancy the seeded position ladder cannot name (see below).
+    CS_VACANCY_TITLE = translate("Customer Success Lead — Enterprise")
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    vacancies = (
+        (await db.execute(select(Vacancy).where(Vacancy.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
+    assert len(vacancies) == len(VACANCIES) + len(EXTRA_VACANCIES)
+
+    runs = {
+        r.candidate_vacancy_id
+        for r in (
+            await db.execute(
+                select(AIAnalysisRun).where(AIAnalysisRun.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    }
+    rounds = {
+        r.candidate_vacancy_id
+        for r in (
+            await db.execute(
+                select(AssessmentRound).where(AssessmentRound.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    }
+
+    unscored_funnels = 0
+    for vacancy in vacancies:
+        rows, total = await list_vacancy_candidates_enriched(db, tenant.id, vacancy.id)
+        assert rows, f"{vacancy.title} has no candidates"
+        assert total == len(rows)
+        # Every vacancy names a position now — the Position column read
+        # ``---`` on all seven before this ticket. The one exception is
+        # Customer Success Lead: the seeded ladder carries no Customer
+        # Success position, and naming the nearest commercial one made
+        # the list print "Account Executive" for a CS role.
+        if vacancy.title != CS_VACANCY_TITLE:
+            assert vacancy.position_id is not None, vacancy.title
+
+        unscored = 0
+        cv_by_id = {
+            cv.id: cv
+            for cv in (
+                await db.execute(
+                    select(CandidateVacancy).where(
+                        CandidateVacancy.vacancy_id == vacancy.id,
+                        CandidateVacancy.tenant_id == tenant.id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        }
+        for row in rows:
+            where = f"{vacancy.title} / {row['candidate_name']}"
+            # HRP-726: the stored mirror has to equal what the product
+            # derives on read, or the list shows one value and the card
+            # another depending on which screen you opened.
+            assert row["ai_readiness"] == cv_by_id[row["id"]].ai_readiness, where
+            if row["ai_verdict"] and row["ai_verdict"] != "pending":
+                assert row["id"] in runs, f"verdict without an analysis run: {where}"
+            if row["manager_score"] is not None:
+                assert row["id"] in rounds, f"score without a round: {where}"
+            else:
+                unscored += 1
+
+            candidate = await db.get(Candidate, row["candidate_id"])
+            assert candidate is not None
+            parsed = candidate.parsed_resume_jsonb
+            assert parsed, f"empty resume: {where}"
+            # The card renders these three; a card of empty sections is
+            # the screenshot on the ticket.
+            assert parsed.get("summary"), where
+            assert parsed.get("experience"), where
+            assert parsed.get("skills"), where
+
+            card = await get_candidate_full_card(db, tenant.id, row["candidate_id"])
+            card.pop("etag", None)
+            assert CandidateCanonicalCardRead.model_validate(card)
+        if unscored:
+            unscored_funnels += 1
+        # A funnel where the manager has scored nobody teaches the
+        # visitor nothing about the manager-vs-AI comparison.
+        assert unscored < len(rows), f"{vacancy.title}: nobody is scored"
+
+    # HRP-726: "Not scored yet" is a real state and the demo should show
+    # it — but only on funnels big enough to spare a row.
+    assert unscored_funnels >= 4

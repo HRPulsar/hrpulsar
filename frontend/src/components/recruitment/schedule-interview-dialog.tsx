@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Check, Loader2, X } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { InterviewerPicker } from "@/components/recruitment/interviewer-picker";
 import { api } from "@/lib/api";
 import {
   joinLocalDateTime,
@@ -81,9 +81,8 @@ export function ScheduleInterviewDialog({
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
   const isEdit = Boolean(interview);
-  // HRP-418: the title of an interview that already carries a recording is
-  // the file identity — renaming it would desync the card from the asset.
-  const titleLocked = isEdit && interview?.status === "uploaded";
+  // HRP-418 REDO: Title stays editable in every state — the acceptance
+  // criteria that locked it on ``uploaded`` meant Type, not Title.
   const typeLocked = Boolean(
     interview?.audio_file_id ||
       interview?.video_file_id ||
@@ -206,17 +205,14 @@ export function ScheduleInterviewDialog({
     };
   }, [open]);
 
-  const toggleInterviewer = useCallback((id: string) => {
-    setInterviewers((prev) =>
-      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id],
-    );
-  }, []);
+  // HRP-386 REDO: Title is mandatory — no default value, no hint.
+  const titleValue = title.trim();
 
   async function submit() {
-    if (!cvId) return;
+    if (!cvId || !titleValue) return;
     setBusy(true);
     const payload = {
-      title: title.trim().slice(0, TITLE_MAX) || null,
+      title: titleValue.slice(0, TITLE_MAX),
       round_id: roundId === NO_ROUND ? null : roundId,
       interview_date: joinLocalDateTime(date, time),
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -229,7 +225,7 @@ export function ScheduleInterviewDialog({
       if (interview) {
         await api.put<Interview>(
           `/recruitment/interviews/${interview.id}`,
-          titleLocked ? { ...payload, title: interview.title ?? null } : payload,
+          payload,
         );
         toast.success(t("candidateInterviewsUpdated"));
       } else {
@@ -258,12 +254,13 @@ export function ScheduleInterviewDialog({
     undecided: t("candidateInterviewsTypeUndecided"),
   };
 
-  const selectedPeople = people.filter((p) => interviewers.includes(p.id));
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[90vh] max-w-lg overflow-y-auto"
+        // HRP-386 REDO: the base popup caps at ``sm:max-w-sm``, so an
+        // unprefixed ``max-w-lg`` never applied and the form rendered in a
+        // 384px column. The fields need the full modal width.
+        className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
         data-testid="recruitment-candidate-interviews-schedule-dialog"
       >
         <DialogHeader>
@@ -338,21 +335,17 @@ export function ScheduleInterviewDialog({
           </div>
 
           <div className="space-y-1">
-            <Label htmlFor="iv-title">{t("columnTitle")}</Label>
+            <Label htmlFor="iv-title">
+              {t("columnTitle")} <span className="text-destructive">*</span>
+            </Label>
             <Input
               id="iv-title"
               value={title}
               maxLength={TITLE_MAX}
-              disabled={titleLocked}
+              required
               onChange={(e) => setTitle(e.target.value)}
-              placeholder={t("candidateInterviewsTitlePlaceholder")}
               data-testid="recruitment-candidate-interviews-schedule-title"
             />
-            <p className="text-xs text-muted-foreground">
-              {titleLocked
-                ? t("candidateInterviewsTitleLocked")
-                : t("candidateInterviewsTitleHint", { max: TITLE_MAX })}
-            </p>
           </div>
 
           <div className="grid grid-cols-3 gap-3">
@@ -397,62 +390,12 @@ export function ScheduleInterviewDialog({
 
           <div className="space-y-1">
             <Label>{t("candidateInterviewsFieldInterviewers")}</Label>
-            <div
-              className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2"
-              data-testid="recruitment-candidate-interviews-schedule-interviewers"
-            >
-              {people.length === 0 ? (
-                <p className="px-1 py-0.5 text-xs text-muted-foreground">
-                  {t("candidateInterviewsNoInterviewers")}
-                </p>
-              ) : (
-                people.map((p) => {
-                  const picked = interviewers.includes(p.id);
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => toggleInterviewer(p.id)}
-                      aria-pressed={picked}
-                      className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-muted ${
-                        picked ? "bg-muted" : ""
-                      }`}
-                      data-testid={`recruitment-candidate-interviews-schedule-interviewer-${p.id}`}
-                    >
-                      <span className="min-w-0 truncate">
-                        {p.full_name}
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          {p.email}
-                        </span>
-                      </span>
-                      {picked && <Check className="size-4 shrink-0" />}
-                    </button>
-                  );
-                })
-              )}
-            </div>
-            {selectedPeople.length > 0 && (
-              <div className="flex flex-wrap gap-1 pt-1">
-                {selectedPeople.map((p) => (
-                  <Badge
-                    key={p.id}
-                    variant="secondary"
-                    className="gap-1 text-xs"
-                  >
-                    {p.full_name}
-                    <button
-                      type="button"
-                      aria-label={t("candidateInterviewsRemoveInterviewer", {
-                        name: p.full_name,
-                      })}
-                      onClick={() => toggleInterviewer(p.id)}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </Badge>
-                ))}
-              </div>
-            )}
+            <InterviewerPicker
+              people={people}
+              value={interviewers}
+              onChange={setInterviewers}
+              testId="recruitment-candidate-interviews-schedule-interviewers"
+            />
           </div>
 
           <div className="space-y-1">
@@ -501,7 +444,7 @@ export function ScheduleInterviewDialog({
           </Button>
           <Button
             onClick={submit}
-            disabled={busy || !cvId}
+            disabled={busy || !cvId || !titleValue}
             data-testid="recruitment-candidate-interviews-schedule-save"
           >
             {busy && <Loader2 className="size-4 animate-spin" />}

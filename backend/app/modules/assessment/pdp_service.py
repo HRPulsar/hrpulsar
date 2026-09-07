@@ -11,6 +11,7 @@ from app.core.errors import AppError
 from app.core.s3 import get_presigned_url
 from app.modules.assessment.models import (
     PDP,
+    Assessment,
     PDPComment,
     PDPItem,
     PDPItemMaterial,
@@ -405,22 +406,21 @@ async def _attach_default_materials(
     target level for this competence), only materials at or below that level
     are seeded — the employee gets the target level plus every preceding
     one, never material from levels above their target.
+
+    HRP-706: the cap reads ``Material.skill_level``, which is a selectin
+    relationship -- the level rows already travelled with the materials,
+    so re-selecting them here was a second query per item for data the
+    session was holding. ``skill_level_id`` is a NOT NULL FK, so there is
+    no missing-level case to fall back on.
     """
     materials = await get_materials_for_specialization(
         db, tenant_id, competence_id, specialization_id
     )
     if up_to_skill_level_sort_index is not None and materials:
-        level_ids = {m.skill_level_id for m in materials}
-        levels_q = await db.execute(
-            select(SkillLevel).where(SkillLevel.id.in_(level_ids))
-        )
-        level_sort_by_id: dict[uuid.UUID, int] = {
-            level.id: level.sort_index for level in levels_q.scalars().all()
-        }
         materials = [
             m
             for m in materials
-            if level_sort_by_id.get(m.skill_level_id, 0) <= up_to_skill_level_sort_index
+            if m.skill_level.sort_index <= up_to_skill_level_sort_index
         ]
     for sort_index, mat in enumerate(materials):
         db.add(
@@ -556,16 +556,22 @@ async def _generate_items_from_competences(
         ).all()
         level_sort = {row[0]: row[1] for row in level_rows}
 
-    for idx, entry in enumerate(competences):
-        item = PDPItem(
+    # HRP-706: add every item, then flush once for all their ids, instead
+    # of a round trip per competence.
+    items = [
+        PDPItem(
             pdp_id=pdp_id,
             competence_id=entry.competence_id,
             title=titles.get(entry.competence_id) or "Competence",
             sort_index=idx,
             entity_type="competence",
         )
-        db.add(item)
-        await db.flush()
+        for idx, entry in enumerate(competences)
+    ]
+    db.add_all(items)
+    await db.flush()
+
+    for item, entry in zip(items, competences, strict=True):
         await _attach_default_materials(
             db,
             tenant_id,
@@ -626,6 +632,20 @@ async def create_pdp(
             active_count=active_count,
             limit=MAX_ACTIVE_PDPS_PER_EMPLOYEE,
         )
+
+    # HRP-731 review: the router checks the employee scope but never the
+    # assessment, so an unvalidated assessment_id would pin a foreign
+    # tenant's assessment onto this plan (and read its title back through
+    # the "Based on assessment" link). Same guard the competence list gets
+    # in _generate_items_from_competences.
+    if data.assessment_id is not None:
+        source = await db.get(Assessment, data.assessment_id)
+        if (
+            source is None
+            or source.tenant_id != tenant_id
+            or source.employee_id != data.employee_id
+        ):
+            raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
 
     p = PDP(
         tenant_id=tenant_id,

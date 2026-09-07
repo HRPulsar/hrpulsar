@@ -9,6 +9,7 @@ import type { Vacancy, VacancyList } from "@/lib/types";
 import { formatDate } from "@/lib/date-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LoadErrorState } from "@/components/load-error-state";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -49,6 +50,7 @@ export default function VacancyListPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
 
@@ -72,8 +74,9 @@ export default function VacancyListPage() {
       const data = await api.get<VacancyList>(`/recruitment/vacancies?${params}`);
       setVacancies(data.items);
       setTotal(data.total);
+      setLoadError(false);
     } catch {
-      // ignore
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -196,7 +199,15 @@ export default function VacancyListPage() {
         )}
       </div>
 
-      {filtered.length === 0 ? (
+      {loadError ? (
+        <LoadErrorState
+          testIdPrefix="recruitment-vacancy"
+          onRetry={() => {
+            setLoading(true);
+            void loadVacancies();
+          }}
+        />
+      ) : filtered.length === 0 ? (
         <div
           data-testid="recruitment-vacancy-empty"
           className="rounded-lg border border-dashed p-12 text-center text-muted-foreground"

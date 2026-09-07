@@ -54,6 +54,13 @@ EVENT_TEMPLATE: dict[str, str] = {
     "recruitment.candidate.attached": "recruitment.candidate_attached",
     "recruitment.candidate.stage_changed": "recruitment.candidate_stage_changed",
     "recruitment.interview.scheduled": "recruitment.interview_scheduled",
+    # HRP-699: the rest of the scheduling lifecycle — the time moved, an
+    # attendee was dropped, or the interview was archived altogether.
+    "recruitment.interview.rescheduled": "recruitment.interview_rescheduled",
+    "recruitment.interview.interviewer_removed": (
+        "recruitment.interview_interviewer_removed"
+    ),
+    "recruitment.interview.cancelled": "recruitment.interview_cancelled",
     "recruitment.interview.transcript_ready": "recruitment.interview_transcript_ready",
     "recruitment.interview.analysis_ready": "recruitment.interview_analysis_ready",
     # HRP-494: AI Insights analyses report under their own codes so the
@@ -442,6 +449,26 @@ async def _resolve_interview_scheduled(
     return await _async_resolve_users_by_ids(db, tenant_id, ids)
 
 
+async def _resolve_interview_attendees(
+    db: AsyncSession, tenant_id: uuid.UUID, data: dict[str, Any]
+) -> list[User]:
+    """HRP-699: exactly the ids the service put in the payload.
+
+    The service already decided who the change affects (added / kept /
+    removed / all), so this resolver must not widen the audience — and,
+    unlike :func:`_resolve_interview_scheduled`, must not drop a past
+    interview either: a cancellation is worth sending late.
+    """
+
+    raw_ids = data.get("interviewer_ids")
+    ids = _dedupe(
+        [_coerce_uuid(v) for v in raw_ids] if isinstance(raw_ids, list) else []
+    )
+    if not ids:
+        return []
+    return await _async_resolve_users_by_ids(db, tenant_id, ids)
+
+
 async def _resolve_report_user(
     db: AsyncSession, tenant_id: uuid.UUID, data: dict[str, Any]
 ) -> list[User]:
@@ -529,6 +556,30 @@ async def on_interview_scheduled(data: dict[str, Any]) -> None:
     )
 
 
+async def on_interview_rescheduled(data: dict[str, Any]) -> None:
+    await _async_handle(
+        "recruitment.interview.rescheduled",
+        data,
+        resolve_recipients=_resolve_interview_attendees,
+    )
+
+
+async def on_interview_interviewer_removed(data: dict[str, Any]) -> None:
+    await _async_handle(
+        "recruitment.interview.interviewer_removed",
+        data,
+        resolve_recipients=_resolve_interview_attendees,
+    )
+
+
+async def on_interview_cancelled(data: dict[str, Any]) -> None:
+    await _async_handle(
+        "recruitment.interview.cancelled",
+        data,
+        resolve_recipients=_resolve_interview_attendees,
+    )
+
+
 async def on_interview_transcript_ready(data: dict[str, Any]) -> None:
     await _async_handle(
         "recruitment.interview.transcript_ready",
@@ -605,6 +656,9 @@ HANDLERS: dict[str, Any] = {
     "recruitment.candidate.attached": on_candidate_attached,
     "recruitment.candidate.stage_changed": on_candidate_stage_changed,
     "recruitment.interview.scheduled": on_interview_scheduled,
+    "recruitment.interview.rescheduled": on_interview_rescheduled,
+    "recruitment.interview.interviewer_removed": on_interview_interviewer_removed,
+    "recruitment.interview.cancelled": on_interview_cancelled,
     "recruitment.interview.transcript_ready": on_interview_transcript_ready,
     "recruitment.interview.analysis_ready": on_interview_analysis_ready,
     "recruitment.report.generated": on_report_generated,

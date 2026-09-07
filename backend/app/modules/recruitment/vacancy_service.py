@@ -30,6 +30,7 @@ from app.modules.recruitment.common import (
 )
 from app.modules.recruitment.models import (
     AssessmentInvite,
+    Candidate,
     CandidateVacancy,
     Vacancy,
     VacancyAttachment,
@@ -628,6 +629,21 @@ async def _collect_grade_spec_links(
 # ---------------------------------------------------------------------------
 
 
+def _competence_row_to_dict(r: VacancyCompetence) -> dict:
+    """The wire shape of one vacancy competence row.
+
+    Shared by the GET and by ``set_vacancy_competences``, which answers
+    from the rows it just wrote instead of re-reading them (HRP-706).
+    """
+    return {
+        "id": r.id,
+        "vacancy_id": r.vacancy_id,
+        "competence_id": r.competence_id,
+        "skill_level_ids": list(r.skill_level_ids or []),
+        "source": r.source,
+    }
+
+
 async def list_vacancy_competences(
     db: AsyncSession, tenant_id: uuid.UUID, vacancy_id: uuid.UUID
 ) -> list[dict]:
@@ -646,16 +662,7 @@ async def list_vacancy_competences(
         .scalars()
         .all()
     )
-    return [
-        {
-            "id": r.id,
-            "vacancy_id": r.vacancy_id,
-            "competence_id": r.competence_id,
-            "skill_level_ids": list(r.skill_level_ids or []),
-            "source": r.source,
-        }
-        for r in rows
-    ]
+    return [_competence_row_to_dict(r) for r in rows]
 
 
 async def set_vacancy_competences(
@@ -674,6 +681,9 @@ async def set_vacancy_competences(
     its twin in step — the card's Required Competences follow the new set
     and the candidate pool is recomputed, so the internal shortlist never
     answers a question the requisition stopped asking.
+
+    HRP-705: the requirements sync stays inside the request (it is what
+    the 422 guard below protects), the pool recompute is queued.
     """
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
 
@@ -684,13 +694,17 @@ async def set_vacancy_competences(
             "source": spec.source,
         }
 
+    # HRP-706: ordered the way GET promises, so the final set can be
+    # assembled from these rows instead of read back a third time.
     existing = (
         (
             await db.execute(
-                select(VacancyCompetence).where(
+                select(VacancyCompetence)
+                .where(
                     VacancyCompetence.vacancy_id == vacancy_id,
                     VacancyCompetence.tenant_id == tenant_id,
                 )
+                .order_by(VacancyCompetence.created_at)
             )
         )
         .scalars()
@@ -698,18 +712,25 @@ async def set_vacancy_competences(
     )
     existing_by_id = {row.competence_id: row for row in existing}
 
+    # The set this call leaves behind: survivors in their existing
+    # created_at order, then the rows added below in payload order (they
+    # all take the transaction's timestamp, so nothing else orders them).
+    comp_rows: list[VacancyCompetence] = [
+        row for row in existing if row.competence_id in incoming
+    ]
+
     for competence_id, payload in incoming.items():
         row = existing_by_id.get(competence_id)
         if row is None:
-            db.add(
-                VacancyCompetence(
-                    tenant_id=tenant_id,
-                    vacancy_id=vacancy_id,
-                    competence_id=competence_id,
-                    skill_level_ids=payload["skill_level_ids"],
-                    source=payload["source"],
-                )
+            added = VacancyCompetence(
+                tenant_id=tenant_id,
+                vacancy_id=vacancy_id,
+                competence_id=competence_id,
+                skill_level_ids=payload["skill_level_ids"],
+                source=payload["source"],
             )
+            db.add(added)
+            comp_rows.append(added)
         else:
             row.skill_level_ids = payload["skill_level_ids"]
             row.source = payload["source"]
@@ -717,6 +738,10 @@ async def set_vacancy_competences(
     for competence_id, row in existing_by_id.items():
         if competence_id not in incoming:
             await db.delete(row)
+
+    # Ids for the response, and the deletes have to land before the card
+    # sync reads the set.
+    await db.flush()
 
     # HRP-693: the card's requirements and the vacancy's commit together,
     # the pool recompute runs after the commit — the same order the bridge
@@ -730,8 +755,6 @@ async def set_vacancy_competences(
         else None
     )
     if card_id is not None:
-        await db.flush()
-        comp_rows = await _vacancy_competence_rows(db, tenant_id, vacancy_id)
         if not comp_rows:
             # A posted card synced to zero competences flips the matcher
             # to spec-only mode — the whole specialization pools in as
@@ -744,12 +767,17 @@ async def set_vacancy_competences(
             )
         await _sync_card_competences(db, card_id, comp_rows)
 
+    result = [_competence_row_to_dict(r) for r in comp_rows]
     await db.commit()
     if card_id is not None:
-        from app.modules.talent_market.matching import _auto_populate_candidates
+        # HRP-705: the matcher walks the whole roster, so it runs after
+        # the response instead of inside it. The card's requirements are
+        # already committed above; the pool catches up on the worker and
+        # the Internal Candidates block reads it on its next fetch.
+        from app.modules.talent_market.tasks import recompute_card_candidates_task
 
-        await _auto_populate_candidates(db, tenant_id, card_id)
-    return await list_vacancy_competences(db, tenant_id, vacancy_id)
+        recompute_card_candidates_task.delay(str(tenant_id), str(card_id))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1840,7 +1868,8 @@ async def _vacancy_competence_rows(
 
     The card sync copies all of them — hand-added rows included — which
     is byte-identical to the inline query the bridge used before HRP-693.
-    Filter by source in BOTH callers or in neither.
+    ``set_vacancy_competences`` feeds the sync from the rows it just
+    wrote (HRP-706); if that ever filters by source, this must too.
     """
     return (
         (
@@ -2076,28 +2105,79 @@ async def post_vacancy_to_talent_market(
                 vacancy_id,
             )
         raise
-    return await get_vacancy_internal_candidates(db, tenant_id, vacancy_id)
+    # HRP-706: the row is loaded and current (the session does not expire
+    # on commit), so the shortlist read skips a second hydration.
+    return await get_vacancy_internal_candidates(
+        db, tenant_id, vacancy_id, vacancy=vacancy
+    )
 
 
 async def get_vacancy_internal_candidates(
-    db: AsyncSession, tenant_id: uuid.UUID, vacancy_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    vacancy_id: uuid.UUID,
+    *,
+    vacancy: Vacancy | None = None,
 ) -> dict:
     """Employees the talent-market matcher found for this vacancy.
 
     ``talent_card_id is None`` is the answer the UI needs most: it means
     the vacancy has never been offered internally, so the block shows the
-    offer instead of an empty list. Scoping is the vacancy's own — if the
-    caller may read the requisition they may see who inside fits it.
+    offer instead of an empty list.
+
+    HRP-703: scoping is the vacancy's own, deliberately, and this reads
+    wider than the HRP-149 profile scope the talent market applies to the
+    same employee rows. The two protect different things. HRP-149 gates
+    *browsing* the employee directory: who may look up a colleague's
+    profile out of curiosity. This is a requisition's own shortlist,
+    produced by the matcher the recruiter asked to run, and the roles that
+    reach it (recruiter, hiring manager, the vacancy's owner) are not
+    talent-market viewers at all - several of them cannot open the
+    directory. Narrowing the shortlist to the viewer's division would hide
+    exactly the cross-division candidates internal mobility exists to
+    surface, and would make the same vacancy answer differently to two
+    people working the same hire.
+
+    Privacy is controlled one level up instead, per requisition: the
+    vacancy's ``internal_search_allowed`` switch decides whether employees
+    are matched at all, and ``vacancy_scope`` decides who may open the
+    vacancy. Whoever may open it sees its whole internal shortlist.
+
+    Reversing this decision is a one-line ``can_view_profile`` filter over
+    ``items`` plus a ``current_user`` argument - see HRP-703.
+
+    ``vacancy`` lets a caller that already holds the row skip the reload
+    (HRP-706); the two scalars below are all this needs from it.
     """
     from app.modules.talent_market.models import TalentCandidate, TalentCard
 
-    vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+    if vacancy is not None:
+        talent_card_id = vacancy.talent_card_id
+        internal_search_allowed = vacancy.internal_search_allowed
+    else:
+        # Two scalars, not the full row: ``_get_vacancy`` eager-loads the
+        # candidate list, the specializations and the grades, none of
+        # which this read touches.
+        scalars_row = (
+            await db.execute(
+                select(Vacancy.talent_card_id, Vacancy.internal_search_allowed).where(
+                    Vacancy.id == vacancy_id,
+                    Vacancy.tenant_id == tenant_id,
+                )
+            )
+        ).first()
+        if scalars_row is None:
+            # Same code ``_get_vacancy`` raises, so the router's 404 body
+            # does not change with the caller.
+            raise AppError("vacancy_not_found", status.HTTP_404_NOT_FOUND)
+        talent_card_id, internal_search_allowed = scalars_row
+
     payload: dict = {
         "talent_card_id": None,
         "talent_card_status": None,
         "has_library_competences": False,
         # HRP-678: the block needs the reason, not just a dead button.
-        "internal_search_allowed": vacancy.internal_search_allowed,
+        "internal_search_allowed": internal_search_allowed,
         "items": [],
     }
     payload["has_library_competences"] = bool(
@@ -2111,10 +2191,10 @@ async def get_vacancy_internal_candidates(
         ).scalar()
         or 0
     )
-    if vacancy.talent_card_id is None:
+    if talent_card_id is None:
         return payload
 
-    card = await db.get(TalentCard, vacancy.talent_card_id)
+    card = await db.get(TalentCard, talent_card_id)
     if card is None or card.tenant_id != tenant_id:
         return payload
     payload["talent_card_id"] = card.id
@@ -2131,6 +2211,31 @@ async def get_vacancy_internal_candidates(
         .scalars()
         .all()
     )
+    # HRP-711: which of these people are already in the vacancy's own
+    # pipeline. One statement for the whole roster — the block renders a
+    # link instead of an Add button for them, and the button that stays
+    # would otherwise be the only way to find out (by 409).
+    person_ids = {
+        emp.user.person_id
+        for emp in (r.employee for r in rows)
+        if emp is not None and emp.user is not None and emp.user.person_id is not None
+    }
+    candidate_by_person: dict[uuid.UUID, uuid.UUID] = {}
+    if person_ids:
+        rows_by_person = (
+            await db.execute(
+                select(Candidate.person_id, Candidate.id)
+                .join(CandidateVacancy, CandidateVacancy.candidate_id == Candidate.id)
+                .where(
+                    CandidateVacancy.vacancy_id == vacancy_id,
+                    CandidateVacancy.tenant_id == tenant_id,
+                    Candidate.person_id.in_(person_ids),
+                    Candidate.archived_at.is_(None),
+                )
+            )
+        ).all()
+        candidate_by_person = {p: c for p, c in rows_by_person if p is not None}
+
     items = []
     for row in rows:
         emp = row.employee
@@ -2144,6 +2249,9 @@ async def get_vacancy_internal_candidates(
                 "position_title": emp.position_title if emp is not None else None,
                 "match_score": row.match_score,
                 "status": row.status,
+                "candidate_id": (
+                    candidate_by_person.get(user.person_id) if user else None
+                ),
             }
         )
     # Best fit first; unscored manual picks sink to the bottom.

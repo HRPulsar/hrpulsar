@@ -10,10 +10,10 @@ import {
   answerScaleDescription,
   answerScaleLabel,
   scaleLevelLabel,
-  scaleOptionDescription,
   scaleOptionLabel,
 } from "@/lib/reference-labels";
 import { Badge } from "@/components/ui/badge";
+import { ScaleLegend } from "@/components/assessment/scale-legend";
 import {
   Dialog,
   DialogContent,
@@ -112,6 +112,11 @@ export function ScalePreviewDialog({
               <h3 className="text-sm font-medium">{t("answerOptions")}</h3>
               <div className="space-y-1.5">
                 {sortedOptions.map((opt) => (
+                  // HRP-721: the row carries the name and the score; the
+                  // descriptions live once in the legend below, which is
+                  // reachable by keyboard and touch — unlike a title
+                  // tooltip, on the one screen whose job is explaining
+                  // the scale.
                   <div
                     key={opt.id}
                     className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
@@ -126,14 +131,10 @@ export function ScalePreviewDialog({
                         {t("scoreValue", { value: opt.weight ?? "—" })}
                       </Badge>
                     )}
-                    {scaleOptionDescription(tRef, opt) && (
-                      <span className="text-xs text-muted-foreground">
-                        {scaleOptionDescription(tRef, opt)}
-                      </span>
-                    )}
                   </div>
                 ))}
               </div>
+              <ScaleLegend options={sortedOptions} />
             </section>
 
             {sortedLevels.length > 0 && (

@@ -10,7 +10,7 @@ import { useAuth } from "@/context/auth-context";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useCompetenceTree } from "@/hooks/use-competence-tree";
 import { inlineEditKeys, useInlineEdit } from "@/hooks/use-inline-edit";
-import type { AnswerScaleDeleteResult, AnswerScaleDetail, AssessmentDetail, Competence, CompetenceDetail, CompetenceGroupTree, CPAComparisonResult, Employee, EmployeeList } from "@/lib/types";
+import type { AnswerScaleDeleteResult, AnswerScaleDetail, AssessmentDetail, Competence, CompetenceDetail, CompetenceGroupTree, CPAComparisonResult, Employee, EmployeeList, PDP } from "@/lib/types";
 import {
   answerScaleDescription,
   answerScaleLabel,
@@ -80,10 +80,16 @@ import {
 import { toast } from "sonner";
 import { ArrowLeft, ArrowRightLeft, Check, Info, MoreHorizontal, Pencil, Plus, Send, Sparkles, Star, X } from "lucide-react";
 
-import { AssessmentDetailedResults } from "@/components/assessment/assessment-detailed-results";
+import { AssessmentDetailedResults, roleLabel } from "@/components/assessment/assessment-detailed-results";
+import { AssessmentRoleDivergence } from "@/components/assessment/assessment-role-divergence";
+import { ScaleLegend } from "@/components/assessment/scale-legend";
 import { AssessmentRecommendationCard } from "@/components/assessment/assessment-recommendation-card";
 import { CriteriaSheet } from "@/components/assessment/criteria-sheet";
 import { MatchPercentChip } from "@/components/assessment/match-percent-chip";
+import { cn } from "@/lib/utils";
+import { createPdpHref } from "@/lib/employee-actions";
+import { assessmentBar, isGap } from "@/lib/employee-issues";
+import { isTerminalPDPStatus } from "@/lib/pdp-status";
 import { isPastDeadline, todayLocalISO } from "@/lib/deadline";
 import { formatDate } from "@/lib/date-format";
 import { CriteriaSummary } from "@/components/assessment/criteria-summary";
@@ -157,6 +163,16 @@ export default function AssessmentDetailPage() {
   const [partOpen, setPartOpen] = useState(false);
   const [partForm, setPartForm] = useState({ employee_id: "", role: "peer" });
   const [employees, setEmployees] = useState<Employee[]>([]);
+
+  // HRP-715: bumped whenever calibration is saved or cancelled — the
+  // divergence block reads its own copy of detailed results and would
+  // otherwise keep showing pre-calibration role averages until F5.
+  const [resultsRefresh, setResultsRefresh] = useState(0);
+  // HRP-257: the development plan built from this assessment, if any.
+  const [linkedPdp, setLinkedPdp] = useState<PDP | null>(null);
+  // HRP-731: the full results table sits under a fold once the two
+  // highlight blocks answer the question it used to be read for.
+  const [allResultsOpen, setAllResultsOpen] = useState(false);
 
   // Criteria sheet
   const [criteriaOpen, setCriteriaOpen] = useState(false);
@@ -246,6 +262,26 @@ export default function AssessmentDetailPage() {
         setEmployee(emp);
       } catch {
         // ignore
+      }
+      // HRP-257: a plan already built from this assessment turns the
+      // Create button into Open. Only completed assessments can have one.
+      if (detail.status_code === "done") {
+        try {
+          const plans = await api.get<PDP[]>(
+            `/pdp?employee_id=${detail.employee_id}`,
+          );
+          // Only a live plan replaces the Create button. A cancelled or
+          // finished plan is history: leaving it here would hide the
+          // action for good the moment somebody cancels the first plan.
+          setLinkedPdp(
+            plans.find(
+              (p) =>
+                p.assessment_id === detail.id && !isTerminalPDPStatus(p.status),
+            ) ?? null,
+          );
+        } catch {
+          // ignore — the button just stays "Create"
+        }
       }
     } catch (err) {
       // HRP-40: 404 is the normal not-visible-to-caller case (Draft for employee,
@@ -810,6 +846,57 @@ export default function AssessmentDetailPage() {
   const canViewResults =
     isPrivileged || (isSelfParticipant && assessment.status_code === "done");
 
+  // HRP-731 / HRP-257: growth zones and strengths, split by the one rule
+  // the dashboard and the employee card use (isCompetenceGap). Only a
+  // completed assessment gets them: before approval the totals can still
+  // move in calibration, so offering a development plan off them would
+  // promise something the numbers do not yet support.
+  const resultsBar = assessmentBar(assessment.passing_score);
+  const isDone = assessment.status_code === "done";
+  // A competence answered entirely with the neutral option has no percent
+  // and therefore no verdict — it belongs in neither list rather than
+  // silently counting as a strength. It still shows in the full table.
+  const measured = assessment.results.filter((r) => r.percent !== null);
+  const growthZones = measured.filter((r) => isGap(r.percent!, resultsBar));
+  const strengths = measured.filter((r) => !isGap(r.percent!, resultsBar));
+  const showHighlights = isDone && canViewResults && assessment.results.length > 0;
+  const competenceTitle = (competenceId: string) =>
+    allCompetences.find((c) => c.id === competenceId)?.title ||
+    competenceId.slice(0, 8);
+  const createPlanFromGrowthHref =
+    `${createPdpHref(assessment.employee_id)}` +
+    `&assessment_id=${assessment.id}` +
+    `&competence_ids=${growthZones.map((r) => r.competence_id).join(",")}`;
+
+  const highlightList = (
+    rows: typeof assessment.results,
+    tone: "growth" | "strength",
+    emptyText: string,
+  ) =>
+    rows.length === 0 ? (
+      <p className="text-sm text-muted-foreground">{emptyText}</p>
+    ) : (
+      <ul className="space-y-2">
+        {rows.map((r) => (
+          <li
+            key={r.competence_id}
+            data-testid={`assessment-${tone === "growth" ? "growth-zone" : "strength"}-${r.competence_id}`}
+            className={cn(
+              "flex items-center justify-between gap-3 rounded-md border-l-4 px-3 py-2",
+              tone === "growth"
+                ? "border-l-destructive bg-destructive/5"
+                : "border-l-emerald-500 bg-emerald-500/5",
+            )}
+          >
+            <span className="text-sm font-medium">
+              {competenceTitle(r.competence_id)}
+            </span>
+            <MatchPercentChip percent={r.percent} bar={resultsBar} />
+          </li>
+        ))}
+      </ul>
+    );
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
@@ -1253,7 +1340,7 @@ export default function AssessmentDetailPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary" className={roleColors[p.role] || ""}>{p.role}</Badge>
+                        <Badge variant="secondary" className={roleColors[p.role] || ""}>{roleLabel(t, p.role)}</Badge>
                       </TableCell>
                       <TableCell>
                         <Badge variant={p.is_completed ? "default" : "outline"}>
@@ -1307,6 +1394,76 @@ export default function AssessmentDetailPage() {
         <AssessmentRecommendationCard recommendation={assessment.recommendation} />
       )}
 
+      {/* HRP-731 / HRP-257: Growth zones and Strengths. Completed
+          assessments only — the plan offer must rest on approved totals. */}
+      {showHighlights && (
+        <div id="results-highlights" className="grid gap-4 scroll-mt-20 md:grid-cols-2">
+          <Card className="border-destructive/40" data-testid="assessment-growth-zones">
+            <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-base text-destructive">
+                  {t("analyticsGrowthZones")}
+                </CardTitle>
+                <Tooltip>
+                  <TooltipTrigger
+                    type="button"
+                    aria-label={t("growthZonesHint")}
+                    className="inline-flex text-muted-foreground/70 transition-colors hover:text-foreground"
+                    data-testid="assessment-growth-zones-info"
+                  >
+                    <Info className="h-4 w-4" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs text-left">
+                    {t("growthZonesHint")}
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              {growthZones.length > 0 &&
+                (linkedPdp ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    data-testid="assessment-open-plan"
+                    render={<Link href={`/development/${linkedPdp.id}`} />}
+                  >
+                    {t("openDevelopmentPlan")}
+                  </Button>
+                ) : (
+                  canManage && (
+                    <Button
+                      size="sm"
+                      data-testid="assessment-create-plan"
+                      render={<Link href={createPlanFromGrowthHref} />}
+                    >
+                      {t("createDevelopmentPlan")}
+                    </Button>
+                  )
+                ))}
+            </CardHeader>
+            <CardContent>
+              <p className="mb-3 text-xs text-muted-foreground">
+                {t("growthZonesBelow", { percent: resultsBar })}
+              </p>
+              {highlightList(growthZones, "growth", t("growthZonesEmpty"))}
+            </CardContent>
+          </Card>
+
+          <Card className="border-emerald-500/40" data-testid="assessment-strengths">
+            <CardHeader>
+              <CardTitle className="text-base text-emerald-700 dark:text-emerald-400">
+                {t("analyticsTopCompetences")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="mb-3 text-xs text-muted-foreground">
+                {t("strengthsAbove", { percent: resultsBar })}
+              </p>
+              {highlightList(strengths, "strength", t("strengthsEmpty"))}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* Results */}
       {canViewResults && assessment.results.length > 0 && (
         // HRP-528: the group analytics matrix deep-links here.
@@ -1319,6 +1476,7 @@ export default function AssessmentDetailPage() {
                   answered entirely with "Don't know" still has result rows). */}
               <MatchPercentChip
                 percent={assessment.overall_percent}
+                bar={resultsBar}
                 className="h-6 px-2.5 text-sm"
                 data-testid="assessment-results-overall-percent"
               />
@@ -1327,7 +1485,36 @@ export default function AssessmentDetailPage() {
                 the spec moves calibration onto per-indicator Totals. */}
           </CardHeader>
           <CardContent>
-            <div className="rounded-lg border">
+            {/* HRP-715: self vs manager per competence, right above the
+                table, so an On review assessment shows the gap before it
+                is approved. */}
+            <AssessmentRoleDivergence
+              assessmentId={id}
+              visible={
+                canViewDetailedResults &&
+                (assessment.status_code === "on_review" ||
+                  assessment.status_code === "done")
+              }
+              refreshKey={resultsRefresh}
+            />
+            {/* HRP-731: with the highlight blocks above, the table is the
+                detail view — one click away rather than always open. */}
+            {showHighlights && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mb-3"
+                data-testid="assessment-toggle-all-results"
+                aria-expanded={allResultsOpen}
+                onClick={() => setAllResultsOpen((open) => !open)}
+              >
+                {allResultsOpen ? t("hideAllResults") : t("showAllResults")}
+              </Button>
+            )}
+            <div
+              className="rounded-lg border"
+              hidden={showHighlights && !allResultsOpen}
+            >
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1391,7 +1578,7 @@ export default function AssessmentDetailPage() {
                           {(r.calibrated_score ?? r.avg_score).toFixed(2)}
                         </TableCell>
                         <TableCell data-testid={`assessment-results-row-${r.competence_id}-percent`}>
-                          <MatchPercentChip percent={r.percent} />
+                          <MatchPercentChip percent={r.percent} bar={resultsBar} />
                         </TableCell>
                         <TableCell data-testid={`assessment-results-row-${r.competence_id}-level`}>
                           {r.level ? (
@@ -1424,7 +1611,10 @@ export default function AssessmentDetailPage() {
         scale={scale ?? null}
         calibrationInProgress={calibrationLock}
         canManage={canManage && !isTerminal}
-        onCalibrationChange={load}
+        onCalibrationChange={async () => {
+          await load();
+          setResultsRefresh((v) => v + 1);
+        }}
       />
 
       {/* CPA Comparison */}
@@ -1593,8 +1783,8 @@ export default function AssessmentDetailPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {["manager", "peer", "subordinate"].map((r) => (
-                    <SelectItem key={r} value={r}>{r}</SelectItem>
+                  {["manager", "peer", "subordinate", "external"].map((r) => (
+                    <SelectItem key={r} value={r}>{roleLabel(t, r)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -1654,6 +1844,9 @@ export default function AssessmentDetailPage() {
             </div>
           ) : (
             <div className="flex-1 space-y-5 overflow-y-auto pr-1">
+              {/* HRP-721: the scale is explained once here instead of after
+                  every option of every indicator. */}
+              {scale?.options && <ScaleLegend options={scale.options} />}
               {/* HRP-688: assessments sent before the "no indicators" guard
                   existed can still open a questionnaire with nothing to
                   answer. Say so instead of showing a bare Submit button. */}
@@ -1712,13 +1905,14 @@ export default function AssessmentDetailPage() {
                                         className="mt-0.5"
                                         data-testid={`assessment-eval-option-${ind.id}-${opt.id}`}
                                       />
-                                      <span className="leading-snug">
+                                      <span
+                                        className="leading-snug"
+                                        title={
+                                          scaleOptionDescription(tRef, opt) ??
+                                          undefined
+                                        }
+                                      >
                                         {scaleOptionLabel(tRef, opt)}
-                                        {scaleOptionDescription(tRef, opt) && (
-                                          <span className="ml-1 text-muted-foreground">
-                                            — {scaleOptionDescription(tRef, opt)}
-                                          </span>
-                                        )}
                                       </span>
                                     </label>
                                   ))}
@@ -1794,8 +1988,10 @@ export default function AssessmentDetailPage() {
             // the standalone "Rating scale" banner that used to live above
             // the question list is intentionally omitted (per QA review on
             // 2026-06-10). The per-indicator skill-level badge is dropped
-            // for the same reason.
+            // for the same reason. HRP-721 brings the scale back as a
+            // collapsed legend — same thing the questionnaire now shows.
             <div className="flex-1 space-y-5 overflow-y-auto pr-1">
+              {scale?.options && <ScaleLegend options={scale.options} />}
               {previewGroups.length === 0 ? (
                 <p className="rounded-md border border-dashed py-6 text-center text-sm text-muted-foreground">
                   {t("noQuestionsYet")}
@@ -1846,13 +2042,14 @@ export default function AssessmentDetailPage() {
                                         disabled
                                         className="mt-0.5"
                                       />
-                                      <span className="leading-snug">
+                                      <span
+                                        className="leading-snug"
+                                        title={
+                                          scaleOptionDescription(tRef, opt) ??
+                                          undefined
+                                        }
+                                      >
                                         {scaleOptionLabel(tRef, opt)}
-                                        {scaleOptionDescription(tRef, opt) && (
-                                          <span className="ml-1 text-muted-foreground">
-                                            — {scaleOptionDescription(tRef, opt)}
-                                          </span>
-                                        )}
                                       </span>
                                     </label>
                                   ))}
@@ -2059,7 +2256,7 @@ export default function AssessmentDetailPage() {
                         : "—"}
                     </TableCell>
                     <TableCell>
-                      <MatchPercentChip percent={row.percent} />
+                      <MatchPercentChip percent={row.percent} bar={resultsBar} />
                     </TableCell>
                   </TableRow>
                 ))}

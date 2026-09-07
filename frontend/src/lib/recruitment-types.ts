@@ -5,6 +5,10 @@
 // re-export legacy `Candidate` / `VacancyCandidate` shapes from
 // `./types.ts` here — those go away in Stage 5.
 
+// HRP-710: the label resolvers below share the one helper, which lives
+// with the frontend-owned enum labels.
+import { asIs, deSlugged, labelResolver } from "./enum-labels";
+
 export type AiVerdict =
   | "pending"
   | "recommended"
@@ -359,31 +363,6 @@ export const AI_ANALYSIS_STAGE_LABEL_KEYS: Record<AiAnalysisStage, string> = {
   verdict: "aiStageVerdict",
 };
 
-/**
- * Build a `(t, code) => label` resolver over a wire-code → i18n-key map.
- *
- * Six of these were written out by hand (HRP-596). They differ in exactly
- * one thing — what an unknown code prints — so that is the parameter, and
- * the fallbacks stay as they were: `asIs` keeps the wire code, `deSlugged`
- * prints a readable form ("escalated_to_lead" → "escalated to lead") on the
- * surfaces whose catalogs are expected to catch up with the backend.
- */
-function labelResolver<Code extends string>(
-  keys: Record<Code, string>,
-  fallback: (code: string) => string,
-) {
-  return (
-    t: (key: string) => string,
-    code: string | null | undefined,
-  ): string => {
-    const key = keys[code as Code];
-    return key ? t(key) : fallback(code ?? "");
-  };
-}
-
-const asIs = (code: string) => code;
-const deSlugged = (code: string) => code.replaceAll("_", " ");
-
 /** Translated pipeline-stage label with a raw-code fallback. */
 export const aiAnalysisStageLabel = labelResolver(
   AI_ANALYSIS_STAGE_LABEL_KEYS,
@@ -496,6 +475,79 @@ export const QUESTION_SET_GENERATION_MODE_LABEL_KEYS: Record<
 export const questionSetGenerationModeLabel = labelResolver(
   QUESTION_SET_GENERATION_MODE_LABEL_KEYS,
   deSlugged,
+);
+
+// HRP-669: shared lifecycle-status resolvers. Every recruitment surface
+// labels a status code through one of these instead of printing the wire
+// value; an unknown code keeps rendering raw (`asIs`), same contract as
+// `lib/enum-labels.ts`.
+
+/** ``Interview.status`` lifecycle codes. */
+export const INTERVIEW_STATUS_LABEL_KEYS: Record<string, string> = {
+  scheduled: "interviewStatusScheduled",
+  uploading: "interviewStatusUploading",
+  uploaded: "interviewStatusUploaded",
+  upload_failed: "interviewStatusUploadFailed",
+  archived: "interviewStatusArchived",
+  completed: "interviewStatusCompleted",
+};
+
+export const interviewStatusLabel = labelResolver(
+  INTERVIEW_STATUS_LABEL_KEYS,
+  asIs,
+);
+
+/**
+ * Generic background-pipeline codes — transcription/analysis columns and
+ * GDPR export requests share this vocabulary.
+ */
+export const PROCESSING_STATUS_LABEL_KEYS: Record<string, string> = {
+  pending: "processingStatusPending",
+  processing: "processingStatusProcessing",
+  completed: "processingStatusCompleted",
+  failed: "processingStatusFailed",
+  not_started: "processingStatusNotStarted",
+};
+
+export const processingStatusLabel = labelResolver(
+  PROCESSING_STATUS_LABEL_KEYS,
+  asIs,
+);
+
+/**
+ * ``CandidateFile.parse_status`` — reuses the add-candidate dialog's
+ * wording so the files card and the import modal never disagree.
+ */
+export const PARSE_STATUS_LABEL_KEYS: Record<string, string> = {
+  pending: "addCandidateStatusQueued",
+  processing: "addCandidateStatusParsing",
+  completed: "addCandidateStatusParsed",
+  failed: "addCandidateStatusFailed",
+};
+
+export const parseStatusLabel = labelResolver(PARSE_STATUS_LABEL_KEYS, asIs);
+
+/** ``CandidateFile.file_type`` — only ``resume`` is ever written today. */
+export const FILE_TYPE_LABEL_KEYS: Record<string, string> = {
+  resume: "fileTypeResume",
+};
+
+export const fileTypeLabel = labelResolver(FILE_TYPE_LABEL_KEYS, asIs);
+
+/**
+ * Raw competence-assessment codes inside ``analysis_data`` (the LLM
+ * Literal in prompts_interview.py). ``assessed``/``not_covered`` share
+ * wording with the post-normalization canvas statuses.
+ */
+export const COMPETENCE_ASSESSMENT_STATUS_LABEL_KEYS: Record<string, string> = {
+  assessed: "canvasAiStatusReady",
+  not_covered: "canvasAiStatusNotCovered",
+  insufficient: "analysisCompetenceStatusInsufficient",
+};
+
+export const competenceAssessmentStatusLabel = labelResolver(
+  COMPETENCE_ASSESSMENT_STATUS_LABEL_KEYS,
+  asIs,
 );
 
 // HRP-271: verbatim resume quote anchored to a parsed-resume section.
@@ -631,6 +683,38 @@ export function analysisStalenessKind(
   return null;
 }
 
+/**
+ * HRP-489 (REDO) — whether the top-up callout renders under a staleness
+ * banner.
+ *
+ * AI Insights stacks two banner layers: exactly one staleness banner
+ * (``analysisStalenessKind``) and the top-up callout, which is either
+ * the actionable +20-cr upgrade or a blocked line naming what full
+ * analysis still needs. QA saw the layers repeat each other — "Resume
+ * was updated. The current analysis is not relevant." sitting above
+ * "Resume changed since the prior run — run a fresh analysis instead of
+ * a top-up."
+ *
+ * Two rules decide it:
+ *
+ *  - a re-parsed resume or edited competences close the +20-cr scenario
+ *    outright — the baseline the top-up would have reused has diverged,
+ *    so the callout and its disabled Upgrade button go away entirely;
+ *  - an expired window keeps the callout only for the one wording the
+ *    staleness banner does not already carry: "upload and transcribe an
+ *    interview". The callout's own "top-up window expired" line is the
+ *    banner above, restated.
+ */
+export function showsTopupCallout(
+  eligibility: TopupEligibility | null,
+  staleness: AnalysisStalenessKind,
+): boolean {
+  if (!eligibility) return false;
+  if (eligibility.eligible) return true;
+  if (staleness === "resume" || staleness === "profile") return false;
+  return eligibility.reason !== "resume_only_too_old";
+}
+
 export interface BulkAnalyzeResponse {
   queued: {
     candidate_vacancy_id: string;
@@ -664,6 +748,9 @@ export interface VacancyInternalCandidate {
   position_title: string | null;
   match_score: number | null;
   status: string;
+  /** HRP-711 — set once this employee is in the vacancy's own pipeline;
+   *  the row then links to the candidate instead of offering Add. */
+  candidate_id: string | null;
 }
 
 export interface VacancyInternalCandidates {

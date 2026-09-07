@@ -136,3 +136,52 @@ export function answerScaleDescription(
   if (!scale.i18n_key) return scale.description;
   return resolve(t, `scale.${scale.i18n_key}.description`, scale.description);
 }
+
+// ---------------------------------------------------------------------------
+// HRP-735: title-only payloads.
+//
+// Many read models denormalize a system grade / skill level down to its
+// English title and drop the `i18n_key` that the helpers above rely on
+// (PDPRead.grade_title, EmployeeCompetenceRow.skill_level_title,
+// EmployeeRead.grade_title, PositionRead.grade_title, ...). Those titles
+// then render as raw English next to translated copy in a non-English UI.
+//
+// Both ladders are closed sets seeded by migration aca1005a8e45 — three
+// levels and five grades — so the title itself is a sufficient join key
+// for display. A row whose title is not one of those eight words falls
+// through unchanged, which is what tenant-authored levels and grades want:
+// they are already stored in the author's language.
+//
+// Accepted trade-off (HRP-735 decision): a tenant grade deliberately named
+// with a system English word ("Middle") localizes like the system one. On a
+// non-English installation that reads as correct rather than wrong.
+const SYSTEM_SKILL_LEVEL_KEYS = new Set(["basic", "intermediate", "advanced"]);
+const SYSTEM_GRADE_KEYS = new Set([
+  "junior",
+  "middle",
+  "senior",
+  "lead",
+  "principal",
+]);
+
+/** Localize a denormalized skill-level title ("Basic" -> de "Einsteiger"). */
+export function skillLevelTitleLabel(
+  t: ReferenceTranslator,
+  title: string | null | undefined,
+): string {
+  if (!title) return "";
+  const key = title.trim().toLowerCase();
+  if (!SYSTEM_SKILL_LEVEL_KEYS.has(key)) return title;
+  return resolve(t, `skillLevel.${key}`, title) ?? title;
+}
+
+/** Localize a denormalized grade title through reference.dictionary.grade. */
+export function gradeTitleLabel(
+  t: ReferenceTranslator,
+  title: string | null | undefined,
+): string {
+  if (!title) return "";
+  const key = title.trim().toLowerCase();
+  if (!SYSTEM_GRADE_KEYS.has(key)) return title;
+  return resolve(t, `dictionary.grade.${key}.label`, title) ?? title;
+}

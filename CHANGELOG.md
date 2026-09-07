@@ -6,6 +6,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.23.0] - 2026-09-07
+
+### Added
+- Completed assessment results split into Growth zones and Strengths, with a development plan built from exactly the growth-zone competences and linked back to the assessment; a competence at the passing bar now counts as a growth zone on every screen (HRP-731, HRP-257)
+- Assessments started from an employee card arrive with a title, format, evaluation criteria and rating scale already filled in (HRP-733)
+- Dashboard queue rows and the employee list they open rank people by problem severity instead of surname or creation date (HRP-729)
+- Assessed stage carries a red "N unassessed" chip and its queue row's button now reads "Assess N" (HRP-730)
+- HR metrics over a 30/90/365-day period on the analytics page — each marked exact or estimated, metrics the workspace has no data for named explicitly, and the page itself opened to the HR role (HRP-732)
+- Recording consent banner can resend the pending link, behind a confirmation naming when it was last sent, without invalidating the link already in the candidate's inbox (HRP-684)
+- Interviewers are emailed when they are added to a scheduled interview, when it is moved, when they are taken off it, and when it is archived (HRP-699)
+- Talent Market board explains what a vacancy, a project and a talent card are, in a collapsible panel under the counter and in the heading hint (HRP-719)
+- Assessment results show the self-versus-manager gap per competence and overall from On review, before the assessment is approved (HRP-715)
+- Assessment create dialogs explain what self, 180° and 360° are used for (HRP-723)
+- Employee profile issue badges name the date the problem is scheduled to resolve — the open plan's deadline or the open assessment's due date (HRP-720)
+- Development dynamics over a chosen period — plans completed and competences raised — on both dashboards and in the employee profile (HRP-724)
+- The personal dashboard's In development tile opens the active plan itself, and a plan material with no link or file says so instead of looking clickable (HRP-712)
+- Employees on a vacancy's internal shortlist can be added to its candidate pipeline in one click, with their profile mapped onto the candidate's resume (HRP-711)
+- Reacting to a talent-market vacancy or project below its match bar now sends a soft reply that keeps the employee on the candidate list, readable in Notifications, and they can ask their manager for a development plan from the card (HRP-714)
+- Talent Market candidate rows say which requirement is short — competences, experience, or both — instead of a bare "not matched" (HRP-734)
+
+### Changed
+- Talent Market board header counts cards by type instead of a bare total (HRP-716)
+- Talent Market project cards are described as staffing a time-boxed task with specialists from inside the company (HRP-717)
+- Interview emails name the time zone of the interview time (HRP-699)
+- Demo seed employers no longer name third-party HR products (HRP-707)
+- Demo seed runs one corporate-cycle story end to end: an SDR carrying a stale gap with no plan is the "view as employee" persona, a 180° re-assessment waits on review with a self/manager divergence, development materials open on real links, seeded plans arrive with materials, the engineer whose plan is already closed carries an open plan for the gap her last review still shows, and the Roles / Goals / Projects dictionaries are no longer empty (HRP-713, HRP-737)
+- Demo seed: the sales-demo storyline now runs on six locale-native personas, including a named demo administrator instead of "Demo User", and the demo "view as employee" persona is the SDR with the open gap (HRP-713)
+- Saving a vacancy's required competences returns without waiting for the internal match; the shortlist is recomputed in the background (HRP-705)
+- Answer scale options show only their name in questionnaires and previews, with the level descriptions in one collapsed legend, and the assessment results Level column is now Scale result (HRP-721)
+
+### Fixed
+- Employee profile header shows the last completed assessment instead of the newest created one, so it no longer contradicts the "no recent assessment" badge (HRP-736)
+- Shipped grades and skill levels follow the reference catalog on every screen that names one, wherever the interface language carries a translation for them, instead of always falling back to their English titles (HRP-735)
+- Employees, candidates, vacancies, exams, competences, dictionaries, development plans and talent market lists show a load error with a retry button instead of an empty list when the API fails (HRP-728)
+- Demo candidates on every seeded vacancy carry a parsed resume, an AI analysis run and a manager round, so the candidate list matches the candidate card (HRP-726)
+- Demo seed salaries follow the installation currency instead of the interface locale (HRP-708)
+- Employee cards, vacancy competence saves, gap plan creation and the internal candidates block open with fewer database round trips (HRP-706)
+- Vacancy analytics gained a Withdrew tile between Rejected and In progress, labelled with the funnel's own terminal-neutral stage names (HRP-425)
+- Changing Position, Specializations or Grades now refills the Salary range from the company library on the vacancy Edit page and in the Overview inline edit, not only on Create (HRP-440)
+- Settings show translated labels instead of raw codes for invitation and notification statuses, and for import job types and statuses (HRP-671)
+- Competence criticality, vacancy employment type, position source and question purpose read as words instead of wire codes wherever they are shown (HRP-672)
+- Candidate AI Insights no longer stacks two banners that say the same thing: a re-parsed resume or edited vacancy competences close the +20-cr upgrade outright, and only the missing-transcript line still shows under an outdated analysis (HRP-489)
+- Starting a resume + interview analysis from the candidate card switches the block to the progress banner immediately, from every button, and can be cancelled while it runs (HRP-492)
+- The "Resume analysis ready" email is sent again after a resume-only analysis, and both analysis emails name the candidate instead of "None" (HRP-494)
+- Analysis emails land on the AI Insights block: the deep link now scrolls to it once the candidate card has loaded (HRP-494)
+- Schedule interview modal is as wide as its fields, and Title is required with no default value or hint (HRP-386)
+- Interviewer(s) is picked with the same searchable employee list as Exams -> Assign employees, in the Schedule modal and from the interview page (HRP-386, HRP-387)
+- Exams -> Assign employees modal is as wide as its fields (HRP-387)
+- Interview page Details labels are sentence case, the edit pencil hides while its field is open, Duration is edited on its own, and Interviewer(s) is editable (HRP-387)
+- Interview list shows the round of an interview attached to a round created in the same session, without a page reload (HRP-418)
+- Edit interview keeps Title editable for an uploaded interview; only Type stays locked (HRP-418)
+- Back to candidate from an interview opens the candidate page in the vacancy that interview belongs to (HRP-697)
+- Turning a vacancy's internal search off now freezes the internal shortlist it already has: editing the talent card's requirements or pressing Recompute no longer rebuilds it (HRP-700)
+- Deleting a Required Specialization drops its derived competences from the talent card even when the (specialization, grade) pair had already been removed from the grade ladder (HRP-709)
+- Vacancy Versions panel and Questions tab load for a division head instead of rendering empty (HRP-701)
+- A generated vacancy profile records the language it was actually written in instead of always claiming the vacancy language (HRP-702)
+- Generate questions works for a candidate added manually or by bulk import, and an interview recording is no longer mistaken for their resume (HRP-704)
+- Cancelling a running AI analysis leaves the candidate's AI DATA column readable instead of blank (HRP-710)
+
 ## [1.22.0] - 2026-09-01
 
 ### Added
@@ -33,6 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Manager/AI divergence has one definition everywhere: the per-competence workspace threshold, so the row flag can no longer contradict the count beside it (HRP-662)
 
 ### Fixed
+- Recruitment status codes are shown as translated labels instead of raw wire values — interview lifecycle, transcription and analysis progress, resume files, GDPR exports, reports, the assessment canvas and the funnel (HRP-669)
+- Assessment participant roles are translated in the participants table and the add-participant dialog, and the dialog now offers the external role (HRP-670)
+- The interview analysis competence matrix shows scores on the workspace's assessment scale instead of rendering every raw 0..1 score as a short red bar (HRP-673)
 - Vacancy competency profiles and individual interview questions are now generated in the workspace's AI content language instead of English (HRP-690)
 - Resume upload works with S3-compatible storage providers that reject request checksums, and a resume the platform could not store or read now reports the actual storage error instead of "no files recognized" (HRP-691)
 - Recruitment managers can read the assessment matrix behind the divergence badge they already see, including its export and cell drill-down (HRP-694)

@@ -9,6 +9,7 @@ import type { Candidate, CandidateList } from "@/lib/types";
 import { formatDate } from "@/lib/date-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LoadErrorState } from "@/components/load-error-state";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -46,6 +47,7 @@ export default function CandidateListPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterSource, setFilterSource] = useState("");
 
@@ -60,8 +62,9 @@ export default function CandidateListPage() {
       const data = await api.get<CandidateList>(`/recruitment/candidates?${params}`);
       setCandidates(data.items);
       setTotal(data.total);
+      setLoadError(false);
     } catch {
-      // ignore
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -172,7 +175,15 @@ export default function CandidateListPage() {
         )}
       </div>
 
-      {filtered.length === 0 ? (
+      {loadError ? (
+        <LoadErrorState
+          testIdPrefix="recruitment-candidate"
+          onRetry={() => {
+            setLoading(true);
+            void loadCandidates();
+          }}
+        />
+      ) : filtered.length === 0 ? (
         <div
           data-testid="recruitment-candidate-empty"
           className="rounded-lg border border-dashed p-12 text-center text-muted-foreground"

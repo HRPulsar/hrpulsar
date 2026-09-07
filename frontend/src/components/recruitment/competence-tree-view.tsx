@@ -236,6 +236,19 @@ const CRITICALITY_LEVELS = Object.keys(criticalityConfig) as Array<
   keyof typeof criticalityConfig
 >;
 
+/**
+ * HRP-672: criticality label for consumers that hold a plain string —
+ * the comparison table and the add-from-competency dialog. An unknown
+ * level (an older vacancy, a code added later) renders as it came.
+ */
+export function criticalityLabel(
+  t: (key: string) => string,
+  level: string,
+): string {
+  const entry = criticalityConfig[level as keyof typeof criticalityConfig];
+  return entry ? t(entry.labelKey) : level;
+}
+
 interface GroupedData {
   groups: {
     name: string;

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/table";
 import { ArrowLeft, Loader2, AlertTriangle, Check } from "lucide-react";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
+import { criticalityLabel } from "@/components/recruitment/competence-tree-view";
 import { ALERT_TONE } from "@/lib/badge-tones";
 
 const DIVERGENCE_THRESHOLD = 1.5;
@@ -186,7 +187,8 @@ export default function CompareCandidatesPage() {
                         <div>{comp.name}</div>
                         {comp.criticality && (
                           <Badge variant="outline" className="mt-1 text-xs">
-                            {comp.criticality}
+                            {/* HRP-672: same labels as the competence tree. */}
+                            {criticalityLabel(t, comp.criticality)}
                           </Badge>
                         )}
                       </TableCell>

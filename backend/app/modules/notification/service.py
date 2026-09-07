@@ -1,7 +1,9 @@
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
+from html import unescape
 
 from jinja2 import Template
 from sqlalchemy import func, select, update
@@ -104,6 +106,27 @@ def render_db_template(
     subject = _compiled(template.subject_template).render(values)
     body = _compiled_html(template.body_template).render(values)
     return subject, _render(subject, body, locale=template.locale or "en")
+
+
+def render_db_template_preview(
+    template: NotificationTemplate, context: dict
+) -> tuple[str, str]:
+    """Subject plus the body as plain text, for the in-app bell.
+
+    The bell renders ``context.title`` / ``context.message`` as text, so
+    it needs the letter's own words — :func:`render_db_template` wraps
+    its body in the branded email layout, which is markup the bell would
+    show raw. Callers that want the click-through omitted from the text
+    (the row is already a link) render with ``link_url`` unset.
+    """
+    values = {"brand_name": settings.brand_name, **context}
+    subject = _compiled(template.subject_template).render(values)
+    body = _compiled_html(template.body_template).render(values)
+    text = unescape(re.sub(r"<[^>]+>", " ", body))
+    # Every tag becomes a space, so "<b>Card</b>." collapsed to "Card ." —
+    # visible in the bell on any template that punctuates right after a tag.
+    # Drop the space the stripping introduced before closing punctuation.
+    return subject, re.sub(r"\s+([,.;:!?)»])", r"\1", " ".join(text.split()))
 
 
 async def get_template_for_locale(

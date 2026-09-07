@@ -36,16 +36,18 @@ from app.modules.recruitment.schemas import (
 )
 
 
-async def list_consent_templates(
-    db: AsyncSession, tenant_id: uuid.UUID
-) -> list[dict]:
+async def list_consent_templates(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
     rows = (
-        await db.execute(
-            select(ConsentTemplate)
-            .where(ConsentTemplate.tenant_id == tenant_id)
-            .order_by(ConsentTemplate.created_at.desc())
+        (
+            await db.execute(
+                select(ConsentTemplate)
+                .where(ConsentTemplate.tenant_id == tenant_id)
+                .order_by(ConsentTemplate.created_at.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [_consent_template_to_read(t) for t in rows]
 
 
@@ -104,14 +106,10 @@ async def update_consent_template(
         )
     ).scalar_one_or_none()
     if not template:
-        raise AppError(
-            "consent_template_not_found", status.HTTP_404_NOT_FOUND
-        )
+        raise AppError("consent_template_not_found", status.HTTP_404_NOT_FOUND)
 
     if data.is_active and not template.is_active:
-        await _deactivate_consent_templates(
-            db, tenant_id, exclude_id=template_id
-        )
+        await _deactivate_consent_templates(db, tenant_id, exclude_id=template_id)
 
     if data.name is not None:
         template.name = data.name
@@ -216,17 +214,22 @@ async def send_consent_request(
     # Mark previous pending requests for this candidate as superseded so a
     # candidate cannot accidentally sign an old token.
     pending = (
-        await db.execute(
-            select(ConsentRequest).where(
-                ConsentRequest.candidate_id == candidate_id,
-                ConsentRequest.tenant_id == tenant_id,
-                ConsentRequest.status == "pending",
+        (
+            await db.execute(
+                select(ConsentRequest).where(
+                    ConsentRequest.candidate_id == candidate_id,
+                    ConsentRequest.tenant_id == tenant_id,
+                    ConsentRequest.status == "pending",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for prev in pending:
         prev.status = "superseded"
 
+    now = datetime.now(timezone.utc)
     request = ConsentRequest(
         tenant_id=tenant_id,
         candidate_id=candidate_id,
@@ -236,10 +239,42 @@ async def send_consent_request(
         expires_at=expires_at,
         status="pending",
         requested_by=user_id,
+        last_sent_at=now,
     )
     db.add(request)
     await db.commit()
     await db.refresh(request)
+
+    await _deliver_consent_email(
+        db,
+        tenant_id,
+        candidate=candidate,
+        template=template,
+        request=request,
+        expires_in_days=data.expires_in_days,
+        logger=logger,
+    )
+
+    return _consent_request_to_read(request)
+
+
+async def _deliver_consent_email(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    candidate: Candidate,
+    template: ConsentTemplate,
+    request: ConsentRequest,
+    expires_in_days: int,
+    logger,
+) -> None:
+    """Render and enqueue the candidate-facing consent email.
+
+    Shared by the first send and by HRP-684's resend so both put the same
+    letter in the mailbox. Failures are logged, never raised: the request
+    row is already committed and a dead SMTP provider must not turn a
+    successful mutation into a 500.
+    """
 
     try:
         from app.core.email import enqueue_email
@@ -261,14 +296,14 @@ async def send_consent_request(
             candidate, fallback=translate("email.fallback.unnamed", locale)
         )
         subject, html_body = render_recruitment_consent_email(
-            token,
+            request.token,
             candidate_name,
             template.body,
-            expires_in_days=data.expires_in_days,
+            expires_in_days=expires_in_days,
             locale=locale,
         )
         enqueue_email(
-            data.email,
+            request.email,
             subject,
             html_body,
             tenant_id=str(tenant_id),
@@ -277,15 +312,74 @@ async def send_consent_request(
     except Exception:
         logger.exception(
             "Failed to enqueue recruitment consent email for candidate=%s",
-            candidate_id,
+            request.candidate_id,
         )
+
+
+async def resend_consent_request(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+) -> dict:
+    """HRP-684: email the pending consent link again.
+
+    Deliberately reuses the existing token and expiry instead of issuing a
+    new request: a candidate who still has the first email must not find a
+    dead link because someone pressed Resend. Only ``last_sent_at`` moves.
+    """
+
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    candidate = await _get_candidate(db, tenant_id, candidate_id)
+
+    request = (
+        await db.execute(
+            select(ConsentRequest)
+            .where(
+                ConsentRequest.candidate_id == candidate_id,
+                ConsentRequest.tenant_id == tenant_id,
+                ConsentRequest.status == "pending",
+            )
+            .order_by(ConsentRequest.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if request is None:
+        raise AppError("no_pending_consent_request", status.HTTP_404_NOT_FOUND)
+
+    now = datetime.now(timezone.utc)
+    expires_at = request.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= now:
+        raise AppError("consent_link_expired", status.HTTP_409_CONFLICT)
+
+    template = await db.get(ConsentTemplate, request.template_id)
+    if template is None:
+        raise AppError("consent_template_not_found", status.HTTP_404_NOT_FOUND)
+
+    request.last_sent_at = now
+    await db.commit()
+    await db.refresh(request)
+
+    # Remaining lifetime, so the letter never promises days that are gone.
+    remaining = max(1, (expires_at - now).days)
+    await _deliver_consent_email(
+        db,
+        tenant_id,
+        candidate=candidate,
+        template=template,
+        request=request,
+        expires_in_days=remaining,
+        logger=logger,
+    )
 
     return _consent_request_to_read(request)
 
 
-async def get_consent_by_token(
-    db: AsyncSession, token: str
-) -> dict:
+async def get_consent_by_token(db: AsyncSession, token: str) -> dict:
     """Public endpoint helper — resolve a consent token to its template view."""
 
     request = await _resolve_consent_request(db, token)
@@ -348,9 +442,7 @@ async def sign_consent(
         raise AppError("consent_link_not_found", status.HTTP_404_NOT_FOUND)
     if request.status == "signed":
         return {"signed_at": request.signed_at, "status": "signed"}
-    if request.status == "expired" or request.expires_at < datetime.now(
-        timezone.utc
-    ):
+    if request.status == "expired" or request.expires_at < datetime.now(timezone.utc):
         request.status = "expired"
         await db.commit()
         raise AppError("consent_link_expired", status.HTTP_410_GONE)
@@ -373,18 +465,24 @@ async def sign_consent(
                     CandidateVacancy.tenant_id == request.tenant_id,
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     ]
     if cv_ids:
         interviews = (
-            await db.execute(
-                select(Interview).where(
-                    Interview.candidate_vacancy_id.in_(cv_ids),
-                    Interview.tenant_id == request.tenant_id,
-                    Interview.consent_signed_at.is_(None),
+            (
+                await db.execute(
+                    select(Interview).where(
+                        Interview.candidate_vacancy_id.in_(cv_ids),
+                        Interview.tenant_id == request.tenant_id,
+                        Interview.consent_signed_at.is_(None),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for iv in interviews:
             iv.consent_signed_at = now
             iv.consent_template_id = request.template_id
@@ -436,13 +534,9 @@ async def sign_consent(
     return {"signed_at": now, "status": "signed"}
 
 
-async def _resolve_consent_request(
-    db: AsyncSession, token: str
-) -> ConsentRequest:
+async def _resolve_consent_request(db: AsyncSession, token: str) -> ConsentRequest:
     request = (
-        await db.execute(
-            select(ConsentRequest).where(ConsentRequest.token == token)
-        )
+        await db.execute(select(ConsentRequest).where(ConsentRequest.token == token))
     ).scalar_one_or_none()
     if not request:
         raise AppError("consent_link_not_found", status.HTTP_404_NOT_FOUND)
@@ -459,6 +553,9 @@ def _consent_request_to_read(r: ConsentRequest) -> dict:
         "expires_at": r.expires_at,
         "signed_at": r.signed_at,
         "created_at": r.created_at,
+        # HRP-684: rows created before the column existed report their
+        # creation time — that is when their link went out.
+        "last_sent_at": r.last_sent_at or r.created_at,
     }
 
 

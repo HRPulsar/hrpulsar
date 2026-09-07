@@ -15,6 +15,7 @@ import {
 import { formatDate } from "@/lib/date-format";
 import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type {
+  AssessmentDetail,
   DictionaryItem,
   Employee,
   EmployeeList,
@@ -24,6 +25,7 @@ import type {
 } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LoadErrorState } from "@/components/load-error-state";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
@@ -77,6 +79,7 @@ export default function DevelopmentPage() {
   // pre-filled grade selectable).
   const [specGrades, setSpecGrades] = useState<GradeOption[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   const [createOpen, setCreateOpen] = useState(false);
   // HRP-660: arrived from an employee card — land on the new plan
@@ -141,8 +144,9 @@ export default function DevelopmentPage() {
       setPdps(pdpData);
       setEmployees(empData.items);
       setSpecializations(specData);
+      setLoadError(false);
     } catch {
-      // ignore
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -268,6 +272,27 @@ export default function DevelopmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+  // HRP-731 / HRP-257: the assessment page hands over the competences that
+  // came out below the bar, so the plan closes exactly this assessment's
+  // growth zones instead of the whole grade matrix. POST /pdp has taken an
+  // explicit competence list since HRP-665 — only the caller is new.
+  const deepLinkAssessment = useMemo(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    const assessmentId = params.get("assessment_id");
+    const competenceIds = (params.get("competence_ids") ?? "")
+      .split(",")
+      .filter(Boolean);
+    return assessmentId && competenceIds.length
+      ? { assessmentId, competenceIds }
+      : null;
+    // read once on mount — the filter mirror below strips the params
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // HRP-731 review: competence -> assessed skill level, so plan items keep
+  // the level cap the assessment measured at.
+  const [assessmentLevels, setAssessmentLevels] = useState<
+    Map<string, string | null>
+  >(new Map());
   const deepLinkConsumed = useRef(false);
 
   useEffect(() => {
@@ -289,9 +314,37 @@ export default function DevelopmentPage() {
         );
       }
       const name = emp.user_name?.trim() || emp.user_email || "";
-      setForm({ ...emptyForm, title: t("defaultTitleFor", { name }) });
       setOpenedFromCard(true);
       setCreateOpen(true);
+      if (deepLinkAssessment) {
+        // HRP-257: the plan is named after the assessment it answers, and
+        // carries no development specialization / grade — its items come
+        // from the assessment, not from a target position.
+        let title = t("defaultTitleFor", { name });
+        try {
+          const source = await api.get<AssessmentDetail>(
+            `/assessments/${deepLinkAssessment.assessmentId}`,
+          );
+          if (source.title) title = source.title;
+          // HRP-731 review: carry each competence's assessed skill level
+          // across. Without it the plan attaches every material the
+          // competence has, at every level, instead of stopping at the
+          // level the assessment actually measured (HRP-189's cap).
+          setAssessmentLevels(
+            new Map(
+              (source.competences ?? []).map((c) => [
+                c.competence_id,
+                c.skill_level_id,
+              ]),
+            ),
+          );
+        } catch {
+          // fall back to the employee-named default and unlevelled items
+        }
+        setForm({ ...emptyForm, title, employee_id: emp.id });
+        return;
+      }
+      setForm({ ...emptyForm, title: t("defaultTitleFor", { name }) });
       await prefillFromEmployee(emp);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -318,6 +371,17 @@ export default function DevelopmentPage() {
         specialization_id: form.specialization_id || null,
         grade_id: form.grade_id || null,
         deadline: form.deadline || null,
+        ...(deepLinkAssessment
+          ? {
+              assessment_id: deepLinkAssessment.assessmentId,
+              competences: deepLinkAssessment.competenceIds.map(
+                (competence_id) => ({
+                  competence_id,
+                  skill_level_id: assessmentLevels.get(competence_id) ?? null,
+                }),
+              ),
+            }
+          : {}),
       });
       toast.success(t("toastCreated"));
       setCreateOpen(false);
@@ -436,7 +500,15 @@ export default function DevelopmentPage() {
         )}
       </div>
 
-      {pdps.length === 0 ? (
+      {loadError ? (
+        <LoadErrorState
+          testIdPrefix="development"
+          onRetry={() => {
+            setLoading(true);
+            void load();
+          }}
+        />
+      ) : pdps.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="development-empty">{t("empty")}</div>
       ) : filtered.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="development-empty-filtered">{t("emptyFiltered")}</div>
@@ -556,7 +628,13 @@ export default function DevelopmentPage() {
             </div>
             <div className="space-y-2">
               <Label>{tc("employee")}</Label>
-              <Select value={form.employee_id} onValueChange={(val) => handleEmployeeChange(val ?? "")}>
+              {/* HRP-257: the plan belongs to the assessed employee —
+                  not something to re-pick here. */}
+              <Select
+                value={form.employee_id}
+                onValueChange={(val) => handleEmployeeChange(val ?? "")}
+                disabled={!!deepLinkAssessment}
+              >
                 <SelectTrigger className="w-full" data-testid="development-create-employee">
                   <SelectValue placeholder={t("selectEmployee")}>
                     {(() => { const emp = employees.find((e) => e.id === form.employee_id); return emp ? (emp.user_name?.trim() || emp.user_email || emp.position_title) : undefined; })()}
@@ -569,6 +647,11 @@ export default function DevelopmentPage() {
                 </SelectContent>
               </Select>
             </div>
+            {/* HRP-257: a plan built from an assessment has no development
+                specialization or grade — its items are the assessment's
+                growth zones, and the plan page names that source instead. */}
+            {!deepLinkAssessment && (
+            <>
             <div className="space-y-2">
               <Label>{t("fieldSpecialization")}</Label>
               <Select
@@ -623,6 +706,8 @@ export default function DevelopmentPage() {
                 </SelectContent>
               </Select>
             </div>
+            </>
+            )}
             <div className="space-y-2">
               <Label>{t("deadline")}</Label>
               {/* HRP-335: shared DatePicker (HRP-152) instead of the

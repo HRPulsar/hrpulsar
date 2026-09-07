@@ -100,6 +100,98 @@ class TestEventMapping:
         )
 
 
+class TestDispatchedEventNames:
+    """HRP-494 REDO — the events the dispatcher *builds*, not the ones
+    the mapping happens to declare.
+
+    ``_notify_analysis_result`` interpolated the run's wire mode into the
+    event name, so a resume-only run asked for
+    ``recruitment.candidate.resume_only_analysis_ready`` — a key in no
+    mapping. ``notify_sync`` logged a warning, returned 0 and no email
+    went out at all; only ``full`` happened to line up, which is why QA
+    got one of the two notices. The previous test asserted the map keys
+    as string literals, so it could not see this.
+    """
+
+    def _dispatch(self, monkeypatch, *, mode: str, ok: bool) -> dict:
+        from app.modules.recruitment.tasks import analysis as analysis_mod
+
+        seen: dict = {}
+
+        def _fake_notify_sync(db, *, event, tenant_id, **kwargs):
+            seen["event"] = event
+            seen.update(kwargs)
+            return 1
+
+        monkeypatch.setattr(
+            "app.modules.recruitment.notifications.notify_sync",
+            _fake_notify_sync,
+        )
+
+        class _CV:
+            id = uuid.uuid4()
+            candidate_id = CANDIDATE
+            vacancy_id = VACANCY
+
+        analysis_mod._notify_analysis_result(
+            None,
+            tenant_id=uuid.uuid4(),
+            cv=_CV(),
+            mode=mode,
+            ok=ok,
+            candidate_name="Nadezhda Voronova",
+        )
+        return seen
+
+    def test_resume_only_run_asks_for_a_mapped_event(self, monkeypatch):
+        seen = self._dispatch(monkeypatch, mode="resume_only", ok=True)
+        assert seen["event"] == "recruitment.candidate.resume_analysis_ready"
+        assert EVENT_TEMPLATE[seen["event"]] == "recruitment.resume_analysis_ready"
+
+    def test_resume_only_failure_is_mapped_too(self, monkeypatch):
+        seen = self._dispatch(monkeypatch, mode="resume_only", ok=False)
+        assert seen["event"] == "recruitment.candidate.resume_analysis_failed"
+        assert EVENT_TEMPLATE[seen["event"]] == "recruitment.resume_analysis_failed"
+
+    def test_full_run_keeps_its_event(self, monkeypatch):
+        seen = self._dispatch(monkeypatch, mode="full", ok=True)
+        assert seen["event"] == "recruitment.candidate.full_analysis_ready"
+        assert EVENT_TEMPLATE[seen["event"]] == "recruitment.full_analysis_ready"
+
+    def test_context_carries_the_name_and_the_deep_link(self, monkeypatch):
+        seen = self._dispatch(monkeypatch, mode="full", ok=True)
+        context = seen["context"]
+        assert context["candidate_name"] == "Nadezhda Voronova"
+        assert context["link"] == candidate_ai_insights_deep_link(CANDIDATE, VACANCY)
+
+
+class TestNotifiedCandidateName:
+    """HRP-494 REDO — one resolution behind all four notices.
+
+    The happy paths built the name from ``candidate.person`` alone. A
+    candidate added by parsing a resume has no Person row (``person_id``
+    is optional since HRP-181 REDO), so the name resolved to ``None`` and
+    the templates — which interpolate it unguarded — mailed "Interview
+    analysis ready for None" in subject and body.
+    """
+
+    def test_resume_sourced_candidate_is_named(self):
+        from app.modules.recruitment.models import Candidate
+        from app.modules.recruitment.tasks.analysis import _candidate_name
+
+        assert (
+            _candidate_name(Candidate(full_name="Nadezhda Voronova"))
+            == "Nadezhda Voronova"
+        )
+
+    def test_no_candidate_stays_none(self):
+        """``None`` beats the string "None": the template guards on
+        falsiness, an empty string does not read as a name."""
+        from app.modules.recruitment.tasks.analysis import _candidate_name
+
+        assert _candidate_name(None) is None
+
+
 class TestSeededTemplates:
     def test_every_code_ships_en_and_de(self):
         pairs = {(code, locale) for code, locale, _, _ in _migration().TEMPLATES}
@@ -132,8 +224,7 @@ class TestSeededTemplates:
     def test_resume_and_full_wordings_are_distinguishable(self):
         """The recruiter must be able to tell which mode they paid for."""
         bodies = {
-            (code, locale): body
-            for code, locale, _, body in _migration().TEMPLATES
+            (code, locale): body for code, locale, _, body in _migration().TEMPLATES
         }
         resume_en = bodies[("recruitment.resume_analysis_ready", "en")]
         full_en = bodies[("recruitment.full_analysis_ready", "en")]
@@ -146,9 +237,9 @@ class TestSeededTemplates:
             (code, locale): subject
             for code, locale, subject, _ in _migration().TEMPLATES
         }
-        rendered = Template(
-            subjects[("recruitment.full_analysis_ready", "en")]
-        ).render(candidate_name="Viktoriya Koptsova")
+        rendered = Template(subjects[("recruitment.full_analysis_ready", "en")]).render(
+            candidate_name="Viktoriya Koptsova"
+        )
         assert rendered == "Interview analysis ready for Viktoriya Koptsova"
         assert "None" not in rendered
 

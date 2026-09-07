@@ -1573,3 +1573,152 @@ class TestHRP291TerminalLock:
         with pytest.raises(HTTPException) as exc_info:
             await service.delete_card(db, tenant.id, card["id"])
         assert exc_info.value.status_code == 409
+
+
+# --------------- HRP-734: why a candidate does not qualify ---------------
+
+
+class TestCandidateBlockedByHRP734:
+    """The Status word cannot say *why*, so the row carries the axes.
+
+    After a re-assessment closes the competence gaps, a bare "not matched"
+    reads as stale data when it is in fact correct — the blocker has moved
+    to experience. These codes are what lets the row say so.
+    """
+
+    @pytest.mark.parametrize(
+        ("status", "has_comp", "has_spec", "comp_ok", "exp_ok", "expected"),
+        [
+            # A card with no Required blocks qualifies nobody, so there is
+            # no honest reason to give — the caller keeps the status label.
+            ("not_matched", False, False, False, False, None),
+            # Appointed is terminal: no reason, whatever the axes say, and
+            # the same answer on a card with no requirements — ``None`` is
+            # reserved for "nothing to judge", nothing else.
+            ("appointed", True, True, False, False, []),
+            ("appointed", True, True, True, True, []),
+            ("appointed", False, False, False, False, []),
+            # The stored status lags the live axes: a manual nominee is kept
+            # at not_matched until a pool recompute, but every axis already
+            # clears. The row has to read (and colour) as matched.
+            ("not_matched", True, True, True, True, []),
+            # Competences only.
+            ("matched", True, False, True, False, []),
+            ("not_matched", True, False, False, False, ["competences"]),
+            # Specializations / experience only.
+            ("matched", False, True, False, True, []),
+            ("not_matched", False, True, False, False, ["experience"]),
+            # Both axes required — the four corners.
+            ("matched", True, True, True, True, []),
+            ("not_matched", True, True, True, False, ["experience"]),
+            ("not_matched", True, True, False, True, ["competences"]),
+            (
+                "not_matched",
+                True,
+                True,
+                False,
+                False,
+                ["competences", "experience"],
+            ),
+        ],
+    )
+    def test_codes(
+        self, status, has_comp, has_spec, comp_ok, exp_ok, expected
+    ) -> None:
+        from app.modules.talent_market.common import _blocked_by_codes
+
+        assert (
+            _blocked_by_codes(
+                status=status,
+                has_comp=has_comp,
+                has_spec=has_spec,
+                comp_qualifies=comp_ok,
+                exp_qualifies=exp_ok,
+            )
+            == expected
+        )
+
+    async def test_a_cleared_axis_comes_back_empty(
+        self, db: AsyncSession, tenant, user, employee
+    ) -> None:
+        """The codes are computed live, not defaulted.
+
+        The negative case below would pass even with the breakdown left
+        unwired — an absent ``comp_qualifies`` reads as False and still
+        yields ["competences"]. Only an axis that actually clears proves
+        the card detail is reading real match data.
+        """
+        from app.modules.talent_market.models import TalentCard
+
+        group = CompetenceGroup(tenant_id=tenant.id, title="G-pass")
+        db.add(group)
+        await db.flush()
+        comp = Competence(tenant_id=tenant.id, group_id=group.id, title="C-pass")
+        level = SkillLevel(tenant_id=tenant.id, title="High-pass", sort_index=0)
+        db.add_all([comp, level])
+        await db.flush()
+
+        card_dict = await service.create_card(db, tenant.id, user.id, _card_create())
+        card = await db.get(TalentCard, card_dict["id"])
+        db.add(
+            TalentCardCompetence(
+                card_id=card.id, competence_id=comp.id, skill_level_id=level.id
+            )
+        )
+        await db.commit()
+        # 90% against the card's default 80% bar — the one axis this card
+        # gates on, cleared for real.
+        await TestComputeMatchHRP129()._add_done_assessment(
+            db, tenant, employee, comp, level, 90
+        )
+        await service.add_candidate(
+            db, tenant.id, card.id, CandidateAdd(employee_id=employee.id)
+        )
+
+        detail = await service.get_card_detail(db, tenant.id, card.id)
+        row = detail["candidates"][0]
+        assert row["comp_qualifies"] is True
+        assert row["blocked_by"] == []
+
+    async def test_card_detail_carries_the_reason(
+        self, db: AsyncSession, tenant, user, employee
+    ) -> None:
+        """Wiring check: the codes reach the card payload the page reads."""
+        from app.modules.talent_market.models import TalentCard
+
+        group = CompetenceGroup(tenant_id=tenant.id, title="G")
+        db.add(group)
+        await db.flush()
+        comp = Competence(tenant_id=tenant.id, group_id=group.id, title="C")
+        level = SkillLevel(tenant_id=tenant.id, title="High", sort_index=0)
+        db.add_all([comp, level])
+        await db.flush()
+
+        card_dict = await service.create_card(db, tenant.id, user.id, _card_create())
+        card = await db.get(TalentCard, card_dict["id"])
+        db.add(
+            TalentCardCompetence(
+                card_id=card.id, competence_id=comp.id, skill_level_id=level.id
+            )
+        )
+        await db.commit()
+        await service.add_candidate(
+            db, tenant.id, card.id, CandidateAdd(employee_id=employee.id)
+        )
+
+        detail = await service.get_card_detail(db, tenant.id, card.id)
+        row = detail["candidates"][0]
+        # No assessment covers the required competence, so that axis blocks;
+        # the card sets no specializations, so experience is not an axis.
+        assert row["blocked_by"] == ["competences"]
+
+    async def test_no_requirements_means_no_reason(
+        self, db: AsyncSession, tenant, user, employee
+    ) -> None:
+        card = await service.create_card(db, tenant.id, user.id, _card_create())
+        await service.add_candidate(
+            db, tenant.id, card["id"], CandidateAdd(employee_id=employee.id)
+        )
+
+        detail = await service.get_card_detail(db, tenant.id, card["id"])
+        assert detail["candidates"][0]["blocked_by"] is None

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core import rbac_hooks
+from app.core.access_scope import can_see_position_grades
 from app.core.email import (
     send_invitation_email,
     send_invitation_reminder_email,
@@ -710,6 +711,15 @@ async def get_me(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
         raise AppError("user_not_found", status.HTTP_404_NOT_FOUND)
     avatar_url = await _resolve_avatar_url(db, user.avatar_file_id)
     payload = _user_to_dict(user, avatar_url)
+
+    # HRP-710: the answer, not the inputs to it. The SPA used to re-derive
+    # "may I see a position's grade and specialization" from the role list
+    # plus ``tenant_directory_show_grades`` below — a copy of
+    # ``GRADE_ROLE_CODES`` that had to be kept in step by hand. Computed
+    # outside the tenant branch: the predicate short-circuits on the role
+    # set before it ever looks the tenant up, so a payload built without a
+    # tenant row still answers for the roles that carry the pair.
+    payload["can_view_job_profile"] = await can_see_position_grades(db, user)
 
     # Demo-session metadata so the SPA can render <DemoBanner/> without
     # a second /tenant lookup. Cheap: tenant id is on the user already.

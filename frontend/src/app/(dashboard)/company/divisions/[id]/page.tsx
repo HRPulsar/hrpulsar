@@ -64,6 +64,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ArrowLeft, Pencil, Users, X } from "lucide-react";
 import { toast } from "sonner";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 const emptyDivisionForm = {
   name: "",
@@ -93,6 +94,7 @@ function employeeLabel(
 
 export default function DivisionDetailPage() {
   const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   const tc = useTranslations("common");
   const { id } = useParams<{ id: string }>();
   const { canManage, canViewHrData } = usePermissions();
@@ -206,8 +208,13 @@ export default function DivisionDetailPage() {
     [scopedEmployees],
   );
   const gradeOptions = useMemo(
-    () => deriveGradeOptions(scopedEmployees),
-    [scopedEmployees],
+    () =>
+      // HRP-735: deriveGradeOptions sorts on the stored English title, so
+      // re-sort once the labels are localized or the picker reads jumbled.
+      deriveGradeOptions(scopedEmployees)
+        .map((o) => ({ ...o, title: gradeTitleLabel(tRef, o.title) }))
+        .sort((a, b) => a.title.localeCompare(b.title)),
+    [scopedEmployees, tRef],
   );
   // HRP-58 REDO: union of the division's mapped specializations (what the
   // tiles render, zero-employee ones included) and the specializations the

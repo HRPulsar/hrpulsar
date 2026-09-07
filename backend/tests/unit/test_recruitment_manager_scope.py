@@ -388,3 +388,163 @@ class TestManagerReadsTheAssessmentMatrix:
             json={"audit_event_id": str(uuid.uuid4())},
         )
         assert reverted.status_code == 403, reverted.text
+
+
+class TestInternalShortlistIsScopedByTheVacancy:
+    """HRP-703: the shortlist is scoped by the requisition, not the viewer.
+
+    The decision on HRP-678: internal matching is a legitimate-interest
+    read the employer already makes for its own staffing, so whoever may
+    open a vacancy sees its whole internal shortlist. The HRP-149 profile
+    scope that narrows the talent market's directory browsing is
+    deliberately NOT applied here -- it protects looking colleagues up,
+    not a requisition's own match results, and the recruiting roles that
+    reach this endpoint are not talent-market viewers at all.
+
+    Privacy is controlled per requisition instead: ``internal_search_allowed``
+    decides whether anyone is matched, ``vacancy_scope`` decides who may
+    open the vacancy. Reversing the call means filtering ``items`` through
+    ``can_view_profile``; this test is what would go red.
+    """
+
+    async def _employee(self, db: AsyncSession, tenant, division_id, name: str):
+        u = User(
+            email=f"tm-{uuid.uuid4().hex[:8]}@test.com",
+            password_hash=hash_password("x"),
+            first_name=name,
+            last_name="Match",
+            tenant_id=tenant.id,
+            email_verified_at=datetime.now(timezone.utc),
+        )
+        db.add(u)
+        await db.commit()
+        await db.refresh(u)
+        emp = Employee(
+            user_id=u.id,
+            tenant_id=tenant.id,
+            hire_date=date(2024, 1, 1),
+            division_id=division_id,
+            position_title="Engineer",
+        )
+        db.add(emp)
+        await db.commit()
+        await db.refresh(emp)
+        return emp
+
+    async def test_manager_sees_matches_from_every_division(
+        self, db: AsyncSession, client: AsyncClient, tenant, hiring
+    ):
+        from app.modules.talent_market.models import TalentCandidate, TalentCard
+
+        vacancy = hiring["theirs_vacancy"]
+        # The manager manages "mine" and is admitted to this neighbouring
+        # requisition by being named its hiring manager -- the only gate.
+        vacancy.hiring_manager_id = hiring["mgr_user"].id
+
+        card = TalentCard(
+            tenant_id=tenant.id,
+            author_id=hiring["rec_user"].id,
+            title="Twin",
+            card_type="vacancy",
+            start_date=date.today(),
+        )
+        db.add(card)
+        await db.commit()
+        await db.refresh(card)
+        vacancy.talent_card_id = card.id
+        await db.commit()
+
+        mine_emp = await self._employee(
+            db, tenant, hiring["mine_vacancy"].division_id, "Insider"
+        )
+        theirs_emp = await self._employee(db, tenant, vacancy.division_id, "Outsider")
+        db.add_all(
+            [
+                TalentCandidate(
+                    card_id=card.id,
+                    employee_id=mine_emp.id,
+                    status="matched",
+                    match_score=80,
+                ),
+                TalentCandidate(
+                    card_id=card.id,
+                    employee_id=theirs_emp.id,
+                    status="matched",
+                    match_score=60,
+                ),
+            ]
+        )
+        await db.commit()
+
+        resp = await client.get(
+            f"/api/recruitment/vacancies/{vacancy.id}/internal-candidates",
+            headers=_headers(hiring["mgr_user"]),
+        )
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        assert {i["employee_id"] for i in payload["items"]} == {
+            str(mine_emp.id),
+            str(theirs_emp.id),
+        }
+        # Names and scores come through for both, including the employee
+        # from a division this manager does not manage.
+        by_id = {i["employee_id"]: i for i in payload["items"]}
+        assert by_id[str(theirs_emp.id)]["employee_name"] == "Outsider Match"
+        assert by_id[str(theirs_emp.id)]["match_score"] == 60
+
+    async def test_a_manager_outside_the_vacancy_is_still_refused(
+        self, client: AsyncClient, hiring
+    ):
+        """The gate that does apply: no access to the vacancy, no shortlist."""
+        resp = await client.get(
+            f"/api/recruitment/vacancies/{hiring['theirs_vacancy'].id}"
+            "/internal-candidates",
+            headers=_headers(hiring["mgr_user"]),
+        )
+        assert resp.status_code == 403, resp.text
+class TestManagerReadsTheVersionsPanelAndQuestions:
+    """HRP-701: the two GETs HRP-694 left on the narrow role tuple.
+
+    A manager opens the fullscreen canvas (matrix and canvas both admit
+    them since HRP-694), but the Versions panel and the Questions tab were
+    still ``admin / recruiter / hr / hiring_manager`` — both swallow a 403
+    into an empty state, so the panels simply rendered blank.
+    """
+
+    async def test_manager_reads_both_panels_of_its_own_vacancy(
+        self, client: AsyncClient, hiring
+    ):
+        h = _headers(hiring["mgr_user"])
+        vacancy_id = hiring["mine_vacancy"].id
+        for path in (
+            f"/api/recruitment/vacancies/{vacancy_id}/assessment-history",
+            f"/api/recruitment/vacancies/{vacancy_id}/question-sets",
+        ):
+            resp = await client.get(path, headers=h)
+            assert resp.status_code == 200, f"{path} -> {resp.status_code} {resp.text}"
+
+    async def test_a_neighbouring_division_stays_refused(
+        self, client: AsyncClient, hiring
+    ):
+        """Role opens the door, ``vacancy_scope`` still says which room."""
+        h = _headers(hiring["mgr_user"])
+        vacancy_id = hiring["theirs_vacancy"].id
+        for path in (
+            f"/api/recruitment/vacancies/{vacancy_id}/assessment-history",
+            f"/api/recruitment/vacancies/{vacancy_id}/question-sets",
+        ):
+            resp = await client.get(path, headers=h)
+            assert resp.status_code == 403, f"{path} -> {resp.status_code}"
+
+    async def test_employee_is_still_refused(
+        self, db: AsyncSession, client: AsyncClient, tenant, hiring
+    ):
+        """Widening stopped at the recruitment roles — not company-wide."""
+        h = _headers(await _user(db, tenant, "employee"))
+        vacancy_id = hiring["mine_vacancy"].id
+        for path in (
+            f"/api/recruitment/vacancies/{vacancy_id}/assessment-history",
+            f"/api/recruitment/vacancies/{vacancy_id}/question-sets",
+        ):
+            resp = await client.get(path, headers=h)
+            assert resp.status_code == 403, f"{path} -> {resp.status_code}"

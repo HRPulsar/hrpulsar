@@ -26,6 +26,10 @@ export interface User {
   /** HRP-637: tenant switch deciding whether a rank-and-file caller gets
    *  grade / specialization on positions. Mirrors `directory_show_grades`. */
   tenant_directory_show_grades?: boolean;
+  /** HRP-710: whether this caller may read a position's grade and
+   *  specialization, as answered by `can_see_position_grades` on the
+   *  backend — role set included, so the SPA does not mirror it. */
+  can_view_job_profile?: boolean;
 }
 
 export interface TokenResponse {
@@ -217,6 +221,11 @@ export interface EmployeeAlert {
 export interface EmployeeIssue {
   code: EmployeeIssueCode;
   label: string;
+  // HRP-720: ISO date the problem is scheduled to resolve on — an open
+  // plan's deadline or an open assessment's end date. Absent on list rows
+  // (the card is the only surface that renders it) and null when nothing
+  // is scheduled.
+  deadline?: string | null;
 }
 
 export interface Employee {
@@ -547,6 +556,9 @@ export interface Assessment {
   status_title: string;
   group_id: string | null;
   passing_score: number | null;
+  // HRP-733: NULL after creation means the position-driven prefill found
+  // no competences and the criteria still have to be picked by hand.
+  criteria_type?: CriteriaType | null;
   created_at: string;
   // HRP-161: stamped on transitions to ``done`` and ``cancelled``. The
   // detail page surfaces this in place of the deadline once the assessment
@@ -735,6 +747,9 @@ export interface PDP {
   id: string;
   title: string;
   employee_id: string;
+  // HRP-731: set when the plan was built from an assessment's growth
+  // zones — the plan page shows the source instead of dev spec/grade.
+  assessment_id?: string | null;
   employee_name: string | null;
   // HRP-333: EmployeeSummaryLine inputs for the plan's employee.
   employee_position_title?: string | null;
@@ -940,12 +955,17 @@ export interface DetailedCompetenceResult {
   // Origin scale levels have system_title NULL — the code labels them.
   level_code?: string | null;
   all_dont_know: boolean;
+  // HRP-715: role code -> percent for this competence, before the average
+  // across roles that `percent` reports. Missing for roles nobody completed.
+  role_percents?: Record<string, number>;
   skill_levels: DetailedSkillLevel[];
 }
 
 export interface DetailedResultsResponse {
   assessment_id: string;
   competences: DetailedCompetenceResult[];
+  // HRP-715: role code -> mean of its per-competence percents.
+  role_percents_overall?: Record<string, number>;
 }
 
 export interface AssessmentDetail extends Assessment {
@@ -1105,6 +1125,9 @@ export interface TalentCandidate {
   status: string;
   match_score: number | null;
   response_at: string | null;
+  // HRP-734: axes blocking this candidate ("competences" / "experience").
+  // Empty = nothing blocks; null/absent = the card states no requirements.
+  blocked_by?: string[] | null;
   appointed_at: string | null;
   /** HRP-173: per-axis breakdown mirroring CandidatePoolItem. */
   comp_match?: number | null;
@@ -1955,7 +1978,14 @@ export interface InterviewAIAssessment {
 
 export interface InterviewAnalysisCompetence {
   competence_id: string;
+  /** Canonical raw AI score, 0..1 (prompts pin the scale). */
   score: number | null;
+  /**
+   * ``score`` rebased onto the tenant's active assessment scale by the
+   * backend at read time (HRP-673). Render this one; ``score`` alone is
+   * NOT on the display scale.
+   */
+  normalized_score?: number | null;
   status: string;
   citations?: Array<{ start_sec?: number; speaker?: string; quote?: string }>;
   reasoning?: string;
@@ -2094,6 +2124,9 @@ export interface ConsentRequest {
   expires_at: string;
   signed_at: string | null;
   created_at: string;
+  /** HRP-684: when the link last went out — the first send equals
+   *  ``created_at``, a resend moves it forward. */
+  last_sent_at: string | null;
 }
 
 export interface ConsentTemplate {
@@ -2327,6 +2360,7 @@ export interface VacancyAnalytics {
   // HRP-425: names of the funnel's terminal stages, used as the tile labels.
   positive_stage_names: string[];
   negative_stage_names: string[];
+  neutral_stage_names: string[];
   total_candidates: number;
 }
 

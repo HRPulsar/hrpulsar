@@ -95,6 +95,11 @@ class AssessmentCreate(BaseModel):
     scale_id: uuid.UUID | None = None
     approver_id: uuid.UUID | None = None
     ended_at: datetime | None = None
+    # HRP-733: opt-in prefill for the single-employee dialog — criteria
+    # "current positions" plus the tenant's default rating scale, applied
+    # inside the creating transaction. Off by default so mass creation,
+    # group children and API clients keep creating a bare draft.
+    apply_position_criteria: bool = False
 
     _validate_ended_at = field_validator("ended_at")(not_past_deadline)
 
@@ -133,6 +138,10 @@ class AssessmentRead(BaseModel):
     cpa_id: uuid.UUID | None
     group_id: uuid.UUID | None = None
     tenant_id: uuid.UUID
+    # HRP-733: lets the caller see whether the creation-time prefill found
+    # anything — NULL means "criteria could not be derived, pick them by
+    # hand", which is what the dialog turns into a warning.
+    criteria_type: str | None = None
     started_at: datetime | None
     ended_at: datetime | None
     finished_at: datetime | None
@@ -466,12 +475,19 @@ class DetailedCompetenceResult(BaseModel):
     # the only way to label them (level_title stays for tenant levels).
     level_code: str | None = None
     all_dont_know: bool
+    # HRP-715: role code -> percent for this competence, computed the way
+    # `_recompute_assessment_results` scores each role before averaging
+    # across roles. Only roles whose participants completed; the synthetic
+    # "calibrated" role is a reviewer override, not a rater, and is left out.
+    role_percents: dict[str, int] = Field(default_factory=dict)
     skill_levels: list[DetailedSkillLevel]
 
 
 class DetailedResultsResponse(BaseModel):
     assessment_id: uuid.UUID
     competences: list[DetailedCompetenceResult]
+    # HRP-715: role code -> mean of its per-competence percents.
+    role_percents_overall: dict[str, int] = Field(default_factory=dict)
 
 
 # --- Status ---

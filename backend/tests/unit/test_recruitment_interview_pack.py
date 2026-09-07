@@ -14,7 +14,10 @@ import pytest
 from app.modules.recruitment import interview_service, service
 from app.modules.recruitment.manager_assessment_schemas import RoundCreate
 from app.modules.recruitment.models import AIAssessment, Interview
-from app.modules.recruitment.notifications import _resolve_interview_scheduled
+from app.modules.recruitment.notifications import (
+    _resolve_interview_attendees,
+    _resolve_interview_scheduled,
+)
 from app.modules.recruitment.schemas import (
     CandidateCreate,
     CandidateVacancyCreate,
@@ -54,6 +57,25 @@ async def _setup_cv(db: AsyncSession, tenant, user) -> dict:
         ),
     )
     return {"vacancy": vacancy, "candidate": candidate, "cv": cv}
+
+
+async def _make_user(db: AsyncSession, tenant):
+    """A second active user of the same tenant — a colleague to invite."""
+    from app.core.security import hash_password
+    from app.modules.auth.models import User
+
+    u = User(
+        email=f"colleague-{uuid.uuid4().hex[:8]}@test.com",
+        password_hash=hash_password("testpass123"),
+        first_name="Grace",
+        last_name="Hopper",
+        tenant_id=tenant.id,
+        email_verified_at=datetime.now(timezone.utc),
+    )
+    db.add(u)
+    await db.commit()
+    await db.refresh(u)
+    return u
 
 
 class TestScheduleModalPayload:
@@ -468,8 +490,9 @@ class TestScheduledNotification:
         assert payload["candidate_name"] == setup["candidate"]["full_name"]
         assert payload["candidate_name"] is not None
         assert payload["vacancy_title"] == setup["vacancy"]["title"]
-        # Europe/Berlin is UTC+2 in May.
-        assert payload["interview_date"] == "2026-05-28 14:00"
+        # Europe/Berlin is UTC+2 in May. HRP-699: the zone is named — the
+        # recipient may well read this in another country.
+        assert payload["interview_date"] == "2026-05-28 14:00 CEST"
         assert payload["interviewer_ids"] == [str(user.id)]
 
     @pytest.mark.asyncio
@@ -521,3 +544,183 @@ class TestScheduledNotification:
             {"interviewer_ids": [str(user.id)], "interview_date_iso": None},
         )
         assert [r.id for r in recipients] == [user.id]
+
+
+class TestLifecycleNotifications:
+    """HRP-699 — who is emailed when a scheduled interview is edited."""
+
+    @staticmethod
+    def _capture(monkeypatch) -> list[tuple[str, dict]]:
+        published: list[tuple[str, dict]] = []
+
+        async def _publish(event, payload):
+            published.append((event, payload))
+
+        monkeypatch.setattr(
+            "app.modules.recruitment.interview_service._publish_event", _publish
+        )
+        return published
+
+    async def _scheduled(self, db, tenant, user, cv_id, interviewers):
+        return await service.create_interview(
+            db,
+            tenant.id,
+            user.id,
+            cv_id,
+            InterviewCreate(
+                title="Tech screening",
+                interview_date=datetime.now(timezone.utc) + timedelta(days=3),
+                timezone="UTC",
+                interviewers=interviewers,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_added_interviewer_gets_the_scheduled_letter(
+        self, db, tenant, user, monkeypatch
+    ):
+        setup = await _setup_cv(db, tenant, user)
+        other = await _make_user(db, tenant)
+        created = await self._scheduled(db, tenant, user, setup["cv"]["id"], [])
+
+        published = self._capture(monkeypatch)
+        await service.update_interview(
+            db,
+            tenant.id,
+            created["id"],
+            InterviewUpdate(interviewers=[other.id]),
+        )
+
+        events = dict(published)
+        assert "recruitment.interview.scheduled" in events
+        assert events["recruitment.interview.scheduled"]["interviewer_ids"] == [
+            str(other.id)
+        ]
+        assert "recruitment.interview.rescheduled" not in events
+
+    @pytest.mark.asyncio
+    async def test_date_change_notifies_the_existing_attendees_only(
+        self, db, tenant, user, monkeypatch
+    ):
+        setup = await _setup_cv(db, tenant, user)
+        other = await _make_user(db, tenant)
+        created = await self._scheduled(db, tenant, user, setup["cv"]["id"], [user.id])
+
+        published = self._capture(monkeypatch)
+        await service.update_interview(
+            db,
+            tenant.id,
+            created["id"],
+            InterviewUpdate(
+                interviewers=[user.id, other.id],
+                interview_date=datetime.now(timezone.utc) + timedelta(days=5),
+            ),
+        )
+
+        events = dict(published)
+        # The newcomer is invited, not "moved" — one letter each.
+        assert events["recruitment.interview.scheduled"]["interviewer_ids"] == [
+            str(other.id)
+        ]
+        assert events["recruitment.interview.rescheduled"]["interviewer_ids"] == [
+            str(user.id)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_removed_interviewer_is_told(
+        self, db, tenant, user, monkeypatch
+    ):
+        setup = await _setup_cv(db, tenant, user)
+        other = await _make_user(db, tenant)
+        created = await self._scheduled(
+            db, tenant, user, setup["cv"]["id"], [user.id, other.id]
+        )
+
+        published = self._capture(monkeypatch)
+        await service.update_interview(
+            db,
+            tenant.id,
+            created["id"],
+            InterviewUpdate(interviewers=[user.id]),
+        )
+
+        events = dict(published)
+        assert events["recruitment.interview.interviewer_removed"][
+            "interviewer_ids"
+        ] == [str(other.id)]
+        assert "recruitment.interview.scheduled" not in events
+
+    @pytest.mark.asyncio
+    async def test_archive_cancels_for_everyone(
+        self, db, tenant, user, monkeypatch
+    ):
+        setup = await _setup_cv(db, tenant, user)
+        other = await _make_user(db, tenant)
+        created = await self._scheduled(
+            db, tenant, user, setup["cv"]["id"], [user.id, other.id]
+        )
+
+        published = self._capture(monkeypatch)
+        await service.archive_interview(db, tenant.id, user.id, created["id"])
+
+        events = dict(published)
+        assert set(
+            events["recruitment.interview.cancelled"]["interviewer_ids"]
+        ) == {str(user.id), str(other.id)}
+
+    @pytest.mark.asyncio
+    async def test_untouched_interviewers_get_nothing(
+        self, db, tenant, user, monkeypatch
+    ):
+        setup = await _setup_cv(db, tenant, user)
+        created = await self._scheduled(db, tenant, user, setup["cv"]["id"], [user.id])
+
+        published = self._capture(monkeypatch)
+        await service.update_interview(
+            db, tenant.id, created["id"], InterviewUpdate(notes="ask about sharding")
+        )
+        assert published == []
+
+    @pytest.mark.asyncio
+    async def test_attendee_resolver_keeps_past_interviews(self, db, tenant, user):
+        """A cancellation still has to reach people after the slot passed."""
+        past = datetime.now(timezone.utc) - timedelta(hours=2)
+        recipients = await _resolve_interview_attendees(
+            db,
+            tenant.id,
+            {
+                "interviewer_ids": [str(user.id)],
+                "interview_date_iso": past.isoformat(),
+            },
+        )
+        assert [r.id for r in recipients] == [user.id]
+
+    @pytest.mark.asyncio
+    async def test_added_interviewer_is_invited_to_an_undated_interview(
+        self, db, tenant, user, monkeypatch
+    ):
+        """No slot yet is still an invitation — ``create_interview`` sends
+        it for an undated interview, so must the edit that adds someone."""
+        setup = await _setup_cv(db, tenant, user)
+        other = await _make_user(db, tenant)
+        created = await service.create_interview(
+            db,
+            tenant.id,
+            user.id,
+            setup["cv"]["id"],
+            InterviewCreate(title="Tech screening", timezone="UTC"),
+        )
+
+        published = self._capture(monkeypatch)
+        await service.update_interview(
+            db,
+            tenant.id,
+            created["id"],
+            InterviewUpdate(interviewers=[other.id]),
+        )
+
+        events = dict(published)
+        assert events["recruitment.interview.scheduled"]["interviewer_ids"] == [
+            str(other.id)
+        ]
+        assert "recruitment.interview.rescheduled" not in events

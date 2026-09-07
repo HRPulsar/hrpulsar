@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { api, taskErrorKey } from "@/lib/api";
+import { positionSourceLabel } from "./source-label";
 import type {
   Position,
   PositionLifecycleStatus,
@@ -68,6 +69,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 const LIFECYCLE_OPTIONS: PositionLifecycleStatus[] = [
   "active",
@@ -83,6 +85,7 @@ type GroupBy = "none" | "division" | "specialization";
 
 export default function PositionsPage() {
   const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   const tc = useTranslations("common");
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
@@ -467,7 +470,7 @@ export default function PositionsPage() {
                           <TableCell>
                             {pos.specialization_title || "—"}
                           </TableCell>
-                          <TableCell>{pos.grade_title || "—"}</TableCell>
+                          <TableCell>{gradeTitleLabel(tRef, pos.grade_title) || "—"}</TableCell>
                         </>
                       ) : null}
                       <TableCell data-testid={`positions-row-${pos.id}-division`}>
@@ -736,10 +739,10 @@ export default function PositionsPage() {
                                 data-testid={`positions-row-${pos.id}-grade-link`}
                                 className="text-primary hover:underline"
                               >
-                                {pos.grade_title}
+                                {gradeTitleLabel(tRef, pos.grade_title)}
                               </Link>
                             ) : (
-                              pos.grade_title
+                              gradeTitleLabel(tRef, pos.grade_title)
                             )
                           ) : canEdit(pos) ? (
                             <Button
@@ -804,7 +807,7 @@ export default function PositionsPage() {
                     ) : null}
               <TableCell>
                 <Badge variant="outline">
-                  {pos.source === "ai_approved" ? t("sourceAi") : t("sourceManual")}
+                  {positionSourceLabel(t, pos.source)}
                 </Badge>
               </TableCell>
               <TableCell>

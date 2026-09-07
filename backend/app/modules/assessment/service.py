@@ -4,6 +4,7 @@ import secrets
 import uuid
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import status
@@ -595,6 +596,83 @@ async def _auto_assign_manager(
     )
 
 
+async def _default_scale_id(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> uuid.UUID | None:
+    """HRP-733: the rating scale the tenant configured, else the seeded one.
+
+    ``AnswerScale.is_default`` is a plain flag and only the *global* default
+    is guarded by a unique index (``tenant_id IS NULL``). So a tenant that
+    marked one of its own scales as the default wins here, and every tenant
+    that never did falls back to the seeded global scale. Snapshot copies
+    always carry ``is_default = false``, but the filter says so out loud —
+    a snapshot must never be handed to a new assessment.
+    """
+    q = (
+        select(AnswerScale.id)
+        .where(
+            AnswerScale.is_default.is_(True),
+            AnswerScale.deleted_at.is_(None),
+            AnswerScale.is_snapshot.is_(False),
+            or_(
+                AnswerScale.tenant_id == tenant_id,
+                AnswerScale.tenant_id.is_(None),
+            ),
+        )
+        # False sorts before True, so the tenant's own scale outranks global.
+        # created_at breaks a tie deterministically: nothing stops a tenant
+        # from flagging two of its own scales (only the global default is
+        # index-guarded), and picking at random would be a coin flip per call.
+        .order_by(AnswerScale.tenant_id.is_(None), AnswerScale.created_at)
+        .limit(1)
+    )
+    return (await db.execute(q)).scalar_one_or_none()
+
+
+async def _apply_creation_defaults(
+    db: AsyncSession, tenant_id: uuid.UUID, assessment: Assessment
+) -> None:
+    """HRP-733: fill criteria and rating scale in the creating transaction.
+
+    Starting an assessment from an employee card is about one person, and
+    "measure them against the position they hold today" is the only reading
+    that makes sense there. Filling both here rather than with two follow-up
+    requests means the assessment is never persisted half-configured and the
+    dialog needs one click instead of four.
+
+    Criteria are left alone when the employee's position resolves to no
+    competences — an empty criteria set could not be sent anyway, and a NULL
+    ``criteria_type`` is exactly the signal the dialog turns into "pick the
+    criteria by hand". Resolving the competences twice (once here, once
+    inside ``_apply_criteria_to_assessment``) is deliberate: it keeps this
+    path byte-identical to ``PUT /assessments/{id}/criteria`` instead of
+    growing a second copy of the same rules.
+
+    An explicit ``specialization_id`` / ``grade_id`` in the payload wins:
+    "current positions" writes NULLs into both, so the target the caller
+    named would be dropped without a word (review finding). The criteria are
+    then theirs to set, exactly as they are for an employee without a position.
+    """
+    if assessment.specialization_id is None and assessment.grade_id is None:
+        items = await _resolve_current_position_competences_for_employee(
+            db, tenant_id, assessment.employee_id
+        )
+        if items:
+            criteria = SimpleNamespace(
+                criteria_type="current_positions",
+                specialization_id=None,
+                grade_id=None,
+                competences=None,
+                passing_score=None,
+            )
+            passing_score = await _resolve_passing_score(db, tenant_id, criteria)
+            await _apply_criteria_to_assessment(
+                db, tenant_id, assessment, criteria, passing_score
+            )
+    if assessment.scale_id is None:
+        assessment.scale_id = await _default_scale_id(db, tenant_id)
+
+
 async def create_assessment(
     db: AsyncSession, tenant_id: uuid.UUID, initiator_id: uuid.UUID, data
 ) -> dict:
@@ -642,6 +720,10 @@ async def create_assessment(
     # GF6: For 180/360, auto-assign division manager as reviewer
     if atype.code in ("180", "360"):
         await _auto_assign_manager(db, tenant_id, a.id, data.employee_id)
+
+    # HRP-733: same transaction as the row itself — see _apply_creation_defaults.
+    if getattr(data, "apply_position_criteria", False):
+        await _apply_creation_defaults(db, tenant_id, a)
 
     await db.commit()
 
@@ -2534,15 +2616,19 @@ def _detailed_skill_level_percents(
     options_by_id: dict[uuid.UUID, AnswerOption],
     calibrated_by_indicator: dict[uuid.UUID, uuid.UUID],
     max_weight: float,
-) -> list[float]:
+) -> dict[str, float]:
     """Per-role (and synthetic calibrated-role) percents for one skill level.
 
     Mirrors ``_recompute_assessment_results`` within a single level (weighted
     indicator avg per role). HRP-185 REDO #3: a calibrated indicator's per-role
     answers are skipped and the override weight contributes once as a synthetic
     "calibrated" role, matching ``_compute_breakdown_for_assessment``.
+
+    HRP-715: keyed by role instead of a flat list — the level average is
+    still ``.values()``, but the caller can now also fold the same numbers
+    per role across skill levels for the self-vs-manager divergence block.
     """
-    role_level_percents: list[float] = []
+    role_level_percents: dict[str, float] = {}
     if max_weight <= 0:
         return role_level_percents
 
@@ -2573,7 +2659,7 @@ def _detailed_skill_level_percents(
             weight_sum += weight
         if weight_sum == 0:
             continue
-        role_level_percents.append(weighted_sum / weight_sum / max_weight * 100.0)
+        role_level_percents[role] = weighted_sum / weight_sum / max_weight * 100.0
 
     # Synthetic "calibrated" role contributes the weighted
     # average of the override weights for the calibrated
@@ -2591,7 +2677,7 @@ def _detailed_skill_level_percents(
         calibrated_weighted_sum += float(opt.weight) * weight
         calibrated_weight_sum += weight
     if calibrated_weight_sum > 0:
-        role_level_percents.append(
+        role_level_percents["calibrated"] = (
             calibrated_weighted_sum / calibrated_weight_sum / max_weight * 100.0
         )
 
@@ -2794,6 +2880,9 @@ async def get_detailed_results(
         ).append(ans)
 
     competences_out: list[dict] = []
+    # HRP-715: role code -> its per-competence percents, averaged into
+    # `role_percents_overall` once every competence is folded in.
+    overall_by_role: dict[str, list[int]] = {}
 
     for ac in assessment_competences:
         comp = competence_by_id.get(ac.competence_id)
@@ -2869,6 +2958,9 @@ async def get_detailed_results(
         )
 
         skill_levels_out: list[dict] = []
+        # HRP-715: role code → its level percents, folded into a per-role
+        # competence percent below.
+        level_percents_by_role: dict[str, list[float]] = {}
         for sl_id in ordered_level_keys:
             sl_indicators = indicators_by_level[sl_id]
             sl_obj = skill_levels_by_id.get(sl_id) if sl_id else None
@@ -2904,13 +2996,14 @@ async def get_detailed_results(
                 max_weight=max_weight,
             )
 
+            for role_code, role_value in role_level_percents.items():
+                level_percents_by_role.setdefault(role_code, []).append(role_value)
+
             if role_level_percents:
+                level_values = list(role_level_percents.values())
                 percent_for_skill_level = max(
                     0,
-                    min(
-                        100,
-                        round(sum(role_level_percents) / len(role_level_percents)),
-                    ),
+                    min(100, round(sum(level_values) / len(level_values))),
                 )
                 all_dont_know_level = False
             else:
@@ -2952,6 +3045,20 @@ async def get_detailed_results(
             else True
         )
 
+        # HRP-715: per-role competence percent — the role step of
+        # `_recompute_assessment_results` (mean over the skill levels that
+        # role answered), kept before the cross-role average that the
+        # stored `AssessmentResult.percent` reports. The synthetic
+        # "calibrated" role is a reviewer override, not a rater, so it
+        # stays out of the divergence view.
+        role_percents: dict[str, int] = {
+            role_code: max(0, min(100, round(sum(values) / len(values))))
+            for role_code, values in level_percents_by_role.items()
+            if role_code != "calibrated" and values
+        }
+        for role_code, role_value in role_percents.items():
+            overall_by_role.setdefault(role_code, []).append(role_value)
+
         competences_out.append(
             {
                 "competence_id": comp.id,
@@ -2977,11 +3084,21 @@ async def get_detailed_results(
                 "level_title": agg_level_title if not all_dont_know_comp else None,
                 "level_code": agg_level_code if not all_dont_know_comp else None,
                 "all_dont_know": all_dont_know_comp,
+                "role_percents": role_percents,
                 "skill_levels": skill_levels_out,
             }
         )
 
-    return {"assessment_id": assessment_id, "competences": competences_out}
+    return {
+        "assessment_id": assessment_id,
+        "competences": competences_out,
+        # HRP-715: role → mean of its per-competence percents, the headline
+        # number of the self-vs-manager divergence block.
+        "role_percents_overall": {
+            role_code: round(sum(values) / len(values))
+            for role_code, values in overall_by_role.items()
+        },
+    }
 
 
 # --- Answer Scales ---

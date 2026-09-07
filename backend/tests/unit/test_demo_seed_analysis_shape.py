@@ -114,8 +114,8 @@ def _experience_period(entry: dict) -> str:
 def _anchor_exists(excerpt: dict, resume: dict) -> bool:
     """Would ``ParsedResumeEditor`` find a home for this excerpt?
 
-    Mirrors ``findExperienceTarget`` / ``findGenericTarget``
-    (parsed-resume-editor.tsx): the experience section matches on
+    Mirrors ``resumeItemKeyForExcerpt`` (resume-excerpt-focus.ts), the one
+    matcher both directions of the link use: the experience section matches on
     company + period, every other section on a two-way substring test
     against the rendered item text. ``summary`` renders no items at all,
     so the editor falls back to the section block — a substring check on
@@ -222,6 +222,10 @@ def test_parsed_resumes_are_in_the_parser_payload_shape():
     field names — ``position`` with ``role`` as its mirror, newest-first
     experience, no unknown top-level keys."""
     from app.modules.demo.seed_data import PARSED_RESUMES, candidates
+    from app.modules.demo.seed_data_recruitment_extras import (
+        EXTRA_CANDIDATES,
+        EXTRA_PARSED_RESUMES,
+    )
 
     allowed = {
         "summary",
@@ -234,8 +238,10 @@ def test_parsed_resumes_are_in_the_parser_payload_shape():
         "languages",
         "certificates",
     }
-    emails = {spec["email"] for spec in candidates()}
-    for email, resume in PARSED_RESUMES.items():
+    # HRP-726: every seeded candidate carries a resume now, and the
+    # extras' fixtures owe the reader the same field names.
+    emails = {spec["email"] for spec in (*candidates(), *EXTRA_CANDIDATES)}
+    for email, resume in {**PARSED_RESUMES, **EXTRA_PARSED_RESUMES}.items():
         assert email in emails, email
         assert set(resume) <= allowed, set(resume) - allowed
         assert resume["experience"] and resume["skills"]
@@ -289,3 +295,156 @@ def test_parser_prompt_asks_for_every_field_the_editor_renders():
     for section, keys in _NESTED_FIELDS.items():
         declared = _prompt_object_keys(section)
         assert keys <= declared, (section, keys - declared)
+
+
+# ---------------------------------------------------------------------------
+# HRP-726 — the generated analyses for the six supporting funnels
+# ---------------------------------------------------------------------------
+#
+# Elena / Tomás / Priya keep their hand-authored payloads above. The rest
+# are built by ``build_candidate_analysis`` from the candidate spec, so
+# the guard runs over the *product* of the builder rather than over a
+# second set of literals — a spec that grows a field the writer schema
+# does not know fails here instead of on the demo.
+
+
+def _generated_specs() -> list[dict]:
+    from app.modules.demo.seed_data import candidates
+    from app.modules.demo.seed_data_recruitment_extras import EXTRA_CANDIDATES
+
+    return [
+        spec for spec in (*candidates(), *EXTRA_CANDIDATES) if spec.get("analysis_mode")
+    ]
+
+
+def _spec_ids() -> list[str]:
+    return [spec["email"] for spec in _generated_specs()]
+
+
+def _all_resumes() -> dict[str, dict]:
+    from app.modules.demo.seed_data import PARSED_RESUMES
+    from app.modules.demo.seed_data_recruitment_extras import EXTRA_PARSED_RESUMES
+
+    return {**PARSED_RESUMES, **EXTRA_PARSED_RESUMES}
+
+
+@pytest.mark.parametrize("spec", _generated_specs(), ids=_spec_ids())
+def test_generated_analysis_matches_the_writer_schema(spec: dict):
+    from app.modules.demo.seed_data import build_candidate_analysis
+    from app.modules.recruitment.prompts_interview import (
+        InterviewAnalysisResult,
+        ResumeOnlyAnalysisResult,
+    )
+
+    built = build_candidate_analysis(spec)
+    schema = (
+        InterviewAnalysisResult
+        if spec["analysis_mode"] == "full"
+        else ResumeOnlyAnalysisResult
+    )
+    written = schema.model_validate(built).model_dump()
+    assert set(built) == set(written), set(built) ^ set(written)
+    assert built["verdict"] and built["verdict_summary"]
+    assert built["competence_assessments"]
+    assert built["blind_spots"]
+
+
+@pytest.mark.parametrize("spec", _generated_specs(), ids=_spec_ids())
+def test_generated_analysis_scores_its_own_vacancy_profile(spec: dict):
+    """A competence the vacancy profile does not carry renders as a
+    nameless row — the matrix resolves labels through the profile."""
+    from app.modules.demo.seed_data import VACANCIES, build_candidate_analysis
+    from app.modules.demo.seed_data_recruitment_extras import EXTRA_VACANCIES
+
+    slugs = {
+        c["id"]
+        for v in (*VACANCIES, *EXTRA_VACANCIES)
+        if v["key"] == spec["vacancy_key"]
+        for c in (v.get("profile") or {}).get("competences", [])
+    }
+    built = build_candidate_analysis(spec)
+    for ca in built["competence_assessments"]:
+        assert ca["competence_id"] in slugs, (spec["email"], ca["competence_id"])
+    for item in built["blind_spots"]:
+        assert item["competence_id"] in slugs, (spec["email"], item["competence_id"])
+    for key in ("manager_scores",):
+        for slug in spec.get(key) or {}:
+            assert slug in slugs, (spec["email"], slug)
+
+
+@pytest.mark.parametrize("spec", _generated_specs(), ids=_spec_ids())
+def test_generated_analysis_agrees_with_the_list_row(spec: dict):
+    """The mirror columns and the run are the same four sentences.
+
+    HRP-726 is exactly this drifting apart: the list printed a verdict
+    the card could not account for. And a resume-only run may not say
+    ``recommended`` — the guard rewrites it, so a fixture that did would
+    contradict itself on the first re-analyze.
+    """
+    from app.modules.demo.seed_data import build_candidate_analysis
+    from app.modules.recruitment.resume_analysis_service import (
+        apply_resume_only_verdict_guard,
+    )
+
+    built = build_candidate_analysis(spec)
+    assert built["verdict"] == spec["ai_verdict"]
+    assert built["verdict_summary"] == spec["ai_summary"]
+    assert built["key_strength"] == spec["ai_strength"]
+    assert built["key_risk"] == spec["ai_risk"]
+    assert built["risk_mitigation"] == spec["ai_mitigation"]
+    if spec["analysis_mode"] != "full":
+        verdict = built["verdict"]
+        assert apply_resume_only_verdict_guard(verdict) == (verdict, False)
+
+
+@pytest.mark.parametrize("locale", ["en", "de", "ru"])
+def test_every_generated_citation_lands_in_its_source(locale: str):
+    """Same acceptance as the Priya fixture, over the generated ones:
+    a resume-only chip must open the resume on a real item, and a
+    full-mode citation must quote something the reasoning says — in
+    every locale the demo ships, because both halves are translated
+    independently.
+    """
+    from app.modules.demo.seed_data import build_candidate_analysis
+    from app.modules.demo.seed_i18n import localize
+
+    resumes = _all_resumes()
+    for spec in _generated_specs():
+        # Same order the seeder uses: the spec is localized first and the
+        # payload is built from it. Building first and localizing after
+        # would hide a spec field that carries display text under a key
+        # ``localize`` does not translate.
+        built = build_candidate_analysis(localize(spec, locale))
+        resume = localize(resumes[spec["email"]], locale)
+        for ca in built["competence_assessments"]:
+            covered = ca["status"] != "not_covered"
+            if spec["analysis_mode"] == "full":
+                assert bool(ca["citations"]) is covered, ca["competence_id"]
+                for citation in ca["citations"]:
+                    assert citation["quote"] == ca["reasoning"], (
+                        locale,
+                        spec["email"],
+                    )
+                continue
+            assert bool(ca["resume_excerpts"]) is covered, ca["competence_id"]
+            for excerpt in ca["resume_excerpts"]:
+                assert _anchor_exists(excerpt, resume), (
+                    locale,
+                    spec["email"],
+                    ca["competence_id"],
+                    excerpt["excerpt_text"],
+                )
+
+
+def test_generated_transcripts_are_diarized():
+    """A full-mode fixture ships a transcript the segment parser can
+    split — otherwise the panel shows one undifferentiated blob and the
+    progress checklist leaves Diarization unticked."""
+    from app.modules.demo.seed_data import parse_transcript_segments
+
+    for spec in _generated_specs():
+        if spec["analysis_mode"] != "full":
+            continue
+        segments = parse_transcript_segments(spec["transcript"])
+        assert len(segments) >= 8, (spec["email"], len(segments))
+        assert {s["speaker"] for s in segments} == {"Recruiter", "Candidate"}

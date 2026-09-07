@@ -39,11 +39,11 @@ def generate_questions_task(
     from app.config import settings
     from app.modules.recruitment.models import (
         Candidate,
-        CandidateFile,
         CandidateQuestion,
         Vacancy,
         VacancyProfile,
     )
+    from app.modules.recruitment.resume_presence import load_parsed_resume_sync
 
     sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
     engine = create_engine(sync_url)
@@ -60,18 +60,11 @@ def generate_questions_task(
                 logger.error("Vacancy %s not found", vacancy_id)
                 return {"status": "error", "error": "Vacancy not found"}
 
-            # Get latest parsed resume
-            resume = db.execute(
-                select(CandidateFile)
-                .where(
-                    CandidateFile.candidate_id == candidate.id,
-                    CandidateFile.parse_status == "completed",
-                )
-                .order_by(CandidateFile.created_at.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-
-            if not resume or not resume.parsed_data:
+            # HRP-704: shared loader — resume files only, mirror as fallback.
+            # ``{}`` is a parse (``resume_presence`` counts it); only ``None``
+            # is absence.
+            resume_data = load_parsed_resume_sync(db, tenant_id, candidate.id)
+            if resume_data is None:
                 logger.error("No parsed resume for candidate %s", candidate_id)
                 return {"status": "error", "error": "No parsed resume found"}
 
@@ -96,7 +89,7 @@ def generate_questions_task(
             creds = resolve_generation_target_sync(db, vacancy.tenant_id, None)
             questions = asyncio.run(
                 generate_individual_questions(
-                    resume_data=resume.parsed_data,
+                    resume_data=resume_data,
                     profile_data=profile.profile_data,
                     vacancy_title=vacancy.title,
                     language=resolve_analysis_language_sync(db, tenant_id, vacancy),
@@ -205,6 +198,9 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
                 logger.error("Vacancy %s not found", vacancy_id)
                 return {"status": "error", "error": "Vacancy not found"}
 
+            # HRP-628 / HRP-702: resolved once — the prompt is written in
+            # this language and ``VacancyProfile.language`` records it.
+            analysis_language = resolve_analysis_language_sync(db, tenant_id, vacancy)
             vacancy_data = {
                 "vacancy_id": str(vacancy.id),
                 "title": vacancy.title,
@@ -222,7 +218,7 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
                 "tasks_kpi": json.dumps(vacancy.tasks_kpi) if vacancy.tasks_kpi else "",
                 # HRP-628: same as the interactive path — generated
                 # competence names follow the tenant's content language.
-                "language": resolve_analysis_language_sync(db, tenant_id, vacancy),
+                "language": analysis_language,
             }
 
             from app.modules.ai.providers import resolve_generation_target_sync
@@ -254,6 +250,7 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
                 existing.profile_data = profile_data
                 existing.version = existing.version + 1
                 existing.generated_by = "ai"
+                existing.language = analysis_language
                 if profile_data.get("coverage_note"):
                     existing.coverage_note = profile_data["coverage_note"]
             else:
@@ -262,7 +259,7 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
                     tenant_id=vacancy.tenant_id,
                     profile_data=profile_data,
                     version=1,
-                    language=vacancy.language or "en",
+                    language=analysis_language,
                     coverage_note=profile_data.get("coverage_note"),
                     generated_by="ai",
                 )

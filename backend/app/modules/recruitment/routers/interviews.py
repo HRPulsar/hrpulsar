@@ -586,19 +586,23 @@ async def enqueue_ai_analysis(
         raise AppError("interview_not_found", 404)
     if interview_row.candidate_vacancy_id != candidate_vacancy_id:
         raise AppError("interview_id_not_in_candidate_vacancy", 400)
-    res = await service.enqueue_analyze_or_cached(
-        db, current_user.tenant_id, data.interview_id
-    )
-    # ``enqueue_analyze_or_cached`` returns ``{"task_id", "status"}`` on
-    # cache miss and ``{"status": "completed", "cached": True}`` on hit.
-    # No ``AIAnalysisRun`` row exists for cache hits — the legacy
-    # interview-page entry point predates the runs table. Surface
-    # ``run_id=None`` so the schema does not lie with a fake UUID
-    # that the frontend might key list rows by or 404 against.
+    # HRP-492: the candidate card goes to ``enqueue_analyze``, not to the
+    # cache-aware entry point the interview page uses. A cache hit is by
+    # definition "transcript, profile and resume all unchanged", so from
+    # this surface it returned — instantly, and without a run row — the
+    # very analysis the block's banner had just called stale, leaving an
+    # outdated analysis with no way to refresh it. This button names its
+    # price (40 cr) and the caller picked it deliberately; the in-flight
+    # run it now creates is what blocks a second click.
+    res = await service.enqueue_analyze(db, current_user.tenant_id, data.interview_id)
+    run_id = res.get("run_id")
     return AIAnalysisEnqueueResponse(
         task_id=res.get("task_id"),
-        run_id=None,
-        status="queued" if res.get("status") != "completed" else "completed",
+        # ``None`` for an interview with no candidate-vacancy behind it —
+        # not reachable from this endpoint, but the field stays honest
+        # rather than inventing a UUID the frontend would 404 against.
+        run_id=uuid.UUID(run_id) if run_id else None,
+        status="queued",
         mode="full",
     )
 

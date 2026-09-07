@@ -10,6 +10,7 @@ import { Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import type { DictionaryItemUsage } from "@/lib/api/dictionaries";
 import { ALERT_TONE } from "@/lib/badge-tones";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 type Props = {
   usage: DictionaryItemUsage | null | undefined;
@@ -17,6 +18,7 @@ type Props = {
 
 export function UsageReferencesList({ usage }: Props) {
   const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   if (usage === null) {
     return (
       <div
@@ -96,7 +98,8 @@ export function UsageReferencesList({ usage }: Props) {
                 data-testid={`usage-references-chain-${c.id}`}
                 className="truncate"
               >
-                • {c.specialization_title ?? "—"} → {c.grade_title ?? "—"}
+                • {c.specialization_title ?? "—"} →{" "}
+                {gradeTitleLabel(tRef, c.grade_title) || "—"}
               </li>
             ))}
           </ul>

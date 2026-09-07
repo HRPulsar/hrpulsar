@@ -7,12 +7,12 @@ import { basename, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  deriveSalaryForSelection,
   deriveSalaryFromBands,
-  isSalaryEmpty,
   parseSalaryInput,
-  sameSalary,
   validateSalaryRange,
 } from "../lib/vacancy-salary";
+import type { SpecializationGradeRow } from "../lib/vacancy-salary";
 
 const FORM = readFileSync(
   resolve(
@@ -37,6 +37,10 @@ const EDIT = readFileSync(
     __dirname,
     "../app/(dashboard)/recruitment/requisitions/[id]/edit/page.tsx",
   ),
+  "utf8",
+);
+const HOOK = readFileSync(
+  resolve(__dirname, "../hooks/use-salary-autofill.ts"),
   "utf8",
 );
 
@@ -155,19 +159,50 @@ describe("deriveSalaryFromBands", () => {
   });
 });
 
-describe("isSalaryEmpty / sameSalary", () => {
-  it("detects an untouched group", () => {
-    expect(isSalaryEmpty(salary("", ""))).toBe(true);
-    expect(isSalaryEmpty(salary("", "", "EUR"))).toBe(false);
+describe("deriveSalaryForSelection", () => {
+  const rows: Record<string, SpecializationGradeRow[]> = {
+    backend: [
+      { grade_id: "junior", salary_min: 100, salary_max: 200, salary_currency: "EUR" },
+      { grade_id: "senior", salary_min: 300, salary_max: 400, salary_currency: "EUR" },
+    ],
+    frontend: [
+      { grade_id: "junior", salary_min: 90, salary_max: 180, salary_currency: "EUR" },
+    ],
+  };
+  const fetchGrades = async (id: string) => rows[id] ?? [];
+
+  it("spans only the grades that were actually picked", async () => {
+    expect(await deriveSalaryForSelection(["backend"], ["junior"], fetchGrades)).toEqual(
+      { salary_min: "100", salary_max: "200", salary_currency: "EUR" },
+    );
+    expect(
+      await deriveSalaryForSelection(["backend"], ["junior", "senior"], fetchGrades),
+    ).toEqual({ salary_min: "100", salary_max: "400", salary_currency: "EUR" });
   });
 
-  it("compares all three fields", () => {
-    expect(sameSalary(salary("1", "2", "EUR"), salary("1", "2", "EUR"))).toBe(
-      true,
-    );
-    expect(sameSalary(salary("1", "2", "EUR"), salary("1", "2", "USD"))).toBe(
-      false,
-    );
+  it("merges the bands of several specializations", async () => {
+    expect(
+      await deriveSalaryForSelection(["backend", "frontend"], ["junior"], fetchGrades),
+    ).toEqual({ salary_min: "90", salary_max: "200", salary_currency: "EUR" });
+  });
+
+  it("says nothing when there is nothing to derive", async () => {
+    expect(await deriveSalaryForSelection([], ["junior"], fetchGrades)).toBeNull();
+    expect(await deriveSalaryForSelection(["backend"], [], fetchGrades)).toBeNull();
+    // A picked pair the library prices nowhere leaves the fields alone.
+    expect(
+      await deriveSalaryForSelection(["backend"], ["principal"], fetchGrades),
+    ).toBeNull();
+  });
+
+  it("keeps deriving from the specializations it can read", async () => {
+    const flaky = async (id: string) => {
+      if (id === "broken") throw new Error("boom");
+      return rows[id] ?? [];
+    };
+    expect(
+      await deriveSalaryForSelection(["broken", "backend"], ["junior"], flaky),
+    ).toEqual({ salary_min: "100", salary_max: "200", salary_currency: "EUR" });
   });
 });
 
@@ -190,12 +225,51 @@ describe("Form wiring (HRP-440)", () => {
     expect(FORM).toContain("salary_min: numberText(vacancy.salary_min),");
   });
 
-  it("prefills from the Specialization × Grade bands without clobbering edits", () => {
-    expect(FORM).toContain("`/specializations/${specId}/grades`");
-    expect(FORM).toContain("deriveSalaryFromBands(bands)");
+  it("runs one shared recompute on all three surfaces", () => {
+    // Create and the Edit page both render VacancyForm; the Overview block
+    // edits inline. All three must call the same hook — a copy per surface
+    // is how the Edit surfaces fell behind Create in the first place.
+    for (const source of [FORM, OVERVIEW]) {
+      expect(source).toContain(
+        'import { useSalaryAutofill } from "@/hooks/use-salary-autofill";',
+      );
+      expect(source).toContain("useSalaryAutofill(");
+    }
+    expect(HOOK).toContain("deriveSalaryForSelection(");
+    expect(HOOK).toContain("`/specializations/${specializationId}/grades`");
+  });
+
+  it("recomputes from the pick handlers, not from an effect on the values", () => {
+    // An effect keyed on the values also fires when Edit loads a saved
+    // vacancy, which is why the old guard had to refuse to overwrite a
+    // stored range — and then refused the recompute QA asked for.
+    for (const source of [FORM, OVERVIEW]) {
+      const flat = source.replace(/\s+/g, " ");
+      expect(flat).toContain("function handleGradesChange(");
+      expect(flat).toContain("refreshSalary(");
+      expect(flat).not.toContain("useEffect(() => { const specIds");
+    }
     expect(FORM.replace(/\s+/g, " ")).toContain(
-      "const untouched = isSalaryEmpty(currentSalary) || (autofilledSalary.current !== null && sameSalary(currentSalary, autofilledSalary.current));",
+      "refreshSalary(nextIds, nextGrades);",
     );
+    expect(OVERVIEW.replace(/\s+/g, " ")).toContain(
+      "refreshSalary(newSpec, newGrade);",
+    );
+  });
+
+  it("discards an in-flight autofill when the inline edit is cancelled", () => {
+    // Cancel restores `form` from `initial`, but a late autofill would
+    // write over that restored form and quietly re-dirty the block. An
+    // empty recompute invalidates whatever is still in flight.
+    const body = OVERVIEW.match(/function handleCancel\(\)\s*\{([\s\S]*?)\n  \}/);
+    expect(body, "handleCancel not found").not.toBeNull();
+    expect(body![1].replace(/\s+/g, " ")).toContain("refreshSalary([], [])");
+  });
+
+  it("drops a stale answer instead of landing it on a newer pick", () => {
+    const flat = HOOK.replace(/\s+/g, " ");
+    expect(flat).toContain("const ticket = ++latest.current;");
+    expect(flat).toContain("if (ticket !== latest.current || !derived) return;");
   });
 
   it("blocks saving an invalid range on all three surfaces", () => {

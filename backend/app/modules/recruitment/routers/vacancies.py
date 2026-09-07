@@ -407,6 +407,28 @@ async def get_vacancy_internal_candidates(
 
 
 @router.post(
+    "/recruitment/vacancies/{vacancy_id}/internal-candidates/{employee_id}/add",
+    status_code=201,
+)
+async def add_internal_candidate_to_vacancy(
+    vacancy_id: uuid.UUID,
+    employee_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "recruiter")),
+    _scope: None = Depends(vacancy_scope),
+):
+    """HRP-711: promote someone off the internal shortlist into the pipeline.
+
+    Reading the shortlist is as wide as reading the vacancy; adding to the
+    pipeline is not — the same pair of roles that may add a candidate by
+    hand, because that is what this is.
+    """
+    return await service.add_internal_candidate_to_vacancy(
+        db, current_user.tenant_id, current_user.id, vacancy_id, employee_id
+    )
+
+
+@router.post(
     "/recruitment/vacancies/{vacancy_id}/talent-card",
     response_model=VacancyInternalCandidatesRead,
     status_code=201,

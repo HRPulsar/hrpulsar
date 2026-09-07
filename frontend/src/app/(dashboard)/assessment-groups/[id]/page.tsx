@@ -27,6 +27,7 @@ import {
   assessmentTypeTitle,
   scaleOptionDescription,
   scaleOptionLabel,
+  gradeTitleLabel,
 } from "@/lib/reference-labels";
 import { scaleOptionSuffix } from "@/lib/scale-option-label";
 import {
@@ -342,7 +343,10 @@ export default function AssessmentGroupPage() {
             const gradeOptions = Object.values(recommendations).reduce(
               (acc, rec) => {
                 if (rec.grade_id && !acc.find((g) => g.id === rec.grade_id)) {
-                  acc.push({ id: rec.grade_id, title: rec.grade_title ?? "—" });
+                  acc.push({
+                    id: rec.grade_id,
+                    title: gradeTitleLabel(tRef, rec.grade_title) || "—",
+                  });
                 }
                 return acc;
               },
@@ -408,7 +412,7 @@ export default function AssessmentGroupPage() {
                         >
                           {rec?.grade_title ? (
                             <span className="flex items-center gap-2 text-sm">
-                              <span className="font-medium">{rec.grade_title}</span>
+                              <span className="font-medium">{gradeTitleLabel(tRef, rec.grade_title)}</span>
                               {rec.passed ? (
                                 <Badge
                                   variant="outline"

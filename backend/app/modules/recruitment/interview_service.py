@@ -27,13 +27,20 @@ from app.core.errors import AppError
 # keep the RBAC filter local to interview reads.
 from app.modules.recruitment.common import _FULL_ROLES, _HM_ROLES, _publish_event
 from app.modules.recruitment.models import (
+    AIAnalysisRun,
     AIAssessment,
     Candidate,
     CandidateVacancy,
     Interview,
     InterviewInterviewer,
     InterviewSegment,
+    ScaleConfig,
     UploadSession,
+    VacancyProfile,
+)
+from app.modules.recruitment.resume_analysis_service import (
+    _acquire_cv_lock,
+    _pending_run,
 )
 from app.modules.recruitment.schemas import (
     AbortUploadRequest,
@@ -48,6 +55,7 @@ from app.modules.recruitment.schemas import (
     TranscriptUpdate,
     UploadChunkAck,
 )
+from app.modules.recruitment.score_normalization import compute_normalized_ai_score
 from app.modules.storage.models import File
 
 logger = logging.getLogger(__name__)
@@ -281,11 +289,75 @@ def _role_filter_analysis(
     return None
 
 
+async def _active_scale_max(db: AsyncSession, tenant_id) -> float | None:
+    """Max value of the tenant's active assessment scale (None if unset)."""
+    return (
+        await db.execute(
+            select(ScaleConfig.max_value)
+            .where(
+                ScaleConfig.tenant_id == tenant_id,
+                ScaleConfig.is_active.is_(True),
+            )
+            .order_by(ScaleConfig.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+def _with_normalized_scores(
+    analysis: dict | None, scale_max: float | None
+) -> dict | None:
+    """HRP-673: attach ``normalized_score`` next to each raw competence score.
+
+    ``analysis_data`` stores the canonical raw ``0..1`` score; consumers
+    render on the tenant scale. Enriching at read time (instead of at
+    analysis time) covers historical analyses and later scale changes
+    without a migration — and keeps ``analysis_data`` itself untouched.
+    """
+    if not analysis:
+        return analysis
+    assessments = analysis.get("competence_assessments")
+    if not assessments:
+        return analysis
+    out = dict(analysis)
+    out["competence_assessments"] = [
+        (
+            {
+                **a,
+                "normalized_score": compute_normalized_ai_score(
+                    a.get("score"), scale_max
+                ),
+            }
+            if isinstance(a, dict)
+            else a
+        )
+        for a in assessments
+    ]
+    return out
+
+
+async def _interview_read(
+    db: AsyncSession,
+    interview: Interview,
+    *,
+    role: str | None = None,
+    ai_assessments: list[AIAssessment] | None = None,
+) -> dict:
+    """``_interview_to_read`` plus the tenant scale for analysis enrichment."""
+    scale_max = None
+    if interview.analysis_data:
+        scale_max = await _active_scale_max(db, interview.tenant_id)
+    return _interview_to_read(
+        interview, role=role, ai_assessments=ai_assessments, scale_max=scale_max
+    )
+
+
 def _interview_to_read(
     interview: Interview,
     *,
     role: str | None = None,
     ai_assessments: list[AIAssessment] | None = None,
+    scale_max: float | None = None,
 ) -> dict:
     segments = sorted((interview.segments or []), key=lambda s: (s.start_sec, s.id))
     ai_payload: list[dict] = []
@@ -359,7 +431,9 @@ def _interview_to_read(
             for s in segments
         ],
         "ai_assessments": ai_payload,
-        "analysis": _role_filter_analysis(interview.analysis_data, role),
+        "analysis": _with_normalized_scores(
+            _role_filter_analysis(interview.analysis_data, role), scale_max
+        ),
     }
 
 
@@ -482,7 +556,83 @@ def _format_interview_datetime(
             aware = aware.astimezone(timezone.utc)
     else:
         aware = aware.astimezone(timezone.utc)
-    return aware.strftime("%Y-%m-%d %H:%M")
+    # HRP-699: name the zone. Interviewers read these emails from other
+    # countries, and a reschedule notice that says "14:00" without saying
+    # whose 14:00 is worse than no notice.
+    return aware.strftime("%Y-%m-%d %H:%M %Z")
+
+
+async def _interview_event_payload(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview: Interview,
+    interviewer_ids: list[uuid.UUID],
+) -> dict:
+    """Common context for every interview lifecycle email (HRP-419/699).
+
+    One builder for scheduled / rescheduled / removed / cancelled so the
+    four letters name the candidate, the vacancy and the time the same
+    way.
+    """
+
+    cv_row = (
+        await db.execute(
+            select(CandidateVacancy)
+            .options(
+                selectinload(CandidateVacancy.candidate).selectinload(Candidate.person),
+                selectinload(CandidateVacancy.vacancy),
+            )
+            .where(CandidateVacancy.id == interview.candidate_vacancy_id)
+        )
+    ).scalar_one_or_none()
+    candidate_name = None
+    vacancy_title = None
+    owner_id: uuid.UUID | None = None
+    if cv_row:
+        if cv_row.candidate:
+            # HRP-419: ``candidates.full_name`` is NOT NULL and is the
+            # denormalised source of truth for the card. The old lookup went
+            # through ``candidate.person``, which is absent for externally
+            # sourced candidates — that is why the email said "None".
+            candidate_name = (cv_row.candidate.full_name or "").strip() or None
+            if not candidate_name and cv_row.candidate.person:
+                p = cv_row.candidate.person
+                candidate_name = f"{p.first_name} {p.last_name}".strip() or None
+        if cv_row.vacancy:
+            vacancy_title = cv_row.vacancy.title
+            owner_id = cv_row.vacancy.owner_id
+    return {
+        "tenant_id": str(tenant_id),
+        "interview_id": str(interview.id),
+        "interviewer_id": (
+            str(interview.interviewer_id) if interview.interviewer_id else None
+        ),
+        # HRP-419: the notification goes to the assigned interviewers,
+        # not to the vacancy owner / creator. ``owner_id`` stays in the
+        # payload for template context only.
+        "interviewer_ids": [str(uid) for uid in interviewer_ids],
+        "owner_id": str(owner_id) if owner_id else None,
+        "candidate_name": candidate_name,
+        "vacancy_title": vacancy_title,
+        "interview_title": interview.title,
+        "interview_date": _format_interview_datetime(
+            interview.interview_date, interview.timezone
+        ),
+        "interview_date_iso": (
+            interview.interview_date.isoformat() if interview.interview_date else None
+        ),
+    }
+
+
+def _interview_is_upcoming(interview: Interview) -> bool:
+    """HRP-699: scheduling emails are only for interviews still ahead."""
+
+    if interview.status != "scheduled" or interview.interview_date is None:
+        return False
+    moment = interview.interview_date
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment > datetime.now(timezone.utc)
 
 
 async def create_interview(
@@ -571,58 +721,11 @@ async def create_interview(
     await db.commit()
     await db.refresh(interview, attribute_names=["segments", "interviewers"])
 
-    cv_row = (
-        await db.execute(
-            select(CandidateVacancy)
-            .options(
-                selectinload(CandidateVacancy.candidate).selectinload(Candidate.person),
-                selectinload(CandidateVacancy.vacancy),
-            )
-            .where(CandidateVacancy.id == cv_id)
-        )
-    ).scalar_one_or_none()
-    candidate_name = None
-    vacancy_title = None
-    owner_id: uuid.UUID | None = None
-    if cv_row:
-        if cv_row.candidate:
-            # HRP-419: ``candidates.full_name`` is NOT NULL and is the
-            # denormalised source of truth for the card. The old lookup went
-            # through ``candidate.person``, which is absent for externally
-            # sourced candidates — that is why the email said "None".
-            candidate_name = (cv_row.candidate.full_name or "").strip() or None
-            if not candidate_name and cv_row.candidate.person:
-                p = cv_row.candidate.person
-                candidate_name = f"{p.first_name} {p.last_name}".strip() or None
-        if cv_row.vacancy:
-            vacancy_title = cv_row.vacancy.title
-            owner_id = cv_row.vacancy.owner_id
     await _publish_event(
         "recruitment.interview.scheduled",
-        {
-            "tenant_id": str(tenant_id),
-            "interview_id": str(interview.id),
-            "interviewer_id": (
-                str(interview.interviewer_id) if interview.interviewer_id else None
-            ),
-            # HRP-419: the notification goes to the assigned interviewers,
-            # not to the vacancy owner / creator. ``owner_id`` stays in the
-            # payload for template context only.
-            "interviewer_ids": [str(uid) for uid in interviewer_ids],
-            "owner_id": str(owner_id) if owner_id else None,
-            "candidate_name": candidate_name,
-            "vacancy_title": vacancy_title,
-            "interview_date": _format_interview_datetime(
-                interview.interview_date, interview.timezone
-            ),
-            "interview_date_iso": (
-                interview.interview_date.isoformat()
-                if interview.interview_date
-                else None
-            ),
-        },
+        await _interview_event_payload(db, tenant_id, interview, interviewer_ids),
     )
-    return _interview_to_read(interview, role="recruiter")
+    return await _interview_read(db, interview, role="recruiter")
 
 
 async def update_interview(
@@ -640,6 +743,12 @@ async def update_interview(
             "interview_version_conflict",
             status.HTTP_412_PRECONDITION_FAILED,
         )
+
+    # HRP-699: the attendee diff is computed here, on the server, from the
+    # state before the write — the client sends a replacement list, not a
+    # delta, so "who was added / removed" exists nowhere else.
+    ids_before = [link.user_id for link in interview.interviewers]
+    date_before = interview.interview_date
 
     # Every nullable column below is read off ``model_fields_set`` rather
     # than "is not None": an explicit ``null`` is the client clearing the
@@ -693,7 +802,63 @@ async def update_interview(
     interview.version = (interview.version or 1) + 1
     await db.commit()
     await db.refresh(interview, attribute_names=["segments", "interviewers"])
-    return _interview_to_read(interview, role="recruiter")
+    await _notify_interview_changed(
+        db, tenant_id, interview, ids_before=ids_before, date_before=date_before
+    )
+    return await _interview_read(db, interview, role="recruiter")
+
+
+async def _notify_interview_changed(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview: Interview,
+    *,
+    ids_before: list[uuid.UUID],
+    date_before: datetime | None,
+) -> None:
+    """HRP-699: email the attendees an edit actually affected.
+
+    Only for interviews still in ``scheduled`` — an uploaded or archived
+    card is history, and nobody needs to be told its metadata was tidied
+    up. Each recipient gets exactly one letter: someone added to a
+    rescheduled interview is told it is scheduled (that letter already
+    carries the new time), not scheduled *and* moved.
+    """
+
+    if interview.status != "scheduled":
+        return
+
+    ids_after = [link.user_id for link in interview.interviewers]
+    before, after = set(ids_before), set(ids_after)
+    added = [uid for uid in ids_after if uid not in before]
+    removed = [uid for uid in ids_before if uid not in after]
+    kept = [uid for uid in ids_after if uid in before]
+
+    def _aware(moment: datetime | None) -> datetime | None:
+        if moment is None:
+            return None
+        return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+    date_changed = _aware(date_before) != _aware(interview.interview_date)
+    upcoming = _interview_is_upcoming(interview)
+
+    async def _publish(event: str, recipients: list[uuid.UUID]) -> None:
+        if not recipients:
+            return
+        await _publish_event(
+            event,
+            await _interview_event_payload(db, tenant_id, interview, recipients),
+        )
+
+    # Being added is an invitation whether or not a slot is set yet —
+    # ``create_interview`` sends it for an undated interview too, and the
+    # resolver drops the letter for a date already in the past.
+    await _publish("recruitment.interview.scheduled", added)
+    if upcoming and date_changed:
+        await _publish("recruitment.interview.rescheduled", kept)
+    # Losing your slot is worth knowing even for an interview that is no
+    # longer in the future — no date guard here.
+    await _publish("recruitment.interview.interviewer_removed", removed)
 
 
 async def list_interviews(
@@ -721,7 +886,10 @@ async def list_interviews(
     if not include_archived:
         stmt = stmt.where(Interview.archived_at.is_(None))
     rows = (await db.execute(stmt)).scalars().all()
-    return [_interview_to_read(i, role=role) for i in rows]
+    scale_max = None
+    if any(i.analysis_data for i in rows):
+        scale_max = await _active_scale_max(db, tenant_id)
+    return [_interview_to_read(i, role=role, scale_max=scale_max) for i in rows]
 
 
 async def get_interview(
@@ -743,7 +911,7 @@ async def get_interview(
         .scalars()
         .all()
     )
-    return _interview_to_read(interview, role=role, ai_assessments=list(ai_rows))
+    return await _interview_read(db, interview, role=role, ai_assessments=list(ai_rows))
 
 
 async def update_transcript(
@@ -758,7 +926,7 @@ async def update_transcript(
     interview.transcript = redact_pii(data.transcript)
     await db.commit()
     await db.refresh(interview, attribute_names=["segments", "interviewers"])
-    return _interview_to_read(interview, role="recruiter")
+    return await _interview_read(db, interview, role="recruiter")
 
 
 async def _apply_text_transcript(
@@ -834,7 +1002,7 @@ async def paste_text_transcript(
     interview.version = (interview.version or 1) + 1
     await db.commit()
     await db.refresh(interview, attribute_names=["segments", "interviewers"])
-    return _interview_to_read(interview, role="recruiter")
+    return await _interview_read(db, interview, role="recruiter")
 
 
 async def update_segment(
@@ -1379,7 +1547,7 @@ async def complete_interview_upload(
     # scan and could hand an infected recording to the ASR provider. The
     # persisted ``auto_process`` flag is the signal the AV task reads.
 
-    return _interview_to_read(interview, role="recruiter")
+    return await _interview_read(db, interview, role="recruiter")
 
 
 async def get_interview_media_url(
@@ -1550,7 +1718,7 @@ async def replace_interview_file(
         except Exception:
             logger.exception("Failed to delete old interview media %s", old_key)
 
-    return _interview_to_read(interview, role="recruiter")
+    return await _interview_read(db, interview, role="recruiter")
 
 
 async def archive_interview(
@@ -1571,7 +1739,14 @@ async def archive_interview(
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     if interview.archived_at is not None:
-        return _interview_to_read(interview, role="recruiter")
+        return await _interview_read(db, interview, role="recruiter")
+    # HRP-699: archiving a scheduled interview cancels it — capture the
+    # attendees before the status flips, they are the ones to tell.
+    cancelled_for = (
+        [link.user_id for link in interview.interviewers]
+        if interview.status == "scheduled"
+        else []
+    )
     interview.archived_at = datetime.now(timezone.utc)
     interview.archived_by = user_id
     interview.status = "archived"
@@ -1590,7 +1765,12 @@ async def archive_interview(
     interview.version = (interview.version or 1) + 1
     await db.commit()
     await db.refresh(interview, attribute_names=["segments", "interviewers"])
-    return _interview_to_read(interview, role="recruiter")
+    if cancelled_for:
+        await _publish_event(
+            "recruitment.interview.cancelled",
+            await _interview_event_payload(db, tenant_id, interview, cancelled_for),
+        )
+    return await _interview_read(db, interview, role="recruiter")
 
 
 async def restore_interview(
@@ -1603,7 +1783,7 @@ async def restore_interview(
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     if interview.archived_at is None:
-        return _interview_to_read(interview, role="recruiter")
+        return await _interview_read(db, interview, role="recruiter")
 
     retention_cutoff = datetime.now(timezone.utc) - timedelta(
         days=ARCHIVE_RETENTION_DAYS
@@ -1635,7 +1815,7 @@ async def restore_interview(
     interview.version = (interview.version or 1) + 1
     await db.commit()
     await db.refresh(interview, attribute_names=["segments", "interviewers"])
-    return _interview_to_read(interview, role="recruiter")
+    return await _interview_read(db, interview, role="recruiter")
 
 
 async def purge_expired_archived_interviews(
@@ -1791,7 +1971,7 @@ async def record_av_scan_result(
     interview.version = (interview.version or 1) + 1
     await db.commit()
     await db.refresh(interview, attribute_names=["segments", "interviewers"])
-    return _interview_to_read(interview, role="recruiter")
+    return await _interview_read(db, interview, role="recruiter")
 
 
 # ---------------------------------------------------------------------------
@@ -1906,6 +2086,55 @@ async def enqueue_transcribe(
     return {"task_id": task.id, "status": "queued"}
 
 
+async def _stamp_pending_full_run(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview: Interview,
+) -> AIAnalysisRun | None:
+    """HRP-492 — make a full analysis visible from the moment it starts.
+
+    ``ai_analysis_runs`` only heard about a plain interview analysis once
+    it finished: the mirror step in ``analyze_interview_task`` inserted
+    the row already ``completed``. Everything the candidate card derives
+    from an in-flight row — the progress banner, the stage stepper, the
+    Cancel button — therefore had nothing to render between the click and
+    the verdict, so AI Insights kept showing the previous analysis and
+    its stale banners. A recruiter who had just spent 40 credits saw no
+    sign the run had started.
+
+    The top-up path always stamped the row up front; this does the same
+    for the plain path, and the mirror completes the row in place
+    (its ``pending`` branch) instead of inserting a second one.
+
+    Returns the row so the caller can stash the Celery id on it.
+    """
+    cv = await db.get(CandidateVacancy, interview.candidate_vacancy_id)
+    if cv is None:
+        return None
+
+    profile = (
+        await db.execute(
+            select(VacancyProfile).where(
+                VacancyProfile.vacancy_id == cv.vacancy_id,
+                VacancyProfile.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    run = AIAnalysisRun(
+        tenant_id=tenant_id,
+        candidate_vacancy_id=cv.id,
+        mode="full",
+        status="pending",
+        interview_id=interview.id,
+        vacancy_profile_id=profile.id if profile else None,
+        vacancy_profile_version=profile.version if profile else None,
+        analysis_data={},
+    )
+    db.add(run)
+    return run
+
+
 async def enqueue_analyze(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1918,13 +2147,35 @@ async def enqueue_analyze(
         raise AppError("analysis_requires_transcription", status.HTTP_409_CONFLICT)
     if interview.analysis_status == "processing":
         raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
+    # One in-flight run per pair, whichever surface started it: a pending
+    # resume-only run, or this interview's own run as seen by a second
+    # concurrent POST. Same check + advisory lock + re-check as
+    # ``enqueue_resume_only_analysis``; the lock is released on commit.
+    cv_id = interview.candidate_vacancy_id
+    if await _pending_run(db, tenant_id, cv_id):
+        raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
+    await _acquire_cv_lock(db, cv_id)
+    if await _pending_run(db, tenant_id, cv_id):
+        raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
 
     interview.analysis_status = "processing"
     interview.analysis_error = None
+    # HRP-492: the row goes in before dispatch — a worker that finishes
+    # first would otherwise mirror its own completed run and leave this
+    # one pending forever, blocking every later analysis on the pair.
+    run = await _stamp_pending_full_run(db, tenant_id, interview)
     await db.commit()
 
     task = analyze_interview_task.delay(str(interview_id), str(tenant_id))
-    return {"task_id": task.id, "status": "queued"}
+    if run is not None:
+        # HRP-270 parity: the cancel endpoint revokes through this id.
+        run.celery_task_id = task.id
+        await db.commit()
+    return {
+        "task_id": task.id,
+        "run_id": str(run.id) if run is not None else None,
+        "status": "queued",
+    }
 
 
 async def enqueue_analyze_or_cached(

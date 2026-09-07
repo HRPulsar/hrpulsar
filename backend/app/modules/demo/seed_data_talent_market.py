@@ -35,7 +35,10 @@ Two invariants hold here, and breaking either makes the demo lie:
    matched candidates prunes them on the first recompute. Regular
    demo hires sit between ~2 and ~6.5 years. The free-text
    ``requirements`` below carry years of their own; the matcher
-   never reads those, they are recruiter-facing prose.
+   never reads those, they are recruiter-facing prose — but a floor
+   the card's own ``matched`` roster fails is still a bug: the spec
+   filter gates the auto-pool, so ``tc-ae-dach`` asks for two years,
+   not the three its top seller has yet to serve.
 
 3. **A ``talent`` card has to find a gap.** The type exists to feed
    development plans, and the drawer only offers "Create development
@@ -86,7 +89,7 @@ TALENT_CARDS: list[dict] = [
         ],
         "candidates": [
             {"employee_index": 1, "status": "matched", "match_score": 84},  # Bella Martins
-            {"employee_index": 2, "status": "matched", "match_score": 78},  # Carlos Mendez
+            {"employee_index": 2, "status": "matched", "match_score": 78},  # Anna Rising
             {"employee_index": 8, "status": "not_matched", "match_score": 73},  # Ivan Petrov
         ],
     },
@@ -94,33 +97,51 @@ TALENT_CARDS: list[dict] = [
     # that pays off the dashboard's headline problem (HRP-661) — the
     # sellers who scored below the bar on product knowledge are the same
     # ones who miss the bar here.
+    #
+    # HRP-713 — the years floor came down from 3 to 2. The spec filter
+    # gates the auto-pool, and the demo's top seller has 2.0 years on the
+    # AE ladder: a three-year floor pruned him off the roster on the first
+    # recompute, which is the one thing invariant 2 above forbids. The
+    # junior SDR and the product manager on the roster are manual
+    # ``not_matched`` picks — only ``matched`` rows are auto-pruned, so
+    # they ride out a recompute without matching the spec at all, and the
+    # Experience chip still reads red next to a real tenure for them.
     {
         "key": "tc-ae-dach",
         "title": "Senior Account Executive — DACH",
         "description": (
-            "One open seat on the DACH team. Two of the three account "
-            "executives clear the three-year experience floor; only one of "
-            "them clears the competency bar — the others get a named gap "
-            "instead of a rejection."
+            "One open seat on the DACH team, and the roster is the whole "
+            "argument: one account executive clears the competency bar, the "
+            "next is two competences short of it, and the third is a strong "
+            "product manager the matcher scores against a profession that is "
+            "not their own. None of them gets a rejection — each gets a "
+            "named gap."
         ),
         "card_type": "vacancy",
         "status": "published",
         "division_key": "gtm",
         "match_percent": 75,
         "specializations": [
-            {"specialization_key": "sales", "grade_key": "g-senior", "min_years": 3},
+            {"specialization_key": "sales", "grade_key": "g-senior", "min_years": 2},
         ],
         "competences": [
             {"competence_key": "c-sales-discovery", "skill_level_key": "sl-l3"},
             {"competence_key": "c-objection-handling", "skill_level_key": "sl-l3"},
         ],
         "requirements": [
+            {"description": "Two or more years closing enterprise deals end to end", "min_years": 2},
             {"description": "Available in EU timezones for cross-team standup", "min_years": None},
         ],
+        # Hannah Adler is here because the matcher puts her here: her done
+        # self-assessment clears the bar on both required competences and
+        # nothing in ``_auto_populate_candidates`` excludes a division head
+        # from a card in their own division. Dropping her from the fixture
+        # would only make the seed disagree with the product (HRP-664).
         "candidates": [
+            {"employee_index": 35, "status": "matched", "match_score": 90},  # Sean Best
             {"employee_index": 33, "status": "matched", "match_score": 88},  # Hannah Adler
-            {"employee_index": 34, "status": "not_matched", "match_score": 73},  # Igor Sokolov
-            {"employee_index": 35, "status": "not_matched", "match_score": 36},  # Jana Vargas
+            {"employee_index": 38, "status": "not_matched", "match_score": 64},  # Will Gapp
+            {"employee_index": 19, "status": "not_matched", "match_score": 42},  # Kate Highmore
         ],
     },
     # --- Project: a time-boxed initiative rather than a headcount. The
@@ -179,7 +200,7 @@ TALENT_CARDS: list[dict] = [
         ],
         "candidates": [
             {"employee_index": 33, "status": "appointed", "match_score": 88},  # Hannah Adler
-            {"employee_index": 34, "status": "not_matched", "match_score": 61},  # Igor Sokolov
+            {"employee_index": 34, "status": "not_matched", "match_score": 44},  # Victor Redd
         ],
     },
     # --- Talent: no open headcount at all — a bench kept warm against a

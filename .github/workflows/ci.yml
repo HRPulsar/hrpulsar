@@ -77,6 +77,17 @@ jobs:
           REDIS_URL: redis://localhost:6379
           JWT_SECRET: test-secret
 
+  # The same blocking guards the public sync runs (EE paths, forbidden
+  # internal strings, Cyrillic, required files) — on every push, so
+  # content that can never reach the public repo fails the build the day
+  # it lands instead of aborting a release sync.
+  public-guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Public-tree guards (pre-sync)
+        run: ./scripts/sync_repos.sh check
+
   frontend:
     runs-on: ubuntu-latest
     steps:

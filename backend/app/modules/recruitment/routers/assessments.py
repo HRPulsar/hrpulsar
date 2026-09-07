@@ -248,13 +248,17 @@ async def list_assessment_history(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hr", "hiring_manager")
-    ),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
     _scope: None = Depends(vacancy_scope),
     _query_scope: None = Depends(candidate_vacancy_query_scope),
 ):
-    """Versions-panel timeline — vacancy-scoped audit of assessment edits."""
+    """Versions-panel timeline — vacancy-scoped audit of assessment edits.
+
+    HRP-701: same gate as the matrix this panel is opened from (HRP-694).
+    A manager who may read the canvas may read who edited it; the narrower
+    tuple only made the Versions panel swallow a 403 into an empty state.
+    ``vacancy_scope`` still decides which vacancies are theirs.
+    """
     items, total = await service.list_assessment_history(
         db,
         current_user.tenant_id,
@@ -529,12 +533,14 @@ async def list_candidate_question_sets(
 async def list_vacancy_question_sets(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    # Same gate as the enriched candidates listing: this payload is the
-    # vacancy's whole roster (names + the questions prepared for them),
-    # so it must not be enumerable by any authenticated employee.
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hr", "hiring_manager")
-    ),
+    # HRP-701: gated by RECRUITMENT_VIEWER_ROLES plus ``vacancy_scope``.
+    # The payload is the vacancy's whole roster (names + the questions
+    # prepared for them), so it must not be enumerable by any
+    # authenticated employee — but a manager reading their own division's
+    # canvas needs it, and the scope dependency is what keeps them there.
+    # The enriched candidates listing still sits on the narrow tuple —
+    # known tail, not in scope here.
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
     _scope: None = Depends(vacancy_scope),
 ):
     """HRP-504: every candidate's latest question set for this vacancy,

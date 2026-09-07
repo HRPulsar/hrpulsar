@@ -16,14 +16,8 @@ import {
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { HiringManagerSelect } from "@/components/recruitment/hiring-manager-select";
 import { api } from "@/lib/api";
-import {
-  deriveSalaryFromBands,
-  isSalaryEmpty,
-  parseSalaryInput,
-  sameSalary,
-  validateSalaryRange,
-} from "@/lib/vacancy-salary";
-import type { SalaryBand, SalaryFormValues } from "@/lib/vacancy-salary";
+import { useSalaryAutofill } from "@/hooks/use-salary-autofill";
+import { parseSalaryInput, validateSalaryRange } from "@/lib/vacancy-salary";
 
 // HRP-320: vacancy create form is anchored on the company library.
 //   Position (single, optional)  → constrains Specializations
@@ -118,14 +112,6 @@ interface DivisionOption {
   name?: string;
 }
 
-// HRP-440: the salary band configured on the specialization page.
-interface SpecializationGradeRow {
-  grade_id: string;
-  salary_min?: number | null;
-  salary_max?: number | null;
-  salary_currency?: string | null;
-}
-
 export function VacancyForm({
   values,
   onChange,
@@ -143,15 +129,21 @@ export function VacancyForm({
     onChange({ ...values, [field]: value });
   }
 
-  // The salary autofill below runs inside an async effect keyed on the
-  // library selection only; these refs keep it writing against the live
-  // form state instead of the values captured when the effect started.
+  // The salary autofill resolves after the pick that started it, so it
+  // writes through refs — against the live form state, not the values
+  // captured when the request went out.
   const valuesRef = useRef(values);
   const onChangeRef = useRef(onChange);
   useEffect(() => {
     valuesRef.current = values;
     onChangeRef.current = onChange;
   });
+
+  // HRP-440 Task 2: picking a Position / Specializations / Grades fills the
+  // Salary range from the bands configured on the specialization page.
+  const refreshSalary = useSalaryAutofill((derived) =>
+    onChangeRef.current({ ...valuesRef.current, ...derived }),
+  );
 
   const [positions, setPositions] = useState<PositionOption[]>([]);
   const [divisions, setDivisions] = useState<DivisionOption[]>([]);
@@ -258,6 +250,9 @@ export function VacancyForm({
       // Position carries a default Division; keep an explicit pick over it.
       division_id: values.division_id ?? target?.division_id ?? null,
     });
+    // Nothing to derive from an empty selection — this call only cancels
+    // an autofill still in flight for the Position we just left.
+    refreshSalary([], []);
   }
 
   function handleSpecializationsChange(nextIds: string[]) {
@@ -266,67 +261,19 @@ export function VacancyForm({
     // PositionRead currently exposes grades as a flat list (not per-spec),
     // we conservatively wipe the selection whenever specs shrink — once
     // PositionRead grows per-spec grade pools we can prune surgically.
+    const nextGrades = nextIds.length === 0 ? [] : values.grade_ids;
     onChange({
       ...values,
       specialization_ids: nextIds,
-      grade_ids: nextIds.length === 0 ? [] : values.grade_ids,
+      grade_ids: nextGrades,
     });
+    refreshSalary(nextIds, nextGrades);
   }
 
-  // HRP-440 Task 2: a Specialization × Grade pair may carry a salary band
-  // on the specialization page. Picking such a pair prefills the range —
-  // but only while the recruiter has not typed their own numbers, so an
-  // autofill can never overwrite a deliberate override.
-  const autofilledSalary = useRef<SalaryFormValues | null>(null);
-  const specKey = values.specialization_ids.join(",");
-  const gradeKey = values.grade_ids.join(",");
-
-  useEffect(() => {
-    const specIds = specKey ? specKey.split(",") : [];
-    const gradeIds = new Set(gradeKey ? gradeKey.split(",") : []);
-    if (specIds.length === 0 || gradeIds.size === 0) return;
-
-    let cancelled = false;
-    (async () => {
-      const bands: SalaryBand[] = [];
-      for (const specId of specIds) {
-        try {
-          const rows = await api.get<SpecializationGradeRow[]>(
-            `/specializations/${specId}/grades`,
-          );
-          for (const row of rows) {
-            if (!gradeIds.has(row.grade_id)) continue;
-            bands.push({
-              salary_min: row.salary_min ?? null,
-              salary_max: row.salary_max ?? null,
-              salary_currency: row.salary_currency ?? null,
-            });
-          }
-        } catch {
-          // A specialization we cannot read simply contributes no band.
-        }
-      }
-      if (cancelled) return;
-      const derived = deriveSalaryFromBands(bands);
-      if (!derived) return;
-      const current = valuesRef.current;
-      const currentSalary = {
-        salary_min: current.salary_min,
-        salary_max: current.salary_max,
-        salary_currency: current.salary_currency,
-      };
-      const untouched =
-        isSalaryEmpty(currentSalary) ||
-        (autofilledSalary.current !== null &&
-          sameSalary(currentSalary, autofilledSalary.current));
-      if (!untouched) return;
-      autofilledSalary.current = derived;
-      onChangeRef.current({ ...current, ...derived });
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [specKey, gradeKey]);
+  function handleGradesChange(nextIds: string[]) {
+    updateField("grade_ids", nextIds);
+    refreshSalary(values.specialization_ids, nextIds);
+  }
 
   const salaryError = validateSalaryRange({
     salary_min: values.salary_min,
@@ -461,7 +408,7 @@ export function VacancyForm({
               <MultiSelectFilter
                 options={gradeOptions}
                 value={values.grade_ids}
-                onChange={(next) => updateField("grade_ids", next)}
+                onChange={handleGradesChange}
                 placeholder={gradesPlaceholder}
                 disabled={disabled || gradesDisabled}
                 data-testid="recruitment-vacancy-select-grades"

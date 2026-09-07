@@ -4,6 +4,7 @@
 // means without diverging.
 
 import {
+  ASSESSMENT_RUNNING_STATUSES,
   ASSESSMENT_TERMINAL_STATUSES,
   type AssessmentStatusCode,
 } from "@/lib/assessment-status";
@@ -35,6 +36,12 @@ export function isOpenAssessment(a: OpenAssessmentInput): boolean {
   return !ASSESSMENT_TERMINAL_STATUSES.has(a.status_code as AssessmentStatusCode);
 }
 
+export function isRunningAssessment(a: OpenAssessmentInput): boolean {
+  // HRP-736: the Last assessment tile's "running" state mirrors the
+  // server's set, which is narrower than "open" — a Draft is not running.
+  return ASSESSMENT_RUNNING_STATUSES.has(a.status_code);
+}
+
 /**
  * Returns the average of `total_progress` across open PDPs, rounded to
  * the nearest integer. `null` means the employee has no open plans, so
@@ -56,4 +63,48 @@ export function openPdpCount(pdps: OpenPdpInput[]): number {
 
 export function openAssessmentCount(asmts: OpenAssessmentInput[]): number {
   return asmts.filter(isOpenAssessment).length;
+}
+
+export interface LastAssessmentInput {
+  status_code: string;
+  finished_at?: string | null;
+}
+
+/**
+ * HRP-736: the newest **completed** assessment, or `undefined` when the
+ * employee has none.
+ *
+ * The Last assessment tile answers "when did we last learn something about
+ * this person". Only a Done assessment answers it — an assessment still
+ * running has no approved result and its percentages can still move in
+ * calibration. This is the same rule the "No recent assessment" chip and
+ * the dashboard queue use (``STALE_DAYS`` in employee/issues.py), so the
+ * header can no longer contradict the chip sitting two lines above it.
+ *
+ * Dated by ``finished_at`` only: ``assessed_recent`` skips undated rows,
+ * so dating one by ``created_at`` here could put "12 d" next to a
+ * "No recent assessment" chip. Cancelled assessments never count.
+ */
+export function latestDoneAssessment<T extends LastAssessmentInput>(
+  asmts: T[],
+): (T & { finished_at: string }) | undefined {
+  return asmts
+    .filter(
+      (a): a is T & { finished_at: string } =>
+        a.status_code === "done" && !!a.finished_at,
+    )
+    .reduce<(T & { finished_at: string }) | undefined>(
+      (best, a) =>
+        best === undefined || completedAt(a) > completedAt(best) ? a : best,
+      undefined,
+    );
+}
+
+function completedAt(a: { finished_at: string }): number {
+  return new Date(a.finished_at).getTime();
+}
+
+/** HRP-736: how long ago that assessment was completed, in whole days. */
+export function daysSinceCompleted(a: { finished_at: string }, now = Date.now()): number {
+  return Math.max(0, Math.floor((now - completedAt(a)) / (24 * 3600 * 1000)));
 }

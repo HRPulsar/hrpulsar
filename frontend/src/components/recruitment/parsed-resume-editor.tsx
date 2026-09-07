@@ -56,8 +56,7 @@ import {
   RESUME_EXCERPT_FOCUS_EVENT,
   dispatchResumeCitationFocus,
   mapExcerptsToResumeItems,
-  normalisePeriod,
-  overlaps,
+  resumeItemKeyForExcerpt,
   type ResumeExcerptFocusDetail,
 } from "@/lib/resume-excerpt-focus";
 import { cn } from "@/lib/utils";
@@ -151,70 +150,6 @@ function citedItemProps(
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-function findExperienceTarget(
-  section: HTMLElement,
-  detail: ResumeExcerptFocusDetail,
-): HTMLElement | null {
-  const items = Array.from(
-    section.querySelectorAll<HTMLElement>("[data-resume-item-key]"),
-  );
-  if (items.length === 0) return null;
-  const wantCompany = detail.source_company?.trim().toLowerCase() ?? "";
-  const wantPeriod = normalisePeriod(detail.source_period);
-  const excerpt = detail.excerpt_text.trim().toLowerCase();
-  // Prefer the strongest signal first — company+period, then company,
-  // then period, then a substring match anywhere in the rendered item.
-  if (wantCompany && wantPeriod) {
-    for (const it of items) {
-      const company = (it.dataset.resumeCompany ?? "").toLowerCase();
-      const period = normalisePeriod(it.dataset.resumePeriod);
-      if (company === wantCompany && period === wantPeriod) return it;
-    }
-  }
-  if (wantCompany) {
-    for (const it of items) {
-      const company = (it.dataset.resumeCompany ?? "").toLowerCase();
-      if (company === wantCompany) return it;
-    }
-  }
-  if (wantPeriod) {
-    for (const it of items) {
-      const period = normalisePeriod(it.dataset.resumePeriod);
-      if (period === wantPeriod) return it;
-    }
-  }
-  if (excerpt) {
-    for (const it of items) {
-      const text = (it.textContent ?? "").toLowerCase();
-      if (text.includes(excerpt)) return it;
-    }
-  }
-  // No signal matched — return null so the caller scrolls to the
-  // section header instead of misleading the recruiter with an
-  // arbitrary items[0] highlight.
-  return null;
-}
-
-function findGenericTarget(
-  section: HTMLElement,
-  detail: ResumeExcerptFocusDetail,
-): HTMLElement | null {
-  const items = Array.from(
-    section.querySelectorAll<HTMLElement>("[data-resume-item-key]"),
-  );
-  if (items.length === 0) return null;
-  const excerpt = detail.excerpt_text.trim().toLowerCase();
-  if (!excerpt) return null;
-  // Same rule as the data-side matcher (``overlaps``): two-way
-  // containment, with short chips (R, Go, C#) held to whole-token
-  // matches so they cannot claim an unrelated excerpt.
-  for (const it of items) {
-    const text = (it.textContent ?? "").toLowerCase();
-    if (overlaps(text, excerpt)) return it;
-  }
-  return null;
 }
 
 export function ParsedResumeEditor({
@@ -315,18 +250,20 @@ export function ParsedResumeEditor({
         `[data-resume-section="${key}"]`,
       );
       if (!section) return;
-      let target: HTMLElement = section;
-      if (key !== "summary") {
-        // ``projects`` excerpts route through the experience section
-        // (closest semantic match) but typically lack source_company /
-        // source_period — so we use the substring matcher instead of
-        // the company+period one to avoid a wrong company match.
-        const matcher =
-          key === "experience" && detail.section !== "projects"
-            ? findExperienceTarget
-            : findGenericTarget;
-        target = matcher(section, detail) ?? section;
-      }
+      // HRP-710: one matcher, not two. ``resumeItemKeyForExcerpt`` already
+      // answers "which item does this excerpt quote" off the parsed
+      // payload — including the ``projects`` carve-out — and the answer is
+      // the ``data-resume-item-key`` the item renders, so the DOM side is
+      // a lookup rather than a second copy of the rules. No key (or a key
+      // whose section is collapsed away) falls back to the section block,
+      // never to an arbitrary items[0].
+      const itemKey = resumeItemKeyForExcerpt(parsed, detail);
+      const target: HTMLElement =
+        (itemKey &&
+          section.querySelector<HTMLElement>(
+            `[data-resume-item-key="${itemKey}"]`,
+          )) ||
+        section;
       target.scrollIntoView({
         block: "center",
         behavior: prefersReducedMotion() ? "auto" : "smooth",
@@ -336,7 +273,7 @@ export function ParsedResumeEditor({
     window.addEventListener(RESUME_EXCERPT_FOCUS_EVENT, handle);
     return () =>
       window.removeEventListener(RESUME_EXCERPT_FOCUS_EVENT, handle);
-  }, [applyHighlight, candidateId]);
+  }, [applyHighlight, candidateId, parsed]);
 
   async function patchSection<K extends ParsedResumeSectionKey>(
     section: K,

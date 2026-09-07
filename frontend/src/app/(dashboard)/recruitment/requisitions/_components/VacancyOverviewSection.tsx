@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ApiError, api } from "@/lib/api";
+import { useSalaryAutofill } from "@/hooks/use-salary-autofill";
 import { getDefaultSalaryCurrency } from "@/lib/currency";
 import {
   parseSalaryInput,
@@ -45,6 +46,13 @@ const employmentTypes = [
   { value: "temporary", labelKey: "employmentTypeTemporary" },
   { value: "remote", labelKey: "employmentTypeRemote" },
 ];
+
+// HRP-672: the read-only row rendered `full_time` → "full time"; it now
+// reads the same label the editor's picker shows. Unknown code → as it came.
+function employmentTypeLabel(t: (key: string) => string, code: string): string {
+  const entry = employmentTypes.find((opt) => opt.value === code);
+  return entry ? t(entry.labelKey) : code;
+}
 
 interface PositionOption {
   id: string;
@@ -272,21 +280,38 @@ export function VacancyOverviewSection({
     [selectedPosition],
   );
 
+  // HRP-440 Task 2: the same recompute the Create / Edit form runs, so the
+  // inline edit fills the Salary range from the picked Specialization ×
+  // Grade bands too.
+  const refreshSalary = useSalaryAutofill((derived) =>
+    setForm((prev) => ({ ...prev, ...derived })),
+  );
+
   function applyPositionSwitch(nextId: string | null) {
     const target = nextId
       ? positions.find((p) => p.id === nextId) ?? null
       : null;
-    setForm((prev) => {
-      const newSpec = target?.specializations?.map((s) => s.id) ?? [];
-      const newGrade = target?.grades?.map((g) => g.id) ?? [];
-      return {
-        ...prev,
-        position_id: nextId,
-        specialization_ids: newSpec,
-        grade_ids: newGrade,
-        division_id: target?.division_id ?? prev.division_id,
-      };
-    });
+    const newSpec = target?.specializations?.map((s) => s.id) ?? [];
+    const newGrade = target?.grades?.map((g) => g.id) ?? [];
+    setForm((prev) => ({
+      ...prev,
+      position_id: nextId,
+      specialization_ids: newSpec,
+      grade_ids: newGrade,
+      division_id: target?.division_id ?? prev.division_id,
+    }));
+    // Switching Position rewrites both picks, so the range follows them.
+    refreshSalary(newSpec, newGrade);
+  }
+
+  function handleSpecializationsChange(nextIds: string[]) {
+    setForm((prev) => ({ ...prev, specialization_ids: nextIds }));
+    refreshSalary(nextIds, form.grade_ids);
+  }
+
+  function handleGradesChange(nextIds: string[]) {
+    setForm((prev) => ({ ...prev, grade_ids: nextIds }));
+    refreshSalary(form.specialization_ids, nextIds);
   }
 
   function handlePositionChange(next: string) {
@@ -315,6 +340,11 @@ export function VacancyOverviewSection({
       return;
     }
     setForm(initial);
+    // Discard an autofill still in flight for the picks being thrown away.
+    // The form is only re-seeded from `initial` when the vacancy itself
+    // changes, so a late answer would otherwise land on the discarded form
+    // and reappear, dirty, the next time this block is opened.
+    refreshSalary([], []);
     setEditing(false);
   }
 
@@ -400,6 +430,8 @@ export function VacancyOverviewSection({
             positionGradeOptions={positionGradeOptions}
             disabled={saving}
             onPositionChange={handlePositionChange}
+            onSpecializationsChange={handleSpecializationsChange}
+            onGradesChange={handleGradesChange}
           />
         ) : (
           <OverviewViewGrid
@@ -496,8 +528,8 @@ function OverviewViewGrid({
         </FieldRow>
         <FieldRow label={t("vacancyFieldEmploymentType")}>
           {vacancy.employment_type ? (
-            <span className="text-sm capitalize">
-              {vacancy.employment_type.replace("_", " ")}
+            <span className="text-sm">
+              {employmentTypeLabel(t, vacancy.employment_type)}
             </span>
           ) : (
             <EmptyValue />
@@ -708,6 +740,8 @@ interface OverviewEditGridProps {
   positionGradeOptions: { value: string; label: string }[];
   disabled: boolean;
   onPositionChange: (next: string) => void;
+  onSpecializationsChange: (next: string[]) => void;
+  onGradesChange: (next: string[]) => void;
 }
 
 function OverviewEditGrid({
@@ -720,6 +754,8 @@ function OverviewEditGrid({
   positionGradeOptions,
   disabled,
   onPositionChange,
+  onSpecializationsChange,
+  onGradesChange,
 }: OverviewEditGridProps) {
   const t = useTranslations("recruitment");
   const specDisabled = !form.position_id || positionSpecOptions.length === 0;
@@ -813,7 +849,7 @@ function OverviewEditGrid({
           <MultiSelectFilter
             options={positionSpecOptions}
             value={form.specialization_ids}
-            onChange={(next) => setField("specialization_ids", next)}
+            onChange={onSpecializationsChange}
             placeholder={
               specDisabled
                 ? t("vacancySelectPositionFirst")
@@ -871,7 +907,7 @@ function OverviewEditGrid({
           <MultiSelectFilter
             options={positionGradeOptions}
             value={form.grade_ids}
-            onChange={(next) => setField("grade_ids", next)}
+            onChange={onGradesChange}
             placeholder={
               gradeDisabled
                 ? t("vacancySelectPositionFirst")

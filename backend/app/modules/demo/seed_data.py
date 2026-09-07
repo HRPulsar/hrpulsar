@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -123,9 +124,7 @@ def load_transcript() -> str:
             return path.read_text(encoding="utf-8")
         except OSError:
             continue
-    logger.warning(
-        "demo seed: transcript missing at %s, using stub", TRANSCRIPT_PATH
-    )
+    logger.warning("demo seed: transcript missing at %s, using stub", TRANSCRIPT_PATH)
     return _TRANSCRIPT_FALLBACK
 
 
@@ -136,6 +135,10 @@ def load_transcript() -> str:
 VACANCIES: list[dict] = [
     {
         "key": "senior-backend",
+        # HRP-726: the vacancy list's Position column reads
+        # ``Vacancy.position_id`` — every seeded role now names a
+        # position from the company ladder instead of printing "---".
+        "position_key": "p-be-l3",
         "title": "Senior Backend Engineer — Payments",
         "description": (
             "Own the merchant settlement pipeline. Python, FastAPI, "
@@ -214,6 +217,8 @@ VACANCIES: list[dict] = [
     },
     {
         "key": "product-designer",
+        "anchor_division_key": "design",
+        "position_key": "p-designer-senior",
         "title": "Product Designer — Recruiting Suite",
         "description": (
             "Shape the recruiter and hiring-manager surfaces. End-to-end "
@@ -226,6 +231,13 @@ VACANCIES: list[dict] = [
         "salary_max": 100000,
         "salary_currency": "EUR",
         "status": "published",
+        # HRP-726: same library-linked requirements the headline role
+        # carries, so "search inside first" scores this vacancy too and
+        # the recruiter no longer opens on the "add competences" banner.
+        "library_competences": [
+            {"competence_key": "c-design-systems", "skill_level_key": "sl-l3"},
+            {"competence_key": "c-user-research", "skill_level_key": "sl-l2"},
+        ],
         "profile": {
             "competences": [
                 {"id": "product-design", "name": "Product design", "must_have": True},
@@ -236,6 +248,12 @@ VACANCIES: list[dict] = [
     },
     {
         "key": "customer-success",
+        "anchor_division_key": "gtm",
+        # No Customer Success rung exists on the seeded ladder
+        # (``seed_data_company.POSITIONS``), and anchoring this role to
+        # the nearest commercial one printed "Account Executive" in the
+        # vacancy list — a wrong title reads worse than none. Left NULL
+        # on purpose; adding the position is a company-structure change.
         "title": "Customer Success Lead — Enterprise",
         "description": (
             "First CS hire. Own onboarding, expansion and retention for our "
@@ -248,6 +266,10 @@ VACANCIES: list[dict] = [
         "salary_max": 110000,
         "salary_currency": "EUR",
         "status": "published",
+        "library_competences": [
+            {"competence_key": "c-customer-discovery", "skill_level_key": "sl-l3"},
+            {"competence_key": "c-cross-fn", "skill_level_key": "sl-l2"},
+        ],
         "profile": {
             "competences": [
                 {"id": "saas-cs", "name": "SaaS customer success", "must_have": True},
@@ -265,6 +287,57 @@ VACANCIES: list[dict] = [
 # ---------------------------------------------------------------------------
 # Candidates
 # ---------------------------------------------------------------------------
+
+
+# HRP-726: short seeded transcripts for the supporting funnels. Inline
+# strings rather than ``seed_assets`` files: the whole transcript is one
+# ``transcript`` value, so it costs a single catalog entry per interview
+# instead of a three-file asset set per locale. Format is the diarized
+# ``[HH:MM:SS] Speaker: line`` one ``parse_transcript_segments`` reads,
+# so the panel shows speakers and timecodes like the Elena asset does.
+_SOFIA_TRANSCRIPT = """Interview - Product Designer - Recruiting Suite
+Candidate: Sofia Hartmann
+
+[00:00:12] Recruiter: Walk me through the FlixBus checkout redesign - what problem were you actually solving?
+
+[00:01:05] Candidate: Drop-off at the payment step. We assumed it was the form; the research said it was the price changing between search and checkout.
+
+[00:02:20] Recruiter: How did you find that?
+
+[00:03:02] Candidate: Eleven session recordings and six interviews. I ran them myself, a researcher helped me synthesise.
+
+[00:05:40] Recruiter: And the design system - you built it from scratch?
+
+[00:06:30] Candidate: From scratch. Twelve components at first, then adoption across four squads. The hard part was migration, not the components.
+
+[00:09:15] Recruiter: What broke?
+
+[00:10:02] Candidate: Two squads forked the button. We fixed it by making the system easier to use than the fork, not by writing a rule.
+
+[00:13:40] Recruiter: What do you know about recruiting workflows?
+
+[00:14:25] Candidate: Honestly, very little. I would want to sit with two recruiters for a week before drawing anything.
+"""
+
+_AISHA_TRANSCRIPT = """Interview - Customer Success Lead - Enterprise
+Candidate: Aisha Patel
+
+[00:00:10] Recruiter: You grew net revenue retention from 108 to 124. What actually moved it?
+
+[00:00:58] Candidate: Two things. We stopped treating renewal as a date and started treating it as a quarter. And we let go of the accounts we could not save, early enough to reinvest the time.
+
+[00:02:45] Recruiter: How do you decide an account cannot be saved?
+
+[00:03:30] Candidate: No executive sponsor after two attempts, and usage flat for a quarter. If both are true I say so out loud instead of running a rescue play nobody believes in.
+
+[00:06:10] Recruiter: You would be our first CS hire. No playbook, no team.
+
+[00:07:00] Candidate: That is the part I want. I would spend the first month on the twenty-five accounts we already have and write the playbook out of what I find, not out of what I did at Gong.
+
+[00:10:20] Recruiter: What would you need from us?
+
+[00:11:05] Candidate: Product access to usage data on day one. Without it I am guessing, and guessing is how customer success turns into a support queue.
+"""
 
 
 def candidates() -> list[dict]:
@@ -373,7 +446,7 @@ def candidates() -> list[dict]:
             "last_name": "Hartmann",
             "email": "sofia.hartmann@example.com",
             "location": "Munich, Germany",
-            "current_position": "Senior Product Designer @ Personio",
+            "current_position": "Senior Product Designer @ FlixBus",
             "years": 8,
             # ``screen`` so the funnel column matches her ``interview=False``
             # state — a previous fixture had her at the ``interview``
@@ -382,11 +455,84 @@ def candidates() -> list[dict]:
             "status": "screen",
             "ai_score": 0.87,
             "ai_verdict": "recommended",
-            "ai_summary": "Strong HRtech design background, owns systems-thinking and research.",
-            "ai_strength": "Built the HRIS design system at Personio from scratch.",
-            "ai_risk": "Has only worked on B2B HRtech; broader range untested.",
+            "ai_summary": "Strong consumer travel design background, owns systems-thinking and research.",
+            "ai_strength": "Built the booking design system at FlixBus from scratch.",
+            "ai_risk": "Has only worked on consumer travel; broader range untested.",
             "ai_mitigation": "Probe motivation in next round; ask for portfolio across other domains if any.",
-            "interview": False,
+            # HRP-726: the supporting funnels get the same treatment the
+            # headline one has had since HRP-666 — a real interview, a
+            # real analysis run and a real manager round behind every
+            # number the list prints. ``analysis_mode`` drives
+            # ``build_candidate_analysis``; the verdict panel reuses the
+            # four ``ai_*`` strings above so the mirror columns on
+            # ``candidate_vacancies`` cannot drift from the run.
+            "interview": True,
+            "analysis_mode": "full",
+            "next_step": "final_decision",
+            "title_prefix": "Portfolio review — ",
+            "duration_minutes": 45,
+            "days_ago": 4,
+            "transcript": _SOFIA_TRANSCRIPT,
+            "competence_notes": [
+                {
+                    "competence_id": "product-design",
+                    "score": 0.88,
+                    "status": "assessed",
+                    "reasoning": (
+                        "Framed the checkout problem from research rather than "
+                        "from the form, and carried it through to a shipped "
+                        "metric."
+                    ),
+                },
+                {
+                    "competence_id": "design-systems",
+                    "score": 0.9,
+                    "status": "assessed",
+                    "reasoning": (
+                        "Built the FlixBus system from scratch and solved "
+                        "adoption by making it easier to use than the fork."
+                    ),
+                },
+                {
+                    "competence_id": "user-research",
+                    "score": 0.7,
+                    "status": "assessed",
+                    "reasoning": (
+                        "Runs her own interviews and recordings, but hands "
+                        "synthesis to a researcher."
+                    ),
+                },
+            ],
+            "blind_spots": [
+                {
+                    "competence_id": "user-research",
+                    "human_score": None,
+                    "suggested_question": (
+                        "How would you plan research for a recruiter workflow "
+                        "you have never used yourself?"
+                    ),
+                },
+            ],
+            "process_findings": [
+                {
+                    "finding_type": "too_detailed",
+                    "severity": "minor",
+                    "citations": [],
+                    "full_description": (
+                        "Nine minutes went into design-system migration while "
+                        "the recruiting domain got the last two."
+                    ),
+                    "positive_reframe": (
+                        "The systems depth was convincing; a time box would "
+                        "leave room for the domain questions."
+                    ),
+                },
+            ],
+            "manager_scores": {
+                "product-design": 4,
+                "design-systems": 4,
+                "user-research": 3,
+            },
         },
         {
             "vacancy_key": "product-designer",
@@ -394,16 +540,60 @@ def candidates() -> list[dict]:
             "last_name": "O'Brien",
             "email": "james.obrien@example.com",
             "location": "Dublin, Ireland",
-            "current_position": "Product Designer @ Workday",
+            "current_position": "Product Designer @ Revolut",
             "years": 5,
             "status": "new",
             "ai_score": 0.72,
             "ai_verdict": "needs_check",
             "ai_summary": "Capable designer with relevant enterprise context.",
-            "ai_strength": "Has shipped HR-adjacent enterprise workflows.",
+            "ai_strength": "Has shipped payments-facing enterprise workflows.",
             "ai_risk": "Portfolio leans heavily on dashboards; less evidence of editorial UX.",
             "ai_mitigation": "Request to see process work on a complex flow.",
             "interview": False,
+            # No ``manager_scores``: every funnel keeps one candidate
+            # nobody has scored yet, so "Not scored yet" in the MANAGER
+            # column is a true statement rather than missing seed data.
+            "analysis_mode": "resume_only",
+            "next_step": "schedule_interview",
+            "competence_notes": [
+                {
+                    "competence_id": "product-design",
+                    "score": 0.7,
+                    "status": "assessed",
+                    "reasoning": (
+                        "Two years of business-account dashboards at Revolut, "
+                        "all inside an existing design system."
+                    ),
+                    "source_company": "Revolut",
+                    "source_period": "2022",
+                    "skill": "Dashboards",
+                },
+                {
+                    "competence_id": "design-systems",
+                    "score": 0.4,
+                    "status": "not_covered",
+                    "reasoning": (
+                        "Works to an existing design system; the resume shows "
+                        "no ownership of one."
+                    ),
+                },
+                {
+                    "competence_id": "user-research",
+                    "score": None,
+                    "status": "not_covered",
+                    "reasoning": "No research work anywhere on the resume.",
+                },
+            ],
+            "blind_spots": [
+                {
+                    "competence_id": "user-research",
+                    "human_score": None,
+                    "suggested_question": (
+                        "Which decision on your last project came from "
+                        "research rather than from a stakeholder?"
+                    ),
+                },
+            ],
         },
         # --- Customer Success pipeline ---
         {
@@ -421,7 +611,60 @@ def candidates() -> list[dict]:
             "ai_strength": "Grew NRR from 108% to 124% at Gong over two years.",
             "ai_risk": "Comp expectations may exceed band.",
             "ai_mitigation": "Discuss equity-heavy package early.",
-            "interview": False,
+            "interview": True,
+            "analysis_mode": "full",
+            "next_step": "final_decision",
+            "title_prefix": "Hiring manager interview — ",
+            "duration_minutes": 40,
+            "days_ago": 6,
+            "transcript": _AISHA_TRANSCRIPT,
+            "competence_notes": [
+                {
+                    "competence_id": "saas-cs",
+                    "score": 0.9,
+                    "status": "assessed",
+                    "reasoning": (
+                        "Treats renewal as a quarter, not a date, and has a "
+                        "written rule for when to stop rescuing an account."
+                    ),
+                },
+                {
+                    "competence_id": "enterprise-accounts",
+                    "score": 0.85,
+                    "status": "assessed",
+                    "reasoning": (
+                        "Carried eighteen enterprise accounts and the "
+                        "retention number attached to them."
+                    ),
+                },
+            ],
+            "blind_spots": [
+                {
+                    "competence_id": "saas-cs",
+                    "human_score": None,
+                    "suggested_question": (
+                        "How would you run onboarding for a customer with no "
+                        "dedicated admin on their side?"
+                    ),
+                },
+            ],
+            "process_findings": [
+                {
+                    "finding_type": "leading_question",
+                    "severity": "minor",
+                    "citations": [],
+                    "full_description": (
+                        "The question already named the missing playbook, so "
+                        "the candidate was handed the answer the round was "
+                        "meant to surface."
+                    ),
+                    "positive_reframe": (
+                        "Ask what the first month looks like without naming "
+                        "the gap first."
+                    ),
+                },
+            ],
+            "manager_scores": {"saas-cs": 4, "enterprise-accounts": 4},
         },
     ]
 
@@ -905,6 +1148,190 @@ PARSED_RESUMES: dict[str, dict] = {
             },
         ],
     },
+    # HRP-726: the three supporting pipelines used to open on an empty
+    # candidate card while their list rows advertised a score. Same
+    # payload shape as the headline candidates above — the card, the
+    # "Last position" column and the resume-only citation chips all read
+    # this one structure.
+    "sofia.hartmann@example.com": {
+        "summary": (
+            "Eight years of product design in consumer travel. Owns the "
+            "FlixBus booking flow and the design system behind it."
+        ),
+        "current_position": "Senior Product Designer",
+        "years_of_experience": 8,
+        "location": "Munich, Germany",
+        "experience": [
+            {
+                "position": "Senior Product Designer",
+                "role": "Senior Product Designer",
+                "company": "FlixBus",
+                "start_date": "2021",
+                "end_date": None,
+                "description": (
+                    "Built the booking design system from scratch and drove "
+                    "its adoption across four squads. Took the checkout "
+                    "redesign from research to a 9% lift in completed bookings."
+                ),
+            },
+            {
+                "position": "Product Designer",
+                "role": "Product Designer",
+                "company": "Check24",
+                "start_date": "2018",
+                "end_date": "2021",
+                "description": (
+                    "Designed comparison and lead flows for the insurance "
+                    "vertical. First exposure to research-led iteration."
+                ),
+            },
+        ],
+        "education": [
+            {
+                "institution": "Munich University of Applied Sciences",
+                "degree": "BA",
+                "field": "Communication Design",
+                "start_date": "2014",
+                "end_date": "2018",
+            },
+        ],
+        "skills": [
+            "Figma",
+            "Design systems",
+            "User research",
+            "Prototyping",
+            "Accessibility",
+        ],
+        "languages": [
+            {"name": "German", "level": "C2"},
+            {"name": "English", "level": "C1"},
+        ],
+        "certificates": [
+            {
+                "name": "UX Design Certificate",
+                "issuer": "Interaction Design Foundation",
+                "issued_at": "2021",
+            },
+        ],
+    },
+    "james.obrien@example.com": {
+        "summary": (
+            "Five years of product design in fintech. Strongest on dense "
+            "dashboards and bulk operations; lighter on editorial work."
+        ),
+        "current_position": "Product Designer",
+        "years_of_experience": 5,
+        "location": "Dublin, Ireland",
+        "experience": [
+            {
+                "position": "Product Designer",
+                "role": "Product Designer",
+                "company": "Revolut",
+                "start_date": "2022",
+                "end_date": None,
+                "description": (
+                    "Designs business-account dashboards and the bulk-payment "
+                    "flows behind them. Works to an existing design system."
+                ),
+            },
+            {
+                "position": "UI Designer",
+                "role": "UI Designer",
+                "company": "Intercom",
+                "start_date": "2019",
+                "end_date": "2022",
+                "description": (
+                    "Built onboarding and marketing screens for the messenger product."
+                ),
+            },
+        ],
+        "education": [
+            {
+                "institution": "National College of Art and Design",
+                "degree": "BA",
+                "field": "Visual Communication",
+                "start_date": "2015",
+                "end_date": "2019",
+            },
+        ],
+        "skills": [
+            "Figma",
+            "Dashboards",
+            "Prototyping",
+            "Design systems",
+        ],
+        "languages": [
+            {"name": "English", "level": "C2"},
+        ],
+        "certificates": [
+            {
+                "name": "Google UX Design Certificate",
+                "issuer": "Google",
+                "issued_at": "2020",
+            },
+        ],
+    },
+    "aisha.patel@example.com": {
+        "summary": (
+            "Seven years in SaaS customer success, the last four on "
+            "enterprise accounts. Carries a retention number, not a "
+            "ticket queue."
+        ),
+        "current_position": "Senior Customer Success Manager",
+        "years_of_experience": 7,
+        "location": "London, UK",
+        "experience": [
+            {
+                "position": "Senior Customer Success Manager",
+                "role": "Senior Customer Success Manager",
+                "company": "Gong",
+                "start_date": "2021",
+                "end_date": None,
+                "description": (
+                    "Owns 18 enterprise accounts. Grew net revenue retention "
+                    "from 108% to 124% over two years and built the quarterly "
+                    "business review format the team still uses."
+                ),
+            },
+            {
+                "position": "Customer Success Manager",
+                "role": "Customer Success Manager",
+                "company": "Zendesk",
+                "start_date": "2017",
+                "end_date": "2021",
+                "description": (
+                    "Ran onboarding for mid-market accounts across EMEA. "
+                    "Handed the largest of them to the enterprise team."
+                ),
+            },
+        ],
+        "education": [
+            {
+                "institution": "University of Manchester",
+                "degree": "BA",
+                "field": "Business Management",
+                "start_date": "2013",
+                "end_date": "2016",
+            },
+        ],
+        "skills": [
+            "Account management",
+            "Onboarding",
+            "Renewals",
+            "Executive stakeholder management",
+        ],
+        "languages": [
+            {"name": "English", "level": "C2"},
+            {"name": "Spanish", "level": "B2"},
+        ],
+        "certificates": [
+            {
+                "name": "Customer Success Manager Certification",
+                "issuer": "SuccessCOACHING",
+                "issued_at": "2020",
+            },
+        ],
+    },
 }
 
 
@@ -1067,3 +1494,111 @@ PRIYA_RESUME_ANALYSIS: dict = {
     "risk_mitigation": "Decline for senior role; consider for future mid-level opening if pipeline has room.",
     "recommendation_for_next_step": "reject",
 }
+
+
+# ---------------------------------------------------------------------------
+# Analysis payloads for the supporting funnels (HRP-726)
+# ---------------------------------------------------------------------------
+
+
+def build_candidate_analysis(spec: dict) -> dict:
+    """Assemble one seeded ``AIAnalysisRun.analysis_data`` payload.
+
+    HRP-726: the six supporting vacancies used to print an AI score and
+    a verdict on every list row while the candidate card behind it was
+    empty — the columns read the ``candidate_vacancies.ai_*`` mirrors,
+    which the seed wrote by hand with no run behind them. Building the
+    payload from the same spec that fills those mirrors makes the list a
+    summary of the card again instead of an independent claim.
+
+    The verdict block is not authored twice: ``verdict`` /
+    ``verdict_summary`` / ``key_strength`` / ``key_risk`` /
+    ``risk_mitigation`` are the spec's own ``ai_*`` strings, so one
+    translation serves both the row and the run and the two cannot
+    drift. Only the per-competence evidence is spec-authored
+    (``competence_notes``).
+
+    ``mode="full"`` produces an ``InterviewAnalysisResult`` whose
+    citations quote the reasoning (the Elena pattern — one catalog entry
+    covers both). Any other mode produces a ``ResumeOnlyAnalysisResult``
+    whose excerpts anchor on the resume: the experience section matches
+    on ``source_company`` + ``source_period`` and the optional ``skill``
+    adds a second section, so a citation chip still lands on a real
+    resume item after the fixture is translated.
+
+    The caller passes an already-localized spec — this function only
+    reshapes, it never translates.
+    """
+    mode = spec.get("analysis_mode")
+    if mode is None:
+        raise ValueError(f"spec {spec.get('email')!r} carries no analysis_mode")
+    full = mode == "full"
+
+    assessments: list[dict] = []
+    for note in spec.get("competence_notes") or []:
+        row: dict[str, Any] = {
+            "competence_id": note["competence_id"],
+            "score": note.get("score"),
+            "status": note["status"],
+            "reasoning": note.get("reasoning"),
+        }
+        # Evidence is evidence: a competence the source never covered
+        # must not carry any (pinned by the shape guard).
+        covered = note["status"] != "not_covered"
+        if full:
+            row["citations"] = (
+                [
+                    {
+                        "segment_id": None,
+                        "start_sec": None,
+                        "end_sec": None,
+                        "quote": note["reasoning"],
+                    }
+                ]
+                if covered
+                else []
+            )
+        else:
+            excerpts: list[dict] = []
+            if covered:
+                excerpts.append(
+                    {
+                        "section": "experience",
+                        "excerpt_text": note["reasoning"],
+                        "source_company": note.get("source_company"),
+                        "source_period": note.get("source_period"),
+                    }
+                )
+                if note.get("skill"):
+                    excerpts.append(
+                        {
+                            "section": "skills",
+                            "excerpt_text": note["skill"],
+                            "source_company": None,
+                            "source_period": None,
+                        }
+                    )
+            row["resume_excerpts"] = excerpts
+            row["confidence"] = note.get("confidence", "medium")
+        assessments.append(row)
+
+    payload: dict[str, Any] = {
+        "data_completeness": spec.get(
+            "data_completeness", "full" if full else "partial"
+        ),
+        "competence_assessments": assessments,
+        "blind_spots": spec.get("blind_spots") or [],
+        "red_flags": spec.get("red_flags") or [],
+        "verdict": spec["ai_verdict"],
+        "verdict_summary": spec["ai_summary"],
+        "key_strength": spec["ai_strength"],
+        "key_risk": spec["ai_risk"],
+        "risk_mitigation": spec["ai_mitigation"],
+    }
+    if full:
+        payload["process_findings"] = spec.get("process_findings") or []
+    else:
+        payload["recommendation_for_next_step"] = spec.get(
+            "next_step", "schedule_interview"
+        )
+    return payload

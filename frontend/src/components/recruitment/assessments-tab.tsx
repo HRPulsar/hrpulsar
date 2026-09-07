@@ -7,12 +7,13 @@ import { AlertTriangle, ExternalLink, Info, Loader2 } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type {
-  AssessmentMatrixCandidate,
-  AssessmentMatrixCell,
-  AssessmentMatrixCellDetail,
-  AssessmentMatrixCompetence,
-  AssessmentMatrixData,
+import {
+  matrixAiStatusLabel,
+  type AssessmentMatrixCandidate,
+  type AssessmentMatrixCell,
+  type AssessmentMatrixCellDetail,
+  type AssessmentMatrixCompetence,
+  type AssessmentMatrixData,
 } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -514,7 +515,7 @@ function CompactFooter({
                       : formatScore(locale, detail.ai_latest.score)}
                   </Badge>
                   <span className="text-muted-foreground">
-                    {detail.ai_latest.status}
+                    {matrixAiStatusLabel(t, detail.ai_latest.status)}
                   </span>
                 </div>
                 {detail.ai_latest.reasoning && (

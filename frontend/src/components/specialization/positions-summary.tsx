@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 /** Lifecycle status code → key in the `company` i18n namespace. Unknown
  * codes fall through to the raw value, as before. */
@@ -29,6 +30,7 @@ export function PositionsSummary({
   blocks: DivisionPositionsBlock[];
 }) {
   const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   const { canViewJobProfile } = usePermissions();
   // HRP-637: the catalogue's "position -> grade" join under the
   // specialization's own URL, so the column follows the same viewer/tenant
@@ -89,7 +91,7 @@ export function PositionsSummary({
                   <TableRow key={pos.id}>
                     <TableCell className="font-medium">{pos.title}</TableCell>
                     {showGrade ? (
-                      <TableCell>{pos.grade_title ?? "—"}</TableCell>
+                      <TableCell>{gradeTitleLabel(tRef, pos.grade_title) || "—"}</TableCell>
                     ) : null}
                     <TableCell className="text-right">
                       {pos.assigned}/{pos.headcount ?? 0}

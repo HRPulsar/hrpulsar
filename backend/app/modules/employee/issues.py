@@ -39,7 +39,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
 from sqlalchemy import Row, select
@@ -61,6 +61,9 @@ STALE_DAYS = 180
 STUCK_REVIEW_DAYS = 14
 CLOSED_WINDOW_DAYS = 90
 DEFAULT_PASSING = 75
+# Assessment statuses that still expect an answer — an open assessment is
+# what makes ``ended_at`` a promise rather than history (HRP-720).
+OPEN_ASSESSMENT_STATUSES = ("sent", "in_progress")
 
 IssueCode = Literal[
     "competence_gap",
@@ -95,6 +98,30 @@ def passing_bar(passing_score: int | None) -> int:
     return DEFAULT_PASSING if passing_score is None else passing_score
 
 
+def is_gap(percent: int | float, bar: int) -> bool:
+    """HRP-731: the one growth-zone / gap rule for the whole product.
+
+    A competence counts as a gap when its result is **at or below** the
+    bar. The boundary is inclusive on purpose: scoring exactly the bar is
+    not a competence the business treats as closed, and the group
+    analytics growth zones have always read it that way. Every surface
+    that splits results into gaps and strengths goes through here — the
+    dashboard queue, the employee chips, the Competences tab and the
+    assessment results blocks (the last two via the frontend twin
+    ``isGap``) — so they cannot drift apart again.
+
+    Takes the resolved bar rather than the raw snapshot: callers already
+    have it from ``passing_bar`` and several of them reuse it across a
+    whole assessment's results.
+
+    ``collect_issue_facts`` decides the live cohorts through this function;
+    anything re-deriving a gap at another point in time (a historical
+    replay, a report) must call it too rather than spelling the comparison
+    out again (HRP-729).
+    """
+    return percent <= bar
+
+
 @dataclass(frozen=True)
 class IssueFacts:
     """Everything the loop derives from one pass over the cohort's data."""
@@ -112,6 +139,31 @@ class IssueFacts:
     stuck_employees: set[uuid.UUID] = field(default_factory=set)
     plans_done_on_time: int = 0
     gaps_closed: int = 0
+    # HRP-720: "when does this resolve?" — per employee, the date of the thing
+    # each dated code is about: the earliest missed plan deadline, the earliest
+    # deadline of a plan in the stuck set (review / returned), the earliest
+    # deadline of a plan in review, the earliest missed assessment end date and
+    # the next one still ahead. Collected here because the pass already reads
+    # both tables; ``issue_deadlines`` picks the dict per code.
+    pdp_overdue_deadline: dict[uuid.UUID, date] = field(default_factory=dict)
+    pdp_stuck_deadline: dict[uuid.UUID, date] = field(default_factory=dict)
+    pdp_pending_deadline: dict[uuid.UUID, date] = field(default_factory=dict)
+    assessment_overdue_deadline: dict[uuid.UUID, date] = field(default_factory=dict)
+    assessment_next_deadline: dict[uuid.UUID, date] = field(default_factory=dict)
+    # HRP-729: how bad each gap is, per employee — collected in the same pass
+    # that decides *whether* there is a gap, so the severity can never disagree
+    # with the cohort about what counts as below the bar.
+    gap_count: dict[uuid.UUID, int] = field(default_factory=dict)
+    gap_worst_depth: dict[uuid.UUID, int] = field(default_factory=dict)
+    # Same idea for the plan codes: how many days past the deadline, and how
+    # many days sitting in review. Precomputed here rather than in the sort
+    # key, which would otherwise rescan every plan for every employee.
+    pdp_overdue_days: dict[uuid.UUID, int] = field(default_factory=dict)
+    pdp_stuck_days: dict[uuid.UUID, int] = field(default_factory=dict)
+    # HRP-724: the raw plan rows, kept so a caller can ask a window question
+    # the fixed 90-day tiles do not answer. Already fetched — dropping them
+    # only bought a second query later.
+    pdp_rows: Sequence[Row] = ()
 
     @property
     def total_active(self) -> int:
@@ -148,9 +200,60 @@ def closed_against_previous(
             if res.competence_id in seen:
                 continue
             seen.add(res.competence_id)
-            if res.percent < prev_bar and res.competence_id in passed_now:
+            if is_gap(res.percent, prev_bar) and res.competence_id in passed_now:
                 closed.add(res.competence_id)
     return closed
+
+
+def improved_against_previous(
+    inside: Sequence[Row],
+    before: Sequence[Row],
+    results_by_assessment: dict[uuid.UUID, list[Row]],
+) -> set[uuid.UUID]:
+    """HRP-724: competences that scored higher inside the window than before it.
+
+    Sibling of :func:`closed_against_previous`, and deliberately not the same
+    question: that one counts crossing the passing bar, this one counts any
+    strict improvement — 40 to 55 is movement worth reporting even though the
+    gap is still open.
+
+    Both sequences are one employee's done assessments, newest first (the
+    order ``collect_issue_facts`` returns). Per competence only the newest
+    result on each side is compared, and a competence with nothing measured
+    before the window is not counted: with no baseline there is no gain, only
+    a first reading.
+    """
+
+    def _newest(rows: Sequence[Row]) -> dict[uuid.UUID, int]:
+        out: dict[uuid.UUID, int] = {}
+        for row in rows:
+            for res in results_by_assessment.get(row.id, []):
+                out.setdefault(res.competence_id, res.percent)
+        return out
+
+    baseline = _newest(before)
+    return {
+        competence_id
+        for competence_id, percent in _newest(inside).items()
+        if competence_id in baseline and percent > baseline[competence_id]
+    }
+
+
+def split_by_window(
+    rows: Sequence[Row], window_start: datetime
+) -> tuple[list[Row], list[Row]]:
+    """Split done assessments (newest first) into inside / before the window.
+
+    Rows with no ``finished_at`` sit in neither half — an undated assessment
+    cannot be placed on either side of a date.
+    """
+    inside = [
+        r for r in rows if r.finished_at is not None and r.finished_at >= window_start
+    ]
+    before = [
+        r for r in rows if r.finished_at is not None and r.finished_at < window_start
+    ]
+    return inside, before
 
 
 def _cohort_filter(
@@ -235,7 +338,22 @@ async def collect_issue_facts(
         PDP.deadline,
         PDP.updated_at,
         PDP.finished_at,
+        # HRP-732: when the plan started existing — the only way to ask
+        # "did this person have a plan back then?" without a second query.
+        PDP.created_at,
     ).where(PDP.tenant_id == tenant_id)
+    # HRP-720: every open assessment's end date. Split below into missed and
+    # still ahead — one grouped minimum cannot tell those apart, and a stale
+    # badge must not promise a date that has already passed.
+    due_q = (
+        select(Assessment.employee_id, Assessment.ended_at)
+        .join(AssessmentStatus, AssessmentStatus.id == Assessment.status_id)
+        .where(
+            Assessment.tenant_id == tenant_id,
+            AssessmentStatus.code.in_(OPEN_ASSESSMENT_STATUSES),
+            Assessment.ended_at.is_not(None),
+        )
+    )
     if cohort is not None:
         # Narrow on the active set actually loaded, not on the requested
         # cohort: a requested id that is terminated or off-tenant carries
@@ -244,6 +362,7 @@ async def collect_issue_facts(
         done_q = done_q.where(Assessment.employee_id.in_(loaded))
         results_q = results_q.where(Assessment.employee_id.in_(loaded))
         pdp_q = pdp_q.where(PDP.employee_id.in_(loaded))
+        due_q = due_q.where(Assessment.employee_id.in_(loaded))
 
     done_rows = (await db.execute(done_q)).all()
     results_by_assessment: dict[uuid.UUID, list[Row]] = {}
@@ -261,12 +380,20 @@ async def collect_issue_facts(
     # Gaps: results below the bar in the employee's latest done assessment.
     gap_employees: set[uuid.UUID] = set()
     gap_competences = 0
+    gap_count: dict[uuid.UUID, int] = {}
+    gap_worst_depth: dict[uuid.UUID, int] = {}
     for emp_id, row in latest_done.items():
         bar = passing_bar(row.passing_score)
         for res in results_by_assessment.get(row.id, []):
-            if res.percent < bar:
+            if is_gap(res.percent, bar):
                 gap_employees.add(emp_id)
                 gap_competences += 1
+                # HRP-729: inside the branch on purpose — whatever the bar
+                # comparison becomes, the severity follows it for free.
+                gap_count[emp_id] = gap_count.get(emp_id, 0) + 1
+                depth = bar - res.percent
+                if depth > gap_worst_depth.get(emp_id, 0):
+                    gap_worst_depth[emp_id] = depth
 
     # Confirmed closures: competence below the bar in the IMMEDIATELY
     # preceding result and at/above the bar in the latest assessment,
@@ -286,7 +413,7 @@ async def collect_issue_facts(
         passed_now = {
             res.competence_id
             for res in results_by_assessment.get(latest.id, [])
-            if res.percent >= latest_bar
+            if not is_gap(res.percent, latest_bar)
         }
         earlier = [r for r in done_by_employee[emp_id] if r.id != latest.id]
         gaps_closed += len(
@@ -310,6 +437,22 @@ async def collect_issue_facts(
         for r in pdp_rows
         if r.status in {"review", "returned"} and r.updated_at < stuck_cutoff
     }
+    # HRP-729: worst plan per employee, on the same clock as the cohorts above.
+    pdp_overdue_days: dict[uuid.UUID, int] = {}
+    pdp_stuck_days: dict[uuid.UUID, int] = {}
+    for r in pdp_rows:
+        if (
+            r.status not in PDP_FINALIZED_STATUSES
+            and r.deadline is not None
+            and r.deadline < now
+        ):
+            days = (now - r.deadline).days
+            if days > pdp_overdue_days.get(r.employee_id, -1):
+                pdp_overdue_days[r.employee_id] = days
+        if r.status in {"review", "returned"}:
+            days = (now - r.updated_at).days
+            if days > pdp_stuck_days.get(r.employee_id, -1):
+                pdp_stuck_days[r.employee_id] = days
     plans_done_on_time = sum(
         1
         for r in pdp_rows
@@ -319,6 +462,49 @@ async def collect_issue_facts(
         and r.deadline is not None
         and r.finished_at <= r.deadline
     )
+
+    # Per code, the plan that raised it: the overdue code answers with the
+    # earliest missed deadline, the stuck code with the earliest deadline in
+    # its review / returned set, the pending code with a plan in review only
+    # (a returned plan is not awaiting anybody's review). One nearest date
+    # across all open plans handed a stuck review the in-progress plan's date
+    # (review finding).
+    pdp_overdue_deadline: dict[uuid.UUID, date] = {}
+    pdp_stuck_deadline: dict[uuid.UUID, date] = {}
+    pdp_pending_deadline: dict[uuid.UUID, date] = {}
+    for r in pdp_rows:
+        if r.status in PDP_FINALIZED_STATUSES or r.deadline is None:
+            continue
+        due = r.deadline.date()
+        if r.deadline < now:
+            pdp_overdue_deadline[r.employee_id] = min(
+                pdp_overdue_deadline.get(r.employee_id, due), due
+            )
+        if r.status in {"review", "returned"}:
+            pdp_stuck_deadline[r.employee_id] = min(
+                pdp_stuck_deadline.get(r.employee_id, due), due
+            )
+        if r.status == "review":
+            pdp_pending_deadline[r.employee_id] = min(
+                pdp_pending_deadline.get(r.employee_id, due), due
+            )
+    # Same split for assessments: a missed end date is what ``assessment_overdue``
+    # is about; ``assessment_stale`` may only point at one still ahead.
+    assessment_overdue_deadline: dict[uuid.UUID, date] = {}
+    assessment_next_deadline: dict[uuid.UUID, date] = {}
+    today = now.date()
+    for emp_id, ends in (await db.execute(due_q)).all():
+        if emp_id not in active_by_id:
+            continue
+        due = ends.date()
+        if ends < now:
+            assessment_overdue_deadline[emp_id] = min(
+                assessment_overdue_deadline.get(emp_id, due), due
+            )
+        if due >= today:
+            assessment_next_deadline[emp_id] = min(
+                assessment_next_deadline.get(emp_id, due), due
+            )
 
     return IssueFacts(
         active_by_id=active_by_id,
@@ -334,7 +520,61 @@ async def collect_issue_facts(
         stuck_employees=stuck_employees,
         plans_done_on_time=plans_done_on_time,
         gaps_closed=gaps_closed,
+        pdp_overdue_deadline=pdp_overdue_deadline,
+        pdp_stuck_deadline=pdp_stuck_deadline,
+        pdp_pending_deadline=pdp_pending_deadline,
+        assessment_overdue_deadline=assessment_overdue_deadline,
+        assessment_next_deadline=assessment_next_deadline,
+        gap_count=gap_count,
+        gap_worst_depth=gap_worst_depth,
+        pdp_overdue_days=pdp_overdue_days,
+        pdp_stuck_days=pdp_stuck_days,
+        pdp_rows=pdp_rows,
     )
+
+
+def development_dynamics(
+    facts: IssueFacts, days: int, *, now: datetime | None = None
+) -> dict:
+    """HRP-724: what actually moved in the last ``days``.
+
+    Two numbers, both about people and not about paperwork: development plans
+    that reached ``done`` inside the window, and (employee, competence) pairs
+    scoring higher now than they did before the window opened.
+
+    Deliberately separate from the ``closed`` stage: that one counts gaps
+    crossing the passing bar in a fixed 90-day window and is what the loop is
+    graded on. This one answers "did the last quarter change anything", which
+    a competence climbing 40 to 55 does even though no bar was crossed.
+    """
+    window_start = (now or datetime.now(UTC)) - timedelta(days=days)
+    # Both halves of the tile count the same population: active employees.
+    # Without the filter a terminated employee's finished plan still raised
+    # plans_completed while their competences could never raise the other
+    # number (review finding).
+    plans_completed = sum(
+        1
+        for r in facts.pdp_rows
+        if r.status == "done"
+        and r.finished_at is not None
+        and r.finished_at >= window_start
+        and r.employee_id in facts.active_by_id
+    )
+    done_by_employee: dict[uuid.UUID, list[Row]] = {}
+    for row in facts.done_rows:
+        if row.employee_id in facts.active_by_id:
+            done_by_employee.setdefault(row.employee_id, []).append(row)
+    competences_improved = 0
+    for rows in done_by_employee.values():
+        inside, before = split_by_window(rows, window_start)
+        competences_improved += len(
+            improved_against_previous(inside, before, facts.results_by_assessment)
+        )
+    return {
+        "days": days,
+        "plans_completed": plans_completed,
+        "competences_improved": competences_improved,
+    }
 
 
 def issue_cohorts(facts: IssueFacts) -> dict[IssueCode, set[uuid.UUID]]:
@@ -385,3 +625,114 @@ ISSUE_PRIORITY: tuple[str, ...] = (
     "pdp_pending_review",
     "assessment_stale",
 )
+
+
+# HRP-720: "there is a problem -> what was done -> when does it resolve?".
+# Only the codes whose resolution is actually scheduled carry a date: a plan
+# has a deadline, an open assessment has an end date. A competence gap, the
+# hygiene codes and a finalisation waiting on the initiator
+# (``assessment_pending``) resolve when somebody acts, and inventing a date for
+# them would be a promise the system cannot keep.
+
+
+def issue_deadlines(
+    facts: IssueFacts, employee_id: uuid.UUID, codes: Sequence[str]
+) -> dict[str, date]:
+    """Per-code resolution date for one employee; codes without one are absent.
+
+    Each code reads the date of the thing that raised it, so two codes on
+    one card can name two different plans. ``assessment_stale`` with nothing
+    scheduled ahead stays undated on purpose — "nothing has been done yet" is
+    the honest answer, and a badge reading "due <today>" or pointing at a date
+    already missed would say the opposite.
+    """
+    sources: dict[str, dict[uuid.UUID, date]] = {
+        "pdp_overdue": facts.pdp_overdue_deadline,
+        "pdp_stuck_review": facts.pdp_stuck_deadline,
+        "pdp_pending_review": facts.pdp_pending_deadline,
+        "assessment_overdue": facts.assessment_overdue_deadline,
+        "assessment_stale": facts.assessment_next_deadline,
+    }
+    out: dict[str, date] = {}
+    for code in codes:
+        due = sources.get(code, {}).get(employee_id)
+        if due is not None:
+            out[code] = due
+    return out
+
+
+# HRP-729: how bad one person's problem is, so the queue chips and the
+# ``?issue=`` list can lead with whoever needs a human first.
+#
+# One comparator, one place. Scores are comparable only WITHIN a code —
+# 342 "gap" points and 21 "days stuck" are different units, and nothing
+# sorts the codes against each other (the queue's chip order is fixed).
+#
+# The gap score reads ``gap_count`` / ``gap_worst_depth``, both filled by
+# the same branch that decides whether a result is below the bar, so a
+# change to that rule carries over without a second comparison here.
+#
+# Never assessed outranks assessed-long-ago (decision on HRP-729,
+# 06.09.2026): no measurement at all is the worse state. Flipping that is
+# a one-line change to ``_NEVER_ASSESSED_DAYS``.
+_GAP_COUNT_WEIGHT = 100
+_NEVER_ASSESSED_DAYS = 10**6
+
+
+def issue_severity(
+    facts: IssueFacts,
+    employee_id: uuid.UUID,
+    code: str,
+    *,
+    now: datetime | None = None,
+) -> float:
+    """Severity of ``code`` for one employee; higher is worse, 0.0 if unknown.
+
+    Every branch is a dict lookup: the counting happens once, in the pass that
+    built ``facts``. ``now`` is only consulted for staleness, which is measured
+    against read time rather than collection time.
+    """
+    if code in ("gaps_without_plan", "competence_gap"):
+        count = facts.gap_count.get(employee_id, 0)
+        if not count:
+            return 0.0
+        # Count dominates, depth breaks ties: three competences below the
+        # bar is a bigger hole than one competence that sank further.
+        return float(
+            count * _GAP_COUNT_WEIGHT + facts.gap_worst_depth.get(employee_id, 0)
+        )
+    if code == "pdp_overdue":
+        return float(facts.pdp_overdue_days.get(employee_id, 0))
+    if code == "pdp_stuck_review":
+        return float(facts.pdp_stuck_days.get(employee_id, 0))
+    if code in ("assessment_stale", "assessment_coverage"):
+        now = now or datetime.now(UTC)
+        row = facts.latest_done.get(employee_id)
+        if row is None or row.finished_at is None:
+            return float(_NEVER_ASSESSED_DAYS)
+        return float((now - row.finished_at).days)
+    return 0.0
+
+
+def sort_by_severity(
+    facts: IssueFacts,
+    employees: Sequence[Employee],
+    codes: Sequence[str],
+    *,
+    now: datetime | None = None,
+) -> list[Employee]:
+    """Worst first; equal severity keeps last name / id order so the list is stable.
+
+    ``codes`` is normally a single code. Passing several ranks each employee by
+    their worst one, which mixes units and is why callers fall back to another
+    ordering rather than asking for that.
+    """
+    now = now or datetime.now(UTC)
+    return sorted(
+        employees,
+        key=lambda e: (
+            -max((issue_severity(facts, e.id, c, now=now) for c in codes), default=0.0),
+            e.user.last_name if e.user else "",
+            str(e.id),
+        ),
+    )

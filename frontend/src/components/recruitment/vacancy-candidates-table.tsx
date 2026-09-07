@@ -52,23 +52,16 @@ const SORT_LS_PREFIX = "hrp:vacancy-candidates:sort:";
 // table shows the % match — the one number that is directly comparable
 // with the manager side — and keeps the tenant-scale normalized score in
 // the cell tooltip, or as the value itself when the row has no % match.
-// The helper stays parameterised because both formats are still real.
-type AiScoreView = "raw" | "normalized";
-
-export function formatAiScoreForView(
-  row: Pick<CandidateVacancyEnrichedRow, "ai_score" | "ai_score_normalized">,
-  view: AiScoreView,
+// HRP-710: with the toggle gone both call sites asked for the same view,
+// so the parameter went with it.
+export function formatAiScore(
+  row: Pick<CandidateVacancyEnrichedRow, "ai_score_normalized">,
 ): string {
-  if (view === "normalized") {
-    // Tenant assessment scale (e.g. 0..5) — one decimal matches how
-    // manager scores render.
-    const value = row.ai_score_normalized;
-    if (value === null || value === undefined) return "—";
-    return value.toFixed(1);
-  }
-  // Canonical raw 0..1 LLM scale — two decimals keep it readable.
-  if (row.ai_score === null || row.ai_score === undefined) return "—";
-  return row.ai_score.toFixed(2);
+  // Tenant assessment scale (e.g. 0..5) — one decimal matches how
+  // manager scores render.
+  const value = row.ai_score_normalized;
+  if (value === null || value === undefined) return "—";
+  return value.toFixed(1);
 }
 
 function readPersistedSort(vacancyId: string): {
@@ -643,7 +636,7 @@ function Row({
       >
         <ScoreCell
           percent={row.ai_percent}
-          score={formatAiScoreForView(row, "normalized")}
+          score={formatAiScore(row)}
           scoreTestId={`vacancy-candidates-row-${row.id}-ai-score-value`}
           percentTestId={`vacancy-candidates-row-${row.id}-ai-percent`}
           emptyLabel={t("candidatesTableAiNotAnalyzed")}
@@ -787,7 +780,7 @@ function MobileCard({
           </p>
           <ScoreCell
             percent={row.ai_percent}
-            score={formatAiScoreForView(row, "normalized")}
+            score={formatAiScore(row)}
             scoreTestId={`vacancy-candidates-mobile-row-${row.id}-ai-score-value`}
             percentTestId={`vacancy-candidates-mobile-row-${row.id}-ai-percent`}
             emptyLabel={t("candidatesTableAiNotAnalyzed")}

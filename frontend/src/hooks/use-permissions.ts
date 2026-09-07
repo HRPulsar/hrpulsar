@@ -26,29 +26,27 @@ export function usePermissions() {
     /** Admin or Manager */
     canManage: isAdmin || isManager,
     /**
+     * HRP-732: who may open /analytics. Deliberately its own flag rather
+     * than widening ``canManage`` — that one also unlocks every edit
+     * affordance in the product, which HR must not get for free. Mirrors
+     * ``require_role("admin", "manager", "hr")`` on the analytics routes.
+     */
+    canViewAnalytics: isAdmin || isManager || isHr,
+    /**
      * HRP-623: sees the HR record rather than the directory row. Mirrors
      * ``is_employee_only`` in backend/app/core/access_scope.py, inverted —
      * a wider set here renders columns the API does not send.
      */
     canViewHrData: isAdmin || isPlatformAdmin || isHr || isManager,
     /**
-     * HRP-637: sees a position's grade and specialization. Mirrors
-     * ``can_see_position_grades`` in backend/app/core/access_scope.py —
-     * the hiring roles read the pair (a requisition cannot be raised
-     * without it), everyone else only while the tenant switched
-     * ``directory_show_grades`` on. The flag arrives on ``/auth/me``: it
-     * is a property of the tenant, and deriving it from whichever rows the
-     * current page happens to hold answers wrong on any page whose rows
-     * have no pair.
+     * HRP-637: sees a position's grade and specialization — the hiring
+     * roles read the pair (a requisition cannot be raised without it),
+     * everyone else only while the tenant switched ``directory_show_grades``
+     * on. HRP-710: ``/auth/me`` answers this outright via
+     * ``can_see_position_grades``; this used to re-derive it from the role
+     * list, which is the backend's role set copied out by hand.
      */
-    canViewJobProfile:
-      isAdmin ||
-      isPlatformAdmin ||
-      isHr ||
-      isManager ||
-      isRecruiter ||
-      isHiringManager ||
-      user?.tenant_directory_show_grades === true,
+    canViewJobProfile: user?.can_view_job_profile === true,
     /** Can create/edit assessments, exams, PDPs */
     canCreateAssessments: isAdmin || isManager,
     /**

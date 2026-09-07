@@ -29,7 +29,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { api } from "@/lib/api";
-import { skillLevelLabel } from "@/lib/reference-labels";
+import { skillLevelLabel, skillLevelTitleLabel } from "@/lib/reference-labels";
 import type { CompetenceDetail, Indicator, SkillLevel } from "@/lib/types";
 
 interface IndicatorsEditorProps {
@@ -89,7 +89,7 @@ export function IndicatorsEditor({
       const level: SkillLevel =
         skillLevels.find((l) => l.id === ind.skill_level_id) ?? {
           id: ind.skill_level_id,
-          title: ind.skill_level_title || t("unknownLevel"),
+          title: skillLevelTitleLabel(tRef, ind.skill_level_title) || t("unknownLevel"),
           sort_index: 999,
           i18n_key: null,
           is_active: true,
@@ -107,7 +107,7 @@ export function IndicatorsEditor({
         (order.get(a.level.id) ?? a.level.sort_index) -
         (order.get(b.level.id) ?? b.level.sort_index),
     );
-  }, [detail, skillLevels, t]);
+  }, [detail, skillLevels, t, tRef]);
 
   function openCreate() {
     setEditing({

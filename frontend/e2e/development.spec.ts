@@ -1,9 +1,11 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   registerUser,
   setAuthTokens,
   setupFullTenant,
   createPDP,
+  provisionTenantMember,
   seedPDPItemWithMaterial,
 } from "./helpers";
 
@@ -142,7 +144,7 @@ test.describe("Development status lifecycle", () => {
 
     // Sent → In progress (HRP-197: auto-promotes when owner marks first item passed)
     const passResp = await ctx.request.post(
-      `http://localhost:8100/api/pdp/${pdp.id}/items/${item.id}/pass`,
+      `${API_BASE}/pdp/${pdp.id}/items/${item.id}/pass`,
       {
         headers: { Authorization: `Bearer ${setup.accessToken}` },
         data: { is_passed: true },
@@ -171,6 +173,77 @@ test.describe("Development status lifecycle", () => {
     await expect(
       ctx.getByTestId("development-detail-status-actions"),
     ).toHaveCount(0);
+
+    await ctx.close();
+  });
+});
+
+// HRP-712: the same walk the demo does in the employee's own seat — open the
+// plan the admin sent, follow a material, tick it off, leave a comment and
+// hand it back for review. The lifecycle test above drives those transitions
+// as the admin who owns the tenant; this one proves they work for a plain
+// employee, who is the person the scenario actually puts in front of the
+// screen.
+test.describe("Development plan — the owner's flow", () => {
+  test("owner follows a material, ticks it, comments and sends for review", async ({
+    browser,
+  }) => {
+    const ctx = await browser.newPage();
+    const setup = await setupFullTenant(ctx);
+    const admin = { page: ctx, accessToken: setup.accessToken };
+
+    const member = await provisionTenantMember(admin, {
+      roleCode: "employee",
+      divisionId: setup.divisionId,
+      firstName: "Owner",
+      lastName: "Flow",
+    });
+    const pdp = await createPDP(admin, member.employeeId!, "Owner flow plan");
+    await seedPDPItemWithMaterial(admin, pdp.id);
+
+    const sent = await ctx.request.post(`${API_BASE}/pdp/${pdp.id}/status`, {
+      headers: { Authorization: `Bearer ${setup.accessToken}` },
+      data: { status_code: "sent" },
+    });
+    expect(sent.ok()).toBeTruthy();
+
+    const detail = await ctx.request.get(`${API_BASE}/pdp/${pdp.id}`, {
+      headers: { Authorization: `Bearer ${setup.accessToken}` },
+    });
+    const materialId = (await detail.json()).items[0].materials[0].id;
+
+    // From here on the browser is the employee, not the admin.
+    await setAuthTokens(ctx, member.accessToken, member.refreshToken);
+    await ctx.goto(`/development/${pdp.id}`);
+
+    const status = ctx.getByTestId("development-detail-status");
+    await expect(status).toHaveText("Sent", { timeout: 10000 });
+
+    // Step 6/8 of the demo: the material is a real link that opens away.
+    const link = ctx.getByTestId(
+      `development-detail-material-${materialId}-link`,
+    );
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute("href", "https://example.com");
+    await expect(link).toHaveAttribute("target", "_blank");
+
+    // Ticking the first item promotes the plan without any admin action.
+    await ctx.getByTestId(/^development-detail-item-.*-checkbox$/).click();
+    await expect(status).toHaveText("In progress", { timeout: 10000 });
+
+    await expect(ctx.getByTestId("development-detail-comments")).toBeVisible();
+    await ctx
+      .getByTestId("development-detail-comment-input")
+      .fill("Read it, makes sense.");
+    await ctx.getByTestId("development-detail-comment-submit").click();
+    await expect(
+      ctx.getByText("Read it, makes sense."),
+    ).toBeVisible({ timeout: 10000 });
+
+    const reviewBtn = ctx.getByTestId("development-detail-btn-status-review");
+    await expect(reviewBtn).toBeVisible({ timeout: 10000 });
+    await reviewBtn.click();
+    await expect(status).toHaveText("On review", { timeout: 10000 });
 
     await ctx.close();
   });

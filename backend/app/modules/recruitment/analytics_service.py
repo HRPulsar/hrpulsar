@@ -181,6 +181,9 @@ async def vacancy_analytics(
         "negative_stage_names": [
             stage.name for stage in stages if stage.stage_type == "terminal_negative"
         ],
+        "neutral_stage_names": [
+            stage.name for stage in stages if stage.stage_type == "terminal_neutral"
+        ],
         "total_candidates": len(cv_rows),
     }
 

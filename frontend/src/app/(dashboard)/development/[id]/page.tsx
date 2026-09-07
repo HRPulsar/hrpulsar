@@ -19,8 +19,9 @@ import {
   translatePdpStatusAction,
   type PDPStatus,
 } from "@/lib/pdp-status";
-import { dictionaryItemLabel } from "@/lib/reference-labels";
+import { dictionaryItemLabel, gradeTitleLabel } from "@/lib/reference-labels";
 import type {
+  Assessment,
   DictionaryItem,
   GradeOption,
   PDPDetail,
@@ -78,6 +79,9 @@ export default function PDPDetailPage() {
   const [pdp, setPdp] = useState<PDPDetail | null>(null);
   const [progressTimeline, setProgressTimeline] = useState<PDPProgressEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  // HRP-257: title of the assessment this plan was built from, for the
+  // "Based on assessment" link that replaces dev specialization / grade.
+  const [sourceAssessmentTitle, setSourceAssessmentTitle] = useState<string | null>(null);
 
   // Add/edit item
   const [itemOpen, setItemOpen] = useState(false);
@@ -149,6 +153,18 @@ export default function PDPDetailPage() {
       ]);
       setPdp(detail);
       setProgressTimeline(timeline);
+      // HRP-257: name the source assessment in the header link. A failure
+      // here only costs the title — the link itself still works.
+      if (detail.assessment_id) {
+        try {
+          const source = await api.get<Assessment>(
+            `/assessments/${detail.assessment_id}`,
+          );
+          if (mounted.current) setSourceAssessmentTitle(source.title);
+        } catch {
+          // leave the fallback wording in place
+        }
+      }
     } catch {
       toast.error(t("errorLoadPdp"));
     } finally {
@@ -239,7 +255,10 @@ export default function PDPDetailPage() {
       pdp.grade_title &&
       !options.some((g) => g.id === includeGradeId)
     ) {
-      options = [...options, { id: includeGradeId, title: pdp.grade_title }];
+      options = [
+        ...options,
+        { id: includeGradeId, title: gradeTitleLabel(tRef, pdp.grade_title) },
+      ];
     }
     if (!mounted.current || seq !== gradeReqSeq.current) return;
     setSpecGrades(options);
@@ -905,9 +924,24 @@ export default function PDPDetailPage() {
               <p className="font-medium">{formatDate(pdp.created_at)}</p>
             </div>
           </div>
-          {/* HRP-189: dev specialization + grade live below the top row,
+          {/* HRP-257: a plan built from an assessment's growth zones has no
+              development specialization or grade — its items came from the
+              assessment, so the source is named here instead. */}
+          {pdp.assessment_id ? (
+            <div className="mt-4 text-sm" data-testid="development-detail-source-assessment">
+              <p className="text-muted-foreground">{t("basedOnAssessment")}</p>
+              <Link
+                href={`/assessments/${pdp.assessment_id}`}
+                className="font-medium text-primary hover:underline"
+                data-testid="development-detail-source-assessment-link"
+              >
+                {sourceAssessmentTitle ?? t("basedOnAssessmentFallback")}
+              </Link>
+            </div>
+          ) : (
+          /* HRP-189: dev specialization + grade live below the top row,
               right under Progress; in Draft each value carries a pencil
-              affordance that opens the Specialization & Grade dialog. */}
+              affordance that opens the Specialization & Grade dialog. */
           <div className="mt-4 grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
             <div>
               <p className="text-muted-foreground">{t("fieldSpecialization")}</p>
@@ -939,7 +973,7 @@ export default function PDPDetailPage() {
                   className="font-medium"
                   data-testid="development-detail-grade"
                 >
-                  {pdp.grade_title || "—"}
+                  {gradeTitleLabel(tRef, pdp.grade_title) || "—"}
                 </p>
                 {canManage && !isPDPGradeLocked(pdp.status) && (
                   <Button
@@ -956,6 +990,7 @@ export default function PDPDetailPage() {
               </div>
             </div>
           </div>
+          )}
           {!isTerminal && nextStatuses.length > 0 && (
             <div className="mt-4 flex flex-wrap gap-2" data-testid="development-detail-status-actions">
               {nextStatuses.map((s) => {
@@ -1098,18 +1133,42 @@ export default function PDPDetailPage() {
                                     <ExternalLink className="h-3 w-3 text-muted-foreground" />
                                   )}
                                   {mat.file_url ? (
-                                    <a href={mat.file_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                                    <a
+                                      href={mat.file_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-primary hover:underline"
+                                      data-testid={`development-detail-material-${mat.id}-link`}
+                                    >
                                       {mat.file_name || mat.title}
                                     </a>
                                   ) : mat.link ? (
-                                    <a href={mat.link} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                                    <a
+                                      href={mat.link}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-primary hover:underline"
+                                      data-testid={`development-detail-material-${mat.id}-link`}
+                                    >
                                       {mat.title}
                                     </a>
                                   ) : (
-                                    <span>{mat.title}</span>
+                                    <span data-testid={`development-detail-material-${mat.id}-text`}>
+                                      {mat.title}
+                                    </span>
                                   )}
                                   {mat.format && (
                                     <Badge variant="outline" className="text-[10px]">{materialFormatLabel(tFormat, mat.format)}</Badge>
+                                  )}
+                                  {/* HRP-712: nothing to open — say so
+                                      rather than leave a title that looks
+                                      clickable and is not. Worded for any
+                                      format: a video with no link is not
+                                      "text" either. */}
+                                  {!mat.file_url && !mat.link && (
+                                    <span className="text-muted-foreground">
+                                      {t("materialNoSource")}
+                                    </span>
                                   )}
                                   {canEditThisItem && (
                                     <>
@@ -1182,7 +1241,7 @@ export default function PDPDetailPage() {
       </Card>
 
       {/* Comments */}
-      <Card>
+      <Card data-testid="development-detail-comments">
         <CardHeader>
           <CardTitle className="text-base">{t("comments")}</CardTitle>
         </CardHeader>
@@ -1236,13 +1295,19 @@ export default function PDPDetailPage() {
                   onChange={(e) => setCommentText(e.target.value)}
                   rows={2}
                   className="flex-1"
+                  data-testid="development-detail-comment-input"
                 />
                 <div className="flex flex-col gap-1">
                   <label className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md hover:bg-muted transition-colors">
                     <Paperclip className="h-4 w-4 text-muted-foreground" />
                     <input type="file" className="hidden" onChange={handleCommentFileUpload} disabled={commentUploading} />
                   </label>
-                  <Button size="sm" onClick={addComment} disabled={saving || (!commentText.trim() && !commentFile)}>
+                  <Button
+                    size="sm"
+                    onClick={addComment}
+                    disabled={saving || (!commentText.trim() && !commentFile)}
+                    data-testid="development-detail-comment-submit"
+                  >
                     {t("send")}
                   </Button>
                 </div>

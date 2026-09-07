@@ -1,9 +1,10 @@
 // HRP-680 — the resume item ↔ citation chip correspondence.
 //
 // The mark on a quoted resume item and the chip it links back to are
-// only useful if they agree with the forward direction (chip → resume,
-// findExperienceTarget / findGenericTarget in parsed-resume-editor.tsx).
-// This pins the priority order those two share: company + period first,
+// only useful if they agree with the forward direction (chip → resume),
+// which since HRP-710 is the same function: the editor scrolls to the
+// ``data-resume-item-key`` this returns. This pins the priority order:
+// company + period first,
 // then company, then period, then a substring pass — and pins the
 // refusal to guess, which is what keeps an unplaceable quote from
 // marking an arbitrary item.

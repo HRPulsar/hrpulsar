@@ -554,6 +554,11 @@ def _grade_items(
         grade_percent = round(
             sum(competence_percents) / len(competence_percents), 2
         )
+        # HRP-731: deliberately NOT issues.is_gap(). That rule judges one
+        # competence against the bar and calls the bar itself a gap. This is
+        # a different question — whether the *average across a grade's
+        # competences* clears the bar, i.e. readiness for that grade — and
+        # hitting the bar exactly is a pass here.
         passed = passing_score is not None and grade_percent >= passing_score
         missing = (
             None

@@ -54,8 +54,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ApiError, api } from "@/lib/api";
-import { formatDate } from "@/lib/date-format";
+import { formatDate, formatDateTime } from "@/lib/date-format";
 import {
   UPLOAD_ACCEPT_ATTR,
   detectKind,
@@ -72,6 +73,10 @@ import type {
   InterviewRoundOption,
   InterviewType,
 } from "@/lib/types";
+import {
+  interviewStatusLabel,
+  processingStatusLabel,
+} from "@/lib/recruitment-types";
 import { ScheduleInterviewDialog } from "./schedule-interview-dialog";
 
 interface VacancyOption {
@@ -86,6 +91,10 @@ interface Props {
   vacancyOptions: VacancyOption[];
   initialVacancyId?: string;
   candidateEmail?: string | null;
+  /** HRP-418 REDO: bumped by the Manager assessments block whenever a
+   *  round is created, so the round names cached here are re-read
+   *  instead of going stale until F5. */
+  roundsVersion?: number;
 }
 
 interface FileProgress {
@@ -109,11 +118,15 @@ const PROCESSING_TONE: Record<string, string> = {
   failed: "text-rose-600",
 };
 
-function processingBadge(label: string, status?: string | null) {
+function processingBadge(
+  t: (key: string) => string,
+  label: string,
+  status?: string | null,
+) {
   if (!status || status === "pending") return null;
   return (
     <span className={`text-xs ${PROCESSING_TONE[status] ?? ""}`}>
-      {label}: {status}
+      {label}: {processingStatusLabel(t, status)}
     </span>
   );
 }
@@ -123,6 +136,7 @@ export function CandidateInterviewsSection({
   vacancyOptions,
   initialVacancyId,
   candidateEmail,
+  roundsVersion = 0,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [vacancyId, setVacancyId] = useState<string | undefined>(
@@ -145,8 +159,16 @@ export function CandidateInterviewsSection({
   // HRP-472: a snackbar disappeared before the recruiter could read where
   // consent templates are configured — this is a modal now.
   const [consentSetupOpen, setConsentSetupOpen] = useState(false);
+  const [resendOpen, setResendOpen] = useState(false);
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  // Every write this block offers — consent send/resend, schedule, upload,
+  // edit, archive/restore — is require_role("admin", "recruiter"); the
+  // other recruitment viewers keep the list and the banner and lose the
+  // actions, the same rule as the Add button on the internal-candidates
+  // shortlist.
+  const { isAdmin, isRecruiter } = usePermissions();
+  const canEdit = isAdmin || isRecruiter;
 
   const currentVacancy = useMemo(
     () => vacancyOptions.find((v) => v.id === vacancyId),
@@ -180,26 +202,30 @@ export function CandidateInterviewsSection({
 
   // HRP-418: rows render "Interview 1 · added yyyy-mm-dd" — the round part
   // needs the Manager-assessment rounds of the same candidate-vacancy.
-  useEffect(() => {
+  // HRP-418 REDO: this list is a cache, and it went stale the moment a
+  // round was created elsewhere on the page — an interview pointing at a
+  // round created after mount rendered without its round until F5. It is
+  // re-read on every round creation (``roundsVersion``) and after every
+  // interview create/edit, which are the only two ways a row can start
+  // referencing a round this block has never seen.
+  const loadRounds = useCallback(async () => {
     if (!cvId) {
       setRounds([]);
       return;
     }
-    let cancelled = false;
-    api
-      .get<InterviewRoundOption[]>(
+    try {
+      const rows = await api.get<InterviewRoundOption[]>(
         `/v1/candidate-vacancies/${cvId}/assessment-rounds`,
-      )
-      .then((rows) => {
-        if (!cancelled) setRounds(Array.isArray(rows) ? rows : []);
-      })
-      .catch(() => {
-        if (!cancelled) setRounds([]);
-      });
-    return () => {
-      cancelled = true;
-    };
+      );
+      setRounds(Array.isArray(rows) ? rows : []);
+    } catch {
+      setRounds([]);
+    }
   }, [cvId]);
+
+  useEffect(() => {
+    void loadRounds();
+  }, [loadRounds, roundsVersion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -371,6 +397,28 @@ export function CandidateInterviewsSection({
     }
   }
 
+  // HRP-684: resend the pending link — same token, same expiry, so an
+  // already-delivered email keeps working.
+  async function resendConsentRequest() {
+    setSendingConsent(true);
+    try {
+      const updated = await api.post<ConsentRequest>(
+        `/recruitment/candidates/${candidateId}/consent/resend`,
+        {},
+      );
+      setConsent(updated);
+      toast.success(t("candidateInterviewsConsentSent"));
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : t("candidateInterviewsConsentSendFailed"),
+      );
+    } finally {
+      setSendingConsent(false);
+    }
+  }
+
   async function archiveInterview(interview: Interview) {
     try {
       await api.post(`/recruitment/interviews/${interview.id}/archive`);
@@ -445,16 +493,18 @@ export function CandidateInterviewsSection({
               </SelectContent>
             </Select>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setScheduleOpen(true)}
-            disabled={!cvId}
-            data-testid="recruitment-candidate-interviews-schedule-btn"
-          >
-            <CalendarPlus className="mr-1 h-4 w-4" />
-            {t("candidateInterviewsScheduleButton")}
-          </Button>
+          {canEdit && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setScheduleOpen(true)}
+              disabled={!cvId}
+              data-testid="recruitment-candidate-interviews-schedule-btn"
+            >
+              <CalendarPlus className="mr-1 h-4 w-4" />
+              {t("candidateInterviewsScheduleButton")}
+            </Button>
+          )}
         </div>
       </CardHeader>
 
@@ -470,73 +520,93 @@ export function CandidateInterviewsSection({
                 ? t("candidateInterviewsConsentPending")
                 : t("candidateInterviewsConsentMissing")}
             </span>
-            {consent?.status !== "pending" && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={sendConsentRequest}
-                disabled={sendingConsent}
-                data-testid="recruitment-candidate-interviews-consent-send-btn"
-              >
-                {sendingConsent
-                  ? t("candidateInterviewsSending")
-                  : t("candidateInterviewsSendConsent")}
-              </Button>
-            )}
+            {canEdit &&
+              (consent?.status === "pending" ? (
+                // HRP-684: the link is out but unsigned — offer to send it
+                // again (same link, same expiry) behind a confirmation that
+                // names when it last went out.
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setResendOpen(true)}
+                  disabled={sendingConsent}
+                  data-testid="recruitment-candidate-interviews-consent-resend-btn"
+                >
+                  {sendingConsent
+                    ? t("candidateInterviewsSending")
+                    : t("candidateInterviewsResendConsent")}
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={sendConsentRequest}
+                  disabled={sendingConsent}
+                  data-testid="recruitment-candidate-interviews-consent-send-btn"
+                >
+                  {sendingConsent
+                    ? t("candidateInterviewsSending")
+                    : t("candidateInterviewsSendConsent")}
+                </Button>
+              ))}
           </div>
         )}
 
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label={t("candidateInterviewsDropzoneAria")}
-          onClick={() => !uploading && consentSigned && inputRef.current?.click()}
-          onKeyDown={(e) => {
-            if ((e.key === "Enter" || e.key === " ") && !uploading && consentSigned) {
+        {canEdit && (
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={t("candidateInterviewsDropzoneAria")}
+            onClick={() => !uploading && consentSigned && inputRef.current?.click()}
+            onKeyDown={(e) => {
+              if ((e.key === "Enter" || e.key === " ") && !uploading && consentSigned) {
+                e.preventDefault();
+                inputRef.current?.click();
+              }
+            }}
+            onDragOver={(e) => {
               e.preventDefault();
-              inputRef.current?.click();
-            }
-          }}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
-          className={`cursor-pointer rounded-lg border border-dashed p-6 text-center transition ${
-            dragOver ? "border-sky-500 bg-sky-50 dark:bg-sky-950/30" : ""
-          } ${!consentSigned || uploading ? "cursor-not-allowed opacity-60" : ""}`}
-          data-testid="recruitment-candidate-interviews-dropzone"
-        >
-          <Upload className="mx-auto mb-2 h-6 w-6 text-muted-foreground/60" />
-          <p className="text-sm font-medium">
-            {t("candidateInterviewsDropzoneTitle")}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("candidateInterviewsDropzoneHint")}
-          </p>
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            hidden
-            accept={UPLOAD_ACCEPT_ATTR}
-            onChange={(e) =>
-              handleFiles(Array.from(e.currentTarget.files ?? []))
-            }
-            data-testid="recruitment-candidate-interviews-file-input"
-          />
-        </div>
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            className={`cursor-pointer rounded-lg border border-dashed p-6 text-center transition ${
+              dragOver ? "border-sky-500 bg-sky-50 dark:bg-sky-950/30" : ""
+            } ${!consentSigned || uploading ? "cursor-not-allowed opacity-60" : ""}`}
+            data-testid="recruitment-candidate-interviews-dropzone"
+          >
+            <Upload className="mx-auto mb-2 h-6 w-6 text-muted-foreground/60" />
+            <p className="text-sm font-medium">
+              {t("candidateInterviewsDropzoneTitle")}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("candidateInterviewsDropzoneHint")}
+            </p>
+            <input
+              ref={inputRef}
+              type="file"
+              multiple
+              hidden
+              accept={UPLOAD_ACCEPT_ATTR}
+              onChange={(e) =>
+                handleFiles(Array.from(e.currentTarget.files ?? []))
+              }
+              data-testid="recruitment-candidate-interviews-file-input"
+            />
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox
-              checked={autoProcess}
-              onCheckedChange={(checked) => setAutoProcess(Boolean(checked))}
-              data-testid="recruitment-candidate-interviews-auto-process"
-            />
-            {t("candidateInterviewsAutoProcess")}
-          </label>
+          {canEdit && (
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={autoProcess}
+                onCheckedChange={(checked) => setAutoProcess(Boolean(checked))}
+                data-testid="recruitment-candidate-interviews-auto-process"
+              />
+              {t("candidateInterviewsAutoProcess")}
+            </label>
+          )}
           {(archivedCount > 0 || showArchived) && (
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               <Checkbox
@@ -623,10 +693,12 @@ export function CandidateInterviewsSection({
                             })}
                       </span>
                       {processingBadge(
+                        t,
                         t("candidateInterviewsTranscriptLabel"),
                         iv.transcription_status,
                       )}
                       {processingBadge(
+                        t,
                         t("candidateInterviewsAiLabel"),
                         iv.analysis_status,
                       )}
@@ -642,45 +714,47 @@ export function CandidateInterviewsSection({
                     className="text-xs"
                     data-testid={`recruitment-candidate-interview-status-${iv.id}`}
                   >
-                    {iv.status}
+                    {interviewStatusLabel(t, iv.status)}
                   </Badge>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      aria-label={t("candidateInterviewsRowMenuAria")}
-                      data-testid={`recruitment-candidate-interview-menu-${iv.id}`}
-                      render={<Button variant="ghost" size="icon-sm" />}
-                    >
-                      <MoreVertical className="h-4 w-4" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      {isArchived ? (
-                        <DropdownMenuItem
-                          onClick={() => restoreInterview(iv)}
-                          data-testid={`recruitment-candidate-interview-restore-${iv.id}`}
-                        >
-                          <ArchiveRestore className="mr-2 h-4 w-4" />
-                          {t("candidateInterviewsRestore")}
-                        </DropdownMenuItem>
-                      ) : (
-                        <>
+                  {canEdit && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        aria-label={t("candidateInterviewsRowMenuAria")}
+                        data-testid={`recruitment-candidate-interview-menu-${iv.id}`}
+                        render={<Button variant="ghost" size="icon-sm" />}
+                      >
+                        <MoreVertical className="h-4 w-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {isArchived ? (
                           <DropdownMenuItem
-                            onClick={() => setEditing(iv)}
-                            data-testid={`recruitment-candidate-interview-edit-${iv.id}`}
+                            onClick={() => restoreInterview(iv)}
+                            data-testid={`recruitment-candidate-interview-restore-${iv.id}`}
                           >
-                            <Pencil className="mr-2 h-4 w-4" />
-                            {t("actionEdit")}
+                            <ArchiveRestore className="mr-2 h-4 w-4" />
+                            {t("candidateInterviewsRestore")}
                           </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setPendingArchive(iv)}
-                            data-testid={`recruitment-candidate-interview-archive-${iv.id}`}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            {t("candidateInterviewsArchive")}
-                          </DropdownMenuItem>
-                        </>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                        ) : (
+                          <>
+                            <DropdownMenuItem
+                              onClick={() => setEditing(iv)}
+                              data-testid={`recruitment-candidate-interview-edit-${iv.id}`}
+                            >
+                              <Pencil className="mr-2 h-4 w-4" />
+                              {t("actionEdit")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => setPendingArchive(iv)}
+                              data-testid={`recruitment-candidate-interview-archive-${iv.id}`}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              {t("candidateInterviewsArchive")}
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
                 </div>
               );
             })
@@ -696,6 +770,7 @@ export function CandidateInterviewsSection({
         onSaved={() => {
           setScheduleOpen(false);
           loadInterviews();
+          loadRounds();
         }}
       />
 
@@ -710,7 +785,21 @@ export function CandidateInterviewsSection({
         onSaved={() => {
           setEditing(null);
           loadInterviews();
+          loadRounds();
         }}
+      />
+
+      <ConfirmDialog
+        open={resendOpen}
+        onOpenChange={setResendOpen}
+        title={t("candidateInterviewsResendConfirmTitle")}
+        description={t("candidateInterviewsResendConfirmBody", {
+          sentAt: formatDateTime(consent?.last_sent_at ?? consent?.created_at),
+        })}
+        confirmLabel={t("candidateInterviewsResendConsent")}
+        cancelLabel={tc("cancel")}
+        testId="recruitment-candidate-interviews-consent-resend-confirm"
+        onConfirm={resendConsentRequest}
       />
 
       <ConfirmDialog

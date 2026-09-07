@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -96,6 +97,9 @@ async def list_employees(
     with_alerts: bool = Query(default=False),
     # HRP-638: the dashboard links here with the cohort it just counted.
     issue: list[IssueCode] | None = Query(default=None),
+    # HRP-729: severity ordering. Default when ``issue`` is set, so the list a
+    # dashboard chip opens leads with the same person the chip named.
+    sort: Literal["severity", "created"] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -125,6 +129,7 @@ async def list_employees(
         # Development-loop problems are HR data about a colleague, and the
         # filter answers the same question the badge would.
         issue = None
+        sort = None
     items, total = await service.list_employees(
         db,
         current_user.tenant_id,
@@ -142,6 +147,7 @@ async def list_employees(
         q=q,
         include_sub_divisions=include_sub_divisions,
         issue=issue,
+        sort=sort,
     )
     if directory:
         items = await service.directory_rows(db, current_user.tenant_id, items)

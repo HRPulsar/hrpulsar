@@ -15,6 +15,7 @@ import type {
   InterviewType,
   VacancyProfile,
 } from "@/lib/types";
+import { interviewStatusLabel } from "@/lib/recruitment-types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -35,6 +36,7 @@ import {
   TranscriptEditDialog,
   TranscriptViewer,
 } from "@/components/recruitment";
+import { InterviewerPickerDialog } from "@/components/recruitment/interviewer-picker";
 import { Check, FileText, Loader2, Pencil, Sparkles, Wand2, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate, formatDateTime } from "@/lib/date-format";
@@ -44,6 +46,7 @@ import {
   splitLocalDateTime,
 } from "@/lib/recruitment-helpers";
 import { useCreditGate } from "@/hooks/use-cost-confirmation";
+import { usePermissions } from "@/hooks/use-permissions";
 
 const POLL_INTERVAL = 3000;
 
@@ -55,7 +58,15 @@ const EM_DASH = "—";
 
 // HRP-387: the Details block edits one field at a time — everything else
 // on the page keeps rendering while a single value is being changed.
-type EditableField = "type" | "schedule" | "notes" | "title" | null;
+// HRP-387 REDO: Duration left the Date & Time editor and became a field
+// of its own, with its own pencil and its own save.
+type EditableField =
+  | "type"
+  | "schedule"
+  | "duration"
+  | "notes"
+  | "title"
+  | null;
 
 export default function InterviewDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -79,11 +90,18 @@ export default function InterviewDetailPage() {
     insufficient: analyzeInsufficient,
     refresh: refreshAnalyzeCredits,
   } = useCreditGate(ANALYZE_ACTION);
+  // PUT /recruitment/interviews/{id} is require_role("admin", "recruiter");
+  // the rest of RECRUITMENT_VIEWER_ROLES only read the page. Same rule as
+  // the Add button on the internal-candidates shortlist: a pencil is not
+  // shown to a role that cannot use it — there is nothing to explain.
+  const { isAdmin, isRecruiter } = usePermissions();
+  const canEdit = isAdmin || isRecruiter;
   const [editing, setEditing] = useState<EditableField>(null);
   const [savingField, setSavingField] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [rounds, setRounds] = useState<InterviewRoundOption[]>([]);
   const [people, setPeople] = useState<InterviewerOption[]>([]);
+  const [interviewersOpen, setInterviewersOpen] = useState(false);
   const [currentSec, setCurrentSec] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -295,8 +313,10 @@ export default function InterviewDetailPage() {
     }
   }
 
-  async function saveField(patch: Record<string, unknown>) {
-    if (!interview) return;
+  /** True once the PUT landed — a caller that owns a modal closes it on
+   *  that, not unconditionally, or a failed save throws the edit away. */
+  async function saveField(patch: Record<string, unknown>): Promise<boolean> {
+    if (!interview) return false;
     setSavingField(true);
     try {
       const updated = await api.put<Interview>(
@@ -306,10 +326,12 @@ export default function InterviewDetailPage() {
       setInterview(updated);
       setEditing(null);
       toast.success(t("interviewDetailsSaved"));
+      return true;
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : t("interviewDetailsSaveFailed"),
       );
+      return false;
     } finally {
       setSavingField(false);
     }
@@ -348,6 +370,15 @@ export default function InterviewDetailPage() {
   }
 
   const candidateName = cvCtx?.candidate_name || tc("candidate");
+  // HRP-697: every way back to the candidate carries the vacancy this
+  // interview belongs to. Without it the candidate page falls back to the
+  // most recently linked vacancy and opens in the wrong context — the
+  // whole page, not just the Interviews block, is vacancy-scoped.
+  const candidateHref = cvCtx?.candidate_id
+    ? `/recruitment/candidates/${cvCtx.candidate_id}${
+        cvCtx.vacancy_id ? `?vacancyId=${cvCtx.vacancy_id}` : ""
+      }`
+    : null;
   const roundLabel = interview.round_id
     ? (() => {
         const found = rounds.find((r) => r.id === interview.round_id);
@@ -380,11 +411,8 @@ export default function InterviewDetailPage() {
       <RecruitmentBreadcrumbs
         segments={[
           { label: t("candidatesTitle"), href: "/recruitment/candidates" },
-          cvCtx?.candidate_id
-            ? {
-                label: candidateName,
-                href: `/recruitment/candidates/${cvCtx.candidate_id}`,
-              }
+          candidateHref
+            ? { label: candidateName, href: candidateHref }
             : { label: candidateName },
           { label: t("interviewBreadcrumb") },
         ]}
@@ -430,15 +458,17 @@ export default function InterviewDetailPage() {
                 {interview.title ||
                   t("interviewHeading", { name: candidateName })}
               </h1>
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                onClick={() => startEdit("title")}
-                aria-label={t("interviewEditTitleAria")}
-                data-testid="recruitment-interview-title-edit"
-              >
-                <Pencil className="size-3.5" />
-              </Button>
+              {canEdit && (
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => startEdit("title")}
+                  aria-label={t("interviewEditTitleAria")}
+                  data-testid="recruitment-interview-title-edit"
+                >
+                  <Pencil className="size-3.5" />
+                </Button>
+              )}
             </div>
           )}
           <p
@@ -455,13 +485,10 @@ export default function InterviewDetailPage() {
             variant="outline"
             size="sm"
             render={
-              cvCtx?.candidate_id ? (
-                <Link
-                  href={`/recruitment/candidates/${cvCtx.candidate_id}`}
-                />
-              ) : undefined
+              candidateHref ? <Link href={candidateHref} /> : undefined
             }
-            disabled={!cvCtx?.candidate_id}
+            disabled={!candidateHref}
+            data-testid="recruitment-interview-back-to-candidate"
           >
             {t("interviewBackToCandidate")}
           </Button>
@@ -477,11 +504,8 @@ export default function InterviewDetailPage() {
         </h2>
         <dl className="grid gap-4 sm:grid-cols-3">
           <DetailField label={tc("candidate")}>
-            {cvCtx?.candidate_id ? (
-              <Link
-                href={`/recruitment/candidates/${cvCtx.candidate_id}`}
-                className="hover:underline"
-              >
+            {candidateHref ? (
+              <Link href={candidateHref} className="hover:underline">
                 {candidateName}
               </Link>
             ) : (
@@ -491,7 +515,12 @@ export default function InterviewDetailPage() {
 
           <DetailField
             label={t("interviewDetailType")}
-            onEdit={typeLocked ? undefined : () => startEdit("type")}
+            // HRP-387 REDO: no pencil while the field is open for editing.
+            onEdit={
+              !canEdit || typeLocked || editing === "type"
+                ? undefined
+                : () => startEdit("type")
+            }
             editAria={t("interviewEditTypeAria")}
             testId="recruitment-interview-detail-type"
           >
@@ -548,7 +577,7 @@ export default function InterviewDetailPage() {
           </DetailField>
 
           <DetailField label={t("columnStatus")}>
-            {interview.status}
+            {interviewStatusLabel(t, interview.status)}
           </DetailField>
 
           <DetailField label={t("interviewDetailAdded")}>
@@ -557,7 +586,11 @@ export default function InterviewDetailPage() {
 
           <DetailField
             label={t("candidateInterviewsFieldDate")}
-            onEdit={() => startEdit("schedule")}
+            onEdit={
+              !canEdit || editing === "schedule"
+                ? undefined
+                : () => startEdit("schedule")
+            }
             editAria={t("interviewEditScheduleAria")}
             testId="recruitment-interview-detail-schedule"
           >
@@ -581,16 +614,6 @@ export default function InterviewDetailPage() {
                   }
                   data-testid="recruitment-interview-time-input"
                 />
-                <Input
-                  type="number"
-                  min={1}
-                  className="h-8 w-24"
-                  value={draft.duration ?? ""}
-                  onChange={(e) =>
-                    setDraft((p) => ({ ...p, duration: e.target.value }))
-                  }
-                  data-testid="recruitment-interview-duration-input"
-                />
                 <Button
                   size="icon-sm"
                   disabled={savingField}
@@ -602,10 +625,6 @@ export default function InterviewDetailPage() {
                       ),
                       timezone:
                         Intl.DateTimeFormat().resolvedOptions().timeZone,
-                      duration_minutes:
-                        Number(draft.duration) > 0
-                          ? Number(draft.duration)
-                          : null,
                     })
                   }
                   aria-label={t("save")}
@@ -627,17 +646,70 @@ export default function InterviewDetailPage() {
             )}
           </DetailField>
 
-          <DetailField label={t("interviewDetailDuration")}>
-            {interview.duration_minutes
-              ? t("interviewDetailDurationMinutes", {
-                  minutes: interview.duration_minutes,
-                })
-              : EM_DASH}
+          <DetailField
+            label={t("interviewDetailDuration")}
+            onEdit={
+              !canEdit || editing === "duration"
+                ? undefined
+                : () => startEdit("duration")
+            }
+            editAria={t("interviewEditDurationAria")}
+            testId="recruitment-interview-detail-duration"
+          >
+            {editing === "duration" ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={1}
+                  className="h-8 w-24"
+                  value={draft.duration ?? ""}
+                  onChange={(e) =>
+                    setDraft((p) => ({ ...p, duration: e.target.value }))
+                  }
+                  data-testid="recruitment-interview-duration-input"
+                />
+                <Button
+                  size="icon-sm"
+                  disabled={savingField}
+                  onClick={() =>
+                    saveField({
+                      duration_minutes:
+                        Number(draft.duration) > 0
+                          ? Number(draft.duration)
+                          : null,
+                    })
+                  }
+                  aria-label={t("save")}
+                  data-testid="recruitment-interview-duration-save"
+                >
+                  <Check className="size-4" />
+                </Button>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => setEditing(null)}
+                  aria-label={tc("cancel")}
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+            ) : interview.duration_minutes ? (
+              t("interviewDetailDurationMinutes", {
+                minutes: interview.duration_minutes,
+              })
+            ) : (
+              EM_DASH
+            )}
           </DetailField>
 
           <DetailField
             label={t("candidateInterviewsFieldInterviewers")}
             className="sm:col-span-3"
+            // HRP-387 REDO: the pencil opens the same employee picker as
+            // Exams → Assign employees, seeded with who is already on it.
+            onEdit={canEdit ? () => setInterviewersOpen(true) : undefined}
+            editAria={t("interviewEditInterviewersAria")}
+            testId="recruitment-interview-detail-interviewers"
           >
             {interviewerNames.length > 0
               ? interviewerNames.join(", ")
@@ -671,15 +743,17 @@ export default function InterviewDetailPage() {
               </Button>
             </div>
           ) : (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => startEdit("notes")}
-              data-testid="recruitment-interview-notes-edit"
-            >
-              <Pencil className="size-3.5" />
-              {t("actionEdit")}
-            </Button>
+            canEdit && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => startEdit("notes")}
+                data-testid="recruitment-interview-notes-edit"
+              >
+                <Pencil className="size-3.5" />
+                {t("actionEdit")}
+              </Button>
+            )
           )}
         </div>
         {editing === "notes" ? (
@@ -709,29 +783,35 @@ export default function InterviewDetailPage() {
                 <p className="text-sm text-muted-foreground">
                   {t("interviewNoRecording")}
                 </p>
-                <InterviewUploadZone
-                  interviewId={interview.id}
-                  consentSigned={!!interview.consent_signed_at}
-                  interviewType={interview.type}
-                  onUploaded={(updated) => {
-                    setInterview(updated);
-                    void refresh();
-                  }}
-                />
-                <div className="flex items-center justify-center text-xs text-muted-foreground">
-                  {t("interviewOr")}
-                </div>
-                <div className="flex items-center justify-center">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setTextPasteOpen(true)}
-                    data-testid="recruitment-interview-btn-paste-text"
-                  >
-                    <FileText className="size-4" />
-                    {t("interviewPasteText")}
-                  </Button>
-                </div>
+                {/* POST upload/* and transcript-text are admin/recruiter,
+                    like the pencils. */}
+                {canEdit && (
+                  <>
+                    <InterviewUploadZone
+                      interviewId={interview.id}
+                      consentSigned={!!interview.consent_signed_at}
+                      interviewType={interview.type}
+                      onUploaded={(updated) => {
+                        setInterview(updated);
+                        void refresh();
+                      }}
+                    />
+                    <div className="flex items-center justify-center text-xs text-muted-foreground">
+                      {t("interviewOr")}
+                    </div>
+                    <div className="flex items-center justify-center">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setTextPasteOpen(true)}
+                        data-testid="recruitment-interview-btn-paste-text"
+                      >
+                        <FileText className="size-4" />
+                        {t("interviewPasteText")}
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             ) : !media ? (
               <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
@@ -771,22 +851,27 @@ export default function InterviewDetailPage() {
               <h2 className="text-sm font-medium">
                 {t("interviewTranscriptHeading")}
               </h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setEditTranscriptOpen(true)}
-                disabled={!interview.transcript && interview.segments.length === 0}
-                data-testid="recruitment-interview-btn-edit-transcript"
-              >
-                <Pencil className="size-3.5" />
-                {t("interviewEditTranscript")}
-              </Button>
+              {/* PUT .../transcript is admin/recruiter, like the pencils. */}
+              {canEdit && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setEditTranscriptOpen(true)}
+                  disabled={!interview.transcript && interview.segments.length === 0}
+                  data-testid="recruitment-interview-btn-edit-transcript"
+                >
+                  <Pencil className="size-3.5" />
+                  {t("interviewEditTranscript")}
+                </Button>
+              )}
             </div>
             <TranscriptViewer
               interview={interview}
               currentSec={currentSec}
               onSeek={seekTo}
-              onSegmentChange={() => void refresh()}
+              // PUT .../segments/{id} is admin/recruiter — no callback, no
+              // per-segment pencil.
+              onSegmentChange={canEdit ? () => void refresh() : undefined}
             />
           </section>
         </div>
@@ -798,54 +883,60 @@ export default function InterviewDetailPage() {
               {t("interviewProgressHeading")}
             </h2>
             <AnalysisProgress interview={interview} />
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleTranscribe}
-                disabled={
-                  busyAction !== null ||
-                  interview.transcription_status === "processing" ||
-                  (!interview.audio_file_id && !interview.video_file_id)
-                }
-                data-testid="recruitment-interview-btn-transcribe"
-              >
-                {busyAction === "transcribe" ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Wand2 className="size-4" />
+            {/* POST transcribe / analyze are admin/recruiter, like the
+                pencils. */}
+            {canEdit && (
+              <>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleTranscribe}
+                    disabled={
+                      busyAction !== null ||
+                      interview.transcription_status === "processing" ||
+                      (!interview.audio_file_id && !interview.video_file_id)
+                    }
+                    data-testid="recruitment-interview-btn-transcribe"
+                  >
+                    {busyAction === "transcribe" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Wand2 className="size-4" />
+                    )}
+                    {interview.transcription_status === "completed"
+                      ? t("interviewRetranscribe")
+                      : t("interviewTranscribe")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={handleAnalyze}
+                    disabled={
+                      busyAction !== null ||
+                      interview.analysis_status === "processing" ||
+                      interview.transcription_status !== "completed"
+                    }
+                    data-testid="recruitment-interview-btn-analyze"
+                  >
+                    {busyAction === "analyze" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="size-4" />
+                    )}
+                    {billingActive && analyzeCost !== null
+                      ? t("interviewAnalyzeCr", { cost: analyzeCost })
+                      : t("interviewAnalyze")}
+                  </Button>
+                </div>
+                {billingActive && analyzeInsufficient && analyzeCost !== null && (
+                  <p
+                    data-testid="recruitment-interview-analyze-insufficient"
+                    className="mt-2 text-xs text-amber-600 dark:text-amber-500"
+                  >
+                    {t("interviewAnalyzeInsufficient", { cost: analyzeCost })}
+                  </p>
                 )}
-                {interview.transcription_status === "completed"
-                  ? t("interviewRetranscribe")
-                  : t("interviewTranscribe")}
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleAnalyze}
-                disabled={
-                  busyAction !== null ||
-                  interview.analysis_status === "processing" ||
-                  interview.transcription_status !== "completed"
-                }
-                data-testid="recruitment-interview-btn-analyze"
-              >
-                {busyAction === "analyze" ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Sparkles className="size-4" />
-                )}
-                {billingActive && analyzeCost !== null
-                  ? t("interviewAnalyzeCr", { cost: analyzeCost })
-                  : t("interviewAnalyze")}
-              </Button>
-            </div>
-            {billingActive && analyzeInsufficient && analyzeCost !== null && (
-              <p
-                data-testid="recruitment-interview-analyze-insufficient"
-                className="mt-2 text-xs text-amber-600 dark:text-amber-500"
-              >
-                {t("interviewAnalyzeInsufficient", { cost: analyzeCost })}
-              </p>
+              </>
             )}
           </section>
 
@@ -878,6 +969,17 @@ export default function InterviewDetailPage() {
           void refresh();
         }}
       />
+
+      <InterviewerPickerDialog
+        open={interviewersOpen}
+        onOpenChange={setInterviewersOpen}
+        people={people}
+        value={interview.interviewer_ids ?? []}
+        saving={savingField}
+        onSave={async (ids) => {
+          if (await saveField({ interviewers: ids })) setInterviewersOpen(false);
+        }}
+      />
     </div>
   );
 }
@@ -902,9 +1004,9 @@ function DetailField({
 }) {
   return (
     <div className={className} data-testid={testId}>
-      <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-        {label}
-      </dt>
+      {/* HRP-387 REDO: sentence case, not shouted — "Candidate", not
+          "CANDIDATE". */}
+      <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="mt-0.5 flex items-center gap-1 text-sm">
         <span className="min-w-0">{children}</span>
         {onEdit && (

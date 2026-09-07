@@ -4,9 +4,13 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.access_scope import get_visible_employee_ids
+from app.core.access_scope import (
+    assert_employee_read_scope,
+    get_visible_employee_ids,
+)
 from app.core.schemas import TaskAccepted
 from app.database import get_db
+from app.modules.analytics import hr_metrics as hr_metrics_service
 from app.modules.analytics import service
 from app.modules.assessment.scope import pdp_status_scope
 from app.modules.auth.dependencies import get_current_user, require_role
@@ -25,7 +29,7 @@ class AiSummaryRequest(BaseModel):
 @router.get("/analytics/assessments")
 async def assessment_stats(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "manager", "hr")),
 ):
     return await service.assessment_stats(
         db, current_user.tenant_id, await get_visible_employee_ids(db, current_user)
@@ -35,7 +39,7 @@ async def assessment_stats(
 @router.get("/analytics/pdp")
 async def pdp_stats(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "manager", "hr")),
 ):
     return await service.pdp_stats(
         db, current_user.tenant_id, await get_visible_employee_ids(db, current_user)
@@ -44,6 +48,9 @@ async def pdp_stats(
 
 @router.get("/analytics/dev-loop")
 async def dev_loop(
+    # HRP-724: a closed set, so a typo answers 422 instead of silently
+    # reporting a window nobody asked for.
+    days: service.DynamicsPeriod = service.DynamicsPeriod.quarter,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "manager")),
 ):
@@ -56,6 +63,26 @@ async def dev_loop(
         db,
         current_user.tenant_id,
         await get_visible_employee_ids(db, current_user),
+        days=int(days),
+    )
+
+
+@router.get("/analytics/hr-metrics")
+async def hr_metrics(
+    days: service.DynamicsPeriod = service.DynamicsPeriod.quarter,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "manager", "hr")),
+):
+    """HRP-732: HR metrics over a period, each tagged with how exact it is.
+
+    Same read scope as the rest of the page: a manager gets their subtree,
+    admin and HR the whole workspace.
+    """
+    return await hr_metrics_service.hr_metrics(
+        db,
+        current_user.tenant_id,
+        await get_visible_employee_ids(db, current_user),
+        days=int(days),
     )
 
 
@@ -77,11 +104,27 @@ async def dev_loop_ai_summary(
 
 @router.get("/analytics/my-loop")
 async def my_loop(
+    days: service.DynamicsPeriod = service.DynamicsPeriod.quarter,
+    employee_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Personal development loop for the logged-in employee."""
-    return await service.my_loop(db, current_user.tenant_id, current_user.id)
+    """Personal development loop — the caller's, or a readable colleague's.
+
+    HRP-724: the employee profile shows the same dynamics the owner sees on
+    their dashboard, so it reads this endpoint rather than growing a second
+    one. Access is the card's own rule: your own loop always, anyone else's
+    only inside your read scope (403 ``outside_division_scope`` otherwise).
+    """
+    if employee_id is not None:
+        await assert_employee_read_scope(db, current_user, employee_id)
+    return await service.my_loop(
+        db,
+        current_user.tenant_id,
+        current_user.id,
+        days=int(days),
+        employee_id=employee_id,
+    )
 
 
 @router.post("/analytics/my-loop/ai-summary")
@@ -152,7 +195,7 @@ async def pdp_progress(
 @router.post("/analytics/export/assessments")
 async def export_assessments(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "manager", "hr")),
 ):
     return await service.export_assessments_xlsx(
         db, current_user.tenant_id, await get_visible_employee_ids(db, current_user)
@@ -162,7 +205,7 @@ async def export_assessments(
 @router.post("/analytics/export/assessments/async", response_model=TaskAccepted)
 async def export_assessments_async(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(require_role("admin", "manager", "hr")),
 ):
     """Queue XLSX report generation as background task. Returns task_id for polling."""
     from app.core.task_enqueue import enqueue_task

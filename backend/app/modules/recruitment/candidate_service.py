@@ -13,7 +13,7 @@ import re
 import unicodedata
 import uuid
 from collections.abc import Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import UploadFile, status
@@ -1201,6 +1201,344 @@ async def add_candidate_to_vacancy_manual(
     await db.refresh(candidate, ["files"])
     await db.refresh(cv, ["candidate", "vacancy", "stage"])
 
+    payload = _candidate_canonical_to_read(
+        candidate,
+        is_employee=await _check_is_employee(db, tenant_id, candidate.person_id),
+    )
+    payload["candidate_vacancy_id"] = cv.id
+    payload["etag"] = candidate_vacancy_etag(cv)
+    return payload
+
+
+# ── HRP-711: an internal candidate becomes a real candidate ─────────
+
+
+def _iso_date(value: date | None) -> str | None:
+    """Canonical resume dates are strings; profile dates are ``date``."""
+    return value.isoformat() if value else None
+
+
+async def _employee_parsed_resume(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    employee: Employee,
+    person: Person,
+) -> dict:
+    """Map an employee profile onto the canonical parsed-resume payload.
+
+    HRP-711 mapping table, in the shape ``prompts.PARSE_RESUME`` asks the
+    LLM for, so every reader of ``parsed_resume_jsonb`` (candidate card,
+    interview prompt builder, ``_denorm_from_parsed``) works on an
+    internal candidate without knowing where the payload came from:
+
+    * Experience → Current + Previous employment  → ``experience``
+    * Education → Education                       → ``education``
+    * Education → Courses & Certifications        → ``certificates``
+    * Competences → Current position + Other      → ``skills``
+
+    ``summary`` stays ``None`` on purpose: no profile field answers it and
+    a generated one would read as the parser's opinion of the person.
+    """
+    # Lazy: ``employee.service`` reaches into assessment/competence, and a
+    # top-level import here would tie the recruitment module to that graph.
+    from app.modules.company.models import Tenant
+    from app.modules.employee import service as employee_service
+
+    tenant = await db.get(Tenant, tenant_id)
+    company_name = tenant.name if tenant else None
+
+    work = await employee_service.list_work_experiences(db, tenant_id, employee.id)
+    previous = await employee_service.list_previous_employments(
+        db, tenant_id, employee.id
+    )
+    education = await employee_service.list_education(db, tenant_id, employee.id)
+    courses = await employee_service.list_courses(db, tenant_id, employee.id)
+    overview = await employee_service.get_competence_overview(
+        db, tenant_id, employee.id
+    )
+
+    experience: list[dict] = []
+    spans: list[tuple[date, date | None]] = []
+    for we in work:
+        # Current employment happens at this company by definition — the
+        # row records the division and role, not the employer.
+        position = we.get("position_title") or we.get("title") or we.get("role")
+        description = " — ".join(
+            part for part in (we.get("division_name"), we.get("description")) if part
+        )
+        experience.append(
+            {
+                "company": company_name,
+                "position": position,
+                "role": we.get("role") or position,
+                "start_date": _iso_date(we.get("start_date")),
+                "end_date": _iso_date(we.get("end_date")),
+                "description": description or None,
+            }
+        )
+        if we.get("start_date"):
+            spans.append((we["start_date"], we.get("end_date")))
+    for pe in previous:
+        experience.append(
+            {
+                "company": pe.get("company_name"),
+                "position": pe.get("position"),
+                "role": pe.get("position"),
+                "start_date": _iso_date(pe.get("start_date")),
+                "end_date": _iso_date(pe.get("end_date")),
+                "description": pe.get("description"),
+            }
+        )
+        if pe.get("start_date"):
+            spans.append((pe["start_date"], pe.get("end_date")))
+    # Newest first, the order the whole codebase assumes of this list —
+    # ``_last_position_from_parsed`` reads entry 0 as the current role, so
+    # an open-ended spell outranks a finished one that started later.
+    experience.sort(
+        key=lambda e: (e["end_date"] is None, e["start_date"] or ""), reverse=True
+    )
+
+    today = date.today()
+    total_days = sum(max(((end or today) - start).days, 0) for start, end in spans)
+
+    skills: list[str] = []
+    for block in ("current_position", "other"):
+        for row in overview.get(block) or []:
+            title = row.get("competence_title")
+            if not title:
+                continue
+            level = row.get("skill_level_title")
+            skills.append(f"{title} — {level}" if level else title)
+
+    # The Person row is the canonical identity, but it is allowed to be
+    # sparse (the seed and the importer both create name-only rows). Fall
+    # back to the login so the resume never contradicts the candidate row
+    # next to it, which is named and addressed from the User.
+    user = employee.user
+    first_name = person.first_name or user.first_name
+    last_name = person.last_name or user.last_name
+    return {
+        "full_name": " ".join(p for p in (first_name, last_name) if p).strip() or None,
+        "first_name": first_name,
+        "last_name": last_name,
+        "summary": None,
+        "current_position": employee.position_title,
+        "years_of_experience": int(total_days // 365) or None,
+        "contacts": {"email": person.email or user.email, "phone": person.phone},
+        "experience": experience,
+        "education": [
+            {
+                "institution": e.get("institution"),
+                "degree": e.get("degree"),
+                "field": e.get("field_of_study"),
+                "start_date": _iso_date(e.get("start_date")),
+                "end_date": _iso_date(e.get("end_date")),
+            }
+            for e in education
+        ],
+        # dict.fromkeys: the overview can name the same competence twice
+        # (required level in Current, a higher assessed one in Other).
+        "skills": list(dict.fromkeys(skills)),
+        "certificates": [
+            {
+                "name": c.get("title"),
+                "issuer": c.get("provider"),
+                "issued_at": _iso_date(c.get("completed_date")),
+            }
+            for c in courses
+        ],
+    }
+
+
+async def _person_belongs_to_a_user(
+    db: AsyncSession, tenant_id: uuid.UUID, person_id: uuid.UUID | None
+) -> bool:
+    """Is this Person somebody's login in this tenant?
+
+    Guards the rebind in the internal-add path: a Person nobody signs in
+    as is bookkeeping (importer rows, the fresh Person a demo tenant
+    mints) and may be re-pointed; one that is a user's identity belongs
+    to that person and is never taken from them.
+    """
+    if person_id is None:
+        return False
+    return bool(
+        (
+            await db.execute(
+                select(User.id).where(
+                    User.person_id == person_id, User.tenant_id == tenant_id
+                )
+            )
+        ).first()
+    )
+
+
+async def add_internal_candidate_to_vacancy(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    vacancy_id: uuid.UUID,
+    employee_id: uuid.UUID,
+) -> dict:
+    """Move an employee off the internal shortlist into the pipeline (HRP-711).
+
+    HRP-663 gave a candidate who already works here a badge; HRP-667 gave
+    the vacancy a shortlist of such people. Between them sat a gap the
+    recruiter had to close by hand: retyping a colleague whose profile the
+    system already holds. This closes it — the profile becomes the resume.
+
+    The mirror of ``add_candidate_to_vacancy_manual`` with three
+    deliberate differences:
+
+    (a) the employee must be on this vacancy's talent-card roster. The
+        endpoint takes an employee id, and without this it would be a
+        directory read that a requisition has no business granting.
+    (b) an existing candidate on the same Person (or email) is reused
+        rather than refused. Manual add answers 409 so the recruiter can
+        choose link-or-create; here there is nothing to choose — the
+        colleague is the same person either way.
+    (c) ``User.person_id`` is backfilled when the employee's user row has
+        none. The internal-candidate chip is computed through it
+        (``_employee_person_ids``), so a candidate created without it
+        would land in the pipeline as an external hire.
+    """
+    from app.modules.talent_market.models import TalentCandidate
+
+    vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+
+    roster = None
+    if vacancy.talent_card_id is not None:
+        roster = (
+            await db.execute(
+                select(TalentCandidate)
+                .options(selectinload(TalentCandidate.employee))
+                .where(
+                    TalentCandidate.card_id == vacancy.talent_card_id,
+                    TalentCandidate.employee_id == employee_id,
+                )
+            )
+        ).scalar_one_or_none()
+    employee = roster.employee if roster is not None else None
+    user = employee.user if employee is not None else None
+    if employee is None or user is None or employee.tenant_id != tenant_id:
+        raise AppError(
+            "recruitment_internal_candidate_not_found",
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    person: Person | None = None
+    if user.person_id is not None:
+        person = await db.get(Person, user.person_id)
+    if person is None and user.email and not await is_demo_tenant(db, tenant_id):
+        # Same carve-out as ``create_candidate``: a demo session must not
+        # resolve an address onto a real user's Person row.
+        person = (
+            await db.execute(
+                select(Person).where(func.lower(Person.email) == user.email.lower())
+            )
+        ).scalar_one_or_none()
+    if person is None:
+        person = Person(
+            first_name=user.first_name,
+            last_name=user.last_name,
+            email=user.email,
+        )
+        db.add(person)
+        await db.flush()
+    if user.person_id != person.id:
+        user.person_id = person.id
+
+    # Archived rows count here, unlike the email lookup below.
+    # ``uq_candidate_person_tenant`` covers (person_id, tenant_id) in
+    # full — no ``archived_at`` in it — and ``archive_candidate`` keeps
+    # person_id, so an archived twin still owns this Person. Filtering it
+    # out sent the create branch straight into an IntegrityError 500 on
+    # the second add of someone who had been archived once.
+    candidate = (
+        (
+            await db.execute(
+                select(Candidate).where(
+                    Candidate.tenant_id == tenant_id,
+                    Candidate.person_id == person.id,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if candidate is not None and candidate.archived_at is not None:
+        # Mirrors the manual-add link path: a soft-deleted candidate does
+        # not slip back onto a vacancy, and the recruiter is told which
+        # row is in the way instead of getting a 500.
+        raise AppError(
+            "candidate_archived",
+            status.HTTP_409_CONFLICT,
+            detail_extra={"existing_candidate_id": str(candidate.id)},
+        )
+    if candidate is None and user.email:
+        candidate = await find_active_candidate_by_email(db, tenant_id, user.email)
+
+    if candidate is None:
+        parsed = await _employee_parsed_resume(db, tenant_id, employee, person)
+        candidate = Candidate(
+            tenant_id=tenant_id,
+            person_id=person.id,
+            full_name=parsed["full_name"] or user.email,
+            email=user.email,
+            phone=person.phone,
+            source="internal",
+            parsed_resume_jsonb=parsed,
+            **_denorm_from_parsed(parsed),
+        )
+        db.add(candidate)
+        await db.flush()
+    elif candidate.person_id != person.id and not await _person_belongs_to_a_user(
+        db, tenant_id, candidate.person_id
+    ):
+        # An email-matched row whose Person is nobody's — created before
+        # this employee had one, or minted fresh by ``create_candidate``
+        # in a demo tenant. Rebind it to the employee's Person, or the
+        # internal-candidate chip (resolved through ``User.person_id``)
+        # stays off for the rest of that row's life and the shortlist
+        # keeps offering an Add that can only 409. Safe against the
+        # unique constraint: the lookup above proved no row holds this
+        # Person already.
+        candidate.person_id = person.id
+
+    existing_cv = await db.execute(
+        select(CandidateVacancy).where(
+            CandidateVacancy.candidate_id == candidate.id,
+            CandidateVacancy.vacancy_id == vacancy_id,
+            CandidateVacancy.tenant_id == tenant_id,
+        )
+    )
+    if existing_cv.scalar_one_or_none() is not None:
+        raise AppError(
+            "candidate_already_attached_to_vacancy",
+            status.HTTP_409_CONFLICT,
+        )
+
+    cv = CandidateVacancy(
+        tenant_id=tenant_id,
+        candidate_id=candidate.id,
+        vacancy_id=vacancy_id,
+        stage_id=await _first_non_terminal_stage_id(db, tenant_id, vacancy_id),
+        status="new",
+        status_history=[],
+        attached_by=user_id,
+    )
+    db.add(cv)
+    await db.commit()
+    # ``updated_at`` too, not just the relationship: rebinding an existing
+    # row's Person makes this an UPDATE, and the server-side onupdate
+    # leaves the column expired — reading it back in the serializer would
+    # be a lazy load outside the greenlet.
+    await db.refresh(candidate, ["files", "updated_at"])
+    await db.refresh(cv, ["candidate", "vacancy", "stage"])
+
+    # Computed, not asserted: when the reused row kept a Person of its
+    # own (one that does belong to another user), the lists resolve the
+    # chip through that Person and would disagree with a hardcoded True.
     payload = _candidate_canonical_to_read(
         candidate,
         is_employee=await _check_is_employee(db, tenant_id, candidate.person_id),

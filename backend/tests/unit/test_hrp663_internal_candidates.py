@@ -10,8 +10,10 @@ Two facts the product could not state before:
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from datetime import date, datetime, timezone
+from unittest.mock import patch
 
 import pytest
 from app.core.errors import AppError
@@ -30,6 +32,29 @@ from app.modules.recruitment.schemas import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
+
+
+@contextlib.asynccontextmanager
+async def _queued_recompute(db: AsyncSession):
+    """Capture ``recompute_card_candidates_task.delay`` and run it inline.
+
+    HRP-705 moved the pool recompute off the request onto Celery. The
+    worker would open its own session, which a unit test does not have, so
+    the mock records the arguments and the body runs on the test session
+    once the block exits. ``calls`` is exposed so a test can assert what
+    the save queued.
+    """
+    from app.modules.talent_market.matching import _auto_populate_candidates
+
+    with patch(
+        "app.modules.talent_market.tasks.recompute_card_candidates_task.delay"
+    ) as delay:
+        yield delay
+    for call in delay.call_args_list:
+        tenant_id_str, card_id_str = call.args
+        await _auto_populate_candidates(
+            db, uuid.UUID(tenant_id_str), uuid.UUID(card_id_str)
+        )
 
 
 async def _make_vacancy(db: AsyncSession, tenant_id, user_id) -> dict:
@@ -627,14 +652,18 @@ class TestVacancyCompetenceSyncKeepsTheCardInStep:
 
         second = await _competence(db, tenant.id)
         await db.commit()
-        await service.set_vacancy_competences(
-            db,
-            tenant.id,
-            vacancy["id"],
-            VacancyCompetencesUpdate(
-                competences=[VacancyCompetenceSpec(competence_id=second)]
-            ),
-        )
+        async with _queued_recompute(db) as delay:
+            await service.set_vacancy_competences(
+                db,
+                tenant.id,
+                vacancy["id"],
+                VacancyCompetencesUpdate(
+                    competences=[VacancyCompetenceSpec(competence_id=second)]
+                ),
+            )
+            # HRP-705: the requirements sync stayed in the request, the
+            # roster scan is queued for the card that was just synced.
+            delay.assert_called_once_with(str(tenant.id), str(card_id))
 
         on_card = {
             r.competence_id
@@ -690,14 +719,17 @@ class TestVacancyCompetenceSyncKeepsTheCardInStep:
         vacancy, _ = await _vacancy_with_competence(db, tenant.id, user.id)
         competence_id = await _competence(db, tenant.id)
         await db.commit()
-        await service.set_vacancy_competences(
-            db,
-            tenant.id,
-            vacancy["id"],
-            VacancyCompetencesUpdate(
-                competences=[VacancyCompetenceSpec(competence_id=competence_id)]
-            ),
-        )
+        async with _queued_recompute(db) as delay:
+            await service.set_vacancy_competences(
+                db,
+                tenant.id,
+                vacancy["id"],
+                VacancyCompetencesUpdate(
+                    competences=[VacancyCompetenceSpec(competence_id=competence_id)]
+                ),
+            )
+        # HRP-705: nothing to recompute, so nothing is queued either.
+        delay.assert_not_called()
         cards = (
             await db.execute(
                 select(func.count(TalentCard.id)).where(
@@ -777,3 +809,507 @@ class TestVacancyCanStartExcluded:
                 db, tenant.id, vacancy["id"], user.id
             )
         assert exc.value.code == "vacancy_internal_search_disabled"
+
+
+class TestRecomputeTaskBody:
+    """HRP-705: the Celery task itself, not a stand-in for it.
+
+    ``_queued_recompute`` above re-implements the task body (it calls
+    ``_auto_populate_candidates`` directly) so the save tests can keep
+    asserting on the pool. That leaves the real body -- the UUID parsing,
+    the session ``_run`` opens, the commit -- executed by nothing. This
+    runs it.
+    """
+
+    async def test_task_rebuilds_the_pool_on_its_own_session(
+        self, db: AsyncSession, session_factory, tenant, user
+    ):
+        from app.modules.talent_market.models import TalentCandidate, TalentCard
+        from app.modules.talent_market.tasks import recompute_card_candidates_task
+        from sqlalchemy import select
+
+        vacancy, _ = await _vacancy_with_competence(db, tenant.id, user.id)
+        posted = await service.post_vacancy_to_talent_market(
+            db, tenant.id, vacancy["id"], user.id
+        )
+        card_id = posted["talent_card_id"]
+
+        # An employee who does not clear the bar, parked in the pool as
+        # `matched`: a recompute that really runs has to prune them.
+        await _make_internal_candidate(db, tenant.id)
+        employee = (
+            (await db.execute(select(Employee).where(Employee.tenant_id == tenant.id)))
+            .scalars()
+            .first()
+        )
+        assert employee is not None
+        db.add(
+            TalentCandidate(card_id=card_id, employee_id=employee.id, status="matched")
+        )
+        card = await db.get(TalentCard, card_id)
+        assert card is not None
+        card.last_matched_at = None
+        await db.commit()
+
+        # Call the real task. Only the engine construction is swapped for
+        # the test factory -- `_run`, the session it opens, the UUID
+        # parsing and the commit are the task's own code. The coroutine is
+        # awaited out here because the shipped runner uses asyncio.run,
+        # which cannot nest inside the test's running loop.
+        captured: dict = {}
+
+        def _fake_runner(coro_factory):
+            captured["coro"] = coro_factory(session_factory)
+
+        with patch(
+            "app.modules.talent_market.tasks._run_with_async_session", _fake_runner
+        ):
+            recompute_card_candidates_task(str(tenant.id), str(card_id))
+        assert "coro" in captured, "the task never handed its body to the runner"
+        await captured["coro"]
+
+        # Drop this session's snapshot and its cached objects, so what the
+        # worker session committed is what gets read back.
+        await db.rollback()
+        db.expire_all()
+
+        pool = (
+            (
+                await db.execute(
+                    select(TalentCandidate).where(TalentCandidate.card_id == card_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [r.employee_id for r in pool if r.status == "matched"] == []
+        refreshed = await db.get(TalentCard, card_id)
+        assert refreshed is not None
+        assert refreshed.last_matched_at is not None
+
+
+# ---------------------------------------------------------------------------
+# HRP-711 — the shortlist becomes the pipeline
+# ---------------------------------------------------------------------------
+
+
+async def _employee_with_profile(
+    db: AsyncSession, tenant_id, *, with_person: bool = True
+):
+    """An employee whose profile has something to say on a resume.
+
+    One spell of current employment, one previous employer, a degree, a
+    certificate and a required competence — one row per section of the
+    HRP-711 mapping table, so a dropped section fails loudly.
+    """
+    from app.modules.company.models import Division
+    from app.modules.competence.models import Competence, CompetenceGroup, SkillLevel
+    from app.modules.dictionary.models import DictionaryItem
+    from app.modules.employee.models import (
+        Course,
+        Education,
+        PreviousEmployment,
+        WorkExperience,
+    )
+    from app.modules.grade_system.models import GradeCompetenceLink, GradeSpecialization
+    from app.modules.position.models import Position as PositionModel
+
+    suffix = uuid.uuid4().hex[:8]
+    person = None
+    if with_person:
+        person = Person(first_name="Vova", last_name="Probelov")
+        db.add(person)
+        await db.flush()
+    u = User(
+        email=f"vova-{suffix}@test.com",
+        password_hash=hash_password("testpass123"),
+        first_name="Vova",
+        last_name="Probelov",
+        tenant_id=tenant_id,
+        person_id=person.id if person else None,
+        email_verified_at=datetime.now(timezone.utc),
+    )
+    db.add(u)
+    await db.flush()
+
+    spec = DictionaryItem(
+        type="specialization", tenant_id=tenant_id, title=f"Sales-{suffix}"
+    )
+    grade = DictionaryItem(type="grade", tenant_id=tenant_id, title=f"Junior-{suffix}")
+    division = Division(tenant_id=tenant_id, name="Go-to-Market")
+    db.add_all([spec, grade, division])
+    await db.flush()
+    position = PositionModel(
+        tenant_id=tenant_id,
+        title=f"SDR-{suffix}",
+        specialization_id=spec.id,
+        grade_id=grade.id,
+    )
+    db.add(position)
+    await db.flush()
+    gs = GradeSpecialization(
+        tenant_id=tenant_id, grade_id=grade.id, specialization_id=spec.id
+    )
+    group = CompetenceGroup(tenant_id=tenant_id, title=f"Sales-{suffix}")
+    db.add_all([gs, group])
+    await db.flush()
+    comp = Competence(tenant_id=tenant_id, group_id=group.id, title="Product knowledge")
+    level = SkillLevel(tenant_id=tenant_id, title="Basic", sort_index=0)
+    db.add_all([comp, level])
+    await db.flush()
+    db.add(
+        GradeCompetenceLink(
+            grade_specialization_id=gs.id,
+            competence_id=comp.id,
+            skill_level_id=level.id,
+        )
+    )
+
+    employee = Employee(
+        user_id=u.id,
+        tenant_id=tenant_id,
+        division_id=division.id,
+        position_id=position.id,
+        position_title="Sales Development Representative",
+        hire_date=date(2023, 3, 1),
+        status="active",
+    )
+    db.add(employee)
+    await db.flush()
+    db.add_all(
+        [
+            WorkExperience(
+                tenant_id=tenant_id,
+                employee_id=employee.id,
+                division_id=division.id,
+                position_id=position.id,
+                description="Outbound prospecting",
+                start_date=date(2023, 3, 1),
+            ),
+            PreviousEmployment(
+                tenant_id=tenant_id,
+                employee_id=employee.id,
+                company_name="Old Corp",
+                position="Support agent",
+                description="First line",
+                start_date=date(2021, 1, 1),
+                end_date=date(2023, 1, 31),
+            ),
+            Education(
+                tenant_id=tenant_id,
+                employee_id=employee.id,
+                institution="State University",
+                degree="BSc",
+                field_of_study="Economics",
+                start_date=date(2016, 9, 1),
+                end_date=date(2020, 6, 30),
+            ),
+            Course(
+                tenant_id=tenant_id,
+                employee_id=employee.id,
+                title="SPIN Selling",
+                provider="Sales Academy",
+                completed_date=date(2024, 4, 1),
+            ),
+        ]
+    )
+    await db.commit()
+    await db.refresh(employee)
+    return employee
+
+
+async def _posted_vacancy_with_roster(db: AsyncSession, tenant_id, user_id, employee):
+    """A vacancy posted to the talent market, with this employee on it."""
+    from app.modules.talent_market.models import TalentCandidate
+
+    vacancy, _ = await _vacancy_with_competence(db, tenant_id, user_id)
+    posted = await service.post_vacancy_to_talent_market(
+        db, tenant_id, vacancy["id"], user_id
+    )
+    card_id = posted["talent_card_id"]
+    db.add(
+        TalentCandidate(card_id=card_id, employee_id=employee.id, status="not_matched")
+    )
+    await db.commit()
+    return vacancy, card_id
+
+
+class TestAddInternalCandidateToVacancy:
+    """HRP-711: the Add action under the Internal candidates block."""
+
+    async def test_roster_employee_lands_in_the_pipeline_with_the_chip(
+        self, db: AsyncSession, tenant, user
+    ):
+        employee = await _employee_with_profile(db, tenant.id)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+
+        added = await service.add_internal_candidate_to_vacancy(
+            db, tenant.id, user.id, vacancy["id"], employee.id
+        )
+        assert added["is_employee"] is True
+        assert added["source"] == "internal"
+        assert added["candidate_vacancy_id"] is not None
+        assert added["current_position"] == "Sales Development Representative"
+
+        # The chip has to burn in the vacancy table and on the card, not
+        # only in the body the button got back.
+        rows, _ = await service.list_vacancy_candidates_enriched(
+            db, tenant.id, vacancy["id"]
+        )
+        assert [r["is_employee"] for r in rows if r["candidate_id"] == added["id"]] == [
+            True
+        ]
+        card = await service.get_candidate_full_card(db, tenant.id, added["id"])
+        assert card["is_employee"] is True
+
+        # And the block now knows the row is done, so it can link instead
+        # of offering the button again.
+        block = await service.get_vacancy_internal_candidates(
+            db, tenant.id, vacancy["id"]
+        )
+        mine = [i for i in block["items"] if i["employee_id"] == employee.id]
+        assert [i["candidate_id"] for i in mine] == [added["id"]]
+
+    async def test_the_profile_becomes_the_resume(self, db: AsyncSession, tenant, user):
+        """The ticket's mapping table, section by section."""
+        employee = await _employee_with_profile(db, tenant.id)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+        added = await service.add_internal_candidate_to_vacancy(
+            db, tenant.id, user.id, vacancy["id"], employee.id
+        )
+        parsed = added["parsed_resume_jsonb"]
+
+        # Experience: current employment first (it is still open), then
+        # the previous employer. The company on the current spell is us.
+        assert [e["company"] for e in parsed["experience"]] == [
+            tenant.name,
+            "Old Corp",
+        ]
+        current = parsed["experience"][0]
+        assert current["end_date"] is None
+        assert current["start_date"] == "2023-03-01"
+        assert "Go-to-Market" in (current["description"] or "")
+        assert "Outbound prospecting" in (current["description"] or "")
+        assert parsed["experience"][1]["position"] == "Support agent"
+
+        assert parsed["education"] == [
+            {
+                "institution": "State University",
+                "degree": "BSc",
+                "field": "Economics",
+                "start_date": "2016-09-01",
+                "end_date": "2020-06-30",
+            }
+        ]
+        assert parsed["certificates"] == [
+            {
+                "name": "SPIN Selling",
+                "issuer": "Sales Academy",
+                "issued_at": "2024-04-01",
+            }
+        ]
+        # Competences of the current position, with the level spelled out.
+        assert parsed["skills"] == ["Product knowledge — Basic"]
+        assert parsed["contacts"]["email"] == added["email"]
+        # Never invented — the profile has no summary to give.
+        assert parsed["summary"] is None
+        assert parsed["years_of_experience"] == added["years_of_experience"]
+        assert added["years_of_experience"] and added["years_of_experience"] >= 2
+
+    async def test_adding_twice_is_a_conflict(self, db: AsyncSession, tenant, user):
+        employee = await _employee_with_profile(db, tenant.id)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+        await service.add_internal_candidate_to_vacancy(
+            db, tenant.id, user.id, vacancy["id"], employee.id
+        )
+        with pytest.raises(AppError) as exc:
+            await service.add_internal_candidate_to_vacancy(
+                db, tenant.id, user.id, vacancy["id"], employee.id
+            )
+        assert exc.value.code == "candidate_already_attached_to_vacancy"
+        assert exc.value.status_code == 409
+
+    async def test_an_employee_off_the_roster_is_refused(
+        self, db: AsyncSession, tenant, user
+    ):
+        """The endpoint takes an employee id; only the shortlist may pass.
+
+        Without this it would be a directory read that a requisition has
+        no business granting.
+        """
+        employee = await _employee_with_profile(db, tenant.id)
+        stranger = await _employee_with_profile(db, tenant.id)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+        with pytest.raises(AppError) as exc:
+            await service.add_internal_candidate_to_vacancy(
+                db, tenant.id, user.id, vacancy["id"], stranger.id
+            )
+        assert exc.value.code == "recruitment_internal_candidate_not_found"
+        assert exc.value.status_code == 404
+
+        # A vacancy that was never posted has no shortlist at all.
+        unposted = await _make_vacancy(db, tenant.id, user.id)
+        with pytest.raises(AppError) as exc:
+            await service.add_internal_candidate_to_vacancy(
+                db, tenant.id, user.id, unposted["id"], employee.id
+            )
+        assert exc.value.code == "recruitment_internal_candidate_not_found"
+
+    async def test_backfills_the_person_and_reuses_the_candidate(
+        self, db: AsyncSession, tenant, user
+    ):
+        """No Person on the user row is the case that silently broke the chip.
+
+        ``_employee_person_ids`` resolves the chip through
+        ``User.person_id``; a candidate created without it would sit in
+        the pipeline looking like an external hire.
+        """
+        employee = await _employee_with_profile(db, tenant.id, with_person=False)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+        first = await service.add_internal_candidate_to_vacancy(
+            db, tenant.id, user.id, vacancy["id"], employee.id
+        )
+        assert first["is_employee"] is True
+        refreshed_user = await db.get(User, employee.user_id)
+        assert refreshed_user is not None
+        assert refreshed_user.person_id is not None
+
+        # Second vacancy, same colleague: one Candidate row, two links.
+        second_vacancy, _ = await _posted_vacancy_with_roster(
+            db, tenant.id, user.id, employee
+        )
+        second = await service.add_internal_candidate_to_vacancy(
+            db, tenant.id, user.id, second_vacancy["id"], employee.id
+        )
+        assert second["id"] == first["id"]
+        assert second["candidate_vacancy_id"] != first["candidate_vacancy_id"]
+
+
+class TestAddInternalCandidateRouteParity:
+    async def test_the_block_calls_a_url_the_router_mounts(self):
+        import re
+        from pathlib import Path
+
+        from app.main import app
+
+        block = (
+            Path(__file__).resolve().parents[3]
+            / "frontend"
+            / "src"
+            / "components"
+            / "recruitment"
+            / "internal-candidates-block.tsx"
+        )
+        if not block.exists():
+            pytest.skip("frontend tree not present")
+
+        def collapse(path: str) -> str:
+            return re.sub(r"\$?\{[^}]*\}", "{}", path).rstrip("/")
+
+        referenced = {
+            "/api" + collapse(u)
+            for u in re.findall(
+                r"/recruitment/vacancies/\$\{[^}]+\}/internal-candidates[^`\"'?]*",
+                block.read_text(encoding="utf-8"),
+            )
+        }
+        mounted = {
+            collapse(getattr(r, "path", ""))
+            for r in app.routes
+            if "internal-candidates" in getattr(r, "path", "")
+        }
+        assert referenced, "the block stopped calling the internal-candidates URLs"
+        assert referenced <= mounted, referenced - mounted
+
+
+class TestAddInternalCandidateReviewFollowUps:
+    """HRP-711 review: the archived twin, and a chip that agrees with itself."""
+
+    async def test_archived_candidate_is_a_conflict_not_a_crash(
+        self, db: AsyncSession, tenant, user
+    ):
+        """``uq_candidate_person_tenant`` has no ``archived_at`` in it.
+
+        Archiving keeps ``person_id``, and the shortlist (which filters
+        archived rows out) starts offering Add again — so the second add
+        used to reach the create branch and die on the constraint.
+        """
+        employee = await _employee_with_profile(db, tenant.id)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+        added = await service.add_internal_candidate_to_vacancy(
+            db, tenant.id, user.id, vacancy["id"], employee.id
+        )
+        await service.archive_candidate(db, tenant.id, added["id"])
+
+        # The block no longer knows about the row, so the button is back.
+        block = await service.get_vacancy_internal_candidates(
+            db, tenant.id, vacancy["id"]
+        )
+        assert [i["candidate_id"] for i in block["items"]] == [None]
+
+        with pytest.raises(AppError) as exc:
+            await service.add_internal_candidate_to_vacancy(
+                db, tenant.id, user.id, vacancy["id"], employee.id
+            )
+        assert exc.value.code == "candidate_archived"
+        assert exc.value.status_code == 409
+        # The recruiter is told which row is in the way.
+        assert exc.value.detail_extra["existing_candidate_id"] == str(added["id"])
+
+    async def test_the_chip_agrees_across_every_list(
+        self, db: AsyncSession, tenant, user
+    ):
+        """``is_employee`` on the body must match what the lists compute.
+
+        The body used to hardcode True while ``_employee_person_ids``
+        resolves the flag through ``User.person_id`` — a reused row that
+        kept a foreign Person would have shown the chip once and never
+        again.
+        """
+        employee = await _employee_with_profile(db, tenant.id)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+        added = await service.add_internal_candidate_to_vacancy(
+            db, tenant.id, user.id, vacancy["id"], employee.id
+        )
+        assert added["is_employee"] is True
+
+        items, _ = await service.list_candidates(db, tenant.id, limit=100)
+        mine = [c for c in items if c["id"] == added["id"]]
+        assert [c["is_employee"] for c in mine] == [True]
+
+    async def test_an_email_twin_with_a_loose_person_is_rebound(
+        self, db: AsyncSession, tenant, user
+    ):
+        """A demo tenant mints a fresh Person for every manual candidate.
+
+        That row matches on email but carries a Person nobody signs in
+        as. Reused untouched it stayed invisible to the chip and to the
+        shortlist, which kept offering an Add that could only 409.
+        """
+        employee = await _employee_with_profile(db, tenant.id)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+        emp_user = await db.get(User, employee.user_id)
+        assert emp_user is not None
+
+        loose = Person(first_name="Vova", last_name="Probelov")
+        db.add(loose)
+        await db.flush()
+        twin = Candidate(
+            tenant_id=tenant.id,
+            person_id=loose.id,
+            full_name="Vova Probelov",
+            email=emp_user.email,
+        )
+        db.add(twin)
+        await db.commit()
+
+        added = await service.add_internal_candidate_to_vacancy(
+            db, tenant.id, user.id, vacancy["id"], employee.id
+        )
+        assert added["id"] == twin.id
+        assert added["is_employee"] is True
+        # And the shortlist can now find it, so the row stops offering Add.
+        block = await service.get_vacancy_internal_candidates(
+            db, tenant.id, vacancy["id"]
+        )
+        assert [i["candidate_id"] for i in block["items"]] == [twin.id]

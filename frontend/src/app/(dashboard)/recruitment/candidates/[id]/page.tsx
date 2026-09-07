@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -36,10 +36,12 @@ import { InterviewQuestionSets } from "@/components/recruitment/interview-questi
 import { ManagerAssessmentSection } from "@/components/recruitment/manager-assessment-section";
 import { ParsedResumeEditor } from "@/components/recruitment/parsed-resume-editor";
 import { useAuth } from "@/context/auth-context";
-import type {
-  CandidateCanonical,
-  CandidateCanonicalCard,
-  ResumeExcerpt,
+import {
+  fileTypeLabel,
+  parseStatusLabel,
+  type CandidateCanonical,
+  type CandidateCanonicalCard,
+  type ResumeExcerpt,
 } from "@/lib/recruitment-types";
 
 // HRP-476: labels live in the `recruitment` i18n namespace; this list only
@@ -111,6 +113,9 @@ export default function CandidateDetailPage() {
     ? `/recruitment/requisitions/${vacancyContextId}`
     : "/recruitment/requisitions";
   const [card, setCard] = useState<CandidateCanonicalCard | null>(null);
+  // HRP-418 REDO: bumped when Manager assessments creates a round, so the
+  // Interviews block re-reads the round list it renders names from.
+  const [roundsVersion, setRoundsVersion] = useState(0);
   const [etag, setEtag] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -134,6 +139,21 @@ export default function CandidateDetailPage() {
     [card?.vacancy_applications],
   );
 
+  // HRP-704: one definition of "this candidate has a resume" for the
+  // whole page, matching the backend predicate — the canonical
+  // parsed-resume mirror (manual entry, bulk import) OR a completed file
+  // of type `resume`. The Generate-questions gate used to read the mirror
+  // alone and the Analyze gate the union, so the same candidate could be
+  // offered one and refused the other.
+  const hasResume = useMemo(
+    () =>
+      card?.parsed_resume_jsonb != null ||
+      (card?.candidate_files ?? []).some(
+        (f) => f.file_type === "resume" && f.parse_status === "completed",
+      ),
+    [card?.parsed_resume_jsonb, card?.candidate_files],
+  );
+
   // HRP-205 / HRP-202: per-vacancy options shared by the Interview
   // questions and Interviews sections. `has_parsed_resume` gates the
   // Generate button — question generation requires a parsed resume.
@@ -145,9 +165,9 @@ export default function CandidateDetailPage() {
           a.vacancy_title ??
           t("candidateVacancyFallback", { id: a.vacancy_id.slice(0, 8) }),
         candidate_vacancy_id: a.cv_id,
-        has_parsed_resume: Boolean(card?.parsed_resume_jsonb),
+        has_parsed_resume: hasResume,
       })),
-    [card?.vacancy_applications, card?.parsed_resume_jsonb, t],
+    [card?.vacancy_applications, hasResume, t],
   );
 
   // Mirrors backend resolve_user_role: full-payload roles win before the
@@ -194,6 +214,27 @@ export default function CandidateDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // HRP-494 REDO: the analysis emails deep-link to ``#ai-insights``, but
+  // the card is fetched after mount — the browser resolves the fragment
+  // against the loading placeholder, finds nothing and stays at the top.
+  // Repeat the jump once the data that renders the target has landed.
+  // Once per visit: ``card`` is replaced after every save, and a page
+  // that yanks itself back to the anchor on each of those is worse than
+  // one that never scrolled.
+  const deepLinkHandled = useRef(false);
+  useEffect(() => {
+    if (!card || deepLinkHandled.current) return;
+    const anchorId = window.location.hash.slice(1);
+    if (!anchorId) return;
+    deepLinkHandled.current = true;
+    document.getElementById(anchorId)?.scrollIntoView({
+      block: "start",
+      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+  }, [card]);
 
   if (loading && !card) {
     return (
@@ -283,15 +324,9 @@ export default function CandidateDetailPage() {
                 // HRP-488: a manually added candidate has nothing to
                 // analyse. Either a parsed resume file or the canonical
                 // parsed-resume mirror (manual entry, bulk import) is
-                // enough to unblock Analyze.
-                hasParsedResume={
-                  card.parsed_resume_jsonb !== null ||
-                  card.candidate_files.some(
-                    (f) =>
-                      f.file_type === "resume" &&
-                      f.parse_status === "completed",
-                  )
-                }
+                // enough to unblock Analyze — HRP-704 made that one
+                // shared `hasResume` for the page.
+                hasParsedResume={hasResume}
               />
             );
             const applicationsSection = (
@@ -323,10 +358,12 @@ export default function CandidateDetailPage() {
             vacancyOptions={interviewVacancyOptions}
             initialVacancyId={vacancyContextId ?? undefined}
             candidateEmail={card.email}
+            roundsVersion={roundsVersion}
           />
           <ManagerAssessmentSection
             vacancies={assessmentVacancies}
             initialVacancyId={vacancyContextId ?? undefined}
+            onRoundsChanged={() => setRoundsVersion((v) => v + 1)}
           />
         </div>
       </div>
@@ -618,7 +655,7 @@ function FilesCard({
               <div className="min-w-0">
                 <p className="truncate text-sm">{f.original_filename}</p>
                 <p className="text-xs text-muted-foreground">
-                  {f.file_type} · {f.parse_status}
+                  {fileTypeLabel(t, f.file_type)} · {parseStatusLabel(t, f.parse_status)}
                 </p>
               </div>
             </div>

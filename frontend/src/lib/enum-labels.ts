@@ -14,15 +14,32 @@
  *   rendering raw instead of disappearing.
  */
 
-function labelFor(
-  keys: Record<string, string>,
-  t: (key: string) => string,
-  value: string | null | undefined,
-): string {
-  if (!value) return "";
-  const key = keys[value];
-  return key ? t(key) : value;
+/**
+ * Build a `(t, code) => label` resolver over a wire-code -> i18n-key map.
+ *
+ * The one label helper (HRP-710): this used to have a twin in
+ * `recruitment-types.ts` differing only in the fallback, which that one
+ * took as a parameter and this one hardcoded. The parameterised form
+ * won — `asIs` keeps the wire code (what the hardcoded twin did, so no
+ * surface changed wording), `deSlugged` prints a readable form
+ * ("escalated_to_lead" -> "escalated to lead") on the surfaces whose
+ * catalogs are expected to catch up with the backend.
+ */
+export function labelResolver<Code extends string>(
+  keys: Record<Code, string>,
+  fallback: (code: string) => string,
+) {
+  return (
+    t: (key: string) => string,
+    code: string | null | undefined,
+  ): string => {
+    const key = keys[code as Code];
+    return key ? t(key) : fallback(code ?? "");
+  };
 }
+
+export const asIs = (code: string) => code;
+export const deSlugged = (code: string) => code.replaceAll("_", " ");
 
 // --- Employee profile → Events -------------------------------------------
 
@@ -49,12 +66,7 @@ export const EVENT_TYPE_LABEL_KEYS: Record<string, string> = {
   other: "eventTypeOther",
 };
 
-export function eventTypeLabel(
-  t: (key: string) => string,
-  value: string | null | undefined,
-): string {
-  return labelFor(EVENT_TYPE_LABEL_KEYS, t, value);
-}
+export const eventTypeLabel = labelResolver(EVENT_TYPE_LABEL_KEYS, asIs);
 
 // --- Development plan → Add material → Format -----------------------------
 

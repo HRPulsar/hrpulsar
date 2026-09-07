@@ -177,7 +177,7 @@ PREV_EMPLOYMENT_DATA = [
         1200,
     ),
     (18, "Palantir", "Product Lead", "Enterprise analytics products", 1200, 500),
-    (25, "Workday", "HR Analyst", "HRIS configuration and analytics", 1800, 900),
+    (25, "Deliveroo", "HR Analyst", "HRIS configuration and analytics", 1800, 900),
     (
         33,
         "HubSpot",

@@ -314,6 +314,10 @@ MASS_EXAMS: list[dict] = [
         "key": "discovery-basics",
         "title": "Product Discovery Basics",
         "description": "Draft — being assembled by the People team for the next PM cohort.",
+        # HRP-713: the demo's protagonist is already on the participant
+        # list of the draft (``assign_employees`` allows it) — the
+        # presenter only has to press Send. He cannot see a draft until
+        # then, which is exactly the beat the script plays.
         "status": "draft",
         "pass_mark_percent": 70,
         "questions": [
@@ -358,6 +362,8 @@ MASS_EXAMS: list[dict] = [
                 ],
             },
         ],
-        "employee_indices": [],
+        "employee_indices": [
+            (38, "assigned", None),  # Will Gapp, SDR
+        ],
     },
 ]

@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
   reportSectionLabel,
+  reportStatusLabel,
   type ReportExport,
   type ReportPreview,
   type ReportSectionCode,
@@ -152,7 +153,7 @@ export default function ReportDetailPage({
               className={STATUS_COLORS[report.status] || ""}
               data-testid="recruitment-report-detail-status"
             >
-              {report.status}
+              {reportStatusLabel(t, report.status)}
             </Badge>
           )}
           <Button

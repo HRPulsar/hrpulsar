@@ -165,6 +165,7 @@ celery.autodiscover_tasks(
         "app.modules.demo",
         "app.modules.employee",
         "app.modules.recruitment",
+        "app.modules.talent_market",
     ]
 )
 

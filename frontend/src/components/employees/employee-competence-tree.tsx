@@ -7,11 +7,13 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { EmployeeCompetenceBreakdown } from "@/components/employees/employee-competence-breakdown";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { matchPercentColor } from "@/components/assessment/match-percent-chip";
 import { ISSUE_TONE, isCompetenceGap } from "@/lib/employee-issues";
 import type {
   CompetenceGroupTree,
   EmployeeCompetenceRow,
 } from "@/lib/types";
+import { skillLevelTitleLabel } from "@/lib/reference-labels";
 
 interface EmployeeCompetenceTreeProps {
   /** Full competence tree (origin + tenant) from useCompetenceTree(). */
@@ -65,7 +67,13 @@ function buildRenderedTree(
   return result;
 }
 
-function PercentBadge({ percent }: { percent: number | null }) {
+function PercentBadge({
+  percent,
+  bar,
+}: {
+  percent: number | null;
+  bar: number;
+}) {
   if (percent === null) {
     return (
       <span className="text-sm text-muted-foreground" data-testid="competence-percent-empty">
@@ -73,12 +81,9 @@ function PercentBadge({ percent }: { percent: number | null }) {
       </span>
     );
   }
-  const tone =
-    percent >= 75
-      ? BADGE_COLOR.green
-      : percent >= 50
-        ? BADGE_COLOR.yellow
-        : BADGE_COLOR.red;
+  // HRP-731: one bucket function, judged against this row's own bar — a
+  // green chip next to a "gap" badge was the contradiction this removes.
+  const tone = BADGE_COLOR[matchPercentColor(percent, bar)];
   return (
     <span
       className={`rounded-md px-2 py-0.5 text-xs font-medium ${tone}`}
@@ -93,8 +98,8 @@ function PercentBadge({ percent }: { percent: number | null }) {
  * HRP-660: a score under the bar has to read as a gap, not just as a warmer
  * colour. Deliberately the same word and tone the `competence_gap` badge
  * uses on the card header and in the employee list — one problem, one name.
- * The PercentBadge thresholds above are a different scale (75/50 traffic
- * lights) and stay where they are.
+ * HRP-731: PercentBadge now shares the same bar, so the colour and this
+ * badge can never disagree — green means "not a gap".
  */
 export function CompetenceGapBadge({ row }: { row: EmployeeCompetenceRow }) {
   const t = useTranslations("employees");
@@ -118,6 +123,7 @@ interface BranchProps {
 }
 
 function Branch({ node, depth, expanded, toggle }: BranchProps) {
+  const tRef = useTranslations("reference");
   const isOpen = expanded.has(node.group.id);
   return (
     <div>
@@ -147,12 +153,12 @@ function Branch({ node, depth, expanded, toggle }: BranchProps) {
               <div className="flex flex-1 items-center gap-2 text-sm">
                 <span className="truncate">{title}</span>
                 <Badge variant="secondary" className="shrink-0 text-xs">
-                  {row.skill_level_title}
+                  {skillLevelTitleLabel(tRef, row.skill_level_title)}
                 </Badge>
               </div>
               <div className="flex items-center gap-2">
                 <CompetenceGapBadge row={row} />
-                <PercentBadge percent={row.percent} />
+                <PercentBadge percent={row.percent} bar={row.passing_score} />
                 <EmployeeCompetenceBreakdown
                   competenceId={id}
                   competenceTitle={title}

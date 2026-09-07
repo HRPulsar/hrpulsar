@@ -142,6 +142,12 @@ test.describe("Assessment Results — percent + level columns", () => {
     await setAuthTokens(page, setup.accessToken, setup.refreshToken);
     await page.goto(`/assessments/${a.id}`);
 
+    // HRP-731: on a completed assessment the two highlight blocks lead and
+    // the full table sits behind a toggle — open it before reading rows.
+    const toggle = page.getByTestId("assessment-toggle-all-results");
+    await expect(toggle).toBeVisible({ timeout: 15000 });
+    await toggle.click();
+
     const percentCell = page.getByTestId(
       `assessment-results-row-${comp.id}-percent`,
     );
@@ -152,6 +158,128 @@ test.describe("Assessment Results — percent + level columns", () => {
     await expect(percentCell).toHaveText("100%");
     await expect(levelCell).toBeVisible();
     await expect(levelCell).toContainText("On target");
+
+    // HRP-731: a 100% result is a strength, so the growth zone is empty and
+    // no plan is offered.
+    await expect(page.getByTestId("assessment-strengths")).toBeVisible();
+    await expect(page.getByTestId("assessment-growth-zones")).toBeVisible();
+    await expect(page.getByTestId("assessment-create-plan")).toHaveCount(0);
+  });
+
+  // HRP-731: the gap side of the split — a low result must land in Growth
+  // zones and offer the plan that closes exactly it.
+  test("low result lands in growth zones and offers a development plan", async ({
+    page,
+  }) => {
+    const setup = await setupFullTenant(page);
+    const auth = { headers: { Authorization: `Bearer ${setup.accessToken}` } };
+
+    const slResp = await page.request.get(`${API_BASE}/skill-levels`, auth);
+    const skillLevels: { id: string }[] = await slResp.json();
+    const skillLevelId = skillLevels[0].id;
+
+    const stamp = Date.now().toString(36);
+    const group = await createCompetenceGroup(
+      { page, accessToken: setup.accessToken },
+      `GapGroup-${stamp}`,
+    );
+    const comp = await createCompetence(
+      { page, accessToken: setup.accessToken },
+      group.id,
+      `GapComp-${stamp}`,
+    );
+    await createIndicator(
+      { page, accessToken: setup.accessToken },
+      comp.id,
+      `GapInd-${stamp}`,
+      skillLevelId,
+    );
+
+    const scaleResp = await page.request.post(`${API_BASE}/answer-scales`, {
+      ...auth,
+      data: {
+        title: `Gap scale ${stamp}`,
+        options: [
+          { title: "Low", sort_index: 0, is_neutral: false },
+          { title: "Top", sort_index: 1, is_neutral: false },
+        ],
+        levels: [
+          { percent_from: 0, percent_to: 50, system_title: "Growth area", sort_index: 0 },
+          { percent_from: 51, percent_to: 100, system_title: "On target", sort_index: 1 },
+        ],
+      },
+    });
+    const scale = await scaleResp.json();
+
+    const a = await createAssessment(
+      { page, accessToken: setup.accessToken },
+      setup.employeeId,
+      `Gap flow ${stamp}`,
+      "self",
+    );
+    await page.request.put(`${API_BASE}/assessments/${a.id}/scale`, {
+      ...auth,
+      data: { scale_id: scale.id },
+    });
+    await page.request.put(`${API_BASE}/assessments/${a.id}/criteria`, {
+      ...auth,
+      data: {
+        criteria_type: "competences",
+        competences: [{ competence_id: comp.id, skill_level_id: skillLevelId }],
+      },
+    });
+    await page.request.post(`${API_BASE}/assessments/${a.id}/status`, {
+      ...auth,
+      data: { status_code: "sent" },
+    });
+
+    const detail = await (
+      await page.request.get(`${API_BASE}/assessments/${a.id}`, auth)
+    ).json();
+    const participant = detail.participants.find(
+      (p: { role: string }) => p.role === "self",
+    );
+    const snap = await (
+      await page.request.get(`${API_BASE}/answer-scales/${detail.scale_id}`, auth)
+    ).json();
+    // Lowest scoring option — the point is a result under the bar.
+    const low = [...snap.options]
+      .filter((o: { is_neutral: boolean }) => !o.is_neutral)
+      .sort((x: { weight: number }, y: { weight: number }) => x.weight - y.weight)[0];
+    const compDetail = await (
+      await page.request.get(`${API_BASE}/competences/${comp.id}`, auth)
+    ).json();
+
+    await page.request.post(`${API_BASE}/assessments/${a.id}/status`, {
+      ...auth,
+      data: { status_code: "in_progress" },
+    });
+    await page.request.post(`${API_BASE}/assessments/${a.id}/answers`, {
+      ...auth,
+      data: {
+        participant_id: participant.id,
+        indicator_id: compDetail.indicators[0].id,
+        answer_option_id: low.id,
+        score: low.weight,
+      },
+    });
+    await page.request.post(`${API_BASE}/assessments/${a.id}/status`, {
+      ...auth,
+      data: { status_code: "done" },
+    });
+
+    await setAuthTokens(page, setup.accessToken, setup.refreshToken);
+    await page.goto(`/assessments/${a.id}`);
+
+    await expect(page.getByTestId("assessment-growth-zones")).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(
+      page.getByTestId(`assessment-growth-zone-${comp.id}`),
+    ).toBeVisible();
+    await expect(page.getByTestId("assessment-strengths")).toBeVisible();
+    // The whole point of the block: a plan built from this competence.
+    await expect(page.getByTestId("assessment-create-plan")).toBeVisible();
   });
 
   test("scale without levels renders empty level cell", async ({ page }) => {
@@ -252,6 +380,9 @@ test.describe("Assessment Results — percent + level columns", () => {
 
     await setAuthTokens(page, setup.accessToken, setup.refreshToken);
     await page.goto(`/assessments/${a.id}`);
+
+    // HRP-731: open the folded table before reading its rows.
+    await page.getByTestId("assessment-toggle-all-results").click();
 
     const percentCell = page.getByTestId(
       `assessment-results-row-${comp.id}-percent`,

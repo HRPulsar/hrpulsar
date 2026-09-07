@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/tooltip";
 import { formatDate } from "@/lib/date-format";
 import { cn } from "@/lib/utils";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 export type EmployeeAlertCode =
   | "user_inactive"
@@ -269,6 +270,7 @@ export function EmployeeListRow({
   hrColumns = true,
 }: EmployeeListRowProps) {
   const t = useTranslations("employees");
+  const tRef = useTranslations("reference");
   const displayName =
     employee.user_name?.trim() ||
     employee.user_email ||
@@ -355,7 +357,7 @@ export function EmployeeListRow({
             variant="outline"
             className="w-fit border-primary/30 bg-primary/5 text-primary"
           >
-            {employee.grade_title}
+            {gradeTitleLabel(tRef, employee.grade_title)}
           </Badge>
         ) : (
           <span

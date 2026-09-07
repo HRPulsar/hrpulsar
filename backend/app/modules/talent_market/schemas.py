@@ -349,6 +349,9 @@ class CandidateRead(BaseModel):
     # ``pdp_id``. None when the candidate has no plan yet.
     pdp_status: str | None = None
     response_at: datetime | None
+    # HRP-734: axes that keep the candidate off the card ("competences" /
+    # "experience"); empty = nothing blocks, null = card states no requirements.
+    blocked_by: list[str] | None = None
     appointed_at: datetime | None
     model_config = {"from_attributes": True}
 

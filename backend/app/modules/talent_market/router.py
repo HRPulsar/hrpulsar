@@ -322,9 +322,7 @@ async def get_candidate_breakdown(
     if is_employee_only(current_user):
         emp = await get_current_employee(db, current_user)
         if emp is None or emp.id != employee_id:
-            raise AppError(
-                "tm_insufficient_permissions", _status.HTTP_403_FORBIDDEN
-            )
+            raise AppError("tm_insufficient_permissions", _status.HTTP_403_FORBIDDEN)
     return await service.get_candidate_breakdown(
         db, current_user.tenant_id, card_id, employee_id
     )
@@ -415,9 +413,7 @@ async def delete_candidate(
     await service.delete_candidate(db, current_user.tenant_id, card_id, employee_id)
 
 
-@router.post(
-    "/talent-market/{card_id}/recompute", response_model=TalentCardRead
-)
+@router.post("/talent-market/{card_id}/recompute", response_model=TalentCardRead)
 async def recompute_card(
     card_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -430,8 +426,26 @@ async def recompute_card(
     Candidates block header. The service stamps ``last_matched_at`` so
     the UI immediately picks up "today" for the new render.
     """
-    return await service.recompute_card_candidates(
-        db, current_user.tenant_id, card_id
+    return await service.recompute_card_candidates(db, current_user.tenant_id, card_id)
+
+
+@router.post(
+    "/talent-market/{card_id}/request-development-plan",
+    response_model=CandidateRead,
+)
+async def request_development_plan(
+    card_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """HRP-714: the employee asks their manager for a plan on this card.
+
+    Same auth posture as ``react`` — employee-facing, so the service, not
+    a role gate, decides: the caller must be a candidate on the card, must
+    have reacted, and must not already have a plan.
+    """
+    return await service.request_development_plan(
+        db, current_user.tenant_id, card_id, current_user
     )
 
 

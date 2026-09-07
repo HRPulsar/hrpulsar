@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useFormatter, useTranslations } from "next-intl";
 import {
@@ -12,6 +12,7 @@ import {
   Loader2,
   Sparkles,
 } from "lucide-react";
+import { LoadErrorState } from "@/components/load-error-state";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
 import { useAuth } from "@/context/auth-context";
@@ -54,9 +55,20 @@ interface DevLoopFinding {
   href: string;
 }
 
+// HRP-724: what moved in the chosen window. Sized by ``?days=``; every
+// other number on the hero keeps its own fixed window.
+interface LoopDynamics {
+  days: number;
+  plans_completed: number;
+  competences_improved: number;
+}
+
+const DYNAMICS_PERIODS = [30, 90, 365] as const;
+
 interface DevLoop {
   stages: DevLoopStages;
   findings: DevLoopFinding[];
+  dynamics: LoopDynamics;
   data_version: string;
 }
 
@@ -105,6 +117,7 @@ interface MyLoop {
     missing: MyCompetence[];
   } | null;
   history: { finished_at: string; avg_percent: number }[];
+  dynamics: LoopDynamics;
   data_version: string;
 }
 
@@ -170,6 +183,8 @@ interface LoopStageSpec {
   series?: number[];
   /** HRP-659: what this number actually counts. */
   hint?: string;
+  /** HRP-724: a tile that is not a loop stage names its own testid. */
+  testid?: string;
 }
 
 // HRP-638: every tile links to the list filtered down to the people it
@@ -177,6 +192,7 @@ interface LoopStageSpec {
 // for the ones the number was about.
 export function buildStages(
   stages: DevLoopStages,
+  dynamics: LoopDynamics,
   t: Translate,
 ): LoopStageSpec[] {
   return [
@@ -189,6 +205,14 @@ export function buildStages(
         covered: stages.assessed.covered,
         total: stages.assessed.total_active,
       }),
+      // HRP-730: the actionable half of the tile, same badge the gaps stage
+      // uses. No badge at zero — "0 unassessed" is not a task.
+      badge:
+        stages.assessed.total_active - stages.assessed.covered > 0
+          ? t("stageAssessedNoAssessment", {
+              count: stages.assessed.total_active - stages.assessed.covered,
+            })
+          : undefined,
       progress: stages.assessed.percent,
       hint: t("hintStageAssessed"),
     },
@@ -254,6 +278,24 @@ export function buildStages(
           : 0,
       hint: t("hintStageClosed"),
     },
+    // HRP-724: the loop's own result over a period the reader picks —
+    // "did the last quarter change anything", which the fixed-window
+    // stages above cannot answer.
+    {
+      key: "dynamics",
+      testid: "dashboard-loop-dynamics",
+      href: "/development?status=done",
+      value: t("stageDynamicsValue", { count: dynamics.plans_completed }),
+      sub: t("stageDynamicsSub", {
+        count: dynamics.competences_improved,
+        days: dynamics.days,
+      }),
+      tone:
+        dynamics.plans_completed + dynamics.competences_improved > 0
+          ? "positive"
+          : undefined,
+      hint: t("hintStageDynamics"),
+    },
   ];
 }
 
@@ -262,20 +304,25 @@ function StagesHero({
   subtitle,
   stages,
   testidPrefix,
+  actions,
 }: {
   title: string;
   subtitle: string;
   stages: LoopStageSpec[];
   testidPrefix: string;
+  actions?: ReactNode;
 }) {
   const t = useTranslations("dashboard");
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm ring-1 ring-foreground/5">
       <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/40 px-4 py-2.5">
         <h2 className="text-[15px] font-semibold tracking-tight">{title}</h2>
-        <span className="truncate text-[11.5px] font-medium text-muted-foreground">
-          {subtitle}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="truncate text-[11.5px] font-medium text-muted-foreground">
+            {subtitle}
+          </span>
+          {actions}
+        </div>
       </div>
       <div className="grid grid-cols-2 lg:flex">
         {stages.map((stage, i) => (
@@ -288,7 +335,7 @@ function StagesHero({
             >
               <Link
                 href={stage.href}
-                data-testid={`${testidPrefix}-${stage.key}`}
+                data-testid={stage.testid ?? `${testidPrefix}-${stage.key}`}
                 className="flex h-full flex-col p-4 transition-colors hover:bg-muted/50"
               >
                 <div className="truncate pr-5 text-[11.5px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -336,7 +383,11 @@ function StagesHero({
                   text={stage.hint}
                   title={t(`stage_${stage.key}`)}
                   className="absolute right-3 top-3.5"
-                  data-testid={`${testidPrefix}-hint-${stage.key}`}
+                  data-testid={
+                    stage.testid
+                      ? `${stage.testid}-hint`
+                      : `${testidPrefix}-hint-${stage.key}`
+                  }
                 />
               )}
             </div>
@@ -354,14 +405,61 @@ function StagesHero({
   );
 }
 
-function DevLoopHero({ loop }: { loop: DevLoop }) {
+// HRP-724: component state, not the URL — the period is how one reader is
+// looking at the hero right now, not a place anyone links to.
+function DynamicsPeriod({
+  days,
+  onChange,
+}: {
+  days: number;
+  onChange: (days: number) => void;
+}) {
+  const t = useTranslations("dashboard");
+  return (
+    <div
+      className="flex shrink-0 items-center gap-0.5 rounded-md border border-border bg-card p-0.5"
+      role="group"
+      aria-label={t("dynamicsPeriodLabel")}
+      data-testid="dashboard-dynamics-period"
+    >
+      {DYNAMICS_PERIODS.map((value) => (
+        <button
+          key={value}
+          type="button"
+          onClick={() => onChange(value)}
+          aria-pressed={value === days}
+          className={cn(
+            "rounded px-1.5 py-0.5 text-[11px] font-semibold transition-colors",
+            value === days
+              ? "bg-accent text-accent-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          data-testid={`dashboard-dynamics-period-${value}`}
+        >
+          {t("dynamicsPeriodDays", { days: value })}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function DevLoopHero({
+  loop,
+  days,
+  onDaysChange,
+}: {
+  loop: DevLoop;
+  days: number;
+  onDaysChange: (days: number) => void;
+}) {
   const t = useTranslations("dashboard");
   return (
     <StagesHero
       title={t("loopTitle")}
       subtitle={t("loopSubtitle")}
-      stages={buildStages(loop.stages, t)}
+      stages={buildStages(loop.stages, loop.dynamics, t)}
       testidPrefix="dashboard-loop-stage"
+      actions={<DynamicsPeriod days={days} onChange={onDaysChange} />}
     />
   );
 }
@@ -543,7 +641,7 @@ function ActionQueue({
                   render={<Link href={finding.href} />}
                   data-testid="dashboard-action-cta"
                 >
-                  {t(`findingCta_${finding.code}`)}
+                  {t(`findingCta_${finding.code}`, { count: finding.count })}
                 </Button>
               </li>
             );
@@ -591,7 +689,10 @@ export function buildMyStages(
     },
     {
       key: "developing",
-      href: "/development",
+      // HRP-712: the payload has carried the plan's id all along, so the
+      // tile opens the plan itself. Landing on the list and hunting for
+      // the one plan the tile just described is a step nobody needs.
+      href: pdp ? `/development/${pdp.id}` : "/development",
       value: pdp ? `${pdp.progress}%` : "—",
       sub: pdp ? pdp.title : t("myStageNoPlan"),
       progress: pdp ? pdp.progress : undefined,
@@ -604,6 +705,25 @@ export function buildMyStages(
       sub: t("myStageClosedSub"),
       tone: closed.gaps_closed_90d > 0 ? "positive" : undefined,
       hint: t("hintMyStageClosed"),
+    },
+    // HRP-724: the same period question on the personal hero — my plans
+    // finished and my competences raised since the window opened.
+    {
+      key: "dynamics",
+      testid: "dashboard-my-dynamics",
+      href: "/development?status=done",
+      value: t("stageDynamicsValue", {
+        count: loop.dynamics.plans_completed,
+      }),
+      sub: t("stageDynamicsSub", {
+        count: loop.dynamics.competences_improved,
+        days: loop.dynamics.days,
+      }),
+      tone:
+        loop.dynamics.plans_completed + loop.dynamics.competences_improved > 0
+          ? "positive"
+          : undefined,
+      hint: t("hintMyStageDynamics"),
     },
   ];
 }
@@ -829,7 +949,15 @@ function GrowthCard({ growth }: { growth: NonNullable<MyLoop["growth"]> }) {
   );
 }
 
-function MyDashboard({ loop }: { loop: MyLoop }) {
+function MyDashboard({
+  loop,
+  days,
+  onDaysChange,
+}: {
+  loop: MyLoop;
+  days: number;
+  onDaysChange: (days: number) => void;
+}) {
   const t = useTranslations("dashboard");
   // HRP-624: reuses the header menu's label rather than minting a second key
   // for the same words.
@@ -845,6 +973,7 @@ function MyDashboard({ loop }: { loop: MyLoop }) {
         subtitle={t("myLoopSubtitle")}
         stages={stages}
         testidPrefix="dashboard-my-stage"
+        actions={<DynamicsPeriod days={days} onChange={onDaysChange} />}
       />
       <div className="flex justify-end">
         <Button
@@ -1007,6 +1136,25 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // HRP-724: only the dynamics block reads this, so flipping it refetches
+  // the one endpoint that answers differently — not the whole dashboard.
+  const [dynamicsDays, setDynamicsDays] = useState(90);
+  const dynamicsRequestId = useRef(0);
+
+  async function changeDynamicsPeriod(days: number) {
+    const path = data.loop ? "/analytics/dev-loop" : "/analytics/my-loop";
+    const key = data.loop ? "loop" : "myLoop";
+    const requestId = ++dynamicsRequestId.current;
+    const next = await api
+      .get<DevLoop | MyLoop>(`${path}?days=${days}`)
+      .catch(() => null);
+    // Period and numbers move together, from the same response: a failed
+    // refetch must not leave the old figures sitting under a newly
+    // highlighted button, and the slower of two quick flips must not win.
+    if (!next || dynamicsRequestId.current !== requestId) return;
+    setData((d) => ({ ...d, [key]: next }));
+    setDynamicsDays(next.dynamics.days);
+  }
 
   useEffect(() => {
     async function load() {
@@ -1086,19 +1234,10 @@ export default function DashboardPage() {
 
   if (failed) {
     return (
-      <div
-        className="flex flex-col items-center justify-center gap-3 py-12"
-        data-testid="dashboard-load-failed"
-      >
-        <p className="text-sm text-muted-foreground">{t("loadFailed")}</p>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => setAttempt((a) => a + 1)}
-        >
-          {t("loadRetry")}
-        </Button>
-      </div>
+      <LoadErrorState
+        testIdPrefix="dashboard"
+        onRetry={() => setAttempt((a) => a + 1)}
+      />
     );
   }
 
@@ -1114,7 +1253,13 @@ export default function DashboardPage() {
         <Hint text={tSections("dashboard.hint")} data-testid="dashboard-hint-title" />
       </div>
 
-      {data.loop && <DevLoopHero loop={data.loop} />}
+      {data.loop && (
+        <DevLoopHero
+          loop={data.loop}
+          days={dynamicsDays}
+          onDaysChange={changeDynamicsPeriod}
+        />
+      )}
 
       {data.loop && (
         <ActionQueue
@@ -1123,7 +1268,13 @@ export default function DashboardPage() {
         />
       )}
 
-      {!data.loop && data.myLoop && <MyDashboard loop={data.myLoop} />}
+      {!data.loop && data.myLoop && (
+        <MyDashboard
+          loop={data.myLoop}
+          days={dynamicsDays}
+          onDaysChange={changeDynamicsPeriod}
+        />
+      )}
 
       {!data.myLoop && (
         <CycleCard stats={cycleStats} hasCycle={cycleStats.total > 0} />

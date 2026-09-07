@@ -1,6 +1,7 @@
 import contextlib
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -19,13 +20,22 @@ init_sentry()
 
 
 class InternalEndpointFilter(logging.Filter):
-    """Suppress access logs for high-frequency internal endpoints."""
+    """Suppress access logs for high-frequency internal endpoints.
+
+    Only *successful* probes are dropped. A non-2xx answer from /health or
+    /metrics is the one line an operator needs when the stack degrades —
+    HRP-728: five days of 503 health probes left no trace in Loki because
+    every probe was filtered regardless of status.
+    """
 
     _SUPPRESSED = ("GET /health", "GET /metrics")
+    _SUCCESS = re.compile(r'" 2\d\d$')
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
-        return not any(ep in message for ep in self._SUPPRESSED)
+        if not any(ep in message for ep in self._SUPPRESSED):
+            return True
+        return self._SUCCESS.search(message.rstrip()) is None
 
 
 logging.getLogger("uvicorn.access").addFilter(InternalEndpointFilter())

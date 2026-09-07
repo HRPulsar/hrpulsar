@@ -38,6 +38,7 @@ from app.modules.recruitment.models import (
     Vacancy,
     VacancyProfile,
 )
+from app.modules.recruitment.resume_presence import candidate_ids_with_resume
 from app.modules.recruitment.schemas import (
     AIAnalysisRunRead,
     ResumeExcerptRead,
@@ -723,7 +724,7 @@ async def cancel_ai_analysis_run(
     # leave that mirror advertising work that never landed — but it
     # also must not erase a prior completed run's readiness. Look up
     # the latest still-completed run for the same cv and roll the
-    # readiness back to that snapshot (or ``pending`` if none).
+    # readiness back to that snapshot.
     from app.modules.recruitment.models import AIAnalysisRun, CandidateVacancy
 
     cv = await db.get(CandidateVacancy, run.candidate_vacancy_id)
@@ -741,7 +742,30 @@ async def cancel_ai_analysis_run(
             .limit(1)
         )
         if prior_active is None:
-            cv.ai_readiness = "pending"
+            # HRP-710: with no prior run to roll back to, the mirror is
+            # whatever the inputs say — the same derivation the candidates
+            # table applies. It used to write ``pending``, which is not a
+            # value of the readiness enum: nothing downstream could render
+            # it, and HRP-681 widening the enum did not revisit this writer.
+            # Two extra reads on a cancel, against a query per row on every
+            # table read.
+            has_resume = bool(
+                await candidate_ids_with_resume(db, tenant_id, [cv.candidate_id])
+            )
+            has_transcript = (
+                await db.scalar(
+                    select(Interview.id)
+                    .where(
+                        Interview.tenant_id == tenant_id,
+                        Interview.candidate_vacancy_id == cv.id,
+                        Interview.transcription_status == "completed",
+                        Interview.archived_at.is_(None),
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+            cv.ai_readiness = _derive_readiness(has_resume, has_transcript)
         elif prior_active.mode == "full":
             cv.ai_readiness = "resume_and_transcript"
         else:
@@ -1046,43 +1070,14 @@ async def apply_ai_analysis_state(
     if not items:
         return
 
-    from app.modules.recruitment.models import Candidate
-
     cv_ids = [i["id"] for i in items]
     candidate_ids = {i["candidate_id"] for i in items}
 
-    # Candidates with at least one successfully parsed resume. The
-    # canonical mirror on ``Candidate.parsed_resume_jsonb`` counts too:
-    # manual entry and the bulk-import finaliser write it without
-    # leaving a ``CandidateFile`` behind.
-    parsed_from_files = set(
-        (
-            await db.execute(
-                select(CandidateFile.candidate_id).where(
-                    CandidateFile.tenant_id == tenant_id,
-                    CandidateFile.candidate_id.in_(candidate_ids),
-                    CandidateFile.file_type == "resume",
-                    CandidateFile.parse_status == "completed",
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    parsed_from_candidates = set(
-        (
-            await db.execute(
-                select(Candidate.id).where(
-                    Candidate.tenant_id == tenant_id,
-                    Candidate.id.in_(candidate_ids),
-                    Candidate.parsed_resume_jsonb.is_not(None),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    with_resume = parsed_from_files | parsed_from_candidates
+    # HRP-704: one shared predicate for "this candidate has a resume" —
+    # a completed file of ``file_type="resume"`` or the canonical mirror
+    # on ``Candidate.parsed_resume_jsonb`` (manual entry and the
+    # bulk-import finaliser leave no ``CandidateFile`` behind).
+    with_resume = await candidate_ids_with_resume(db, tenant_id, candidate_ids)
 
     with_transcript = set(
         (

@@ -756,6 +756,39 @@ async def _auto_populate_candidates(
     if not card or card.tenant_id != tenant_id:
         return
 
+    # HRP-700: the vacancy's internal-search switch (HRP-678) gates every
+    # rebuild of the pool, not only the two recruitment-side paths (the
+    # bridge and the competence sync). Talent Market edits — requirement
+    # blocks, the match threshold, the explicit Recompute — reach the
+    # matcher directly, so the switch is read here, before any row is
+    # added or pruned and before the pool changes anyone gets mailed
+    # about. A card with no vacancy behind it (a plain Talent Market
+    # card) is unaffected. ``Vacancy`` is imported inside the function
+    # because recruitment and talent_market reference each other in both
+    # directions (vacancy_service imports this module); every crossing
+    # is lazy for that reason, and this one stays lazy too.
+    from app.modules.recruitment.models import Vacancy
+
+    internal_search_allowed = (
+        (
+            await db.execute(
+                select(Vacancy.internal_search_allowed).where(
+                    Vacancy.tenant_id == tenant_id,
+                    Vacancy.talent_card_id == card_id,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if internal_search_allowed is False:
+        logger.debug(
+            "talent card %s belongs to a vacancy with internal search off, "
+            "candidate pool left untouched",
+            card_id,
+        )
+        return
+
     comp_rows, spec_rows = await _fetch_match_inputs(db, card_id)
 
     employees = (
@@ -789,6 +822,13 @@ async def _auto_populate_candidates(
 
     qualifying_ids: set[uuid.UUID] = set()
     new_scores: dict[uuid.UUID, int | None] = {}
+    # HRP-705: one cache for the whole roster. Without it the Experience
+    # fallback pays two `db.get` calls per employee with no qualifying
+    # work experience — ~2 x N queries on a 2000-head tenant. Every one of
+    # the ten matcher callers goes through this loop, so the cache lands
+    # here rather than at each call site (``list_candidate_pool`` already
+    # keeps its own).
+    current_pos_cache: dict[uuid.UUID, Position | None] = {}
     for emp in employees:
         ok, score = await _employee_qualifies(
             db,
@@ -798,6 +838,7 @@ async def _auto_populate_candidates(
             spec_rows=spec_rows,
             last_by_comp=last_map.get(emp.id, {}),
             work_exp_cache=work_exp_cache,
+            current_pos_cache=current_pos_cache,
         )
         if ok:
             qualifying_ids.add(emp.id)

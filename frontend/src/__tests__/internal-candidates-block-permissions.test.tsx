@@ -140,6 +140,7 @@ describe("Internal search switch and manual picks (HRP-678 / HRP-693)", () => {
           position_title: "Engineer",
           match_score: null,
           status: "not_matched",
+          candidate_id: null,
         },
         {
           employee_id: "emp-2",
@@ -147,6 +148,7 @@ describe("Internal search switch and manual picks (HRP-678 / HRP-693)", () => {
           position_title: "Engineer",
           match_score: 84,
           status: "matched",
+          candidate_id: null,
         },
       ],
     });
@@ -167,5 +169,73 @@ describe("Internal search switch and manual picks (HRP-678 / HRP-693)", () => {
       '[data-testid="vacancy-internal-candidate-emp-1"]',
     );
     expect(manualRow!.textContent).not.toContain("% match");
+  });
+});
+
+// HRP-711 — the Add action on a shortlist row. Same rule as the offer
+// above, one rung stricter: posting the vacancy is offered to everyone
+// and disabled for most, but adding a candidate is an action only
+// admin/recruiter have anywhere in recruitment, so the roles that cannot
+// do it are not shown a button at all — there is nothing to explain.
+const ROSTER = (candidateId: string | null): VacancyInternalCandidates => ({
+  talent_card_id: "card-1",
+  talent_card_status: "draft",
+  has_library_competences: true,
+  internal_search_allowed: true,
+  items: [
+    {
+      employee_id: "emp-1",
+      employee_name: "Ada Byron",
+      position_title: "Engineer",
+      match_score: 71,
+      status: "matched",
+      candidate_id: candidateId,
+    },
+  ],
+});
+
+const addButton = () =>
+  container.querySelector(
+    '[data-testid="vacancy-internal-candidate-emp-1-add-btn"]',
+  ) as HTMLButtonElement | null;
+
+const addedLink = () =>
+  container.querySelector(
+    '[data-testid="vacancy-internal-candidate-emp-1-added-link"]',
+  );
+
+describe("Add to candidates — who may do it (HRP-711)", () => {
+  it("offers the action to a recruiter", async () => {
+    await render(["recruiter"], ROSTER(null));
+    expect(addButton()).not.toBeNull();
+    expect(addButton()!.textContent).toContain("Add to candidates");
+  });
+
+  it("offers it to an admin", async () => {
+    await render(["admin"], ROSTER(null));
+    expect(addButton()).not.toBeNull();
+  });
+
+  it("hides it from hr and from a hiring manager", async () => {
+    await render(["hr"], ROSTER(null));
+    expect(addButton()).toBeNull();
+    await render(["hiring_manager"], ROSTER(null));
+    expect(addButton()).toBeNull();
+  });
+
+  it("links to the candidate once the employee is already in the pipeline", async () => {
+    await render(["recruiter"], ROSTER("cand-9"));
+    expect(addButton()).toBeNull();
+    const link = addedLink();
+    expect(link).not.toBeNull();
+    expect(link!.textContent).toContain("In candidates");
+    expect(link!.querySelector("a")?.getAttribute("href") ?? link!.getAttribute("href")).toBe(
+      "/recruitment/candidates/cand-9",
+    );
+  });
+
+  it("still shows the link to a role that may not add", async () => {
+    await render(["hr"], ROSTER("cand-9"));
+    expect(addedLink()).not.toBeNull();
   });
 });

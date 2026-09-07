@@ -71,9 +71,19 @@ def test_catalog_covers_every_translatable_string(locale: str):
 @pytest.mark.parametrize("locale", _catalog_locales())
 def test_catalog_preserves_placeholders(locale: str):
     for source, target in seed_i18n._load_catalog(locale).items():
-        assert set(_PLACEHOLDER.findall(source)) == set(
-            _PLACEHOLDER.findall(target)
-        ), f"placeholder mismatch for {source!r}"
+        assert set(_PLACEHOLDER.findall(source)) == set(_PLACEHOLDER.findall(target)), (
+            f"placeholder mismatch for {source!r}"
+        )
+
+
+@pytest.mark.parametrize("locale", sorted({"en", "ru", *_catalog_locales()}))
+def test_admin_name_splits_into_first_and_last(locale: str):
+    # ``service._create_demo_user`` partitions the localized admin name on
+    # its first space (HRP-713); an entry that is not exactly two tokens
+    # hands the demo admin an empty or wrong last name. ``ru`` ships from
+    # ``ee/`` and degrades to the English source on a community build.
+    parts = seed_i18n.translate("Ian Steward", locale).split(" ")
+    assert len(parts) == 2 and all(parts), parts
 
 
 def test_localize_is_passthrough_for_english():
@@ -196,14 +206,14 @@ async def test_clone_seed_localizes_content_de(
     # Employee names are display text too — a German demo is staffed by
     # Germans. The email follows the name (it is a column on /employees),
     # which is exactly what could strand the "view as employee" persona:
-    # ``switch_demo_view`` resolves NAME_POOL idx 2 through the same
+    # ``switch_demo_view`` resolves NAME_POOL idx 38 through the same
     # ``localized_name_pool`` the seed wrote with.
     from app.modules.auth.models import User as AuthUser
     from app.modules.demo.seed_data_employees import localized_name_pool
     from app.modules.demo.service import DEMO_EMPLOYEE_PERSONA_INDEX
 
     persona_email = localized_name_pool()[DEMO_EMPLOYEE_PERSONA_INDEX][2]
-    assert persona_email == "christian.merten@demo.example.com"
+    assert persona_email == "volker.luecke@demo.example.com"
     persona = (
         await db.execute(
             select(AuthUser).where(
@@ -212,4 +222,4 @@ async def test_clone_seed_localizes_content_de(
             )
         )
     ).scalar_one()
-    assert (persona.first_name, persona.last_name) == ("Christian", "Merten")
+    assert (persona.first_name, persona.last_name) == ("Volker", "Lücke")

@@ -754,6 +754,7 @@
     "question_move_cross_candidate_vacancy": "Cannot move a question to a set belonging to a different candidate-vacancy",
     "question_not_found": "Question not found",
     "question_set_not_found": "Question set not found",
+    "recruitment_internal_candidate_not_found": "This employee is not on the vacancy's internal shortlist",
     "report_candidate_ids_required": "At least one candidate id is required",
     "report_candidate_selection_empty": "Select at least one candidate for the report",
     "report_file_missing": "Report file is missing",
@@ -847,9 +848,13 @@
     "tm_match_percent_read_only": "Match% is read-only after publish.",
     "tm_no_competence_gaps": "No competence gaps: the candidate already clears every required competence.",
     "tm_no_employee_profile": "No employee profile",
+    "tm_no_manager": "Nobody manages this division yet, so there is no one to send the request to. Ask your HR team for a development plan.",
     "tm_no_required_competences": "Card has no required competences to build a plan from.",
     "tm_publish_requires_candidate": "Cannot publish: at least one Candidate must be attached.",
+    "tm_plan_request_needs_reaction": "Respond to the card first, then you can ask for a development plan.",
+    "tm_plan_request_no_gap": "This candidate already meets the requirements; no development plan is needed.",
     "tm_publish_requires_competence": "Cannot publish: at least one Required competence must be set.",
+    "tm_self_managed_no_request": "You manage this division yourself, so there is no one to ask. You can build the development plan from the candidate's match breakdown.",
     "tm_skill_level_id_not_found": "Skill level {skill_level_id} not found",
     "tm_specialization_link_not_found": "Specialization link not found",
     "tm_start_date_required": "start_date is required",
@@ -929,6 +934,7 @@
       "uuid_parsing": "Input should be a valid UUID, {error}",
       "llm_yandex_model_not_self_contained": "Yandex model must be a full gpt://<folder>/<model> URI unless a base URL is configured"
     },
-    "llm_yandex_model_not_dispatchable": "The Yandex model {model} needs a full gpt://<folder>/<model> URI unless a base URL is configured."
+    "llm_yandex_model_not_dispatchable": "The Yandex model {model} needs a full gpt://<folder>/<model> URI unless a base URL is configured.",
+    "no_pending_consent_request": "No pending consent request to resend"
   }
 }

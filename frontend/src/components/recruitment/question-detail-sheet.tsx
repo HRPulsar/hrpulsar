@@ -34,7 +34,9 @@ const priorityOptions: { value: QuestionPriority; labelKey: string }[] = [
   { value: "nice_to_ask", labelKey: "questionDetailPriorityNiceToAsk" },
 ];
 
-const purposeOptions: { value: QuestionPurpose; labelKey: string }[] = [
+// HRP-672: also read by the question card, which shows the purpose of a
+// question it does not open.
+export const purposeOptions: { value: QuestionPurpose; labelKey: string }[] = [
   { value: "clarification", labelKey: "questionDetailPurposeClarification" },
   { value: "depth", labelKey: "questionDetailPurposeDepth" },
   { value: "risk", labelKey: "questionDetailPurposeRisk" },

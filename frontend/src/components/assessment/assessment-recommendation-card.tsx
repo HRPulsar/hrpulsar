@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import type { AssessmentRecommendation, GradeRecommendationItem } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 export interface AssessmentRecommendationCardProps {
   recommendation: AssessmentRecommendation;
@@ -31,6 +32,7 @@ function ProgressBar({ percent, passed }: { percent: number; passed: boolean }) 
 
 function GradeRow({ item }: { item: GradeRecommendationItem }) {
   const t = useTranslations("assessments");
+  const tRef = useTranslations("reference");
 
   if (item.excluded) {
     return (
@@ -38,7 +40,9 @@ function GradeRow({ item }: { item: GradeRecommendationItem }) {
         className="flex items-center justify-between rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground"
         data-testid={`assessment-recommendation-grade-${item.grade_id}`}
       >
-        <span className="font-medium text-foreground">{item.grade_title ?? "—"}</span>
+        <span className="font-medium text-foreground">
+          {gradeTitleLabel(tRef, item.grade_title) || "—"}
+        </span>
         <span className="text-xs">{t("recNoRequirements")}</span>
       </div>
     );
@@ -50,7 +54,7 @@ function GradeRow({ item }: { item: GradeRecommendationItem }) {
       data-testid={`assessment-recommendation-grade-${item.grade_id}`}
     >
       <div className="flex items-center justify-between text-sm">
-        <span className="font-medium">{item.grade_title ?? "—"}</span>
+        <span className="font-medium">{gradeTitleLabel(tRef, item.grade_title) || "—"}</span>
         <span className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="font-mono text-foreground">{formatPercent(item.percent)}</span>
           {item.passed ? (
@@ -73,6 +77,7 @@ export function AssessmentRecommendationCard({
   recommendation,
 }: AssessmentRecommendationCardProps) {
   const t = useTranslations("assessments");
+  const tRef = useTranslations("reference");
   const items = [...recommendation.grades].sort((a, b) => a.sort_index - b.sort_index);
   const evaluable = items.filter((g) => !g.excluded);
   const recommended = items.find(
@@ -92,7 +97,7 @@ export function AssessmentRecommendationCard({
           <div className="space-y-2">
             <div className="flex items-baseline justify-between">
               <span className="text-base font-semibold">
-                {recommended.grade_title ?? "—"}
+                {gradeTitleLabel(tRef, recommended.grade_title) || "—"}
               </span>
               <span className="text-sm text-muted-foreground">
                 {t("matchLabel")}{" "}
@@ -132,7 +137,7 @@ export function AssessmentRecommendationCard({
             <div className="flex-1">
               <div className="flex items-baseline justify-between">
                 <span className="text-base font-semibold">
-                  {recommended.grade_title ?? "—"}
+                  {gradeTitleLabel(tRef, recommended.grade_title) || "—"}
                 </span>
                 <span className="text-sm text-muted-foreground">
                   {t("matchLabel")}{" "}

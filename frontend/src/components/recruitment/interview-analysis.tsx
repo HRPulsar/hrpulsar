@@ -10,6 +10,7 @@ import type {
 } from "@/lib/types";
 import {
   aiVerdictLabel,
+  competenceAssessmentStatusLabel,
   processFindingLabel,
   redFlagLabel,
 } from "@/lib/recruitment-types";
@@ -26,12 +27,40 @@ interface InterviewAnalysisProps {
   competences?: CompetenceDictionary;
   onSeek?: (sec: number) => void;
   // Override the upper bound used to render score bars. When omitted the
-  // panel fetches the tenant's active scale and falls back to 5 if none is
-  // configured (legacy behaviour).
+  // panel fetches the tenant's active scale; until it answers the bars stay
+  // empty (see `scoreBar`).
   scaleMax?: number;
 }
 
-const FALLBACK_SCALE_MAX = 5;
+// HRP-673: when the tenant has no active ScaleConfig the backend keeps the
+// score on the raw 0..1 scale (identity fallback in
+// compute_normalized_ai_score) — the bar bound must mirror that, not
+// pretend a 5-point scale exists.
+const NO_SCALE_MAX = 1;
+// Only when the scale request itself fails — the one case where nothing
+// says which scale the scores are on — the pre-HRP-673 5-point default.
+export const FALLBACK_SCALE_MAX = 5;
+
+/** Fill and tone of one score bar. `scaleMax` is null while the tenant's
+ *  scale is still being fetched: the bar stays empty and neutral rather
+ *  than being drawn against a bound we do not have yet — dividing by a
+ *  placeholder painted every bar full green on the first paint. */
+export function scoreBar(
+  score: number | null | undefined,
+  scaleMax: number | null,
+): { pct: number; tone: string } {
+  if (score == null || scaleMax == null) return { pct: 0, tone: "bg-muted" };
+  const n = Number(score);
+  return {
+    pct: Math.max(0, Math.min(100, (n / scaleMax) * 100)),
+    tone:
+      n >= scaleMax * 0.8
+        ? "bg-emerald-500"
+        : n >= scaleMax * 0.5
+          ? "bg-amber-500"
+          : "bg-rose-500",
+  };
+}
 
 // Keyed on the backend ``Verdict`` enum (prompts_interview.py) — the
 // same vocabulary ai-verdict-badge colours.
@@ -50,7 +79,7 @@ function CompetenceBars({
   competences: InterviewAnalysisCompetence[];
   dictionary: CompetenceDictionary;
   onSeek?: (sec: number) => void;
-  scaleMax: number;
+  scaleMax: number | null;
 }) {
   const t = useTranslations("recruitment");
   if (competences.length === 0) {
@@ -64,29 +93,18 @@ function CompetenceBars({
     <ul className="space-y-2">
       {competences.map((c, i) => {
         const name = dictionary[c.competence_id]?.name || c.competence_id;
-        const pct =
-          c.score == null
-            ? 0
-            : Math.max(
-                0,
-                Math.min(100, (Number(c.score) / scaleMax) * 100),
-              );
-        const greenCutoff = scaleMax * 0.8;
-        const amberCutoff = scaleMax * 0.5;
-        const tone =
-          c.score == null
-            ? "bg-muted"
-            : c.score >= greenCutoff
-              ? "bg-emerald-500"
-              : c.score >= amberCutoff
-                ? "bg-amber-500"
-                : "bg-rose-500";
+        // HRP-673: the backend rebases the raw 0..1 score onto the tenant
+        // scale as ``normalized_score``; the raw ``score`` is only a
+        // last-resort fallback for payloads predating the field.
+        const score = c.normalized_score ?? c.score;
+        const { pct, tone } = scoreBar(score, scaleMax);
         return (
           <li key={`${c.competence_id}-${i}`} className="space-y-1">
             <div className="flex items-center justify-between text-xs">
               <span className="font-medium">{name}</span>
               <span className="text-muted-foreground">
-                {c.score != null ? c.score.toFixed(1) : "—"} · {c.status}
+                {score != null ? Number(score).toFixed(1) : "—"} ·{" "}
+                {competenceAssessmentStatusLabel(t, c.status)}
               </span>
             </div>
             <div className="h-1.5 w-full overflow-hidden rounded bg-muted">
@@ -147,6 +165,8 @@ export function InterviewAnalysisPanel({
   // the tenant's active scale once and derive resolvedScaleMax from props +
   // fetched state, keeping the effect free of synchronous setState calls
   // (forbidden by React 19's `react-hooks/set-state-in-effect` rule).
+  // Null = the request has not answered yet; a 200 with no scale is the
+  // identity bound, a failure the legacy one.
   const [fetchedMax, setFetchedMax] = useState<number | null>(null);
 
   useEffect(() => {
@@ -162,12 +182,14 @@ export function InterviewAnalysisPanel({
       )
       .then((res) => {
         if (cancelled) return;
-        if (res && typeof res.max_value === "number" && res.max_value > 0) {
-          setFetchedMax(res.max_value);
-        }
+        setFetchedMax(
+          res && typeof res.max_value === "number" && res.max_value > 0
+            ? res.max_value
+            : NO_SCALE_MAX,
+        );
       })
       .catch(() => {
-        if (!cancelled) setFetchedMax(null);
+        if (!cancelled) setFetchedMax(FALLBACK_SCALE_MAX);
       });
     return () => {
       cancelled = true;
@@ -175,9 +197,7 @@ export function InterviewAnalysisPanel({
   }, [scaleMax]);
 
   const resolvedScaleMax =
-    typeof scaleMax === "number" && scaleMax > 0
-      ? scaleMax
-      : fetchedMax ?? FALLBACK_SCALE_MAX;
+    typeof scaleMax === "number" && scaleMax > 0 ? scaleMax : fetchedMax;
 
   if (interview.analysis_status === "pending") {
     return (

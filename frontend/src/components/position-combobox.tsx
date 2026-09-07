@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Check, ChevronsUpDown, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 interface PositionComboboxProps {
   value: string | null;
@@ -30,6 +31,7 @@ export function PositionCombobox({
   "data-testid": testId,
 }: PositionComboboxProps) {
   const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   const tc = useTranslations("common");
   const resolvedPlaceholder = placeholder ?? t("selectPositionPlaceholder");
   const [open, setOpen] = useState(false);
@@ -197,7 +199,7 @@ export function PositionCombobox({
                   <span className="flex-1 truncate">{pos.title}</span>
                   {pos.grade_title && (
                     <span className="text-xs text-muted-foreground">
-                      {pos.grade_title}
+                      {gradeTitleLabel(tRef, pos.grade_title)}
                     </span>
                   )}
                 </Command.Item>

@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
+import { positionSourceLabel } from "../source-label";
 import { getDefaultSalaryCurrency } from "@/lib/currency";
 import { usePermissions } from "@/hooks/use-permissions";
 import { inlineEditKeys, useInlineEdit } from "@/hooks/use-inline-edit";
@@ -65,6 +66,7 @@ import {
   useActiveAiSessions,
   type ActiveAiSession,
 } from "@/hooks/use-active-ai-sessions";
+import { gradeTitleLabel, skillLevelTitleLabel } from "@/lib/reference-labels";
 
 // HRP-32 redo: bucket the flat competence list by group so the matrix
 // can render as a two-level tree (group → competences) instead of one
@@ -106,6 +108,7 @@ function MatrixTree({
   onOpenActiveSession: (sessionId: string) => void;
 }) {
   const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   const buckets = useMemo(
     () => bucketByGroup(competences, t("ungrouped")),
     [competences, t],
@@ -211,7 +214,7 @@ function MatrixTree({
                               data-testid={`position-detail-matrix-row-${c.competence_id}-level`}
                               className="text-[11px] font-normal"
                             >
-                              {c.skill_level_title}
+                              {skillLevelTitleLabel(tRef, c.skill_level_title)}
                             </Badge>
                           ) : (
                             <span className="text-[11px] text-muted-foreground">
@@ -323,6 +326,7 @@ function formatSalaryRange(
 
 export default function PositionDetailPage() {
   const t = useTranslations("company");
+  const tRef = useTranslations("reference");
   const tc = useTranslations("common");
   const locale = useLocale();
   const { id } = useParams<{ id: string }>();
@@ -480,7 +484,7 @@ export default function PositionDetailPage() {
   const competenceCount = matrix?.competences.length ?? 0;
   const matrixDescribed =
     position.specialization_title && position.grade_title
-      ? `${position.specialization_title} / ${position.grade_title}`
+      ? `${position.specialization_title} / ${gradeTitleLabel(tRef, position.grade_title)}`
       : t("thisProfile");
   // HRP-637: same rule as the catalogue — a property of the viewer and the
   // tenant, read from `/auth/me`, never inferred from this one row. The
@@ -574,7 +578,7 @@ export default function PositionDetailPage() {
           )}
           {showJobProfile ? (
             <p className="text-sm text-muted-foreground">
-              {[position.specialization_title, position.grade_title]
+              {[position.specialization_title, gradeTitleLabel(tRef, position.grade_title)]
                 .filter(Boolean)
                 .join(" · ") || "—"}
             </p>
@@ -766,7 +770,7 @@ export default function PositionDetailPage() {
                         className="text-primary hover:underline"
                         data-testid="position-detail-grade-link"
                       >
-                        {position.grade_title}
+                        {gradeTitleLabel(tRef, position.grade_title)}
                       </Link>
                     ) : canManage ? (
                       <Button
@@ -780,7 +784,7 @@ export default function PositionDetailPage() {
                         {t("setGrade")}
                       </Button>
                     ) : (
-                      (position.grade_title ?? "—")
+                      (gradeTitleLabel(tRef, position.grade_title) || "—")
                     )}
                   </dd>
                 </div>
@@ -904,8 +908,8 @@ export default function PositionDetailPage() {
             ) : null}
             <div>
               <dt className="text-muted-foreground">{t("colSource")}</dt>
-              <dd className="font-medium capitalize">
-                {position.source.replace("_", " ")}
+              <dd className="font-medium">
+                {positionSourceLabel(t, position.source)}
               </dd>
             </div>
           </dl>

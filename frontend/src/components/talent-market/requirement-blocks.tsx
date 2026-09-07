@@ -11,7 +11,7 @@ import {
   talentMarketApi,
 } from "@/lib/api/talent-market";
 import type { SpecializationGrade } from "@/lib/api/specializations";
-import { dictionaryItemLabel, skillLevelLabel } from "@/lib/reference-labels";
+import { dictionaryItemLabel, skillLevelLabel, gradeTitleLabel } from "@/lib/reference-labels";
 import type {
   Competence,
   CompetenceGroupTree,
@@ -121,7 +121,9 @@ export function RequiredSpecializationsBlock({
   const gradeOptionTitle = useCallback(
     (option: SpecializationGrade) => {
       const item = grades.find((g) => g.id === option.grade_id);
-      return item ? dictionaryItemLabel(tRef, item) : option.grade_title;
+      return item
+        ? dictionaryItemLabel(tRef, item)
+        : gradeTitleLabel(tRef, option.grade_title);
     },
     [grades, tRef],
   );

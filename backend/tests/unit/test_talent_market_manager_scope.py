@@ -342,8 +342,15 @@ class TestEveryMutatingRouteCarriesAGuard:
     # and the service refuses anyone without a TalentCandidate row, so the
     # card id in the URL grants nothing; `delete_card` is admin-only;
     # `search` is a read that happens to be a POST — it carries the board's
-    # own read filter instead.
-    EXEMPT = {"react_to_card", "delete_card", "search_cards"}
+    # own read filter instead. HRP-714's plan request is `react`'s twin:
+    # employee-facing, acting only on the caller's own candidate row, and
+    # a manager scope would lock the employee out of their own card.
+    EXEMPT = {
+        "react_to_card",
+        "request_development_plan",
+        "delete_card",
+        "search_cards",
+    }
 
     def test_no_unguarded_mutation(self):
         unguarded = []

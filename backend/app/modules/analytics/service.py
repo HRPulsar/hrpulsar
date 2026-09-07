@@ -19,6 +19,8 @@ import logging
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from enum import IntEnum
+from typing import Any
 
 from fastapi import status
 from fastapi.responses import StreamingResponse
@@ -518,6 +520,23 @@ DEV_LOOP_STALE_DAYS = issues.STALE_DAYS
 DEV_LOOP_STUCK_REVIEW_DAYS = issues.STUCK_REVIEW_DAYS
 DEV_LOOP_CLOSED_WINDOW_DAYS = issues.CLOSED_WINDOW_DAYS
 DEV_LOOP_DEFAULT_PASSING = issues.DEFAULT_PASSING
+
+
+class DynamicsPeriod(IntEnum):
+    """HRP-724: the periods the dynamics block accepts.
+
+    An ``IntEnum`` and not a ``Literal``: FastAPI hands a query parameter
+    over as a string, and a literal of ints refuses "90" outright — the
+    endpoint answered 422 for every period a caller actually asked for and
+    only worked while the default went unmentioned.
+    """
+
+    month = 30
+    quarter = 90
+    year = 365
+
+
+DEV_LOOP_DEFAULT_DYNAMICS_DAYS = int(DynamicsPeriod.quarter)
 _FINDING_EMPLOYEE_LIMIT = 5
 
 _passing_bar = issues.passing_bar
@@ -554,12 +573,17 @@ async def dev_loop(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     visible_employee_ids: set[uuid.UUID] | None,
+    *,
+    days: int = DEV_LOOP_DEFAULT_DYNAMICS_DAYS,
 ) -> dict:
     """Development-loop stages + actionable findings for the dashboard.
 
     Returns machine codes only — all user-facing text is rendered by the
     frontend i18n layer. ``data_version`` fingerprints the derived state
     so the AI-summary cache can detect "same data, same summary".
+
+    ``days`` only sizes the HRP-724 ``dynamics`` block; every other number
+    keeps its own fixed window.
     """
     facts = await issues.collect_issue_facts(
         db, tenant_id, visible_employee_ids=visible_employee_ids
@@ -568,9 +592,15 @@ async def dev_loop(
     total_active = facts.total_active
     uncovered = len(cohorts["assessment_stale"])
 
-    def _employees_for(ids: set[uuid.UUID]) -> list[dict]:
-        picked = [facts.active_by_id[i] for i in ids if i in facts.active_by_id]
-        picked.sort(key=lambda e: (e.user.last_name if e.user else "", str(e.id)))
+    def _employees_for(ids: set[uuid.UUID], code: str) -> list[dict]:
+        # HRP-729: worst first, and the cut to five happens AFTER the sort —
+        # the names on the chip are the ones worth opening today, not the
+        # ones whose surname sorts early.
+        picked = issues.sort_by_severity(
+            facts,
+            [facts.active_by_id[i] for i in ids if i in facts.active_by_id],
+            [code],
+        )
         return [_employee_display(e) for e in picked[:_FINDING_EMPLOYEE_LIMIT]]
 
     # Each finding's href carries the filter that reproduces its own count —
@@ -582,7 +612,9 @@ async def dev_loop(
                 "code": "gaps_without_plan",
                 "severity": "alert",
                 "count": len(cohorts["gaps_without_plan"]),
-                "employees": _employees_for(cohorts["gaps_without_plan"]),
+                "employees": _employees_for(
+                    cohorts["gaps_without_plan"], "gaps_without_plan"
+                ),
                 "href": "/employees?issue=gaps_without_plan",
             }
         )
@@ -592,7 +624,7 @@ async def dev_loop(
                 "code": "pdp_overdue",
                 "severity": "alert",
                 "count": len(facts.overdue_employees),
-                "employees": _employees_for(facts.overdue_employees),
+                "employees": _employees_for(facts.overdue_employees, "pdp_overdue"),
                 "href": "/development?flag=overdue",
             }
         )
@@ -602,7 +634,7 @@ async def dev_loop(
                 "code": "pdp_stuck_review",
                 "severity": "warn",
                 "count": len(facts.stuck_employees),
-                "employees": _employees_for(facts.stuck_employees),
+                "employees": _employees_for(facts.stuck_employees, "pdp_stuck_review"),
                 "href": "/development?flag=stuck_review",
             }
         )
@@ -612,7 +644,9 @@ async def dev_loop(
                 "code": "assessment_coverage",
                 "severity": "info",
                 "count": uncovered,
-                "employees": _employees_for(cohorts["assessment_stale"]),
+                "employees": _employees_for(
+                    cohorts["assessment_stale"], "assessment_stale"
+                ),
                 "href": "/employees?issue=assessment_stale",
             }
         )
@@ -651,6 +685,11 @@ async def dev_loop(
     payload["data_version"] = hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode()
     ).hexdigest()[:16]
+    # HRP-724: added after the fingerprint on purpose. The period switch is a
+    # reading choice, not a change of state — folding it in would mint a new
+    # cache key (and a new LLM call) every time somebody flips 30 / 90 / 365
+    # over data the summary describes identically.
+    payload["dynamics"] = issues.development_dynamics(facts, days)
     return payload
 
 
@@ -856,17 +895,35 @@ def _dict_item_display(item: DictionaryItem | None) -> dict | None:
     }
 
 
-async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) -> dict:
-    """Personal development loop for the logged-in employee.
+async def my_loop(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    days: int = DEV_LOOP_DEFAULT_DYNAMICS_DAYS,
+    employee_id: uuid.UUID | None = None,
+) -> dict:
+    """Personal development loop for one employee.
 
     Read-only mirror of ``dev_loop`` scoped to one person: my stages, my
     action queue, strengths, growth direction and assessment history.
     Machine codes only — the frontend renders all user-facing text.
+
+    HRP-724: ``employee_id`` points it at somebody else's loop so a profile
+    can show their dynamics without a second endpoint computing the same
+    numbers a different way. The router is what decides whether the caller
+    may read that person — this function trusts the id it is given, exactly
+    like ``dev_loop`` trusts ``visible_employee_ids``.
     """
     employee = (
         await db.execute(
             select(Employee).where(
-                Employee.tenant_id == tenant_id, Employee.user_id == user_id
+                Employee.tenant_id == tenant_id,
+                (
+                    Employee.id == employee_id
+                    if employee_id is not None
+                    else Employee.user_id == user_id
+                ),
             )
         )
     ).scalar_one_or_none()
@@ -925,7 +982,10 @@ async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) ->
 
     latest = my_done[0] if my_done else None
     latest_results = my_results.get(latest.id, []) if latest is not None else []
-    latest_bar = _passing_bar(latest.passing_score) if latest else None
+    # Always an int: with no completed assessment ``latest_results`` is
+    # empty, so the bar is never read — and typing it as int keeps the
+    # shared is_gap() rule callable without a None dance at each site.
+    latest_bar = _passing_bar(latest.passing_score if latest else None)
     latest_by_competence = {r.competence_id: r for r in latest_results}
 
     def _avg(results: list[Row]) -> int | None:
@@ -935,7 +995,7 @@ async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) ->
     gap_items = [
         {"competence_id": str(r.competence_id), "title": r.title, "percent": r.percent}
         for r in sorted(latest_results, key=lambda r: r.percent)
-        if r.percent < latest_bar
+        if issues.is_gap(r.percent, latest_bar)
     ]
 
     # Confirmed closures (same rule as the company loop, one employee).
@@ -946,7 +1006,9 @@ async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) ->
         and latest.finished_at >= closed_cutoff
     ):
         passed_now = {
-            r.competence_id for r in latest_results if r.percent >= latest_bar
+            r.competence_id
+            for r in latest_results
+            if not issues.is_gap(r.percent, latest_bar)
         }
         gaps_closed = len(
             _closed_against_previous(passed_now, my_done[1:], my_results)
@@ -977,7 +1039,9 @@ async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) ->
                 .join(AssessmentStatus, AssessmentStatus.id == Assessment.status_id)
                 .where(
                     Assessment.tenant_id == tenant_id,
-                    AssessmentParticipant.user_id == user_id,
+                    # HRP-724: the loop belongs to ``employee``, which is
+                    # the caller only when no ``employee_id`` was passed.
+                    AssessmentParticipant.user_id == employee.user_id,
                     AssessmentParticipant.is_completed.is_(False),
                     # "sent" = dispatched, nobody answered yet — exactly the
                     # state the reminder exists for; the first answer moves
@@ -1068,7 +1132,7 @@ async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) ->
     top = [
         {"competence_id": str(r.competence_id), "title": r.title, "percent": r.percent}
         for r in latest_results
-        if r.percent >= latest_bar
+        if not issues.is_gap(r.percent, latest_bar)
     ][:_STRENGTHS_TOP]
     rare_skills: list[dict] = []
     if latest_results:
@@ -1126,7 +1190,9 @@ async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) ->
                 )
             ).all()
             for passed in passed_rows:
-                if passed.percent >= bar_by_assessment[passed.assessment_id]:
+                if not issues.is_gap(
+                    passed.percent, bar_by_assessment[passed.assessment_id]
+                ):
                     holders[passed.competence_id] = (
                         holders.get(passed.competence_id, 0) + 1
                     )
@@ -1137,7 +1203,7 @@ async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) ->
                 "percent": r.percent,
             }
             for r in latest_results
-            if r.percent >= latest_bar
+            if not issues.is_gap(r.percent, latest_bar)
             and holders.get(r.competence_id, 0) <= _RARE_SKILL_MAX_HOLDERS
         ]
 
@@ -1191,7 +1257,9 @@ async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) ->
                 }
                 for link in links
                 if link.competence_id not in latest_by_competence
-                or latest_by_competence[link.competence_id].percent < next_bar
+                or issues.is_gap(
+                    latest_by_competence[link.competence_id].percent, next_bar
+                )
             ]
             # Deterministic order for the fingerprint (query has no ORDER BY).
             missing.sort(key=lambda m: (m["title"], m["competence_id"]))
@@ -1210,7 +1278,7 @@ async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) ->
         and (avg := _avg(my_results.get(row.id, []))) is not None
     ]
 
-    payload = {
+    payload: dict[str, Any] = {
         "employee_id": str(employee.id),
         "stages": {
             "assessed": {
@@ -1249,6 +1317,22 @@ async def my_loop(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) ->
     payload["data_version"] = hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode()
     ).hexdigest()[:16]
+    # HRP-724: outside the fingerprint — see the note in ``dev_loop``.
+    window_start = now - timedelta(days=days)
+    inside, before = issues.split_by_window(my_done, window_start)
+    payload["dynamics"] = {
+        "days": days,
+        "plans_completed": sum(
+            1
+            for p in my_pdps
+            if p.status == "done"
+            and p.finished_at is not None
+            and p.finished_at >= window_start
+        ),
+        "competences_improved": len(
+            issues.improved_against_previous(inside, before, my_results)
+        ),
+    }
     return payload
 
 

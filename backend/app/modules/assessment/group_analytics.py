@@ -43,13 +43,10 @@ from app.modules.assessment.service import (
     apply_assessment_scope,
     compute_overall_percent,
 )
+from app.modules.employee.issues import DEFAULT_PASSING, is_gap
 
 #: At most this many competences are listed as growth zones.
 GROWTH_ZONE_LIMIT = 10
-#: Growth zones cover competences at or below this average percent.
-GROWTH_ZONE_MAX_PERCENT = 75
-#: Top competences cover competences strictly above this average percent.
-TOP_COMPETENCE_MIN_PERCENT = 75
 
 
 def _round_half_up(value: float) -> int:
@@ -127,13 +124,19 @@ def _competence_averages(
 
 
 def _split_highlights(averages: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Growth zones (<= 75%, worst first) and top competences (> 75%)."""
+    """Growth zones (worst first) and top competences, by the shared rule.
+
+    HRP-731: the threshold is no longer a constant of this module — it is
+    ``is_gap``, the one rule the dashboard and the employee card use too.
+    These averages span several assessments, so no single stored bar
+    applies and the default one is the honest reading.
+    """
     growth = sorted(
-        (a for a in averages if a["percent"] <= GROWTH_ZONE_MAX_PERCENT),
+        (a for a in averages if is_gap(a["percent"], DEFAULT_PASSING)),
         key=lambda a: (a["percent"], a["competence_title"]),
     )[:GROWTH_ZONE_LIMIT]
     top = sorted(
-        (a for a in averages if a["percent"] > TOP_COMPETENCE_MIN_PERCENT),
+        (a for a in averages if not is_gap(a["percent"], DEFAULT_PASSING)),
         key=lambda a: (-a["percent"], a["competence_title"]),
     )
     return growth, top

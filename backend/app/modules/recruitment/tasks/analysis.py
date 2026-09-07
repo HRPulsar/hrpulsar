@@ -448,6 +448,59 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
         engine.dispose()
 
 
+def _fail_inflight_full_run(db, tenant_id, interview_id, message: str) -> None:
+    """Close the in-flight full run when the analysis dies (HRP-492).
+
+    Every full enqueue stamps a pending row now, so every terminal exit
+    owes that row a status. Left in flight the row is worse than no row
+    at all: the candidate card keeps drawing the progress banner with a
+    Cancel button for good, the next successful analysis stays hidden
+    behind it, and every later enqueue for the pair 409s with
+    ``analysis_already_in_progress`` — until the 30-minute stuck-task
+    sweeper happens to clear it. ``analyze_resume_only_task`` closes its
+    own row on the same paths; this is the interview-side twin.
+
+    Keyed on the interview rather than the pair: a top-up running against
+    a different interview for the same candidate is somebody else's run.
+    """
+    from sqlalchemy import select
+
+    from app.modules.recruitment.models import AIAnalysisRun
+
+    run = db.execute(
+        select(AIAnalysisRun)
+        .where(
+            AIAnalysisRun.tenant_id == tenant_id,
+            AIAnalysisRun.interview_id == interview_id,
+            AIAnalysisRun.mode == "full",
+            AIAnalysisRun.status.in_(("pending", "processing")),
+        )
+        .order_by(AIAnalysisRun.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if run is None:
+        return
+    run.status = "failed"
+    run.error_message = message[:1000]
+    run.current_stage = None
+
+
+def _candidate_name(candidate) -> str | None:
+    """Name for an analysis notification, or ``None`` when there is none.
+
+    HRP-494 REDO: the single resolution behind all four notices. Every
+    site used to build the name from ``candidate.person`` — but
+    ``person_id`` is optional since HRP-181 REDO and ``full_name`` is the
+    NOT NULL source of truth, so for a resume-sourced candidate (the
+    ordinary case here) the name came out ``None`` and the templates,
+    which interpolate it unguarded, mailed "Interview analysis ready for
+    None" in the subject and the body alike.
+    """
+    from app.modules.recruitment.common import candidate_display_name
+
+    return candidate_display_name(candidate, fallback="") or None
+
+
 def _candidate_name_for_cv(db, candidate_vacancy_id) -> str | None:
     """Full name of the candidate behind a candidate-vacancy link.
 
@@ -461,7 +514,6 @@ def _candidate_name_for_cv(db, candidate_vacancy_id) -> str | None:
     failure emails went out as "Resume analysis failed for " with a hole
     where the name belongs.
     """
-    from app.modules.recruitment.common import candidate_display_name
     from app.modules.recruitment.models import Candidate, CandidateVacancy
 
     if candidate_vacancy_id is None:
@@ -469,8 +521,7 @@ def _candidate_name_for_cv(db, candidate_vacancy_id) -> str | None:
     cv = db.get(CandidateVacancy, candidate_vacancy_id)
     if cv is None:
         return None
-    candidate = db.get(Candidate, cv.candidate_id)
-    return candidate_display_name(candidate, fallback="") or None
+    return _candidate_name(db.get(Candidate, cv.candidate_id))
 
 
 def _notify_analysis_result(
@@ -504,7 +555,18 @@ def _notify_analysis_result(
 
         if cv is None:
             return
-        event = f"recruitment.candidate.{mode}_analysis_{'ready' if ok else 'failed'}"
+        # HRP-494 REDO: ``mode`` is the run's wire value ("resume_only" /
+        # "full"), the events are named after the *notification* pair
+        # (resume / full). Interpolating the mode straight into the
+        # event built "recruitment.candidate.resume_only_analysis_ready",
+        # which is in no mapping, so ``notify_sync`` logged a warning and
+        # returned 0: every resume-only ready *and* failed notice was
+        # dropped silently. Only "full" happened to line up, which is why
+        # QA saw one email of the two.
+        event_kind = "resume" if mode == "resume_only" else "full"
+        event = (
+            f"recruitment.candidate.{event_kind}_analysis_{'ready' if ok else 'failed'}"
+        )
         context = {
             "candidate_vacancy_id": str(cv.id),
             "candidate_name": candidate_name,
@@ -815,7 +877,6 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
         AIAnalysisRun,
         AIAssessment,
         Candidate,
-        CandidateFile,
         CandidateVacancy,
         Interview,
         InterviewSegment,
@@ -827,6 +888,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
         InterviewAnalysisResult,
         build_interview_analysis_prompt,
     )
+    from app.modules.recruitment.resume_presence import load_parsed_resume_sync
 
     sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
     engine = create_engine(sync_url)
@@ -834,12 +896,25 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
     try:
         with Session(engine) as db:
             interview = db.get(Interview, uuid.UUID(interview_id))
+            # HRP-492: both of these return before ``pending_run`` is
+            # even looked up, and both are terminal — the stamped row
+            # would sit in flight forever behind them.
             if not interview:
                 logger.error("Interview %s not found", interview_id)
+                _fail_inflight_full_run(
+                    db,
+                    uuid.UUID(tenant_id),
+                    uuid.UUID(interview_id),
+                    "Interview not found",
+                )
+                db.commit()
                 return {"status": "error", "error": "Interview not found"}
             if not interview.transcript:
                 interview.analysis_status = "failed"
                 interview.analysis_error = "Transcript missing"
+                _fail_inflight_full_run(
+                    db, uuid.UUID(tenant_id), interview.id, "Transcript missing"
+                )
                 db.commit()
                 return {"status": "failed", "error": "Transcript missing"}
 
@@ -847,20 +922,24 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
             interview.analysis_error = None
             db.commit()
 
-            # HRP-270: locate the in-flight AIAnalysisRun (created by
-            # the top-up flow) so the cancel endpoint + InFlightCard
-            # can track which stage we're in. We also include
-            # ``cancelled`` in the WHERE so the worker honours a cancel
-            # that landed between enqueue and pickup. Direct mode='full'
-            # calls from the candidate-card split-button don't create a
-            # run row, so ``pending_run`` may be None — the rest of the
-            # task treats it as a best-effort bookkeeping helper.
+            # HRP-270: locate the in-flight AIAnalysisRun so the cancel
+            # endpoint + InFlightCard can track which stage we're in. We
+            # also include ``cancelled`` in the WHERE so the worker
+            # honours a cancel that landed between enqueue and pickup.
+            # HRP-492: every enqueue path now stamps the row up front
+            # (top-up in ``enqueue_topup_to_full``, everything else in
+            # ``enqueue_analyze``), but the lookup stays best-effort —
+            # runs enqueued before that change are still in flight on
+            # upgraded installs, and they have no row. Keyed on the
+            # interview like the stamp and the finalizer — another
+            # interview's run on the same pair is somebody else's.
             pending_run = db.execute(
                 select(AIAnalysisRun)
                 .where(
                     AIAnalysisRun.tenant_id == uuid.UUID(tenant_id),
                     AIAnalysisRun.candidate_vacancy_id
                     == interview.candidate_vacancy_id,
+                    AIAnalysisRun.interview_id == interview.id,
                     AIAnalysisRun.mode == "full",
                     AIAnalysisRun.status.in_(("pending", "processing", "cancelled")),
                 )
@@ -946,29 +1025,14 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 else None
             )
             candidate = db.get(Candidate, cv.candidate_id) if cv else None
+            # HRP-704: shared loader — without the ``file_type`` filter this
+            # fed the audio row's ``parsed_data`` in as the resume summary.
             latest_resume = (
-                db.execute(
-                    select(CandidateFile)
-                    .where(
-                        CandidateFile.candidate_id == candidate.id,
-                        CandidateFile.parse_status == "completed",
-                    )
-                    .order_by(CandidateFile.created_at.desc())
-                    .limit(1)
-                ).scalar_one_or_none()
+                load_parsed_resume_sync(db, tenant_id, candidate.id)
                 if candidate
                 else None
             )
-            person = (
-                candidate.person
-                if candidate and getattr(candidate, "person", None)
-                else None
-            )
-            candidate_name = (
-                f"{(person.first_name or '').strip()} {(person.last_name or '').strip()}".strip()
-                if person
-                else None
-            )
+            candidate_name = _candidate_name(candidate)
 
             profile_competences = (
                 (profile.profile_data or {}).get("competences", []) or []
@@ -1005,11 +1069,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 transcript=interview.transcript or "",
                 segments=segments_payload,
                 candidate_name=candidate_name,
-                resume_summary=(
-                    str(latest_resume.parsed_data)[:4000]
-                    if latest_resume and latest_resume.parsed_data
-                    else None
-                ),
+                resume_summary=(str(latest_resume)[:4000] if latest_resume else None),
             )
 
             if pending_run is not None:
@@ -1125,20 +1185,35 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
             # top-up run (created by ``enqueue_topup_to_full`` — we
             # complete it in-place) or a fresh row stamped here for a
             # plain interview analyze.
+            # SAVEPOINT: a mirror that fails inside Postgres must not take
+            # the session down with it — the failure mark below and the
+            # interview's staged verdict still have to commit.
             try:
-                _finalize_full_analysis_run(
-                    db,
-                    tenant_id=uuid.UUID(tenant_id),
-                    interview=interview,
-                    cv=cv,
-                    candidate_name=candidate_name,
-                    analysis=analysis,
-                )
+                with db.begin_nested():
+                    _finalize_full_analysis_run(
+                        db,
+                        tenant_id=uuid.UUID(tenant_id),
+                        interview=interview,
+                        cv=cv,
+                        candidate_name=candidate_name,
+                        analysis=analysis,
+                    )
             except Exception:  # noqa: BLE001
                 logger.exception(
                     "AIAnalysisRun mirror failed for interview %s",
                     interview_id,
                 )
+                # HRP-492: the analysis itself landed on the interview,
+                # but the row that records it did not. Leaving it in
+                # flight would hide the result the recruiter just paid
+                # for behind a progress banner that never resolves.
+                _fail_inflight_full_run(
+                    db,
+                    uuid.UUID(tenant_id),
+                    interview.id,
+                    "analysis completed but the run record could not be written",
+                )
+                db.commit()
 
             # HRP-252 (D4): persist the analysis under
             # sha256(transcript + profile.id + profile.version) so a
@@ -1245,6 +1320,18 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                     # only on the final attempt, so two retries do not
                     # send three identical failure emails.
                     if self.request.retries >= self.max_retries:
+                        # HRP-492: same guard closes the run row. An
+                        # earlier attempt must leave it in flight — the
+                        # retry picks the row back up by its pending /
+                        # processing status, and the card should keep
+                        # showing progress while that is still true.
+                        _fail_inflight_full_run(
+                            db,
+                            uuid.UUID(tenant_id),
+                            uuid.UUID(interview_id),
+                            str(exc),
+                        )
+                        db.commit()
                         _notify_analysis_result(
                             db,
                             tenant_id=uuid.UUID(tenant_id),
@@ -1366,12 +1453,7 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                 db.commit()
                 return {"status": "failed", "error": "missing inputs"}
 
-            person = candidate.person if candidate else None
-            candidate_name = (
-                f"{(person.first_name or '').strip()} {(person.last_name or '').strip()}".strip()
-                if person
-                else None
-            )
+            candidate_name = _candidate_name(candidate)
 
             profile_competences = (profile.profile_data or {}).get(
                 "competences", []

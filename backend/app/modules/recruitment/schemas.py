@@ -533,6 +533,10 @@ class VacancyInternalCandidateRead(BaseModel):
     position_title: str | None = None
     match_score: int | None = None
     status: str
+    # HRP-711: set once this employee has been added to the vacancy's own
+    # candidate pipeline. The row then links to the candidate instead of
+    # offering the Add action again.
+    candidate_id: uuid.UUID | None = None
 
 
 class VacancyInternalCandidatesRead(BaseModel):
@@ -1117,6 +1121,8 @@ class ConsentRequestRead(BaseModel):
     expires_at: datetime
     signed_at: datetime | None = None
     created_at: datetime
+    # HRP-684: drives the "last sent on …" line of the Resend confirmation.
+    last_sent_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -1303,9 +1309,11 @@ class VacancyAnalytics(BaseModel):
     funnel: list[FunnelStageStat]
     win_loss: dict[str, int]
     # HRP-425: names of the funnel's terminal stages, so the Hired /
-    # Rejected tiles can be labelled with the vacancy's own vocabulary.
+    # Rejected / Withdrew tiles can be labelled with the vacancy's own
+    # vocabulary.
     positive_stage_names: list[str] = []
     negative_stage_names: list[str] = []
+    neutral_stage_names: list[str] = []
     total_candidates: int
 
 

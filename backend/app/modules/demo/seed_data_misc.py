@@ -5,7 +5,11 @@ Three buckets of small, page-finishing rows:
 1. Tenant-scoped DictionaryItem rows in fresh types (``language``,
    ``certification``, ``office_location``) so the Settings →
    Dictionaries page has more than the company's own grade + spec
-   catalog.
+   catalog, plus the three types the page ships its own tabs for
+   (``role``, ``goal``, ``project`` — see
+   ``dictionary/schemas.py``). Those three used to render empty, so
+   the demo's Dictionaries page answered "what goes in here?" with
+   nothing (HRP-713).
 
 2. In-app Notification rows for the demo owner so the notification
    bell isn't empty. Each row maps to an existing NotificationTemplate
@@ -48,6 +52,41 @@ CUSTOM_DICTIONARIES: list[dict] = [
             {"title": "New York", "sort_index": 40},
         ],
     },
+    # The three types the Dictionaries page gives its own tab. They are
+    # the vocabulary the rest of the product points at — a role somebody
+    # holds beside their position, the goal a development plan works
+    # toward, the project they are staffed on — so an empty tab reads as
+    # a broken page rather than an unused feature.
+    {
+        "type": "role",
+        "items": [
+            {"title": "Team lead", "sort_index": 10},
+            {"title": "Mentor", "sort_index": 20},
+            {"title": "Tech lead", "sort_index": 30},
+            {"title": "Product owner", "sort_index": 40},
+            {"title": "Incident commander", "sort_index": 50},
+        ],
+    },
+    {
+        "type": "goal",
+        "items": [
+            {"title": "Promotion to senior", "sort_index": 10},
+            {"title": "Lead a cross-team project", "sort_index": 20},
+            {"title": "Professional certification", "sort_index": 30},
+            {"title": "Mentor a new hire to independence", "sort_index": 40},
+            {"title": "Speak at an industry conference", "sort_index": 50},
+        ],
+    },
+    {
+        "type": "project",
+        "items": [
+            {"title": "CRM migration", "sort_index": 10},
+            {"title": "Mobile app launch", "sort_index": 20},
+            {"title": "Onboarding revamp", "sort_index": 30},
+            {"title": "Data platform rebuild", "sort_index": 40},
+            {"title": "Security audit remediation", "sort_index": 50},
+        ],
+    },
 ]
 
 
@@ -69,7 +108,7 @@ NOTIFICATIONS: list[dict] = [
     },
     {
         "template_code": "assessment.done",
-        "subject_data": "Q4 360° review — Carlos Mendez",
+        "subject_data": "Q4 360° review — Anna Rising",
         "is_read": False,
         "status": "sent",
         "days_ago": 1,
@@ -83,7 +122,7 @@ NOTIFICATIONS: list[dict] = [
     },
     {
         "template_code": "pdp.approved",
-        "subject_data": "Plan completed — Carlos Mendez (Q3)",
+        "subject_data": "Plan completed — Anna Rising (Q3)",
         "is_read": True,
         "status": "sent",
         "days_ago": 4,

@@ -8,6 +8,7 @@ import { BADGE_COLOR } from "@/lib/badge-tones";
 import type { Division, TalentCard } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LoadErrorState } from "@/components/load-error-state";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
@@ -28,10 +29,12 @@ import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "sonner";
 import Link from "next/link";
-import { MoreHorizontal, Plus, Search, Send, Trash2, X } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Plus, Search, Send, Trash2, X } from "lucide-react";
 import { formatDate } from "@/lib/date-format";
 import {
+  countCardsByType,
   TALENT_CARD_TYPES,
+  TYPE_COUNT_KEYS,
   TYPE_HINT_KEYS,
   TYPE_KEYS,
 } from "@/lib/talent-card-types";
@@ -176,6 +179,7 @@ export default function TalentMarketPage() {
   const [total, setTotal] = useState(0);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   // Create/Edit
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -211,8 +215,9 @@ export default function TalentMarketPage() {
       setCards(searchData.items);
       setTotal(searchData.total);
       setDivisions(divData);
+      setLoadError(false);
     } catch {
-      // ignore
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -348,9 +353,17 @@ export default function TalentMarketPage() {
     Boolean(searchQuery) || filterTypes.length > 0 || filterStatuses.length > 0;
   const displayCount = hasClientFilters ? filteredCards.length : total;
 
+  // HRP-716: "6 cards" said nothing about what is on the board, so the
+  // header lists the composition instead — "3 vacancies · 2 projects".
+  // The breakdown is only honest while every card is loaded: past the
+  // `{ limit: 50 }` page the counter stays on the server total.
+  // ponytail: client-side type counts; move to the search response when
+  // boards outgrow one page.
+  const typeCounts = total > cards.length ? [] : countCardsByType(filteredCards);
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight" data-testid="talent-market-heading">{t("title")}</h1>
@@ -360,7 +373,35 @@ export default function TalentMarketPage() {
             />
           </div>
           {/* HRP-290: counter respects active filters (Assessments parity). */}
-          <p className="text-sm text-muted-foreground" data-testid="talent-market-count">{t("cardCount", { count: displayCount })}</p>
+          <p className="text-sm text-muted-foreground" data-testid="talent-market-count">
+            {typeCounts.length > 0
+              ? typeCounts
+                  .map((entry) => t(TYPE_COUNT_KEYS[entry.type], { count: entry.count }))
+                  .join(" · ")
+              : t("cardCount", { count: displayCount })}
+          </p>
+          {/* HRP-719: the three types differ by intent only, so the board
+              spells them out where a person first meets a mixed list. The
+              wording is the same one the Type select shows in the create
+              dialog — one source, two places. */}
+          <details className="group mt-2 max-w-2xl text-sm" data-testid="talent-market-type-legend">
+            <summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+              <ChevronRight
+                aria-hidden="true"
+                className="size-4 shrink-0 transition-transform group-open:rotate-90"
+              />
+              {t("typeLegendTitle")}
+            </summary>
+            <ul className="mt-2 space-y-1 pl-5 text-muted-foreground">
+              {TALENT_CARD_TYPES.map((type) => (
+                <li key={type} data-testid={`talent-market-type-legend-${type}`}>
+                  <span className="font-medium text-foreground">{t(TYPE_KEYS[type])}</span>
+                  {" — "}
+                  {t(TYPE_HINT_KEYS[type])}
+                </li>
+              ))}
+            </ul>
+          </details>
         </div>
         {canManage && (
           <Button size="sm" onClick={openCreate} data-testid="talent-market-btn-create">
@@ -417,7 +458,15 @@ export default function TalentMarketPage() {
         )}
       </div>
 
-      {filteredCards.length === 0 ? (
+      {loadError ? (
+        <LoadErrorState
+          testIdPrefix="talent-market"
+          onRetry={() => {
+            setLoading(true);
+            void load();
+          }}
+        />
+      ) : filteredCards.length === 0 ? (
         <div
           data-testid="talent-market-empty"
           className="rounded-lg border border-dashed p-12 text-center text-muted-foreground"

@@ -19,6 +19,7 @@ from app.modules.assessment.models import (
     AnswerScaleLevel,
     Assessment,
     AssessmentAnswer,
+    AssessmentCalibratedTotal,
     AssessmentCompetence,
     AssessmentParticipant,
     AssessmentResult,
@@ -26,6 +27,7 @@ from app.modules.assessment.models import (
 from app.modules.assessment.schemas import (
     AnswerRecord,
     AssessmentCreate,
+    DetailedResultsResponse,
     ParticipantAdd,
 )
 from app.modules.auth.models import User as AuthUser
@@ -358,6 +360,208 @@ class TestRoleMeanCalculation:
         # that Python's banker's rounding doesn't change the outcome.
         assert r.percent == 81
         assert r.avg_score == pytest.approx(0.8125, rel=1e-3)
+
+    async def test_detailed_results_expose_per_role_percents_on_review(
+        self,
+        db: AsyncSession,
+        tenant,
+        user,
+        employee,
+        assessment_statuses,
+        assessment_types,
+    ):
+        """HRP-715: the same fixture as ``test_360_role_mean_with_weighted_levels``,
+        stopped at ``on_review`` (everyone answered, nothing approved yet).
+
+        Detailed results must hand back the per-role numbers the role mean
+        is built from — self 100, manager 75, peer 75, subordinate 75 — and
+        the stored ``AssessmentResult.percent`` must still be their average,
+        81, untouched by the new field.
+        """
+        scale = await _make_scale(db, tenant, weights=[0, 1, 2, 3, 4])
+        comp_id, indicators = await _make_competence_with_levels(
+            db, tenant, "roledetail", indicators_per_level=[[1, 2], [1]]
+        )
+        l1_i1, l1_i2, l2_i1 = indicators
+
+        a = await _create_360(
+            db, tenant, user, employee, competence_id=comp_id, scale=scale
+        )
+        detail = await service.get_assessment_detail(db, tenant.id, a["id"])
+        self_part_id = next(
+            p["id"] for p in detail["participants"] if p["role"] == "self"
+        )
+        manager = await _add_participant_with_role(
+            db, tenant, a["id"], "dmgr", "manager"
+        )
+        peer1 = await _add_participant_with_role(db, tenant, a["id"], "dp1", "peer")
+        peer2 = await _add_participant_with_role(db, tenant, a["id"], "dp2", "peer")
+        sub = await _add_participant_with_role(
+            db, tenant, a["id"], "dsub", "subordinate"
+        )
+
+        await service.change_status(db, tenant.id, a["id"], "sent")
+        snap = await service._load_scale_full(
+            db, (await db.get(Assessment, a["id"])).scale_id
+        )
+        opt_by_weight = {o.weight: o for o in snap.options if not o.is_neutral}
+        w4, w2 = opt_by_weight[4], opt_by_weight[2]
+
+        answers = {
+            self_part_id: (w4, w4, w4),
+            manager.id: (w2, w2, w4),
+            peer1.id: (w4, w4, w4),
+            peer2.id: (w2, w2, w2),
+            sub.id: (w4, w4, w2),
+        }
+        for part_id, (o1, o2, o3) in answers.items():
+            await _record_raw_answer(db, a["id"], part_id, l1_i1.id, option=o1)
+            await _record_raw_answer(db, a["id"], part_id, l1_i2.id, option=o2)
+            await _record_raw_answer(db, a["id"], part_id, l2_i1.id, option=o3)
+            p = await db.get(AssessmentParticipant, part_id)
+            p.is_completed = True
+        await db.commit()
+
+        await advance_to_in_progress(db, tenant.id, a["id"])
+        await service.change_status(db, tenant.id, a["id"], "on_review")
+
+        detailed = await service.get_detailed_results(db, tenant.id, a["id"])
+        assert len(detailed["competences"]) == 1
+        assert detailed["competences"][0]["role_percents"] == {
+            "self": 100,
+            "manager": 75,
+            "peer": 75,
+            "subordinate": 75,
+        }
+        # One competence, so the overall map repeats the per-competence one.
+        assert detailed["role_percents_overall"] == {
+            "self": 100,
+            "manager": 75,
+            "peer": 75,
+            "subordinate": 75,
+        }
+
+        # Checklist 11: the router serializes through DetailedResultsResponse,
+        # which silently drops anything it doesn't declare — assert the fields
+        # survive the response model, not just the service dict.
+        serialized = DetailedResultsResponse.model_validate(detailed).model_dump()
+        assert serialized["role_percents_overall"] == detailed["role_percents_overall"]
+        assert (
+            serialized["competences"][0]["role_percents"]
+            == detailed["competences"][0]["role_percents"]
+        )
+
+        # The stored result is untouched: still the mean across roles.
+        r = (
+            (
+                await db.execute(
+                    select(AssessmentResult).where(
+                        AssessmentResult.assessment_id == a["id"]
+                    )
+                )
+            )
+            .scalars()
+            .one()
+        )
+        assert r.percent == 81
+
+    async def test_role_percents_skip_calibrated_role_and_unfinished_roles(
+        self,
+        db: AsyncSession,
+        tenant,
+        user,
+        employee,
+        assessment_statuses,
+        assessment_types,
+    ):
+        """HRP-715 review follow-up: two competences, one with a calibrated
+        indicator, one participant who never finished.
+
+        Competence A (one indicator): self 4, manager 2 -> self 100, manager 50.
+        Competence B (two indicators): B1 is calibrated to weight 4, so the
+        real answers on it are skipped and a synthetic "calibrated" role
+        carries the override; B2 is answered 2 by both sides -> self 50,
+        manager 50.
+
+        Asserts the three things the block depends on: the synthetic
+        "calibrated" role never shows up as a rater, a role whose participant
+        is unfinished never shows up at all, and the overall map averages each
+        role across both competences.
+        """
+        scale = await _make_scale(db, tenant, weights=[0, 1, 2, 3, 4])
+        comp_a, [a_i1] = await _make_competence_with_levels(
+            db, tenant, "calibA", indicators_per_level=[[1]]
+        )
+        comp_b, [b_i1, b_i2] = await _make_competence_with_levels(
+            db, tenant, "calibB", indicators_per_level=[[1, 1]]
+        )
+
+        a = await _create_360(
+            db, tenant, user, employee, competence_id=comp_a, scale=scale
+        )
+        db.add(AssessmentCompetence(assessment_id=a["id"], competence_id=comp_b))
+        await db.commit()
+
+        detail = await service.get_assessment_detail(db, tenant.id, a["id"])
+        self_part_id = next(
+            p["id"] for p in detail["participants"] if p["role"] == "self"
+        )
+        manager = await _add_participant_with_role(
+            db, tenant, a["id"], "cmgr", "manager"
+        )
+        # Answers, but never finished — must not reach role_percents.
+        peer = await _add_participant_with_role(db, tenant, a["id"], "cpeer", "peer")
+
+        await service.change_status(db, tenant.id, a["id"], "sent")
+        snap = await service._load_scale_full(
+            db, (await db.get(Assessment, a["id"])).scale_id
+        )
+        opt_by_weight = {o.weight: o for o in snap.options if not o.is_neutral}
+        w4, w2 = opt_by_weight[4], opt_by_weight[2]
+
+        await _record_raw_answer(db, a["id"], self_part_id, a_i1.id, option=w4)
+        await _record_raw_answer(db, a["id"], manager.id, a_i1.id, option=w2)
+        # B1 is calibrated below: these answers are deliberately ignored.
+        await _record_raw_answer(db, a["id"], self_part_id, b_i1.id, option=w2)
+        await _record_raw_answer(db, a["id"], manager.id, b_i1.id, option=w2)
+        await _record_raw_answer(db, a["id"], self_part_id, b_i2.id, option=w2)
+        await _record_raw_answer(db, a["id"], manager.id, b_i2.id, option=w2)
+        # The unfinished peer answers everything at the top of the scale.
+        for ind in (a_i1, b_i1, b_i2):
+            await _record_raw_answer(db, a["id"], peer.id, ind.id, option=w4)
+
+        db.add(
+            AssessmentCalibratedTotal(
+                assessment_id=a["id"],
+                indicator_id=b_i1.id,
+                answer_option_id=w4.id,
+            )
+        )
+        for pid in (self_part_id, manager.id):
+            p = await db.get(AssessmentParticipant, pid)
+            p.is_completed = True
+        await db.commit()
+
+        await advance_to_in_progress(db, tenant.id, a["id"])
+        await service.change_status(db, tenant.id, a["id"], "on_review")
+
+        detailed = await service.get_detailed_results(db, tenant.id, a["id"])
+        by_comp = {c["competence_id"]: c for c in detailed["competences"]}
+
+        assert by_comp[comp_a]["role_percents"] == {"self": 100, "manager": 50}
+        # (a) the synthetic calibrated role is not a rater, (b) the unfinished
+        # peer is absent even though it answered every indicator.
+        assert by_comp[comp_b]["role_percents"] == {"self": 50, "manager": 50}
+        for comp_id in (comp_a, comp_b):
+            assert "calibrated" not in by_comp[comp_id]["role_percents"]
+            assert "peer" not in by_comp[comp_id]["role_percents"]
+
+        # (c) each role averaged across both competences.
+        assert detailed["role_percents_overall"] == {"self": 75, "manager": 50}
+
+        # The calibrated override still drives the level percent it always did.
+        b_level = by_comp[comp_b]["skill_levels"][0]
+        assert b_level["percent_for_skill_level"] == 67
 
     async def test_level_with_mixed_neutral_and_real_answers(
         self,

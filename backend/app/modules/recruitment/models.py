@@ -1340,6 +1340,13 @@ class ConsentRequest(BaseModel, TenantMixin):
     signed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # HRP-684: when the link was last emailed. Equal to ``created_at`` on
+    # the first send and moved forward by every resend, so the Resend
+    # confirmation can name the real last attempt rather than the moment
+    # the request row was created.
+    last_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     signed_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     signed_user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(

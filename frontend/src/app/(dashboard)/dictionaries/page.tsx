@@ -12,6 +12,7 @@ import {
 import type { DictionaryItem } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LoadErrorState } from "@/components/load-error-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -90,6 +91,7 @@ function DictionariesPageContent() {
   const [activeType, setActiveType] = useState("grade");
   const [items, setItems] = useState<DictionaryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   // Create/Edit
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -121,8 +123,10 @@ function DictionariesPageContent() {
         `/dictionaries/${activeType}`,
       );
       setItems(data);
+      setLoadError(false);
     } catch {
       setItems([]);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -329,6 +333,8 @@ function DictionariesPageContent() {
         <div className="py-12 text-center text-muted-foreground">
           {tc("loading")}
         </div>
+      ) : loadError ? (
+        <LoadErrorState testIdPrefix="dictionaries" onRetry={() => void load()} />
       ) : filtered.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground" data-testid="dictionaries-empty">
           {items.length === 0

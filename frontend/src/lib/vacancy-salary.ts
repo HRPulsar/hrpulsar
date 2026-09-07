@@ -45,14 +45,6 @@ export function validateSalaryRange(values: SalaryFormValues): string | null {
   return null;
 }
 
-export function isSalaryEmpty(values: SalaryFormValues): boolean {
-  return (
-    !values.salary_min.trim() &&
-    !values.salary_max.trim() &&
-    !values.salary_currency.trim()
-  );
-}
-
 /**
  * Collapse the salary bands of the picked Specialization × Grade pairs
  * into one range: the lowest floor, the highest ceiling.
@@ -89,10 +81,45 @@ export function deriveSalaryFromBands(
   };
 }
 
-export function sameSalary(a: SalaryFormValues, b: SalaryFormValues): boolean {
-  return (
-    a.salary_min === b.salary_min &&
-    a.salary_max === b.salary_max &&
-    a.salary_currency === b.salary_currency
-  );
+// HRP-440: a row of the Specialization page's grade matrix.
+export interface SpecializationGradeRow {
+  grade_id: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+}
+
+/**
+ * The range the current Specialization × Grade selection implies, or null
+ * when the library has nothing usable to say about it (no pick, no band on
+ * the picked pairs, or bands in mixed currencies).
+ *
+ * The grade fetch is injected rather than imported so this stays a pure
+ * function of its inputs — `useSalaryAutofill` passes the API client.
+ * A specialization that fails to load contributes no band instead of
+ * failing the whole recompute: the other picks still carry a range.
+ */
+export async function deriveSalaryForSelection(
+  specializationIds: string[],
+  gradeIds: string[],
+  fetchGrades: (specializationId: string) => Promise<SpecializationGradeRow[]>,
+): Promise<SalaryFormValues | null> {
+  if (specializationIds.length === 0 || gradeIds.length === 0) return null;
+  const wanted = new Set(gradeIds);
+  const bands: SalaryBand[] = [];
+  for (const specializationId of specializationIds) {
+    try {
+      for (const row of await fetchGrades(specializationId)) {
+        if (!wanted.has(row.grade_id)) continue;
+        bands.push({
+          salary_min: row.salary_min ?? null,
+          salary_max: row.salary_max ?? null,
+          salary_currency: row.salary_currency ?? null,
+        });
+      }
+    } catch {
+      // Unreadable specialization — no band, not a failed recompute.
+    }
+  }
+  return deriveSalaryFromBands(bands);
 }

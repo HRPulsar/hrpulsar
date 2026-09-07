@@ -28,6 +28,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.currency import installation_currency
 from app.core.security import hash_password
 from app.models import Person
 from app.modules.assessment.models import (
@@ -61,6 +62,7 @@ from app.modules.demo.seed_data import (
     PRIYA_RESUME_ANALYSIS,
     TOMAS_INTERVIEW_ANALYSIS,
     VACANCIES,
+    build_candidate_analysis,
     candidates,
     load_transcript,
     parse_transcript_segments,
@@ -97,6 +99,7 @@ from app.modules.demo.seed_data_misc import (
 )
 from app.modules.demo.seed_data_recruitment_extras import (
     EXTRA_CANDIDATES,
+    EXTRA_PARSED_RESUMES,
     EXTRA_VACANCIES,
     INTERVIEW_SHAPES,
 )
@@ -136,29 +139,6 @@ _TOMAS_KEY = "tomas.becker@example.com"
 # read, and ``not_recommended`` is a verdict this mode is allowed to
 # reach (``apply_resume_only_verdict_guard`` rewrites ``recommended``).
 _PRIYA_KEY = "priya.shah@example.com"
-
-
-def _seed_currency() -> str:
-    """Salary currency of the seeded workspace.
-
-    The ru catalog paints a Moscow-based company (HRP-696), and its
-    market quotes salaries in roubles; every other locale keeps the
-    annual-EUR figures the fixtures carry.
-    """
-    return "RUB" if seed_locale() == "ru" else "EUR"
-
-
-def _localized_salary(amount: int | None) -> int | None:
-    """Fixture salary figure rendered in the seed locale's convention.
-
-    Fixtures store annual EUR. The Russian market quotes monthly RUB, so
-    the ru seed maps with a single factor — x4, rounded to 10k — which
-    lands the fixtures' 75-115k EUR ranges on plausible 300-460k RUB
-    monthly bands. A market-rate feed would be overkill for demo data.
-    """
-    if amount is None or seed_locale() != "ru":
-        return amount
-    return round(amount * 4 / 10_000) * 10_000
 from app.modules.recruitment.models import (
     AIAnalysisRun,
     AIAssessment,
@@ -173,6 +153,25 @@ from app.modules.recruitment.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _seed_salary(amount: int | None) -> int | None:
+    """Fixture salary figure in the installation's currency.
+
+    Fixtures store annual EUR. A rouble site quotes salaries monthly, so
+    those figures are mapped with a single factor (x4, rounded to 10k),
+    which lands the fixtures' 75-115k EUR ranges on plausible 300-460k
+    RUB monthly bands. A market-rate feed would be overkill for demo
+    data; every other currency keeps the fixture figures as they are.
+
+    HRP-708: keyed on ``installation_currency()``, not the interface
+    locale. The money a demo tenant shows is the site's money: a
+    Russian-language demo on a EUR site keeps the EUR ranges, and a RUB
+    site gets rouble bands whichever language it renders in.
+    """
+    if amount is None or installation_currency() != "RUB":
+        return amount
+    return round(amount * 4 / 10_000) * 10_000
 
 
 async def _pick_anchor_division(
@@ -420,9 +419,9 @@ async def _seed_company_structure(
             grade_id=grade.id,
             specialization_id=specialization.id,
             description=spec.get("description"),
-            salary_min=_localized_salary(spec.get("salary_min")),
-            salary_max=_localized_salary(spec.get("salary_max")),
-            salary_currency=_seed_currency(),
+            salary_min=_seed_salary(spec.get("salary_min")),
+            salary_max=_seed_salary(spec.get("salary_max")),
+            salary_currency=installation_currency(),
             passing_score=spec.get("passing_score"),
             # Ladder order mirrors the grade dictionary — my_loop walks
             # the next rung by GradeSpecialization.sort_index.
@@ -887,7 +886,16 @@ async def _seed_assessments_and_pdps(
     # PDP detail page, which contradicts the demo narrative.
     done_assessment_by_employee: dict[int, Assessment] = {}
     supported_type_codes = {"180", "360", "self"}
-    supported_status_codes = {"draft", "in_progress", "done", "cancelled"}
+    supported_status_codes = {
+        "draft",
+        "in_progress",
+        # HRP-713: the state ``_maybe_auto_move_to_on_review`` leaves
+        # behind — every participant finished, preliminary results
+        # computed, nothing approved yet.
+        "on_review",
+        "done",
+        "cancelled",
+    }
     for spec in localize(ASSESSMENTS):
         # Fail-loud on specs the seed does not know how to materialise —
         # silent fall-through used to leave half-shaped Assessment rows.
@@ -924,7 +932,7 @@ async def _seed_assessments_and_pdps(
             continue
 
         started_at = ended_at = finished_at = None
-        if spec["status_code"] in {"in_progress", "done", "cancelled"}:
+        if spec["status_code"] in {"in_progress", "on_review", "done", "cancelled"}:
             started_at = now - timedelta(days=21)
             ended_at = now + timedelta(days=14)
         if spec["status_code"] == "done":
@@ -994,11 +1002,12 @@ async def _seed_assessments_and_pdps(
         # The check fails loud if a 180/360 spec lands on an employee
         # who is themselves the division_head — that produces an empty
         # scoring matrix and contradicts the cycle type.
+        everyone_answered = spec["status_code"] in {"on_review", "done"}
         self_participant = AssessmentParticipant(
             assessment_id=assessment.id,
             user_id=employee_user.id,
             role="self",
-            is_completed=spec["status_code"] == "done",
+            is_completed=everyone_answered,
         )
         db.add(self_participant)
 
@@ -1028,7 +1037,7 @@ async def _seed_assessments_and_pdps(
                 assessment_id=assessment.id,
                 user_id=manager_employee.user_id,
                 role="manager",
-                is_completed=spec["status_code"] == "done",
+                is_completed=everyone_answered,
             )
             db.add(manager_participant)
 
@@ -1036,13 +1045,13 @@ async def _seed_assessments_and_pdps(
         # get them from the Division Manager (and, when finished, from the
         # assessee as well so the comparison view has both columns).
         scoring_participants: list[AssessmentParticipant] = []
-        if spec["status_code"] in {"in_progress", "done"}:
+        if spec["status_code"] in {"in_progress", "on_review", "done"}:
             if spec["type_code"] == "self":
                 scoring_participants.append(self_participant)
             else:
                 assert manager_participant is not None  # enforced above for 180/360
                 scoring_participants.append(manager_participant)
-                if spec["status_code"] == "done":
+                if everyone_answered:
                     scoring_participants.append(self_participant)
         await db.flush()
 
@@ -1078,6 +1087,8 @@ async def _seed_assessments_and_pdps(
                     continue
                 target_avg = avg_by_competence.get(comp_key)
                 n_inds = len(indicators)
+                self_bias = spec.get("self_bias")
+                biased = bool(self_bias) and n_parts == 2
                 per_participant_totals: list[int] = []
                 if target_avg is not None:
                     # Closest achievable integer answer set: distribute
@@ -1091,8 +1102,45 @@ async def _seed_assessments_and_pdps(
                     per_participant_totals = [
                         base_t + (1 if idx < rem else 0) for idx in range(n_parts)
                     ]
-                    if spec["status_code"] == "done":
+                    if everyone_answered:
+                        # Every scoring role answered every indicator, so
+                        # the flat mean here equals what
+                        # ``_recompute_assessment_results`` derives (one
+                        # indicator per skill level → the per-level and
+                        # per-role averages collapse to it).
                         achieved[comp_key] = total / (n_parts * n_inds)
+                    if biased:
+                        # Move ``self_bias`` scale points per indicator off
+                        # the manager's running total and onto the
+                        # assessee's, so the self column sits above the
+                        # manager column while the mean — and therefore the
+                        # approved result — stays exactly put.
+                        # ``scoring_participants`` is [manager, self].
+                        #
+                        # The gap lands on the totals, not on each answer:
+                        # near the top of the scale a literal +1 per
+                        # indicator would clamp on the ceiling and quietly
+                        # move the mean. The clamp below is two-sided so a
+                        # negative bias (manager rates higher) is just as
+                        # safe, and the aligned ``pos`` in the answer loop
+                        # keeps the ordering true indicator by indicator.
+                        shift = round(self_bias * n_inds / 2)
+                        ceiling = n_inds * max_scale_weight
+                        shift = max(
+                            min(
+                                shift,
+                                ceiling - per_participant_totals[1],
+                                per_participant_totals[0],
+                            ),
+                            -min(
+                                per_participant_totals[1],
+                                ceiling - per_participant_totals[0],
+                            ),
+                        )
+                        per_participant_totals = [
+                            per_participant_totals[0] - shift,
+                            per_participant_totals[1] + shift,
+                        ]
                 for ind_idx, indicator in enumerate(indicators):
                     # in_progress: leave the top indicator unanswered so
                     # the form still looks partially completed.
@@ -1108,7 +1156,13 @@ async def _seed_assessments_and_pdps(
                             # Rotate which indicators carry the +1 per
                             # participant: the comparison view still shows
                             # different answers while the averages hold.
-                            pos = (ind_idx + part_idx) % n_inds
+                            # Under ``self_bias`` both roles put their +1s
+                            # on the same indicators instead, so the self
+                            # column stays at or above the manager column
+                            # on every single row — a stagger there reads
+                            # as "the manager rated this one higher", which
+                            # is the opposite of the story.
+                            pos = ind_idx if biased else (ind_idx + part_idx) % n_inds
                             target_weight = base + (1 if pos < extra else 0)
                         else:
                             # in_progress / no override: deterministic
@@ -1145,8 +1199,16 @@ async def _seed_assessments_and_pdps(
                 # The recompute-stable value wins over the fixture: the
                 # fixture's percent is the *target*, the answers are the
                 # source of truth once the assessment lives its life.
+                #
+                # ``avg_score`` is written the way
+                # ``_recompute_assessment_results`` writes it — the 0..1
+                # ratio, not the 0..4 scale mean the fixture quotes. The
+                # seed used to store the scale mean, so the Avg Score
+                # column flipped from 3.33 to 0.83 the moment anyone
+                # pressed Finish: live, on stage, in the middle of the
+                # demo's climax (HRP-713).
                 value = achieved[comp_key]
-                avg_score = round(value, 2)
+                avg_score = round(value / max_scale_weight, 4)
                 percent = round(value / max_scale_weight * 100)
             db.add(
                 AssessmentResult(
@@ -1158,6 +1220,25 @@ async def _seed_assessments_and_pdps(
             )
 
         await db.flush()
+
+    # (grade_key, specialization_key, competence_key) -> the target skill
+    # level's sort_index on the seeded ladder. ``GRADE_COMPETENCE_LINKS`` is
+    # the same fixture ``_seed_competences`` writes the GradeCompetenceLink
+    # rows from, so this reproduces the product's material cap without a
+    # query per plan item. A triple that is not on the ladder yields None =
+    # no cap, which is what the product does for an off-ladder competence.
+    ladder_level_sort: dict[tuple[str, str, str], int] = {}
+    for link_spec in GRADE_COMPETENCE_LINKS:
+        level = ctx.skill_levels.get(link_spec["skill_level_key"])
+        if level is None:
+            continue
+        ladder_level_sort[
+            (
+                link_spec["grade_key"],
+                link_spec["specialization_key"],
+                link_spec["competence_key"],
+            )
+        ] = level.sort_index
 
     pdp_count = 0
     for spec in localize(PDPS):
@@ -1230,17 +1311,44 @@ async def _seed_assessments_and_pdps(
         await db.flush()
         pdp_count += 1
 
+        pdp_specialization_id = ctx.specializations[spec["specialization_key"]].id
+        items_with_competence: list[tuple[PDPItem, uuid.UUID, str]] = []
         for idx, item_spec in enumerate(items):
             competence = ctx.competences.get(item_spec["competence_key"])
-            db.add(
-                PDPItem(
-                    pdp_id=pdp.id,
-                    competence_id=competence.id if competence is not None else None,
-                    title=item_spec["title"],
-                    sort_index=idx * 10,
-                    is_passed=item_spec.get("is_passed", False),
-                    entity_type="competence" if competence is not None else "custom",
+            item = PDPItem(
+                pdp_id=pdp.id,
+                competence_id=competence.id if competence is not None else None,
+                title=item_spec["title"],
+                sort_index=idx * 10,
+                is_passed=item_spec.get("is_passed", False),
+                entity_type="competence" if competence is not None else "custom",
+            )
+            db.add(item)
+            if competence is not None:
+                items_with_competence.append(
+                    (item, competence.id, item_spec["competence_key"])
                 )
+        await db.flush()
+
+        # HRP-713: the seeded plans used to carry items with no materials
+        # at all, so every in_progress / review plan in the demo opened
+        # empty while a plan the presenter creates on stage arrives full.
+        # Reuse the product's own filler rather than a copy of it, capped
+        # at the plan grade's target level exactly the way
+        # ``_auto_generate_items_from_grade_link`` caps it (HRP-189).
+        from app.modules.assessment.pdp_service import _attach_default_materials
+
+        for item, competence_id, competence_key in items_with_competence:
+            target_sort = ladder_level_sort.get(
+                (spec["grade_key"], spec["specialization_key"], competence_key)
+            )
+            await _attach_default_materials(
+                db,
+                tenant_id,
+                item.id,
+                competence_id,
+                pdp_specialization_id,
+                up_to_skill_level_sort_index=target_sort,
             )
         await db.flush()
 
@@ -1561,10 +1669,11 @@ async def _seed_recruitment_extras(
             language=spec["language"],
             location=spec["location"],
             employment_type=spec["employment_type"],
-            salary_min=_localized_salary(spec["salary_min"]),
-            salary_max=_localized_salary(spec["salary_max"]),
-            salary_currency=_seed_currency(),
+            salary_min=_seed_salary(spec["salary_min"]),
+            salary_max=_seed_salary(spec["salary_max"]),
+            salary_currency=installation_currency(),
             division_id=anchor_division.id if anchor_division is not None else None,
+            position_id=_position_id(ctx, spec),
             tasks_main={"demo_investor": True, "key": spec["key"]},
         )
         db.add(vacancy)
@@ -1582,6 +1691,11 @@ async def _seed_recruitment_extras(
                 generated_by="ai",
             )
         )
+        # HRP-726: same library-linked requirements the headline vacancy
+        # has carried since HRP-667. Without them the vacancy opens on
+        # the "add competences from the library first" banner and the
+        # internal-candidate match has nothing to score.
+        _add_library_competences(db, tenant_id, ctx, vacancy, spec)
         await db.flush()
 
     # Keyed by candidate email → ``(CandidateVacancy, spec)`` so the
@@ -1591,8 +1705,15 @@ async def _seed_recruitment_extras(
     # name; the shapes are intentionally different so don't unify the
     # two locals without rewriting both call sites.
     cv_for_interview: dict[str, tuple[CandidateVacancy, dict]] = {}
+    # Keyed by the *fixture* email so the manager-round and analysis
+    # passes below can look a row up by the spec they came from — the
+    # internal applicant's Candidate carries his employee address, not
+    # the fixture one.
+    cv_by_spec_email: dict[str, CandidateVacancy] = {}
+    extra_resumes = localize(EXTRA_PARSED_RESUMES)
+    localized_candidates = localize(EXTRA_CANDIDATES)
     stage_ids = await _seed_funnel_stages(db, tenant_id)
-    for spec in localize(EXTRA_CANDIDATES):
+    for spec in localized_candidates:
         extra_vac = extra_vacancies.get(spec["vacancy_key"])
         if extra_vac is None:
             # Legacy vacancy key the base seed didn't carry — skip
@@ -1660,6 +1781,20 @@ async def _seed_recruitment_extras(
                 key=spec["vacancy_key"]
             ),
         )
+        # HRP-726: the candidate card's whole left column reads this
+        # payload. Looked up by the *spec* email because the internal
+        # applicant's real address comes off his seeded User row.
+        resume = extra_resumes.get(spec["email"])
+        if resume is not None:
+            candidate.parsed_resume_jsonb = {
+                **resume,
+                "full_name": cand_name,
+                "contacts": {
+                    "email": cand_email,
+                    "phone": spec.get("phone"),
+                    "linkedin": spec.get("linkedin"),
+                },
+            }
         db.add(candidate)
         await db.flush()
         candidate_count += 1
@@ -1670,7 +1805,22 @@ async def _seed_recruitment_extras(
         # ``resume_only`` regardless of the spec's interview_kind —
         # otherwise the recruiter clicks through to a CV with no
         # corresponding Interview.
-        if spec["interview_kind"] is not None and with_interviews:
+        #
+        # HRP-726: a *scheduled* or still-uploading interview is not a
+        # transcript. ``apply_ai_analysis_state`` recomputes this column
+        # from the interviews it can see, so a mirror that claims more
+        # than the data supports is a value the list overwrites on the
+        # next read — the demo used to show both, depending on screen.
+        # An archived interview does not count either: both product
+        # derivations filter ``archived_at IS NULL``
+        # (``apply_ai_analysis_state``, the reporting task), so a mirror
+        # claiming a transcript here is overwritten on the next read.
+        shape = INTERVIEW_SHAPES.get(spec["interview_kind"] or "")
+        has_transcript = spec.get("analysis_mode") == "full" or (
+            (shape or {}).get("transcription_status") == "completed"
+            and (shape or {}).get("status") != "archived"
+        )
+        if has_transcript and with_interviews:
             ai_readiness_value = "resume_and_transcript"
         else:
             ai_readiness_value = "resume_only"
@@ -1694,11 +1844,40 @@ async def _seed_recruitment_extras(
         )
         db.add(cv)
         await db.flush()
+        cv_by_spec_email[spec["email"]] = cv
 
         if spec["interview_kind"] is not None:
             cv_for_interview[cand_email] = (cv, spec)
 
+    # HRP-726: manager rounds and analysis runs for the extras, through
+    # exactly the same helpers the headline funnel uses. Rounds first,
+    # same ordering reason as the base seed: the compact matrix and the
+    # divergence badge read ``manager_score`` off the row.
+    await _seed_manager_rounds(
+        db,
+        tenant_id,
+        owner_user_id=owner_user_id,
+        cv_by_email=cv_by_spec_email,
+        now=now,
+        specs=EXTRA_CANDIDATES,
+    )
+
+    for spec in localized_candidates:
+        spec_cv = cv_by_spec_email.get(spec["email"])
+        if spec_cv is None or not spec.get("analysis_mode"):
+            continue
+        interview_count += await _seed_spec_analysis(
+            db,
+            tenant_id,
+            spec=spec,
+            cv=spec_cv,
+            owner_user_id=owner_user_id,
+            now=now,
+            with_interviews=with_interviews,
+        )
+
     if not with_interviews:
+        await db.flush()
         return (vacancy_count, candidate_count, 0)
 
     localized_shapes = localize(INTERVIEW_SHAPES)
@@ -1878,6 +2057,46 @@ async def _already_seeded(db: AsyncSession, tenant_id: uuid.UUID) -> bool:
     return found is not None
 
 
+def _division_id(ctx: CompanyContext, spec: dict) -> uuid.UUID | None:
+    """Resolve a vacancy fixture's ``anchor_division_key``."""
+    division = ctx.divisions.get(spec.get("anchor_division_key", ""))
+    return division.id if division is not None else None
+
+
+def _position_id(ctx: CompanyContext, spec: dict) -> uuid.UUID | None:
+    """Resolve a vacancy fixture's ``position_key`` against the ladder."""
+    position = ctx.positions.get(spec.get("position_key", ""))
+    return position.id if position is not None else None
+
+
+def _add_library_competences(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    ctx: CompanyContext,
+    vacancy: Vacancy,
+    spec: dict,
+) -> None:
+    """HRP-667: library-linked requirements the internal matcher scores on.
+
+    Silently skips a pair the competence ladder does not carry — a
+    stripped-down seed should lose a requirement row, not the vacancy.
+    """
+    for c_spec in spec.get("library_competences", []):
+        competence = ctx.competences.get(c_spec["competence_key"])
+        skill_level = ctx.skill_levels.get(c_spec["skill_level_key"])
+        if competence is None or skill_level is None:
+            continue
+        db.add(
+            VacancyCompetence(
+                tenant_id=tenant_id,
+                vacancy_id=vacancy.id,
+                competence_id=competence.id,
+                skill_level_ids=[str(skill_level.id)],
+                source="manual",
+            )
+        )
+
+
 async def _create_vacancies(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1897,15 +2116,22 @@ async def _create_vacancies(
             language=spec["language"],
             location=spec["location"],
             employment_type=spec["employment_type"],
-            salary_min=_localized_salary(spec["salary_min"]),
-            salary_max=_localized_salary(spec["salary_max"]),
-            salary_currency=_seed_currency(),
-            # Only anchor the headline role to the engineering division;
-            # the supporting roles stay unscoped so the demo still works
-            # on a tenant with a single division.
+            salary_min=_seed_salary(spec["salary_min"]),
+            salary_max=_seed_salary(spec["salary_max"]),
+            salary_currency=installation_currency(),
+            # The headline role anchors on the engineering division the
+            # caller picked; HRP-726 gives the supporting roles their own
+            # named division so the list stops printing "---" there too.
+            # A tenant whose structure lacks the division still seeds —
+            # the lookup just yields None.
             division_id=(
-                anchor_division_id if spec["key"] == "senior-backend" else None
+                anchor_division_id
+                if spec["key"] == "senior-backend"
+                else _division_id(ctx, spec)
             ),
+            # HRP-726: the vacancy list's Position column reads this FK
+            # and printed "---" on all seven roles while it stayed NULL.
+            position_id=_position_id(ctx, spec),
             tasks_main={"demo_investor": True, "key": spec["key"]},
         )
         db.add(vacancy)
@@ -1925,20 +2151,7 @@ async def _create_vacancies(
 
         # HRP-667: library-linked requirements, so "search inside first"
         # has something the talent-market matcher can score employees on.
-        for c_spec in spec.get("library_competences", []):
-            competence = ctx.competences.get(c_spec["competence_key"])
-            skill_level = ctx.skill_levels.get(c_spec["skill_level_key"])
-            if competence is None or skill_level is None:
-                continue
-            db.add(
-                VacancyCompetence(
-                    tenant_id=tenant_id,
-                    vacancy_id=vacancy.id,
-                    competence_id=competence.id,
-                    skill_level_ids=[str(skill_level.id)],
-                    source="manual",
-                )
-            )
+        _add_library_competences(db, tenant_id, ctx, vacancy, spec)
 
     await db.flush()
     return vacancy_objs
@@ -1987,6 +2200,7 @@ async def _create_candidates(
     *,
     owner_user_id: uuid.UUID,
     vacancy_objs: dict[str, Vacancy],
+    with_interviews: bool = True,
 ) -> dict[str, CandidateVacancy]:
     """Seed the base candidates; returns every ``CandidateVacancy`` by email.
 
@@ -2044,6 +2258,12 @@ async def _create_candidates(
         db.add(candidate)
         await db.flush()
 
+        # HRP-726: with ``with_interviews=False`` an interview-backed
+        # candidate is genuinely un-analysed — same rule as
+        # ``_seed_spec_analysis`` and the extras: readiness stays
+        # ``resume_only`` and the verdict mirror stays at the row default
+        # instead of advertising a run no Interview row stands behind.
+        analysed = with_interviews or not spec["interview"]
         cv = CandidateVacancy(
             tenant_id=tenant_id,
             candidate_id=candidate.id,
@@ -2051,18 +2271,20 @@ async def _create_candidates(
             status=spec["status"],
             stage_id=stage_ids.get(_STATUS_TO_STAGE_CODE.get(spec["status"], "new")),
             attached_by=owner_user_id,
-            ai_score=spec["ai_score"],
+            ai_score=spec["ai_score"] if analysed else None,
             # HRP-274: identity rebase — demo tenants carry no active
             # ScaleConfig, so normalized equals the raw 0..1 score.
-            ai_score_normalized=spec["ai_score"],
+            ai_score_normalized=spec["ai_score"] if analysed else None,
             ai_readiness=(
-                "resume_and_transcript" if spec["interview"] else "resume_only"
+                "resume_and_transcript"
+                if spec["interview"] and with_interviews
+                else "resume_only"
             ),
-            ai_verdict=spec["ai_verdict"],
-            ai_verdict_summary=spec["ai_summary"],
-            ai_key_strength=spec["ai_strength"],
-            ai_key_risk=spec["ai_risk"],
-            ai_risk_mitigation=spec["ai_mitigation"],
+            ai_verdict=spec["ai_verdict"] if analysed else "pending",
+            ai_verdict_summary=spec["ai_summary"] if analysed else None,
+            ai_key_strength=spec["ai_strength"] if analysed else None,
+            ai_key_risk=spec["ai_risk"] if analysed else None,
+            ai_risk_mitigation=spec["ai_mitigation"] if analysed else None,
         )
         db.add(cv)
         await db.flush()
@@ -2082,6 +2304,7 @@ async def _seed_manager_rounds(
     owner_user_id: uuid.UUID,
     cv_by_email: dict[str, CandidateVacancy],
     now: datetime,
+    specs: list[dict] | None = None,
 ) -> int:
     """Lay down completed manager assessment rounds (HRP-666).
 
@@ -2110,7 +2333,10 @@ async def _seed_manager_rounds(
     )
 
     scored = 0
-    for spec in candidates():
+    # HRP-726: the extras call this with their own fixture list — the
+    # supporting funnels need the MANAGER column filled by the same
+    # production path, not by a second hand-rolled writer.
+    for spec in candidates() if specs is None else specs:
         levels: dict[str, int] = spec.get("manager_scores") or {}
         cv = cv_by_email.get(spec["email"])
         if not levels or cv is None:
@@ -2284,89 +2510,59 @@ def _seed_ai_assessments(
     return rows
 
 
-def _seed_ai_analysis_run(
+def _seed_analysis_run(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     *,
     cv: CandidateVacancy,
-    interview: Interview,
     owner_user_id: uuid.UUID,
-    next_step: str,
+    mode: str,
+    analysis: dict[str, Any],
+    interview: Interview | None = None,
+    next_step: str | None = None,
 ) -> None:
-    """Persist the finished ``AIAnalysisRun`` behind a seeded interview.
+    """Persist a finished ``AIAnalysisRun`` behind a seeded candidate.
 
     The candidate card's AI Insights block is driven by runs, so a demo
     without them offered "Analyze" on a candidate who had already been
-    analysed. Mode is ``full`` because the run is interview-backed; the
-    raw ``analysis_data`` is the same payload the real finalizer writes,
-    and ``AIAnalysisRunRead`` keeps its role-filtered halves (red flags,
-    process findings) server-side.
+    analysed. The raw ``analysis_data`` is the same payload the real
+    finalizer writes, and ``AIAnalysisRunRead`` keeps its role-filtered
+    halves (red flags, process findings) server-side.
+
+    Two modes, one shape (HRP-710):
+
+    * ``full`` — interview-backed, so it carries the ``interview_id`` and
+      the caller picks the next step. The mirror columns on the candidate
+      row are the same two the real finalizer stamps, so the candidates
+      table renders the mode sub-badge next to the verdict instead of a
+      bare chip.
+    * ``resume_only`` — no interview (that is the point), and no
+      ``resume_snapshot_hash``: the seed writes the parsed resume onto
+      ``Candidate`` without a ``CandidateFile``, so the staleness check
+      has no current hash to compare against and correctly stays quiet.
+      The candidate card's resume citation chips only render for a run in
+      this mode — ``extract_resume_excerpts`` returns ``[]`` for ``full``
+      by design, because a full run cites the transcript instead — so
+      without one the whole click-to-locate drill-down is unreachable on
+      the demo.
     """
-    analysis = interview.analysis_data or {}
-    # Mirror columns on the candidate row — the same two the real
-    # finalizer stamps, so the candidates table renders the "full" mode
-    # sub-badge next to the verdict instead of a bare chip.
-    cv.ai_analysis_mode = "full"
+    cv.ai_analysis_mode = mode
     cv.ai_data_completeness = analysis.get("data_completeness")
     db.add(
         AIAnalysisRun(
             tenant_id=tenant_id,
             candidate_vacancy_id=cv.id,
-            mode="full",
+            mode=mode,
             status="completed",
             data_completeness=analysis.get("data_completeness"),
-            interview_id=interview.id,
+            interview_id=interview.id if interview is not None else None,
             verdict=analysis.get("verdict"),
             verdict_summary=analysis.get("verdict_summary"),
             key_strength=analysis.get("key_strength"),
             key_risk=analysis.get("key_risk"),
             risk_mitigation=analysis.get("risk_mitigation"),
-            recommendation_for_next_step=next_step,
-            ai_score=cv.ai_score,
-            analysis_data=analysis,
-            credits_charged=0.0,
-            created_by_id=owner_user_id,
-        )
-    )
-
-
-def _seed_resume_only_run(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    *,
-    cv: CandidateVacancy,
-    owner_user_id: uuid.UUID,
-) -> None:
-    """Persist the finished resume-only ``AIAnalysisRun`` (HRP-680).
-
-    The candidate card's resume citation chips only render for a run in
-    this mode — ``extract_resume_excerpts`` returns ``[]`` for ``full``
-    by design, because a full run cites the transcript instead. Every
-    seeded run was ``full``, so the whole click-to-locate drill-down was
-    unreachable on the demo.
-
-    No ``interview_id`` (there is no interview — that is the point) and
-    no ``resume_snapshot_hash``: the seed writes the parsed resume onto
-    ``Candidate`` without a ``CandidateFile``, so the staleness check
-    has no current hash to compare against and correctly stays quiet.
-    """
-    analysis = localize(PRIYA_RESUME_ANALYSIS)
-    cv.ai_analysis_mode = "resume_only"
-    cv.ai_data_completeness = analysis.get("data_completeness")
-    db.add(
-        AIAnalysisRun(
-            tenant_id=tenant_id,
-            candidate_vacancy_id=cv.id,
-            mode="resume_only",
-            status="completed",
-            data_completeness=analysis.get("data_completeness"),
-            verdict=analysis.get("verdict"),
-            verdict_summary=analysis.get("verdict_summary"),
-            key_strength=analysis.get("key_strength"),
-            key_risk=analysis.get("key_risk"),
-            risk_mitigation=analysis.get("risk_mitigation"),
-            recommendation_for_next_step=analysis.get(
-                "recommendation_for_next_step"
+            recommendation_for_next_step=(
+                next_step or analysis.get("recommendation_for_next_step")
             ),
             ai_score=cv.ai_score,
             analysis_data=analysis,
@@ -2374,6 +2570,101 @@ def _seed_resume_only_run(
             created_by_id=owner_user_id,
         )
     )
+
+
+async def _seed_spec_analysis(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    spec: dict,
+    cv: CandidateVacancy,
+    owner_user_id: uuid.UUID,
+    now: datetime,
+    with_interviews: bool = True,
+) -> int:
+    """Lay down the finished analysis behind one seeded candidate (HRP-726).
+
+    Returns the number of Interview rows created (0 or 1).
+
+    The ticket's complaint in one sentence: the candidates table read
+    ``candidate_vacancies.ai_*`` while nothing stood behind those
+    columns, so a row that promised a verdict opened on a blank card.
+    Both halves now come from one fixture — ``build_candidate_analysis``
+    reuses the spec's own ``ai_*`` strings for the verdict block, so the
+    summary in the list and the run on the card are the same sentences.
+
+    ``full`` mode additionally materialises the interview the run cites:
+    a completed, transcribed row with diarized segments and the
+    AIAssessment rows the compact matrix reads. ``resume_only`` writes
+    the run alone — that is the point of the mode, and the resume-only
+    citation chips need a run in it to render at all.
+
+    With ``with_interviews=False`` (the pre-interview configuration) an
+    interview-backed candidate is genuinely un-analysed, so the mirror
+    columns are cleared rather than left advertising a verdict no run
+    stands behind — which is the very inconsistency this ticket fixes.
+
+    ``spec`` must already be localized; this only reshapes and persists.
+    """
+    if spec.get("analysis_mode") == "full" and not with_interviews:
+        cv.ai_score = None
+        cv.ai_score_normalized = None
+        cv.ai_readiness = "resume_only"
+        # ``ai_verdict`` is NOT NULL; ``pending`` is the row default and
+        # the one value the model never emits — exactly "no verdict yet".
+        cv.ai_verdict = "pending"
+        cv.ai_verdict_summary = None
+        cv.ai_key_strength = None
+        cv.ai_key_risk = None
+        cv.ai_risk_mitigation = None
+        return 0
+
+    analysis = build_candidate_analysis(spec)
+    if spec.get("analysis_mode") != "full":
+        _seed_analysis_run(
+            db,
+            tenant_id,
+            cv=cv,
+            owner_user_id=owner_user_id,
+            mode="resume_only",
+            analysis=analysis,
+        )
+        return 0
+
+    duration_minutes = spec.get("duration_minutes")
+    interview = Interview(
+        tenant_id=tenant_id,
+        candidate_vacancy_id=cv.id,
+        interviewer_id=owner_user_id,
+        interview_date=now - timedelta(days=spec.get("days_ago", 3)),
+        duration_minutes=duration_minutes,
+        duration_seconds=duration_minutes * 60 if duration_minutes else None,
+        title=spec["title_prefix"]
+        + translate(f"{spec['first_name']} {spec['last_name']}"),
+        type=spec.get("interview_type", "technical"),
+        status="completed",
+        transcript=spec["transcript"],
+        transcription_status="completed",
+        transcription_provider="seeded",
+        analysis_status="completed",
+        analysis_data=analysis,
+        notes=translate(spec.get("interview_note", "Investor demo interview.")),
+    )
+    db.add(interview)
+    await db.flush()
+    _seed_ai_assessments(db, tenant_id, interview)
+    _seed_interview_segments(db, tenant_id, interview)
+    _seed_analysis_run(
+        db,
+        tenant_id,
+        cv=cv,
+        owner_user_id=owner_user_id,
+        mode="full",
+        analysis=analysis,
+        interview=interview,
+        next_step=spec.get("next_step"),
+    )
+    return 1
 
 
 def _seed_interview_segments(
@@ -2594,6 +2885,7 @@ async def clone_seed_into_demo_tenant(
         tenant_id,
         owner_user_id=owner_user_id,
         vacancy_objs=vacancy_objs,
+        with_interviews=with_completed_interviews,
     )
     # HRP-666: manager rounds before the interviews so the Compact matrix,
     # the Divergence badge and ``candidate_vacancies.manager_score`` are
@@ -2612,14 +2904,36 @@ async def clone_seed_into_demo_tenant(
     # pointing back at a source document.
     priya_cv = cv_by_email.get(_PRIYA_KEY)
     if priya_cv is not None:
-        _seed_resume_only_run(
+        _seed_analysis_run(
             db,
             tenant_id,
             cv=priya_cv,
             owner_user_id=owner_user_id,
+            mode="resume_only",
+            analysis=localize(PRIYA_RESUME_ANALYSIS),
         )
 
+    # HRP-726: the two supporting base funnels (Product Designer,
+    # Customer Success) go through the same spec-driven helper the
+    # extras use. Elena / Tomás / Priya are deliberately absent — they
+    # carry hand-authored deep analyses (red flags, process findings,
+    # eight competences) that the generic builder is not meant to
+    # replace, and this ticket does not touch the headline funnel.
     interview_count = 0
+    for base_spec in localize(candidates()):
+        base_cv = cv_by_email.get(base_spec["email"])
+        if base_cv is None or not base_spec.get("analysis_mode"):
+            continue
+        interview_count += await _seed_spec_analysis(
+            db,
+            tenant_id,
+            spec=base_spec,
+            cv=base_cv,
+            owner_user_id=owner_user_id,
+            now=now,
+            with_interviews=with_completed_interviews,
+        )
+
     elena_interview = None
     if with_completed_interviews:
         transcript = load_transcript()
@@ -2665,12 +2979,14 @@ async def clone_seed_into_demo_tenant(
             (tomas_cv, tomas_interview, "second_interview"),
         ):
             if seeded_cv is not None and seeded_interview is not None:
-                _seed_ai_analysis_run(
+                _seed_analysis_run(
                     db,
                     tenant_id,
                     cv=seeded_cv,
-                    interview=seeded_interview,
                     owner_user_id=owner_user_id,
+                    mode="full",
+                    analysis=seeded_interview.analysis_data or {},
+                    interview=seeded_interview,
                     next_step=next_step,
                 )
 

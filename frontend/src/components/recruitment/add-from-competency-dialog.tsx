@@ -31,6 +31,7 @@ import {
   isUsableCompetence,
 } from "@/lib/competence-question";
 import type { CompetenceItem } from "@/lib/types";
+import { criticalityLabel } from "./competence-tree-view";
 import type { NewQuestionPayload } from "./question-payload";
 
 interface Props {
@@ -267,7 +268,8 @@ export function AddFromCompetencyDialog({
                                       {c.name}
                                     </button>
                                     <p className="text-xs text-muted-foreground">
-                                      {c.criticality}
+                                      {/* HRP-672: same labels as the tree. */}
+                                      {criticalityLabel(t, c.criticality)}
                                     </p>
                                     {showDetail && (
                                       <div className="mt-2 space-y-2 rounded bg-muted/40 p-2 text-xs">

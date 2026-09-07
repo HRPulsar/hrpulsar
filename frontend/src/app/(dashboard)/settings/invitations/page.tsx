@@ -60,6 +60,15 @@ const statusColors: Record<string, string> = {
   expired: BADGE_COLOR.red,
 };
 
+// HRP-671: same wording as the status filter above the table; the wire code
+// stays the value the API is filtered by.
+const STATUS_KEYS: Record<string, string> = {
+  pending: "inviteStatusPending",
+  accepted: "inviteStatusAccepted",
+  cancelled: "inviteStatusCancelled",
+  expired: "inviteStatusExpired",
+};
+
 // EMP3: keep this in sync with `_INVITE_ALLOWED` in backend/app/modules/auth/service.py
 // (pinned by src/__tests__/invite-tiers-parity.test.ts). The platform_admin
 // tier comes from the enterprise rbac_hooks seam, not from the core dict.
@@ -502,7 +511,9 @@ function InvitationsPageContent() {
                             data-testid={`invitations-row-${inv.id}-status`}
                             className={statusColors[inv.status] || ""}
                           >
-                            {inv.status}
+                            {STATUS_KEYS[inv.status]
+                              ? t(STATUS_KEYS[inv.status])
+                              : inv.status}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-muted-foreground">

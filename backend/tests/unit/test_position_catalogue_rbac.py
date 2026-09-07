@@ -570,6 +570,10 @@ async def test_the_currency_leaves_with_the_band(
     default factory refills it, so a rank-and-file caller sees the
     installation currency rather than the band's own. Without this the field
     could be dropped from the rule and nothing would fail.
+
+    HRP-708: the demo seed quotes its bands in the installation currency
+    like every other writer, so the divergence this test needs is written
+    here rather than borrowed from a seed that happened to disagree.
     """
     from app.core.currency import installation_currency
 
@@ -580,9 +584,24 @@ async def test_the_currency_leaves_with_the_band(
     assert admin.status_code == 200, admin.text
     banded = [r for r in admin.json() if r["salary_min"] is not None]
     assert banded, "no grade carries a band — the assertion below is vacuous"
+
+    foreign = "JPY" if installation_currency() != "JPY" else "CHF"
+    patched = await client.patch(
+        f"/api/specializations/{persona.spec_id}/grades/{banded[0]['grade_id']}",
+        json={"salary_currency": foreign},
+        headers=persona.admin_headers,
+    )
+    assert patched.status_code == 200, patched.text
+
+    admin = await client.get(
+        f"/api/specializations/{persona.spec_id}/grades",
+        headers=persona.admin_headers,
+    )
+    assert admin.status_code == 200, admin.text
+    banded = [r for r in admin.json() if r["salary_min"] is not None]
     assert any(r["salary_currency"] != installation_currency() for r in banded), (
-        "every seeded band is quoted in the installation currency — this test "
-        "cannot tell a dropped field from a kept one, reseed it"
+        "the band written in a foreign currency came back in the installation "
+        "currency — this test cannot tell a dropped field from a kept one"
     )
 
     trimmed = await client.get(

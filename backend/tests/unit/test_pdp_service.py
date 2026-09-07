@@ -1,6 +1,7 @@
 import uuid
 
 import pytest
+from app.core.errors import AppError
 from app.modules.assessment import pdp_service as service
 from app.modules.assessment.models import PDPItem
 from app.modules.assessment.schemas import (
@@ -365,12 +366,14 @@ class TestPDPUpdate:
         assert result["deadline"] is None
 
     async def test_update_deadline(self, db: AsyncSession, tenant, user, employee):
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta, timezone
 
         pdp = await service.create_pdp(
             db, tenant.id, user.id, PDPCreate(title="Plan", employee_id=employee.id)
         )
-        new_deadline = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        # Relative, not a literal: the validator refuses a deadline in the
+        # past, so a hardcoded date turns this green test red on its own.
+        new_deadline = datetime.now(timezone.utc) + timedelta(days=30)
         result = await service.update_pdp(
             db, tenant.id, pdp["id"], PDPUpdate(deadline=new_deadline)
         )
@@ -2152,3 +2155,231 @@ class TestPDPCompetenceTenantIsolation:
             .all()
         )
         assert [(i.title, i.competence_id) for i in items] == [("Own", own.id)]
+
+
+class TestGapPlanItemGeneration:
+    """HRP-706: the competence-list path seeds items in a constant number
+    of round trips, and the HRP-189 material cap still holds.
+
+    The cap used to re-select ``SkillLevel`` once per item even though
+    ``Material.skill_level`` is a selectin relationship, and each item was
+    flushed on its own. Both are pinned here: shrink the flush or read the
+    level from the wrong place and one of the two assertions goes red.
+    """
+
+    async def _competence_with_materials(self, db: AsyncSession, tenant, levels):
+        """One competence carrying one material per given skill level."""
+        from app.modules.competence.models import (
+            Competence,
+            CompetenceGroup,
+            Material,
+        )
+
+        group = CompetenceGroup(tenant_id=tenant.id, title=f"G-{uuid.uuid4().hex[:4]}")
+        db.add(group)
+        await db.flush()
+        comp = Competence(
+            tenant_id=tenant.id, group_id=group.id, title=f"C-{uuid.uuid4().hex[:4]}"
+        )
+        db.add(comp)
+        await db.flush()
+        for level in levels:
+            db.add(
+                Material(
+                    tenant_id=tenant.id,
+                    competence_id=comp.id,
+                    skill_level_id=level.id,
+                    title=f"{comp.title} @ {level.title}",
+                )
+            )
+        await db.flush()
+        return comp
+
+    async def test_materials_are_capped_and_items_flush_once(
+        self, db: AsyncSession, tenant, user, employee
+    ):
+        from app.modules.assessment.models import PDPItemMaterial
+        from app.modules.competence.models import SkillLevel
+        from sqlalchemy import event
+
+        basic = SkillLevel(title=f"Basic {uuid.uuid4().hex[:4]}", sort_index=1)
+        advanced = SkillLevel(title=f"Advanced {uuid.uuid4().hex[:4]}", sort_index=9)
+        db.add_all([basic, advanced])
+        await db.flush()
+
+        comps = [
+            await self._competence_with_materials(db, tenant, [basic, advanced])
+            for _ in range(3)
+        ]
+        await db.commit()
+
+        statements: list[str] = []
+
+        def _on_execute(conn, clauseelement, *args, **kwargs):  # noqa: ANN001
+            statements.append(str(clauseelement))
+
+        bind = db.bind
+        event.listen(bind.sync_engine, "before_execute", _on_execute)
+        try:
+            pdp = await service.create_pdp(
+                db,
+                tenant.id,
+                user.id,
+                PDPCreate(
+                    title="Gap",
+                    employee_id=employee.id,
+                    competences=[
+                        CompetenceCriteriaItem(
+                            competence_id=c.id, skill_level_id=basic.id
+                        )
+                        for c in comps
+                    ],
+                ),
+            )
+        finally:
+            event.remove(bind.sync_engine, "before_execute", _on_execute)
+
+        items = (
+            (
+                await db.execute(
+                    select(PDPItem)
+                    .where(PDPItem.pdp_id == pdp["id"])
+                    .order_by(PDPItem.sort_index)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(items) == 3
+
+        # HRP-189 cap: the target level is Basic, so no Advanced material
+        # is seeded for any of the three items.
+        seeded = (
+            (
+                await db.execute(
+                    select(PDPItemMaterial).where(
+                        PDPItemMaterial.item_id.in_([i.id for i in items])
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert seeded, "the cap dropped every material, not just the high ones"
+        assert all("Basic" in m.title for m in seeded), sorted(m.title for m in seeded)
+        assert len(seeded) == 3
+
+        # One INSERT batch for the items, not one per competence.
+        item_inserts = [s for s in statements if s.startswith("INSERT INTO pdp_items")]
+        assert len(item_inserts) == 1, item_inserts
+        # And the level lookup no longer repeats per item: the entry levels
+        # are read once, the material levels ride along on selectin.
+        level_reads = [s for s in statements if "FROM skill_levels" in s]
+        # 4 = the entry levels once, plus the selectin that rides along
+        # with each competence's materials. It was 7 before HRP-706.
+        assert len(level_reads) <= 4, level_reads
+
+
+class TestPDPAssessmentLink:
+    """HRP-731 review: ``PDPCreate.assessment_id`` must name an assessment of
+    this tenant *and* of this employee.
+
+    The router scopes the employee, not the assessment, so the service is
+    the only place the link is checked -- an unvalidated id would pin a
+    foreign assessment onto the plan and read its title back through the
+    "Based on assessment" link.
+    """
+
+    async def _assessment(
+        self, db, tenant_id, employee_id, initiator_id, statuses, types
+    ):
+        from app.modules.assessment.models import Assessment
+
+        a = Assessment(
+            tenant_id=tenant_id,
+            title="Source",
+            employee_id=employee_id,
+            type_id=types["self"].id,
+            status_id=statuses["done"].id,
+            initiator_id=initiator_id,
+        )
+        db.add(a)
+        await db.commit()
+        await db.refresh(a)
+        return a
+
+    async def _create(self, db, tenant, user, employee, assessment_id):
+        return await service.create_pdp(
+            db,
+            tenant.id,
+            user.id,
+            PDPCreate(
+                title="Linked", employee_id=employee.id, assessment_id=assessment_id
+            ),
+        )
+
+    async def test_foreign_tenant_assessment_is_rejected(
+        self, db, tenant, user, employee, assessment_statuses, assessment_types
+    ):
+        from app.modules.company.models import Tenant
+
+        other = Tenant(
+            name=f"Other {uuid.uuid4().hex[:6]}", slug=f"other-{uuid.uuid4().hex[:8]}"
+        )
+        db.add(other)
+        await db.commit()
+        await db.refresh(other)
+        foreign = await self._assessment(
+            db, other.id, employee.id, user.id, assessment_statuses, assessment_types
+        )
+
+        with pytest.raises(AppError) as exc:
+            await self._create(db, tenant, user, employee, foreign.id)
+        assert exc.value.code == "assessment_not_found"
+        await db.rollback()
+
+    async def test_other_employees_assessment_is_rejected(
+        self, db, tenant, user, employee, assessment_statuses, assessment_types
+    ):
+        from datetime import date
+
+        from app.core.security import hash_password
+        from app.modules.auth.models import User
+        from app.modules.employee.models import Employee
+
+        colleague_user = User(
+            email=f"colleague-{uuid.uuid4().hex[:8]}@test.com",
+            password_hash=hash_password("testpass123"),
+            first_name="Other",
+            last_name="Colleague",
+            tenant_id=tenant.id,
+        )
+        db.add(colleague_user)
+        await db.flush()
+        colleague = Employee(
+            user_id=colleague_user.id,
+            tenant_id=tenant.id,
+            position_title="Engineer",
+            hire_date=date(2024, 1, 15),
+        )
+        db.add(colleague)
+        await db.commit()
+        theirs = await self._assessment(
+            db, tenant.id, colleague.id, user.id, assessment_statuses, assessment_types
+        )
+
+        with pytest.raises(AppError) as exc:
+            await self._create(db, tenant, user, employee, theirs.id)
+        assert exc.value.code == "assessment_not_found"
+        await db.rollback()
+
+    async def test_own_assessment_is_linked(
+        self, db, tenant, user, employee, assessment_statuses, assessment_types
+    ):
+        mine = await self._assessment(
+            db, tenant.id, employee.id, user.id, assessment_statuses, assessment_types
+        )
+
+        pdp = await self._create(db, tenant, user, employee, mine.id)
+
+        assert pdp["assessment_id"] == mine.id

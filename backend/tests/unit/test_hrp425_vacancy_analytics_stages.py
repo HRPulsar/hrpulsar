@@ -138,6 +138,13 @@ class TestTileLabels:
         data = await analytics_service.vacancy_analytics(db, tenant.id, vacancy_id)
         assert data["positive_stage_names"] == ["Hired"]
         assert data["negative_stage_names"] == ["Rejected"]
+        # The Withdrew tile is labelled the same way (QA follow-up).
+        assert data["neutral_stage_names"] == ["Withdrew"]
+        # ...and survives the response_model, which is where the labels
+        # would silently drop out of the API on their way to the tile.
+        from app.modules.recruitment.schemas import VacancyAnalytics
+
+        assert VacancyAnalytics(**data).neutral_stage_names == ["Withdrew"]
 
     async def test_several_terminal_stages_are_all_reported(
         self, db: AsyncSession, tenant, user

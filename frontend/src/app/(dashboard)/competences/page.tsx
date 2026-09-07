@@ -27,6 +27,7 @@ import type { CompetenceGroupTree, DictionaryItem } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LoadErrorState } from "@/components/load-error-state";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -739,7 +740,7 @@ export default function CompetencesPage() {
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const tSections = useTranslations("sections");
-  const { tree, loading: treeLoading } = useCompetenceTree();
+  const { tree, loading: treeLoading, error: treeError } = useCompetenceTree();
   const [compTypes, setCompTypes] = useState<DictionaryItem[]>([]);
   const [auxLoading, setAuxLoading] = useState(true);
   const loading = treeLoading || auxLoading;
@@ -1319,7 +1320,12 @@ export default function CompetencesPage() {
           />
         </CardHeader>
         <CardContent data-testid="competences-tree">
-          {tree.length === 0 ? (
+          {treeError ? (
+            <LoadErrorState
+              testIdPrefix="competences"
+              onRetry={() => void invalidateCompetenceTree()}
+            />
+          ) : tree.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
               {t("emptyGroups")}
             </p>

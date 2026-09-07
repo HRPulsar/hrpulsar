@@ -32,6 +32,14 @@ export const ASSESSMENT_TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   "cancelled",
 ]);
 
+/** HRP-736: the server's "running" set. A Draft was never sent and On
+ *  review waits on the reviewer, so neither is running — "open" (not
+ *  terminal) is the wider bucket the Assessments KPI counts. */
+export const ASSESSMENT_RUNNING_STATUSES: ReadonlySet<string> = new Set([
+  "sent",
+  "in_progress",
+]);
+
 /** Allowed forward transitions when the operator drives the assessment by
  *  hand. Done is reachable only from on_review — the backend enforces the
  *  same rule, so the Details buttons must not offer the shortcut. The

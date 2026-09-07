@@ -4,7 +4,11 @@ import { useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
-import type { FunnelStage, CandidateVacancy } from "@/lib/types";
+import {
+  candidateVacancyStatusLabel,
+  type CandidateVacancy,
+  type FunnelStage,
+} from "@/lib/types";
 
 interface FunnelKanbanProps {
   stages: FunnelStage[];
@@ -58,7 +62,7 @@ function CandidateCard({
                   : "bg-muted text-muted-foreground",
             )}
           >
-            {cv.stage_name || cv.status}
+            {cv.stage_name || candidateVacancyStatusLabel(t, cv.status)}
           </span>
           {cv.ranking_score != null && (
             <span className="text-xs text-muted-foreground">

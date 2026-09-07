@@ -10,6 +10,7 @@ import {
 } from "@/lib/reference-labels";
 import type {
   Assessment,
+  Division,
   AssessmentGroupDetail,
   Employee,
   EmployeeList,
@@ -37,6 +38,7 @@ import {
   Tooltip, TooltipContent, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Hint } from "@/components/ui/hint";
+import { LoadErrorState } from "@/components/load-error-state";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { toast } from "sonner";
@@ -67,10 +69,12 @@ import {
   assessmentStatusLabel,
 } from "@/lib/assessment-status";
 
+// HRP-723: `hintKey` explains what the format is for — 180°/360° carry
+// staffing decisions, self-assessment feeds development tracks.
 const TYPE_OPTION_KEYS = [
-  { value: "self", labelKey: "typeSelf" },
-  { value: "180", labelKey: "type180" },
-  { value: "360", labelKey: "type360" },
+  { value: "self", labelKey: "typeSelf", hintKey: "typeSelfHint" },
+  { value: "180", labelKey: "type180", hintKey: "type180Hint" },
+  { value: "360", labelKey: "type360", hintKey: "type360Hint" },
 ];
 
 const statusOptions = ASSESSMENT_STATUS_OPTIONS;
@@ -128,9 +132,19 @@ export default function AssessmentsPage() {
   const [page, setPage] = useState(1);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
+  // HRP-728: an API failure must render as an error with a retry, not as
+  // the empty state the list used to fall back to.
+  const [loadError, setLoadError] = useState(false);
 
   // Create dialog (mode selection + single)
   const [createOpen, setCreateOpen] = useState(false);
+  // HRP-733: division -> manager, used only to pick the default assessment
+  // type. Loaded lazily when the create dialog opens so the list page does
+  // not pay for a tree it never renders.
+  const [divisionManagers, setDivisionManagers] = useState<Map<string, string | null> | null>(null);
+  // HRP-733 review: the last title this dialog generated, so a switch of
+  // employee can tell its own prefill from something the user typed.
+  const autoTitle = useRef("");
   const [createMode, setCreateMode] = useState<"select" | "single" | null>("select");
   const [massOpen, setMassOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -217,8 +231,9 @@ export default function AssessmentsPage() {
         );
         setItems(data.items);
         setTotal(data.total);
+        setLoadError(false);
       } catch {
-        // ignore
+        setLoadError(true);
       }
     },
     [],
@@ -303,6 +318,62 @@ export default function AssessmentsPage() {
     setExpandedGroups(next);
   }
 
+  // HRP-733: 180 needs a second pair of eyes; without a division manager
+  // there is nobody to ask, so a self-assessment is the honest default.
+  // Mirrors _auto_assign_manager on the server, which skips a division
+  // whose manager is the assessee themselves.
+  async function loadDivisionManagers(): Promise<Map<string, string | null>> {
+    if (divisionManagers) return divisionManagers;
+    const flatten = (nodes: Division[]): [string, string | null][] =>
+      nodes.flatMap((d) => [
+        [d.id, d.manager_id] as [string, string | null],
+        ...flatten(d.children ?? []),
+      ]);
+    try {
+      const tree = await api.get<Division[]>("/divisions");
+      const map = new Map(flatten(tree));
+      setDivisionManagers(map);
+      return map;
+    } catch {
+      return new Map();
+    }
+  }
+
+  function defaultTypeFor(
+    employee: Employee | undefined,
+    managers: Map<string, string | null>,
+  ): string {
+    if (!employee?.division_id) return "self";
+    const managerId = managers.get(employee.division_id);
+    return managerId && managerId !== employee.id ? "180" : "self";
+  }
+
+  async function onEmployeePicked(employeeId: string) {
+    const emp = employees.find((e) => e.id === employeeId);
+    const managers = await loadDivisionManagers();
+    setForm((prev) => {
+      // A title the user typed is theirs and survives. One we generated is
+      // ours to replace — otherwise switching from A to B leaves the
+      // dialog saying "— A" over B's assessment.
+      const generated = defaultTitleFor(emp);
+      const ourOwn = !prev.title.trim() || prev.title === autoTitle.current;
+      autoTitle.current = generated;
+      return {
+        ...prev,
+        employee_id: employeeId,
+        title: ourOwn ? generated : prev.title,
+        type_code: defaultTypeFor(emp, managers),
+      };
+    });
+  }
+
+  function defaultTitleFor(employee: Employee | undefined): string {
+    const name = employee?.user_name?.trim() || employee?.user_email;
+    return name ? t("createTitleForEmployee", { name }) : "";
+  }
+
+  const selectedCreateEmployee = employees.find((e) => e.id === form.employee_id);
+
   // Create: single
   function openCreate() {
     setCreateMode("select");
@@ -329,20 +400,31 @@ export default function AssessmentsPage() {
     void (async () => {
       // `loadEmployees` reads one page; a card further down the roster
       // must still arrive prefilled rather than on a blank select.
-      if (!employees.some((e) => e.id === deepLinkEmployeeId)) {
+      let emp = employees.find((e) => e.id === deepLinkEmployeeId);
+      if (!emp) {
         try {
-          const emp = await api.get<Employee>(
+          const fetched = await api.get<Employee>(
             `/employees/${deepLinkEmployeeId}`,
           );
+          emp = fetched;
           setEmployees((prev) =>
-            prev.some((e) => e.id === emp.id) ? prev : [...prev, emp],
+            prev.some((e) => e.id === fetched.id) ? prev : [...prev, fetched],
           );
         } catch {
           toast.error(t("errorCreateFailed"));
           return;
         }
       }
-      setForm({ ...emptyForm, employee_id: deepLinkEmployeeId });
+      // HRP-733: the card already knows who this is about — the dialog
+      // opens named and typed instead of blank.
+      const managers = await loadDivisionManagers();
+      autoTitle.current = defaultTitleFor(emp);
+      setForm({
+        ...emptyForm,
+        employee_id: deepLinkEmployeeId,
+        title: autoTitle.current,
+        type_code: defaultTypeFor(emp, managers),
+      });
       setCreateMode("single");
       setCreateOpen(true);
     })();
@@ -356,16 +438,26 @@ export default function AssessmentsPage() {
     }
     setSaving(true);
     try {
-      await api.post("/assessments", {
+      // HRP-733: the server fills criteria + scale in the creating
+      // transaction, so the assessment is never stored half-configured.
+      const created = await api.post<Assessment>("/assessments", {
         ...form,
         ended_at: form.ended_at || null,
+        apply_position_criteria: true,
       });
       toast.success(t("toastCreated"));
+      // A NULL criteria_type means the position produced no competences —
+      // creation still succeeded, but somebody has to choose them.
+      if (!created.criteria_type) {
+        toast.warning(t("createCriteriaNotPrefilled"));
+      }
       setCreateOpen(false);
       setForm(emptyForm);
       setCreateMode("select");
-      setPage(1);
-      await loadData(1, { search: searchQuery, types: filterTypes, statuses: filterStatuses });
+      // The assessment the user just described, not the list they were
+      // passing through — same handover the Create plan dialog does.
+      router.push(`/assessments/${created.id}`);
+      return;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("errorCreateFailed"));
     } finally {
@@ -604,7 +696,14 @@ export default function AssessmentsPage() {
         )}
       </div>
 
-      {filtered.length === 0 ? (
+      {loadError ? (
+        <LoadErrorState
+          testIdPrefix="assessments"
+          onRetry={() =>
+            void loadData(page, { search: searchQuery, types: filterTypes, statuses: filterStatuses })
+          }
+        />
+      ) : filtered.length === 0 ? (
         <div data-testid="assessments-empty" className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
           {(searchQuery || filterTypes.length > 0 || filterStatuses.length > 0)
             ? t("emptyFiltered")
@@ -873,7 +972,7 @@ export default function AssessmentsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label>{tc("employee")}</Label>
-                  <Select value={form.employee_id} onValueChange={(val) => setForm({ ...form, employee_id: val ?? "" })}>
+                  <Select value={form.employee_id} onValueChange={(val) => { void onEmployeePicked(val ?? ""); }}>
                     <SelectTrigger className="w-full" data-testid="assessments-modal-create-select-employee">
                       <SelectValue placeholder={t("selectEmployee")}>
                         {(() => { const emp = employees.find((e) => e.id === form.employee_id); return emp ? (emp.user_name?.trim() || emp.user_email || emp.position_title) : undefined; })()}
@@ -885,6 +984,17 @@ export default function AssessmentsPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  {/* HRP-733: criteria are derived from the position the
+                      employee holds. No position, nothing to derive — say
+                      so here instead of letting Send fail later. */}
+                  {selectedCreateEmployee && !selectedCreateEmployee.position_title && (
+                    <p
+                      className="text-xs text-amber-600"
+                      data-testid="assessments-modal-create-no-position"
+                    >
+                      {t("createNoPositionHint")}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label>{t("fieldType")}</Label>
@@ -900,6 +1010,16 @@ export default function AssessmentsPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <p
+                    className="text-xs text-muted-foreground"
+                    data-testid="assessments-modal-create-type-hint"
+                  >
+                    {t(
+                      TYPE_OPTION_KEYS.find((o) => o.value === form.type_code)
+                        ?.hintKey ?? "typeSelfHint",
+                    )}{" "}
+                    {t("typesUsageHint")}
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>{t("fieldEndDate")}</Label>

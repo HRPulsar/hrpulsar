@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
 import { RequireRole } from "@/components/require-role";
+import { gradeTitleLabel } from "@/lib/reference-labels";
 
 interface AssessmentStats {
   total: number;
@@ -74,8 +75,157 @@ interface CompensationBenchmark {
   by_specialization: BenchmarkSpecialization[];
 }
 
+
+// HRP-732: HR metrics over a period. Each metric says how exact it is; the
+// approximate ones carry a visible mark and their formula, and the ones this
+// workspace has no signal for are named rather than silently dropped.
+interface HrMetric {
+  code: string;
+  kind: "exact" | "approx" | "no_data";
+  before: number | null;
+  now: number | null;
+  change_pct: number | null;
+  unit: string;
+}
+
+const HR_METRIC_PERIODS = [30, 90, 365];
+
+function HrMetricValue({ value, unit }: { value: number | null; unit: string }) {
+  const t = useTranslations("analytics");
+  if (value === null) return <>{"\u2014"}</>;
+  return (
+    <>
+      {unit === "percent"
+        ? `${value}%`
+        : unit === "months"
+          ? t("hrMetricValueMonths", { value })
+          : value}
+    </>
+  );
+}
+
+function HrMetrics() {
+  const t = useTranslations("analytics");
+  const [days, setDays] = useState(90);
+  // null = nothing loaded for this period yet; the block stays blank rather
+  // than flashing "nothing could be calculated" on first paint.
+  const [metrics, setMetrics] = useState<HrMetric[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let current = true;
+    api
+      .get<{ metrics: HrMetric[] }>(`/analytics/hr-metrics?days=${days}`)
+      .then((r) => {
+        if (current) setMetrics(r.metrics);
+      })
+      .catch(() => {
+        if (current) setFailed(true);
+      });
+    return () => {
+      current = false;
+    };
+  }, [days]);
+
+  function changePeriod(value: number) {
+    if (value === days) return;
+    // Period and numbers move together: the old figures must not sit under
+    // a newly highlighted button while the refetch is in flight.
+    setMetrics(null);
+    setFailed(false);
+    setDays(value);
+  }
+
+  const shown = (metrics ?? []).filter((m) => m.kind !== "no_data");
+  const missing = (metrics ?? []).filter((m) => m.kind === "no_data");
+
+  return (
+    <div data-testid="analytics-hr-metrics">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">{t("hrMetricsTitle")}</h2>
+        <div
+          className="flex shrink-0 items-center gap-0.5 rounded-md border border-border bg-card p-0.5"
+          role="group"
+          data-testid="analytics-hr-metrics-period"
+        >
+          {HR_METRIC_PERIODS.map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => changePeriod(value)}
+              aria-pressed={value === days}
+              className={
+                value === days
+                  ? "rounded bg-accent px-2 py-0.5 text-[11px] font-semibold text-accent-foreground"
+                  : "rounded px-2 py-0.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground"
+              }
+              data-testid={`analytics-hr-metrics-period-${value}`}
+            >
+              {t("hrMetricsPeriod", { days: value })}
+            </button>
+          ))}
+        </div>
+      </div>
+      {failed ? (
+        <p className="text-sm text-muted-foreground">{t("hrMetricsLoadFailed")}</p>
+      ) : metrics === null ? null : shown.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{t("hrMetricsEmpty")}</p>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {shown.map((m) => (
+            <Card key={m.code} data-testid={`analytics-hr-metric-${m.code}`}>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
+                  {t(`hrMetric_${m.code}`)}
+                  {m.kind === "approx" && (
+                    <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                      {t("hrMetricsEstimate")}
+                    </span>
+                  )}
+                  <Hint
+                    text={t(`hrMetricWhy_${m.code}`)}
+                    title={t(`hrMetric_${m.code}`)}
+                    data-testid={`analytics-hr-metric-${m.code}-hint`}
+                  />
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-lg text-muted-foreground">
+                    <HrMetricValue value={m.before} unit={m.unit} />
+                  </span>
+                  <span className="text-muted-foreground">{"\u2192"}</span>
+                  <span className="text-3xl font-bold">
+                    <HrMetricValue value={m.now} unit={m.unit} />
+                  </span>
+                </div>
+                <div className="mt-1 text-[12px] text-muted-foreground">
+                  {m.change_pct === null
+                    ? t("hrMetricsNoBaseline")
+                    : `${m.change_pct > 0 ? "+" : ""}${m.change_pct}%`}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+      {missing.length > 0 && (
+        <p
+          className="mt-3 text-[12px] text-muted-foreground"
+          data-testid="analytics-hr-metrics-missing"
+        >
+          {t("hrMetricsNoData", {
+            codes: missing.map((m) => t(`hrMetric_${m.code}`)).join(", "),
+          })}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function AnalyticsPage() {
   const t = useTranslations("analytics");
+  const tRef = useTranslations("reference");
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const locale = useLocale();
@@ -118,7 +268,7 @@ export default function AnalyticsPage() {
   if (loading) return <div className="py-12 text-center text-muted-foreground">{tc("loading")}</div>;
 
   return (
-    <RequireRole manage>
+    <RequireRole analytics>
     <div className="space-y-6">
       <div>
         <div className="flex items-center gap-2">
@@ -131,6 +281,9 @@ export default function AnalyticsPage() {
         <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
       </div>
 
+      <HrMetrics />
+
+      <h2 className="text-lg font-semibold">{t("hrMetricActionStats")}</h2>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
@@ -201,7 +354,7 @@ export default function AnalyticsPage() {
                       <TableBody>
                         {benchmark.by_grade.map((row) => (
                           <TableRow key={row.grade_id}>
-                            <TableCell className="font-medium">{row.grade_title}</TableCell>
+                            <TableCell className="font-medium">{gradeTitleLabel(tRef, row.grade_title)}</TableCell>
                             <TableCell className="text-right">
                               {formatMoney(row.avg_salary / 100, getBillingCurrency(), locale)}
                             </TableCell>

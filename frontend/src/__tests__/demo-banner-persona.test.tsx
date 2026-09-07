@@ -72,7 +72,7 @@ beforeEach(() => {
   storage.clear();
   user = {
     id: "u-1",
-    first_name: "Carlos",
+    first_name: "Anna",
     // Deliberately the demo *admin* domain while the session is in the
     // employee persona: the switcher must follow the field, not the email.
     email: "demo-abc123@demo.hrpulsar.local",

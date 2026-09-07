@@ -32,7 +32,7 @@ import {
 import { formatDateTime as formatIsoDateTime } from "@/lib/date-format";
 
 /** Participant role codes → keys in the `assessments` i18n namespace. */
-const ROLE_KEYS: Record<string, string> = {
+export const ROLE_KEYS: Record<string, string> = {
   self: "roleSelf",
   manager: "roleManager",
   peer: "rolePeer",
@@ -40,7 +40,7 @@ const ROLE_KEYS: Record<string, string> = {
   external: "roleExternal",
 };
 
-function roleLabel(t: (key: string) => string, role: string): string {
+export function roleLabel(t: (key: string) => string, role: string): string {
   const key = ROLE_KEYS[role];
   return key ? t(key) : role.charAt(0).toUpperCase() + role.slice(1);
 }

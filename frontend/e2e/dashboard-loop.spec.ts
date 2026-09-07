@@ -1,6 +1,7 @@
 import { test, expect } from "./fixtures";
 
 import {
+  API_BASE,
   createAssessment,
   createCompetence,
   createCompetenceGroup,
@@ -8,8 +9,6 @@ import {
   setAuthTokens,
   setupFullTenant,
 } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
 
 /**
  * Dashboard development loop (HRP dashboard rework): a below-the-bar

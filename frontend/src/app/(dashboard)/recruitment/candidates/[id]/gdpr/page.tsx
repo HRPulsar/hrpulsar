@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
 import { formatDate, formatDateTime } from "@/lib/date-format";
 import { ALERT_TONE } from "@/lib/badge-tones";
+import { processingStatusLabel } from "@/lib/recruitment-types";
 
 type ExportRequest = {
   id: string;
@@ -208,7 +209,7 @@ export default function CandidateGDPRPage({
                         req.status === "completed" ? "default" : "outline"
                       }
                     >
-                      {req.status}
+                      {processingStatusLabel(t, req.status)}
                     </Badge>
                     {req.expires_at && (
                       <span className="text-[11px] text-muted-foreground">

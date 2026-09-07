@@ -37,10 +37,12 @@ import { ArrowLeft, ArrowRight, Users } from "lucide-react";
 import { isPastDeadline, todayLocalISO } from "@/lib/deadline";
 import { formatDate } from "@/lib/date-format";
 
+// HRP-723: `hintKey` explains what the format is for — 180°/360° carry
+// staffing decisions, self-assessment feeds development tracks.
 const TYPE_OPTION_KEYS = [
-  { value: "self", labelKey: "typeSelf" },
-  { value: "180", labelKey: "type180" },
-  { value: "360", labelKey: "type360" },
+  { value: "self", labelKey: "typeSelf", hintKey: "typeSelfHint" },
+  { value: "180", labelKey: "type180", hintKey: "type180Hint" },
+  { value: "360", labelKey: "type360", hintKey: "type360Hint" },
 ];
 
 interface MassCreateDialogProps {
@@ -275,6 +277,16 @@ export function MassCreateDialog({
                   ))}
                 </SelectContent>
               </Select>
+              <p
+                className="text-xs text-muted-foreground"
+                data-testid="assessments-mass-type-hint"
+              >
+                {t(
+                  TYPE_OPTION_KEYS.find((o) => o.value === typeCode)?.hintKey ??
+                    "typeSelfHint",
+                )}{" "}
+                {t("typesUsageHint")}
+              </p>
             </div>
             <div className="space-y-2">
               <Label>{t("fieldEndDate")}</Label>

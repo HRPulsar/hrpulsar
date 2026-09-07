@@ -53,9 +53,40 @@ export const ISSUE_TONE: Record<EmployeeIssueCode, string> = {
 // applies in backend/app/modules/employee/issues.py, narrowed to a single
 // row. A row with no score is "never assessed", not a gap: the badge would
 // accuse the employee of failing something nobody measured.
+/**
+ * HRP-731: the one growth-zone / gap rule, twin of ``is_gap`` in
+ * employee/issues.py.
+ *
+ * At or below the bar is a gap. The boundary is inclusive on purpose —
+ * scoring exactly the bar is not a closed competence — and the two sides
+ * must never disagree about it.
+ */
+export function isGap(percent: number, bar: number): boolean {
+  return percent <= bar;
+}
+
+/** The same rule for the row shape the competence surfaces carry. */
 export function isCompetenceGap(row: {
   percent: number | null;
   passing_score: number;
 }): boolean {
-  return row.percent !== null && row.percent < row.passing_score;
+  // A never-assessed competence has no verdict either way.
+  return row.percent !== null && isGap(row.percent, row.passing_score);
+}
+
+/**
+ * HRP-731: the bar a single assessment's results are judged against.
+ *
+ * Mirrors ``passing_bar`` in employee/issues.py: the assessment's own
+ * snapshot when it has one, else the product default. Assessments built
+ * from "Individual competences" criteria never store a bar, so the default
+ * is what their results are read against.
+ */
+export const DEFAULT_PASSING_SCORE = 75;
+
+export function assessmentBar(passingScore: number | null | undefined): number {
+  // Identity check, not truthiness: 0 is a legitimate stored bar.
+  return passingScore === null || passingScore === undefined
+    ? DEFAULT_PASSING_SCORE
+    : passingScore;
 }

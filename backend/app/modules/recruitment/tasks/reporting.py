@@ -55,7 +55,6 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
     from app.modules.recruitment.models import (
         AIAssessment,
         Candidate,
-        CandidateFile,
         CandidateVacancy,
         ConsolidatedReport,
         HumanAssessment,
@@ -66,6 +65,9 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
     )
     from app.modules.recruitment.report_xlsx import render_report_xlsx
     from app.modules.recruitment.resume_analysis_service import _derive_readiness
+    from app.modules.recruitment.resume_presence import (
+        candidate_ids_with_resume_sync,
+    )
     from app.modules.storage.models import File
 
     sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
@@ -138,21 +140,22 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
             cv_ids = [cv.id for cv in cvs]
 
             persons_by_candidate: dict[uuid.UUID, Person] = {}
-            candidates_with_parsed_resume: set[uuid.UUID] = set()
             candidate_ids = {cv.candidate_id for cv in cvs}
+            # HRP-685 / HRP-704: "has a resume" is one shared predicate —
+            # a completed ``file_type='resume'`` row unioned with the
+            # canonical ``parsed_resume_jsonb`` mirror. Both the Summary
+            # readiness derivation and the Incomplete-data sheet below read
+            # this one set, so a workbook cannot call the same candidate
+            # "Full data" on one sheet and "Resume not parsed" on another.
+            candidates_with_resume = candidate_ids_with_resume_sync(
+                db, vacancy.tenant_id, candidate_ids
+            )
             if candidate_ids:
                 cand_rows = (
                     db.execute(select(Candidate).where(Candidate.id.in_(candidate_ids)))
                     .scalars()
                     .all()
                 )
-                # ``is not None``, not truthiness: the candidates table
-                # derives readiness with ``parsed_resume_jsonb.is_not(None)``
-                # (resume_analysis_service), and an empty parse ({}) must
-                # read the same on both surfaces.
-                candidates_with_parsed_resume = {
-                    c.id for c in cand_rows if c.parsed_resume_jsonb is not None
-                }
                 person_ids = {c.person_id for c in cand_rows if c.person_id}
                 persons: dict[uuid.UUID, Person] = {}
                 if person_ids:
@@ -527,29 +530,10 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
             # HRP-493 already moved the candidates table onto the same
             # derivation; ``_derive_readiness`` is the shared seam.
             #
-            # Cost: one extra bounded query for the whole report. The parsed
-            # resumes come from ``cand_rows`` and the transcripts from the
-            # ``interviews`` list, both already loaded above, so every row is
-            # two set lookups — no per-candidate query.
-            resume_file_candidates: set[uuid.UUID] = set()
-            if candidate_ids:
-                resume_file_candidates = {
-                    cid
-                    for cid in db.execute(
-                        select(CandidateFile.candidate_id).where(
-                            CandidateFile.tenant_id == vacancy.tenant_id,
-                            CandidateFile.candidate_id.in_(candidate_ids),
-                            CandidateFile.file_type == "resume",
-                            CandidateFile.parse_status == "completed",
-                        )
-                    )
-                    .scalars()
-                    .all()
-                    if cid is not None
-                }
-            candidates_with_resume = (
-                candidates_with_parsed_resume | resume_file_candidates
-            )
+            # Cost: two bounded queries for the whole report, run once up
+            # with the candidate rows (``candidates_with_resume``); the
+            # transcripts come from the ``interviews`` list already loaded
+            # above, so every row is two set lookups — no per-candidate query.
             cvs_with_transcript = {
                 iv.candidate_vacancy_id
                 for iv in interviews
