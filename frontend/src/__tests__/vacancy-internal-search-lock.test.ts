@@ -13,13 +13,23 @@
 // here, so this is pinned by source-grep like the sibling structural
 // suites.
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import enMessages from "../../messages/en.json";
-import deMessages from "../../messages/de.json";
-import ruMessages from "../../messages/ru.json";
+// Catalogs are discovered rather than hardcoded: ru.json is enterprise-only
+// and absent from the public repo, where a fixed import would fail
+// collection with ENOENT. Same approach as vacancy-salary.test.ts.
+const MESSAGES_DIR = resolve(__dirname, "../../messages");
+
+const CATALOGS: [string, { recruitment: Record<string, string> }][] =
+  readdirSync(MESSAGES_DIR)
+    .filter((file) => file.endsWith(".json"))
+    .sort()
+    .map((file) => [
+      basename(file, ".json"),
+      JSON.parse(readFileSync(resolve(MESSAGES_DIR, file), "utf8")),
+    ]);
 
 const flat = (path: string) =>
   readFileSync(resolve(__dirname, path), "utf8").replace(/\s+/g, " ");
@@ -43,9 +53,15 @@ describe("Internal search switch lock (HRP-667)", () => {
   });
 
   it("carries the explanation in all three catalogues", () => {
-    expect(enMessages.recruitment.vacancyInternalSearchLockedHint).toBeTruthy();
-    expect(deMessages.recruitment.vacancyInternalSearchLockedHint).toBeTruthy();
-    expect(ruMessages.recruitment.vacancyInternalSearchLockedHint).toBeTruthy();
+    expect(CATALOGS.map(([locale]) => locale)).toEqual(
+      expect.arrayContaining(["de", "en"]),
+    );
+    for (const [locale, catalog] of CATALOGS) {
+      expect(
+        catalog.recruitment.vacancyInternalSearchLockedHint,
+        `${locale}.recruitment.vacancyInternalSearchLockedHint`,
+      ).toBeTruthy();
+    }
   });
 
   it("locks from the live link the vacancy page reads, not a stale id", () => {
