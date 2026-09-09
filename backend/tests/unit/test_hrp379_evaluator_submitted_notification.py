@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
-import pytest
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from app.modules.recruitment import manager_assessment_public as public_service
 from app.modules.recruitment import manager_assessment_service as service
 from app.modules.recruitment.manager_assessment_schemas import RoundCreate
@@ -151,11 +151,9 @@ class TestSubmitPublishesTheEvent:
 
 
 class TestBannerNamesTheSamePerson:
-    """"{name} will be notified" has to name whoever gets the email."""
+    """ "{name} will be notified" has to name whoever gets the email."""
 
-    async def test_context_carries_the_owner_name(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_context_carries_the_owner_name(self, db: AsyncSession, tenant, user):
         owner = await _make_extra_user(db, tenant)
         owner.first_name = "Olga"
         owner.last_name = "Owner"
@@ -198,9 +196,7 @@ class TestTemplate:
         assert locales == {"en", "de"}
 
     def test_english_subject_is_the_one_from_the_ticket(self):
-        subject = next(
-            s for locale, s, _ in _migration()._TEMPLATES if locale == "en"
-        )
+        subject = next(s for locale, s, _ in _migration()._TEMPLATES if locale == "en")
         assert (
             Template(subject).render(candidate_name="Jane Doe")
             == "Submitted assessment for candidate Jane Doe"
