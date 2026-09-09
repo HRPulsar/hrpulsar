@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError
 from app.modules.recruitment import audit_service
 from app.modules.recruitment.manager_assessment_models import (
+    AssessmentRound,
     PublicAssessmentIPBlock,
 )
 from app.modules.recruitment.manager_assessment_service import (
@@ -237,22 +238,79 @@ def _mark_in_progress(invite: AssessmentInvite) -> None:
         invite.status = "in_progress"
 
 
-async def public_get_context(
-    db: AsyncSession, token: str, *, ip: str | None = None
-) -> dict[str, Any]:
-    from app.core.s3 import get_presigned_url
-    from app.modules.auth.models import User
-    from app.modules.company.models import Tenant
-    from app.modules.recruitment.common import candidate_display_name
-    from app.modules.recruitment.models import CandidateQuestion
-    from app.modules.storage.models import File
+def _notified_owner_id(
+    vacancy: Vacancy | None, invite: AssessmentInvite
+) -> uuid.UUID | None:
+    """Who hears about this evaluation (HRP-379).
 
-    invite = await resolve_invite_by_token(db, token, ip=ip)
+    The vacancy's owner, then its hiring manager, then whoever sent the
+    invitation — a vacancy that changed hands must not silence the
+    notice. One definition so the banner's "{name} will be notified" and
+    the mail that follows it cannot name different people.
+    """
+    owner_id = None
+    if vacancy is not None:
+        owner_id = vacancy.owner_id or vacancy.hiring_manager_id
+    return owner_id or invite.invited_by
+
+
+async def _live_candidate_vacancy(
+    db: AsyncSession, invite: AssessmentInvite
+) -> CandidateVacancy:
+    """The invite's candidate-vacancy, or the reason the link is over.
+
+    HRP-381: three different dead ends used to answer "This link is
+    invalid. Please contact the recruiter who sent it." — a link whose
+    candidate was archived, one whose vacancy was archived, and a genuine
+    forgery. The evaluator can act on none of them, but the recruiter can,
+    and they need to be told which one it is. One helper so the context
+    read and the resume read cannot drift apart on it.
+
+    A candidate *detached* from the vacancy is not covered here: that
+    DELETE cascades the invite away, so nothing survives to explain.
+    """
     cv = await db.get(CandidateVacancy, invite.candidate_vacancy_id)
     if cv is None:
         raise AppError("candidate_no_longer_available", status.HTTP_410_GONE)
     if cv.tenant_id != invite.tenant_id:
         raise AppError("cross_tenant_invite_mismatch", status.HTTP_403_FORBIDDEN)
+    candidate = await db.get(Candidate, cv.candidate_id)
+    if candidate is None or candidate.archived_at is not None:
+        raise AppError("candidate_no_longer_available", status.HTTP_410_GONE)
+    vacancy = await db.get(Vacancy, cv.vacancy_id)
+    if vacancy is None or vacancy.archived_at is not None:
+        raise AppError("vacancy_no_longer_available", status.HTTP_410_GONE)
+    return cv
+
+
+def _public_round_status(rd: AssessmentRound | None) -> str:
+    """Round state as the public sheet needs it (HRP-376 REDO).
+
+    The page decides read-only from the *round*, not from the mutation it
+    just failed: a submitted evaluator on a completed round with
+    re-editing enabled used to get an editable form and a "Failed to
+    save" toast on every click. Wire values are ``in_progress`` /
+    ``completed`` / ``archived``; an invite with no round reads as open.
+    """
+    if rd is None:
+        return "in_progress"
+    if rd.archived_at is not None or rd.status == "archived":
+        return "archived"
+    if rd.status == "complete":
+        return "completed"
+    return "in_progress"
+
+
+async def public_get_context(
+    db: AsyncSession, token: str, *, ip: str | None = None
+) -> dict[str, Any]:
+    from app.modules.auth.models import User
+    from app.modules.company.models import Tenant
+    from app.modules.recruitment.common import candidate_display_name
+    from app.modules.recruitment.models import CandidateQuestion
+
+    invite = await resolve_invite_by_token(db, token, ip=ip)
+    cv = await _live_candidate_vacancy(db, invite)
 
     await _mark_opened(db, invite)
 
@@ -292,27 +350,13 @@ async def public_get_context(
     candidate = await db.get(Candidate, cv.candidate_id)
     vacancy = await db.get(Vacancy, cv.vacancy_id)
 
-    # Latest resume file → short-lived presigned URL for the PDF pane.
-    # ``file_type`` matters: the same table also holds interview media, and
-    # the newest row on a candidate is often an audio recording — which
-    # would then be handed to the evaluator as "the resume".
-    resume_result = await db.execute(
-        select(CandidateFile)
-        .where(
-            CandidateFile.candidate_id == cv.candidate_id,
-            CandidateFile.tenant_id == invite.tenant_id,
-            CandidateFile.file_type == "resume",
-        )
-        .order_by(CandidateFile.created_at.desc())
-        .limit(1)
-    )
-    resume = resume_result.scalar_one_or_none()
-    resume_url = None
-    if resume and resume.file_id:
-        file_record = await db.get(File, resume.file_id)
-        if file_record:
-            resume_url = get_presigned_url(file_record.path)
-
+    # HRP-371 REDO: the context carries *no* URL to the file itself. It
+    # used to hand out a plain presigned link, and the pane pointed an
+    # iframe at it while the preview request was still in flight — a
+    # browser cannot render a .docx, so that iframe silently downloaded
+    # it on first paint and again on every F5. Everything about the
+    # resume now comes from ``public_resume_preview``, which classifies
+    # the file first and only ever exposes bytes behind Download.
     q_result = await db.execute(
         select(CandidateQuestion)
         .where(
@@ -335,16 +379,32 @@ async def public_get_context(
         for q in q_result.scalars().all()
     ]
 
+    def _full_name(u: Any) -> str | None:
+        return (
+            f"{(u.first_name or '').strip()} {(u.last_name or '').strip()}"
+        ).strip() or None
+
+    recruiter = None
     recruiter_name = None
     recruiter_email = None
     if invite.invited_by is not None:
         recruiter = await db.get(User, invite.invited_by)
         if recruiter is not None:
-            recruiter_name = (
-                f"{(recruiter.first_name or '').strip()} "
-                f"{(recruiter.last_name or '').strip()}"
-            ).strip() or None
+            recruiter_name = _full_name(recruiter)
             recruiter_email = recruiter.email
+
+    # HRP-379: the banner says "{name} will be notified" — that has to be
+    # the person the email actually goes to.
+    owner_name = None
+    owner_id = _notified_owner_id(vacancy, invite)
+    if owner_id is not None:
+        owner = (
+            recruiter
+            if owner_id == invite.invited_by and recruiter_name is not None
+            else await db.get(User, owner_id)
+        )
+        if owner is not None:
+            owner_name = _full_name(owner)
 
     # ``get_or_create_assessment`` snapshots the vacancy scale lazily, so
     # re-read the vacancy for a fresh snapshot before rendering the form.
@@ -368,18 +428,21 @@ async def public_get_context(
         "assessment_id": assessment.id if assessment else None,
         "personal_message": invite.personal_message,
         "consent_accepted": invite.consent_accepted_at is not None,
+        "round_status": _public_round_status(
+            await db.get(AssessmentRound, invite.round_id)
+            if invite.round_id is not None
+            else None
+        ),
         # HRP-359: everything the standalone evaluation page renders.
         "tenant_name": tenant.name if tenant else None,
         # i18n F7: no English "(unnamed)" on the wire — the public
         # evaluation page localizes the empty-name fallback itself.
         "candidate_name": candidate_display_name(candidate, fallback=""),
         "vacancy_title": vacancy.title if vacancy else None,
-        "resume_url": resume_url,
-        "resume_filename": resume.original_filename if resume else None,
-        "resume_mime_type": resume.mime_type if resume else None,
         "questions": questions,
         "recruiter_name": recruiter_name,
         "recruiter_email": recruiter_email,
+        "owner_name": owner_name,
         "scale_levels": scale_levels,
         "competences": competences,
         "critical_submit_threshold": CRITICAL_SUBMIT_THRESHOLD,
@@ -460,6 +523,85 @@ def _plaintext_preview_blocks(data: bytes) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+def _first_text(entry: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    """First non-empty value among interchangeable keys."""
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _entry_lines(entries: Any, *groups: tuple[str, ...]) -> list[str]:
+    """One readable line per resume entry, dates and description attached.
+
+    Each ``group`` is a set of interchangeable keys and contributes at most
+    one value: the parser mirrors ``position`` into ``role``, so treating
+    them as separate parts printed "QA Lead — QA Lead — Acme". Keys only,
+    no prose — the page renders the section headings from its own catalog
+    (HRP-371 REDO).
+    """
+    lines: list[str] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            if isinstance(entry, str) and entry.strip():
+                lines.append(entry.strip())
+            continue
+        head = " — ".join(
+            part for part in (_first_text(entry, g) for g in groups) if part
+        )
+        dates = " – ".join(
+            str(entry[key]).strip()
+            for key in ("start_date", "end_date")
+            if isinstance(entry.get(key), str) and entry[key].strip()
+        )
+        if dates:
+            head = f"{head} ({dates})" if head else f"({dates})"
+        description = entry.get("description")
+        if isinstance(description, str) and description.strip():
+            head = f"{head}\n{description.strip()}" if head else description.strip()
+        if head:
+            lines.append(head)
+    return lines
+
+
+def _parsed_resume_sections(parsed: Any) -> dict[str, Any] | None:
+    """Read-only view of a hand-entered resume (HRP-371 REDO, case 2).
+
+    A candidate added by hand has no file at all — ``parsed_resume_jsonb``
+    *is* their resume. There is nothing to download, so the pane renders
+    these sections and offers no Download button. ``None`` when the
+    payload holds nothing worth showing.
+    """
+    if not isinstance(parsed, dict):
+        return None
+    from app.modules.recruitment.candidate_service import _normalised_parsed_resume
+
+    parsed = _normalised_parsed_resume(parsed) or {}
+    summary = parsed.get("summary")
+    sections = {
+        "summary": summary.strip()
+        if isinstance(summary, str) and summary.strip()
+        else None,
+        "experience": _entry_lines(
+            parsed.get("experience"), ("position", "role", "title"), ("company",)
+        ),
+        "education": _entry_lines(
+            parsed.get("education"), ("institution",), ("degree",), ("field",)
+        ),
+        "skills": [
+            str(skill).strip()
+            for skill in (
+                parsed.get("skills") if isinstance(parsed.get("skills"), list) else []
+            )
+            if str(skill).strip()
+        ],
+    }
+    if not any(sections.values()):
+        return None
+    return sections
+
+
 async def public_resume_preview(
     db: AsyncSession, token: str, *, ip: str | None = None
 ) -> dict[str, Any]:
@@ -475,11 +617,7 @@ async def public_resume_preview(
     invite = await resolve_invite_by_token(db, token, ip=ip)
     if invite.consent_accepted_at is None:
         raise AppError("assessment_consent_required", status.HTTP_403_FORBIDDEN)
-    cv = await db.get(CandidateVacancy, invite.candidate_vacancy_id)
-    if cv is None:
-        raise AppError("candidate_no_longer_available", status.HTTP_410_GONE)
-    if cv.tenant_id != invite.tenant_id:
-        raise AppError("cross_tenant_invite_mismatch", status.HTTP_403_FORBIDDEN)
+    cv = await _live_candidate_vacancy(db, invite)
 
     empty: dict[str, Any] = {
         "kind": "none",
@@ -488,8 +626,19 @@ async def public_resume_preview(
         "preview_url": None,
         "download_url": None,
         "blocks": [],
+        "parsed": None,
         "truncated": False,
     }
+
+    async def _parsed_fallback() -> dict[str, Any]:
+        """No file on record — fall back to the hand-entered resume."""
+        candidate = await db.get(Candidate, cv.candidate_id)
+        sections = _parsed_resume_sections(
+            candidate.parsed_resume_jsonb if candidate else None
+        )
+        if sections is None:
+            return empty
+        return {**empty, "kind": "parsed", "parsed": sections}
 
     resume_result = await db.execute(
         select(CandidateFile)
@@ -503,10 +652,10 @@ async def public_resume_preview(
     )
     resume = resume_result.scalar_one_or_none()
     if resume is None or not resume.file_id:
-        return empty
+        return await _parsed_fallback()
     file_record = await db.get(File, resume.file_id)
     if file_record is None:
-        return empty
+        return await _parsed_fallback()
 
     kind = _resume_kind(resume.mime_type, resume.original_filename)
     # Content-Disposition: attachment is what makes "download" an explicit
@@ -647,6 +796,59 @@ async def public_update_name(
     return {"evaluator_name": invite.evaluator_name}
 
 
+async def _notify_evaluator_submitted(
+    db: AsyncSession,
+    invite: AssessmentInvite,
+    cv: CandidateVacancy,
+) -> None:
+    """Tell the vacancy owner an external sheet came in (HRP-379).
+
+    The evaluator's page has always said "{name} will be notified" — this
+    is the notification. Recipient is the vacancy's owner, falling back to
+    the hiring manager and then to whoever sent the invitation, so the
+    notice never disappears just because a vacancy changed hands.
+
+    Best-effort by design: an evaluation that reached the database must
+    not be lost to a mail failure.
+    """
+    from app.core.events import publish
+    from app.modules.recruitment.common import candidate_display_name
+
+    candidate = await db.get(Candidate, cv.candidate_id)
+    vacancy = await db.get(Vacancy, cv.vacancy_id)
+    owner_id = _notified_owner_id(vacancy, invite)
+    if owner_id is None:
+        return
+    rd = (
+        await db.get(AssessmentRound, invite.round_id)
+        if invite.round_id is not None
+        else None
+    )
+    try:
+        await publish(
+            "recruitment.assessment.evaluator_submitted",
+            {
+                "tenant_id": str(invite.tenant_id),
+                "owner_user_id": str(owner_id),
+                "evaluator_name": invite.evaluator_name or invite.email,
+                "candidate_name": candidate_display_name(candidate, fallback=""),
+                "vacancy_title": vacancy.title if vacancy else None,
+                # Type + number, not a rendered label: the round name is
+                # prose and belongs in the per-locale template (HRP-373).
+                "round_type": rd.type if rd else None,
+                "round_number": rd.round_number if rd else None,
+                "link": (
+                    f"/recruitment/candidates/{cv.candidate_id}"
+                    f"?vacancyId={cv.vacancy_id}#manager-assessments"
+                ),
+            },
+        )
+    except Exception:  # noqa: BLE001 - the evaluation is already saved
+        log.exception(
+            "evaluator_submitted notification failed for invite=%s", invite.id
+        )
+
+
 async def public_submit(
     db: AsyncSession,
     token: str,
@@ -666,6 +868,9 @@ async def public_submit(
         evaluator_invite_id=invite.id,
         evaluator_display_name=invite.evaluator_name or invite.email,
     )
+    # HRP-379: re-editing lets the same invite submit again; the owner is
+    # told once, on the sheet actually arriving, not on every correction.
+    first_submission = invite.status != "submitted"
     a.status = "submitted"
     a.submitted_at = datetime.now(timezone.utc)
     if final_notes is not None:
@@ -677,6 +882,8 @@ async def public_submit(
     cv = await db.get(CandidateVacancy, invite.candidate_vacancy_id)
     if cv is not None:
         await recompute_manager_score(db, invite.tenant_id, cv.id)
+        if first_submission:
+            await _notify_evaluator_submitted(db, invite, cv)
     await audit_service.record_event(
         db,
         tenant_id=invite.tenant_id,

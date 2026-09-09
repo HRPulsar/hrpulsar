@@ -86,6 +86,11 @@ EVENT_TEMPLATE: dict[str, str] = {
     "recruitment.assessment.evaluator_invited": (
         "recruitment.assessment_evaluator_invited"
     ),
+    # HRP-379: an external evaluator submitted their sheet — the vacancy
+    # owner the page promised would be notified finally is.
+    "recruitment.assessment.evaluator_submitted": (
+        "recruitment.assessment_evaluator_submitted"
+    ),
 }
 
 # Roles that receive fan-out notifications for events without an explicit
@@ -509,6 +514,16 @@ async def _resolve_assessment_evaluator(
     return await _async_resolve_users_by_ids(db, tenant_id, [uid])
 
 
+async def _resolve_assessment_submitted(
+    db: AsyncSession, tenant_id: uuid.UUID, data: dict[str, Any]
+) -> list[User]:
+    """HRP-379: the vacancy owner, resolved by the publisher."""
+    uid = _coerce_uuid(data.get("owner_user_id"))
+    if not uid:
+        return []
+    return await _async_resolve_users_by_ids(db, tenant_id, [uid])
+
+
 async def _resolve_question_set_user(
     db: AsyncSession, tenant_id: uuid.UUID, data: dict[str, Any]
 ) -> list[User]:
@@ -638,6 +653,14 @@ async def on_assessment_evaluator_invited(data: dict[str, Any]) -> None:
     )
 
 
+async def on_assessment_evaluator_submitted(data: dict[str, Any]) -> None:
+    await _async_handle(
+        "recruitment.assessment.evaluator_submitted",
+        data,
+        resolve_recipients=_resolve_assessment_submitted,
+    )
+
+
 async def on_question_set_failed(data: dict[str, Any]) -> None:
     await _async_handle(
         "recruitment.question_set.failed",
@@ -668,6 +691,7 @@ HANDLERS: dict[str, Any] = {
     "recruitment.question_set.ready": on_question_set_ready,
     "recruitment.question_set.failed": on_question_set_failed,
     "recruitment.assessment.evaluator_invited": on_assessment_evaluator_invited,
+    "recruitment.assessment.evaluator_submitted": on_assessment_evaluator_submitted,
 }
 
 

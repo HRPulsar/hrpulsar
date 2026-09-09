@@ -1829,17 +1829,23 @@ export interface AssessmentMatrixCandidate {
   cells: AssessmentMatrixCell[];
 }
 
+export interface AssessmentMatrixRoundSlot {
+  key: string;
+  type: "pre_interview" | "interview" | "final";
+  number: number | null;
+}
+
 export interface AssessmentMatrixData {
   vacancy_id: string;
   divergence_threshold: number;
   max_score: number;
   scale_name: string | null;
   total_competences: number;
-  // HRP-510 — interview rounds available for the Round selector on the
-  // fullscreen canvas, and the round this payload is scoped to
-  // ("latest" | "all" | a 1-based round number). Only the AI side has a
-  // round dimension; manager scores are identical under every value.
-  round_count?: number;
+  // HRP-510 REDO — the Round selector's slots (Pre-interview /
+  // Interview 1..N / Final, built from the vacancy's Manager-assessment
+  // rounds) and the value this payload is scoped to: "latest", "all" or
+  // a slot key. Under a slot both halves of a cell are scoped to it.
+  round_slots?: AssessmentMatrixRoundSlot[];
   round?: string;
   competences: AssessmentMatrixCompetence[];
   candidates: AssessmentMatrixCandidate[];

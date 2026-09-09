@@ -94,10 +94,11 @@ test.describe("Demo employee persona surfaces", () => {
       timeout: 20000,
     });
 
-    // Recruitment and the talent market are gated on roles the persona
-    // does not hold (HRP-622).
+    // Recruitment is gated on roles the persona does not hold (HRP-622);
+    // the talent market is open to employees, scoped to their own cards
+    // (HRP-765).
     await expect(page.getByTestId("sidebar-link-recruitment")).toHaveCount(0);
-    await expect(page.getByTestId("sidebar-link-talent-market")).toHaveCount(0);
+    await expect(page.getByTestId("sidebar-link-talent-market")).toBeVisible();
 
     // The directory lists the whole company, without the HR columns.
     await page.goto("/employees");

@@ -48,11 +48,15 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
     from app.core.s3 import upload_file
     from app.models import Person
     from app.modules.company.models import Tenant
+    from app.modules.recruitment.assessment_service import (
+        competence_cells_from_run_data,
+    )
     from app.modules.recruitment.common import (
         candidate_display_name,
         normalize_competence_id,
     )
     from app.modules.recruitment.models import (
+        AIAnalysisRun,
         AIAssessment,
         Candidate,
         CandidateVacancy,
@@ -67,6 +71,9 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
     from app.modules.recruitment.resume_analysis_service import _derive_readiness
     from app.modules.recruitment.resume_presence import (
         candidate_ids_with_resume_sync,
+    )
+    from app.modules.recruitment.score_normalization import (
+        compute_normalized_ai_score,
     )
     from app.modules.storage.models import File
 
@@ -626,6 +633,57 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 if iv.candidate_vacancy_id in selected_cv_ids:
                     interviews_by_cv.setdefault(iv.candidate_vacancy_id, []).append(iv)
 
+            # HRP-685 REDO — the analysis the report prints is the
+            # candidate's last completed run, whatever its mode. The
+            # Detail sheet used to read ``Interview.analysis_data`` off
+            # the newest recording, which on a real vacancy is a later
+            # upload nobody analysed: AI Insights (which reads the run)
+            # was full while the workbook printed an empty verdict. The
+            # run is also the only home a resume-only analysis has, so
+            # this is the same seam the compact matrix took in HRP-507.
+            # Readiness stays a separate question — it labels the data
+            # column and gates the recommendation, and is still derived
+            # from the inputs on file, never from the run.
+            run_by_cv: dict[uuid.UUID, AIAnalysisRun] = {}
+            if selected_cv_ids:
+                for run_row in (
+                    db.execute(
+                        select(AIAnalysisRun)
+                        .where(
+                            AIAnalysisRun.candidate_vacancy_id.in_(selected_cv_ids),
+                            AIAnalysisRun.tenant_id == vacancy.tenant_id,
+                            AIAnalysisRun.status == "completed",
+                            AIAnalysisRun.archived_at.is_(None),
+                        )
+                        # One active completed run per pair is enforced by
+                        # a partial unique index; ordering only keeps the
+                        # read deterministic if that invariant slips.
+                        .order_by(
+                            AIAnalysisRun.created_at.desc(),
+                            AIAnalysisRun.id.desc(),
+                        )
+                    )
+                    .scalars()
+                    .all()
+                ):
+                    run_by_cv.setdefault(run_row.candidate_vacancy_id, run_row)
+            run_cells_by_cv: dict[uuid.UUID, dict[str, dict]] = {
+                cv_key: competence_cells_from_run_data(run_row.analysis_data)
+                for cv_key, run_row in run_by_cv.items()
+            }
+
+            def _ai_entry_for(cv_key: uuid.UUID, comp_key: str) -> dict | None:
+                """One AI opinion on one cell, from whichever side stored it.
+
+                ``AIAssessment`` rows exist only for interview-backed
+                analyses, so the run payload is the fallback — and the two
+                sheets that render a cell (Matrix scores, Detail citations)
+                must not disagree about which one they found.
+                """
+                return ai_latest.get((cv_key, comp_key)) or run_cells_by_cv.get(
+                    cv_key, {}
+                ).get(comp_key)
+
             def _cv_display_name(cv_obj: CandidateVacancy) -> str:
                 # HRP-525 — resume-sourced candidates have no Person row
                 # (person_id is optional since HRP-181 REDO), so keying
@@ -654,7 +712,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                         manager_score = sum(human_vals) / len(human_vals)
                         manager_sum += manager_score
                         manager_scored += 1
-                    ai_entry = ai_latest.get((cv.id, ckey))
+                    ai_entry = _ai_entry_for(cv.id, ckey)
                     ai_score: float | None = None
                     ai_status = "missing"
                     if ai_entry is not None:
@@ -670,7 +728,19 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                         else:
                             ai_status = raw_status or "missing"
                         if ai_entry["score"] is not None and ai_status == "ready":
-                            ai_score = float(ai_entry["score"])
+                            # HRP-685 — AI competence scores are stored on
+                            # the canonical 0..1 scale (HRP-274) while the
+                            # denominator below and the manager column are
+                            # on the tenant scale. Printed raw, a top mark
+                            # read as 0.8/5 and every populated cell looked
+                            # like a divergence; the compact matrix rebases
+                            # the same way (HRP-507).
+                            ai_score = float(
+                                compute_normalized_ai_score(
+                                    ai_entry["score"], max_score
+                                )
+                                or 0.0
+                            )
                             ai_sum += ai_score
                             ai_scored += 1
                         elif ai_status == "not_covered":
@@ -946,7 +1016,10 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     ),
                     default=None,
                 )
-                analysis = (
+                # The run first (HRP-685); the newest interview's mirror is
+                # only a fallback for rows written before runs existed.
+                cv_run = run_by_cv.get(cv.id)
+                analysis = (cv_run.analysis_data if cv_run else None) or (
                     latest_interview.analysis_data
                     if latest_interview and latest_interview.analysis_data
                     else {}
@@ -954,7 +1027,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 scores_table: list[dict] = []
                 for cell in agg["cells"]:
                     meta = comp_meta_by_key[cell["competence_key"]]
-                    ai_entry = ai_latest.get((cv.id, cell["competence_key"]))
+                    ai_entry = _ai_entry_for(cv.id, cell["competence_key"])
                     citations_raw = (ai_entry or {}).get("citations") or []
                     citation_lines: list[str] = []
                     for c in citations_raw[:3]:

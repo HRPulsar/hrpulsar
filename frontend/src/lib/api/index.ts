@@ -24,6 +24,10 @@ export class ApiError extends Error {
     public status: number,
     message: string,
     public detail?: unknown,
+    // HRP-381: `AppError` puts a stable `code` alongside the localized
+    // `detail`. Branching on that beats matching English substrings of
+    // `message`, which stops working the moment the reply is German.
+    public code?: string,
   ) {
     super(message);
   }
@@ -196,7 +200,7 @@ async function request<T>(
       );
     }
 
-    throw new ApiError(res.status, message, body.detail);
+    throw new ApiError(res.status, message, body.detail, body.code);
   }
 
   if (res.status === 204) return undefined as T;
@@ -250,7 +254,7 @@ async function requestWithMeta<T>(
         new CustomEvent("hrpulsar:credit-limit", { detail: message }),
       );
     }
-    throw new ApiError(res.status, message, body.detail);
+    throw new ApiError(res.status, message, body.detail, body.code);
   }
 
   const data =

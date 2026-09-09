@@ -47,10 +47,14 @@ from app.modules.recruitment.schemas import (
     VacancyQuestionsRead,
 )
 from app.modules.recruitment.scope import (
+    candidate_question_scope,
     candidate_scope,
     candidate_vacancy_query_scope,
     candidate_vacancy_scope,
     cv_scope,
+    human_assessment_scope,
+    question_scope,
+    question_set_scope,
     vacancy_query_scope,
     vacancy_scope,
 )
@@ -89,6 +93,8 @@ async def add_question(
     data: QuestionCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _candidate_scope: None = Depends(candidate_scope),
+    _vacancy_scope: None = Depends(vacancy_scope),
 ):
     return await service.add_question(
         db, current_user.tenant_id, candidate_id, vacancy_id, data
@@ -104,6 +110,7 @@ async def update_question(
     data: QuestionUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(candidate_question_scope),
 ):
     return await service.update_question(db, current_user.tenant_id, question_id, data)
 
@@ -113,6 +120,7 @@ async def delete_question(
     question_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(candidate_question_scope),
 ):
     await service.delete_question(db, current_user.tenant_id, question_id)
 
@@ -126,6 +134,8 @@ async def export_questions_pdf(
     data: QuestionsPDFExportRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _candidate_scope: None = Depends(candidate_scope),
+    _vacancy_scope: None = Depends(vacancy_scope),
 ):
     pdf_bytes = await service.export_questions_pdf(
         db,
@@ -184,6 +194,7 @@ async def record_assessment(
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(cv_scope),
 ):
     result = await service.record_human_assessment(
         db,
@@ -210,6 +221,7 @@ async def update_assessment(
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(human_assessment_scope),
 ):
     result = await service.update_human_assessment(
         db,
@@ -289,6 +301,7 @@ async def revert_assessment(
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(cv_scope),
 ):
     """Restore an evaluator's cell to a prior audit-event score (HRP-266).
 
@@ -414,7 +427,11 @@ async def get_assessment_matrix(
     vacancy_id: uuid.UUID,
     round: str = Query(
         default="latest",
-        description="AI round scope: 'latest', 'all', or a 1-based round number.",
+        description=(
+            "Round scope: 'latest', 'all', or a slot key from "
+            "``round_slots`` ('pre_interview', 'interview_1'..'interview_N', "
+            "'final')."
+        ),
     ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
@@ -434,18 +451,77 @@ async def get_assessment_matrix(
     block render empty. Which vacancies a manager may read is still
     decided by ``vacancy_scope``, not by the role tuple.
 
-    ``round`` (HRP-510) scopes the AI side to an interview round; manager
-    scores have no round dimension and are unaffected.
+    ``round`` (HRP-510 REDO) scopes both halves of a cell to a slot of
+    the Manager-assessments strip; ``round_slots`` in the response is the
+    selector's own option list.
     """
     return await service.get_assessment_matrix(
         db, current_user.tenant_id, vacancy_id, round_filter=round
     )
 
 
+# HRP-744 — the canvas toolbar, as query parameters. The export has to be
+# "what is on screen", so every control the recruiter touched before
+# pressing Export travels with the request; both formats read the same
+# tuple and hand it to the same row builder.
+class _CanvasExportState:
+    def __init__(
+        self,
+        round: str = Query(default="latest"),
+        view: str = Query(
+            default="manager_ai",
+            description="manager_ai | manager | ai | aggregated",
+        ),
+        scale: str = Query(default="points", description="points | percent"),
+        only_divergences: bool = Query(default=False),
+        hide_unscored: bool = Query(default=False),
+        candidates: str | None = Query(
+            default=None,
+            description=(
+                "Comma-separated candidate_vacancy_ids still ticked in the "
+                "candidates panel. Omitted when none are unticked."
+            ),
+        ),
+    ) -> None:
+        self.round = round
+        self.view = view
+        self.scale = scale
+        self.only_divergences = only_divergences
+        self.hide_unscored = hide_unscored
+        # Unparseable ids are dropped rather than rejected: an id that is
+        # not on the vacancy simply matches no row, and the alternative is
+        # a 422 on an export the recruiter can see on screen.
+        self.candidate_ids: set[str] | None = None
+        if candidates is not None:
+            self.candidate_ids = {
+                part.strip() for part in candidates.split(",") if part.strip()
+            }
+
+
+async def _canvas_export_payload(
+    db: AsyncSession, tenant_id: uuid.UUID, vacancy_id: uuid.UUID, state
+) -> tuple[dict, dict, str]:
+    from app.modules.recruitment.report_xlsx import build_canvas_rows
+
+    payload = await service.get_assessment_matrix(
+        db, tenant_id, vacancy_id, round_filter=state.round
+    )
+    built = build_canvas_rows(
+        payload,
+        view=state.view,
+        scale=state.scale,
+        only_divergences=state.only_divergences,
+        hide_unscored=state.hide_unscored,
+        candidate_ids=state.candidate_ids,
+    )
+    vacancy = await service.get_vacancy(db, tenant_id, vacancy_id)
+    return payload, built, (getattr(vacancy, "title", None) or "Vacancy")
+
+
 @router.get("/recruitment/vacancies/{vacancy_id}/assessment-matrix/export.xlsx")
 async def export_assessment_matrix_xlsx(
     vacancy_id: uuid.UUID,
-    round: str = Query(default="latest"),
+    state: _CanvasExportState = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
     _scope: None = Depends(vacancy_scope),
@@ -456,14 +532,12 @@ async def export_assessment_matrix_xlsx(
     server-side because openpyxl already lives here and the browser has
     no zip writer.
     """
-    payload = await service.get_assessment_matrix(
-        db, current_user.tenant_id, vacancy_id, round_filter=round
-    )
-    vacancy = await service.get_vacancy(db, current_user.tenant_id, vacancy_id)
-    title = getattr(vacancy, "title", None) or "Vacancy"
     from app.modules.recruitment.report_xlsx import render_canvas_xlsx
 
-    content = render_canvas_xlsx(payload, vacancy_title=title)
+    payload, built, title = await _canvas_export_payload(
+        db, current_user.tenant_id, vacancy_id, state
+    )
+    content = render_canvas_xlsx(payload, vacancy_title=title, built=built)
     return Response(
         content=content,
         media_type=(
@@ -471,6 +545,34 @@ async def export_assessment_matrix_xlsx(
         ),
         headers={
             "Content-Disposition": (f'attachment; filename="canvas-{vacancy_id}.xlsx"')
+        },
+    )
+
+
+@router.get("/recruitment/vacancies/{vacancy_id}/assessment-matrix/export.csv")
+async def export_assessment_matrix_csv(
+    vacancy_id: uuid.UUID,
+    state: _CanvasExportState = Depends(),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    _scope: None = Depends(vacancy_scope),
+):
+    """HRP-744 — the CSV twin of the XLSX export.
+
+    It used to be assembled in the browser from a second copy of the
+    rendering rules, which is how it lost the Total column while the
+    workbook kept it. Same endpoint shape, same builder, same gate.
+    """
+    from app.modules.recruitment.report_xlsx import render_canvas_csv
+
+    _payload, built, _title = await _canvas_export_payload(
+        db, current_user.tenant_id, vacancy_id, state
+    )
+    return Response(
+        content=render_canvas_csv(_payload, built=built),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (f'attachment; filename="canvas-{vacancy_id}.csv"')
         },
     )
 
@@ -576,6 +678,7 @@ async def generate_question_set(
     data: GenerateQuestionSetRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(cv_scope),
 ):
     """Generate, regenerate or evolve a question set (8 credits)."""
     return await question_service.generate_question_set(
@@ -597,6 +700,7 @@ async def add_question_to_set(
     data: QuestionCreate2,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(question_set_scope),
 ):
     return await question_service.add_question_to_set(
         db,
@@ -616,6 +720,7 @@ async def patch_question(
     data: QuestionUpdate2,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(question_scope),
 ):
     return await question_service.update_question_v2(
         db,
@@ -631,6 +736,7 @@ async def delete_question_v2(
     question_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(question_scope),
 ):
     await question_service.soft_delete_question(db, current_user.tenant_id, question_id)
 
@@ -643,6 +749,7 @@ async def export_question_set_pdf(
     data: QuestionSetExportRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(question_set_scope),
 ):
     pdf_bytes = await question_service.export_question_set_pdf(
         db,

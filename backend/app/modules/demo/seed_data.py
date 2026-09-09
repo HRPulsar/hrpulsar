@@ -707,7 +707,7 @@ ELENA_INTERVIEW_ANALYSIS: dict = {
     "competence_assessments": [
         {
             "competence_id": "python-advanced",
-            "score": 0.85,
+            "score": 0.9,
             "status": "assessed",
             "citations": [
                 {
@@ -735,7 +735,7 @@ ELENA_INTERVIEW_ANALYSIS: dict = {
         },
         {
             "competence_id": "postgres-advanced",
-            "score": 0.8,
+            "score": 0.85,
             "status": "assessed",
             "citations": [
                 {
@@ -763,7 +763,7 @@ ELENA_INTERVIEW_ANALYSIS: dict = {
         },
         {
             "competence_id": "payments-domain",
-            "score": 0.55,
+            "score": 0.6,
             "status": "assessed",
             "citations": [
                 {
@@ -791,7 +791,7 @@ ELENA_INTERVIEW_ANALYSIS: dict = {
         },
         {
             "competence_id": "mentorship",
-            "score": 0.75,
+            "score": 0.8,
             "status": "assessed",
             "citations": [
                 {
@@ -802,6 +802,18 @@ ELENA_INTERVIEW_ANALYSIS: dict = {
                 }
             ],
             "reasoning": "Differentiated approach for mid-level vs junior, honest about lacking a clean metric.",
+        },
+        {
+            # HRP-657: the interview never reached streaming — her blind
+            # spot below asks about it. A missing cell drops out of the
+            # matrix silently and quietly deflates the % match; a
+            # ``not_covered`` cell says what happened and is scored over
+            # the competences the round actually covered.
+            "competence_id": "streaming",
+            "score": None,
+            "status": "not_covered",
+            "citations": [],
+            "reasoning": "Not assessed in this round.",
         },
     ],
     "process_findings": [
@@ -883,6 +895,48 @@ TOMAS_INTERVIEW_ANALYSIS: dict = {
                 }
             ],
             "reasoning": "Adyen merchant settlement experience.",
+        },
+        {
+            "competence_id": "postgres-advanced",
+            "score": 0.6,
+            "status": "assessed",
+            "citations": [
+                {
+                    "segment_id": None,
+                    "start_sec": None,
+                    "end_sec": None,
+                    "quote": "Reads a query plan; has not owned a schema migration.",
+                }
+            ],
+            "reasoning": "Reads a query plan; has not owned a schema migration.",
+        },
+        {
+            "competence_id": "system-design",
+            "score": 0.65,
+            "status": "assessed",
+            "citations": [
+                {
+                    "segment_id": None,
+                    "start_sec": None,
+                    "end_sec": None,
+                    "quote": "Sound on the happy path, thin on failure modes.",
+                }
+            ],
+            "reasoning": "Sound on the happy path, thin on failure modes.",
+        },
+        {
+            "competence_id": "ownership",
+            "score": 0.7,
+            "status": "assessed",
+            "citations": [
+                {
+                    "segment_id": None,
+                    "start_sec": None,
+                    "end_sec": None,
+                    "quote": "Carried the settlement pager, escalated the design calls.",
+                }
+            ],
+            "reasoning": "Carried the settlement pager, escalated the design calls.",
         },
         {
             "competence_id": "mentorship",

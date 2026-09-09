@@ -17,6 +17,7 @@ import {
   GraduationCap,
   Languages as LanguagesIcon,
   Plus,
+  Quote,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -103,15 +104,31 @@ const HIGHLIGHT_CLASSES = [
 ];
 const HIGHLIGHT_DURATION_MS = 2000;
 
-// HRP-680: the permanent mark on a quoted item. Deliberately quiet —
-// a soft primary wash and a hairline inset ring, the same vocabulary
-// the rest of the card uses for "this is interactive". Loud enough to
-// be findable while reading the resume, not loud enough to compete
-// with the content.
+// HRP-680 (redo): a quoted item is still the clickable half of the
+// citation pair, but it no longer wears a permanent wash. The card used
+// to open with every cited entry pre-highlighted, so the resume read as
+// a page of hits before the recruiter had clicked anything — and the
+// wash then sat under whatever a chip click actually selected, which is
+// the state the return leg was supposed to make legible. What is left
+// is a hover affordance and the quiet icon below; the marking of an
+// entry happens when, and only when, a chip asks for it.
 const CITED_CLASS =
-  "cursor-pointer bg-primary/5 ring-1 ring-inset ring-primary/25 " +
-  "transition-colors hover:bg-primary/10 focus-visible:outline-none " +
-  "focus-visible:ring-2 focus-visible:ring-primary";
+  "cursor-pointer rounded-sm transition-colors hover:bg-primary/5 " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary";
+
+/** The permanent mark: an outline glyph, no fill. */
+function CitedMarker({ label }: { label: string }) {
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      data-testid="candidate-card-resume-cited-marker"
+      className="ml-1 inline-flex align-text-top text-primary/50"
+    >
+      <Quote aria-hidden className="size-3 shrink-0" />
+    </span>
+  );
+}
 
 /**
  * HRP-680 — props that turn a rendered resume item into the clickable
@@ -147,6 +164,55 @@ function citedItemProps(
   };
 }
 
+/**
+ * HRP-680 (redo) — the quoted words, marked where they actually are.
+ *
+ * The chip carries a verbatim slice of the resume, so the honest
+ * highlight is that slice and not the block around it. ``<mark>`` in the
+ * chips' own accent, not the browser's yellow and not the grey wash the
+ * card used to paint over the whole entry.
+ *
+ * Falls through to plain text when the quote is not in this particular
+ * field: an item renders several fields and the quote lives in one of
+ * them, and the caller treats "no field marked" as its cue to fall back
+ * to the section.
+ */
+function Marked({ text, needle }: { text: string; needle: string | null }) {
+  if (!needle) return <>{text}</>;
+  // Case-insensitive search, but the slice indices come from the original
+  // string — and lowercasing is not always length-preserving ("İ" becomes
+  // two code units), which would slide the mark off the words it belongs
+  // to. Fold only while the lengths agree; otherwise search as written,
+  // which for a chip quoting the resume verbatim is the usual case anyway.
+  const lowered = text.toLowerCase();
+  const loweredNeedle = needle.toLowerCase();
+  const at =
+    lowered.length === text.length && loweredNeedle.length === needle.length
+      ? lowered.indexOf(loweredNeedle)
+      : text.indexOf(needle);
+  if (at === -1) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, at)}
+      <mark className="rounded-sm bg-primary/25 px-0.5 text-inherit">
+        {text.slice(at, at + needle.length)}
+      </mark>
+      {text.slice(at + needle.length)}
+    </>
+  );
+}
+
+/** Which item a chip just asked for, and the words it quoted. */
+interface FocusedQuote {
+  key: string;
+  text: string;
+}
+
+/** The needle for one rendered item — null unless this is the target. */
+function needleFor(focused: FocusedQuote | null, key: string): string | null {
+  return focused && focused.key === key ? focused.text : null;
+}
+
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -173,6 +239,12 @@ export function ParsedResumeEditor({
       dispatchResumeCitationFocus({ ...excerpt, candidate_id: candidateId }),
     [candidateId],
   );
+  // HRP-680 (redo): the one entry a chip asked for. Nothing is marked
+  // until a chip fires, and only this key ever marks — the earlier build
+  // highlighted every cited entry at once, so clicking one chip landed
+  // the reader in a page where the target looked like all its neighbours.
+  const [focused, setFocused] = useState<FocusedQuote | null>(null);
+  const focusTimerRef = useRef<number | undefined>(undefined);
   const highlightStateRef = useRef<{
     el: HTMLElement;
     timer: number;
@@ -221,6 +293,7 @@ export function ParsedResumeEditor({
         window.clearTimeout(pending.timer);
         highlightStateRef.current = null;
       }
+      window.clearTimeout(focusTimerRef.current);
     };
   }, []);
 
@@ -258,17 +331,39 @@ export function ParsedResumeEditor({
       // whose section is collapsed away) falls back to the section block,
       // never to an arbitrary items[0].
       const itemKey = resumeItemKeyForExcerpt(parsed, detail);
-      const target: HTMLElement =
+      const item =
         (itemKey &&
           section.querySelector<HTMLElement>(
             `[data-resume-item-key="${itemKey}"]`,
           )) ||
-        section;
+        null;
+      // The mark is rendered, not painted on: ask React for it, then read
+      // the DOM back to learn whether the quote was actually found inside
+      // the entry. An item renders several fields and the substring may be
+      // in none of them (a paraphrase, a translated fixture) — that, and
+      // only that, is what the section-wide highlight is still for.
+      const quote = detail.excerpt_text?.trim() ?? "";
+      flushSync(() => {
+        setFocused(itemKey && quote ? { key: itemKey, text: quote } : null);
+      });
+      const marked = item?.querySelector<HTMLElement>("mark") ?? null;
+      const target = marked ?? item ?? section;
       target.scrollIntoView({
         block: "center",
         behavior: prefersReducedMotion() ? "auto" : "smooth",
       });
-      applyHighlight(target);
+      if (marked) {
+        // The mark itself is the highlight; give it the same lifetime the
+        // section ring has always had.
+        window.clearTimeout(focusTimerRef.current);
+        focusTimerRef.current = window.setTimeout(
+          () => setFocused(null),
+          HIGHLIGHT_DURATION_MS,
+        );
+      } else {
+        setFocused(null);
+        applyHighlight(section);
+      }
     }
     window.addEventListener(RESUME_EXCERPT_FOCUS_EVENT, handle);
     return () =>
@@ -324,6 +419,7 @@ export function ParsedResumeEditor({
           cited={cited}
           citedLabel={citedLabel}
           onCitedFocus={onCitedFocus}
+          focused={focused}
         />
         <ExperienceEditor
           value={parsed?.experience ?? []}
@@ -333,6 +429,7 @@ export function ParsedResumeEditor({
           cited={cited}
           citedLabel={citedLabel}
           onCitedFocus={onCitedFocus}
+          focused={focused}
         />
         <EducationEditor
           value={parsed?.education ?? []}
@@ -342,6 +439,7 @@ export function ParsedResumeEditor({
           cited={cited}
           citedLabel={citedLabel}
           onCitedFocus={onCitedFocus}
+          focused={focused}
         />
         <SkillsEditor
           value={parsed?.skills ?? []}
@@ -351,6 +449,7 @@ export function ParsedResumeEditor({
           cited={cited}
           citedLabel={citedLabel}
           onCitedFocus={onCitedFocus}
+          focused={focused}
         />
         <LanguagesEditor
           value={parsed?.languages ?? []}
@@ -521,6 +620,8 @@ interface CitedSectionProps {
   cited: Map<string, ResumeExcerpt>;
   citedLabel: string;
   onCitedFocus: (excerpt: ResumeExcerpt) => void;
+  /** HRP-680 (redo): the single entry a chip is pointing at right now. */
+  focused: FocusedQuote | null;
 }
 
 function SummaryEditor({
@@ -531,6 +632,7 @@ function SummaryEditor({
   cited,
   citedLabel,
   onCitedFocus,
+  focused,
 }: {
   value: string | null;
   collapsed: boolean;
@@ -575,8 +677,10 @@ function SummaryEditor({
               citedLabel,
               onCitedFocus,
             )}
+            data-resume-item-key="summary"
           >
-            {value}
+            <Marked text={value} needle={needleFor(focused, "summary")} />
+            {cited.has("summary") && <CitedMarker label={citedLabel} />}
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">
@@ -599,6 +703,7 @@ function SkillsEditor({
   cited,
   citedLabel,
   onCitedFocus,
+  focused,
 }: {
   value: string[];
   collapsed: boolean;
@@ -683,7 +788,8 @@ function SkillsEditor({
                 )}
                 data-resume-item-key={`skill-${idx}`}
               >
-                {s}
+                <Marked text={s} needle={needleFor(focused, `skill-${idx}`)} />
+                {cited.has(`skill-${idx}`) && <CitedMarker label={citedLabel} />}
               </Badge>
             ))}
           </div>
@@ -708,6 +814,7 @@ function ExperienceEditor({
   cited,
   citedLabel,
   onCitedFocus,
+  focused,
 }: {
   value: ParsedResumeExperience[];
   collapsed: boolean;
@@ -840,16 +947,32 @@ function ExperienceEditor({
                 data-resume-period={period}
               >
                 <p className="font-medium">
-                  {exp.position ||
-                    exp.title ||
-                    exp.role ||
-                    t("resumeEditorRoleFallback")}
-                  {exp.company ? ` @ ${exp.company}` : ""}
+                  <Marked
+                    text={
+                      (exp.position ||
+                        exp.title ||
+                        exp.role ||
+                        t("resumeEditorRoleFallback")) +
+                      (exp.company ? ` @ ${exp.company}` : "")
+                    }
+                    needle={needleFor(focused, `experience-${i}`)}
+                  />
+                  {cited.has(`experience-${i}`) && (
+                    <CitedMarker label={citedLabel} />
+                  )}
                 </p>
-                <p className="text-xs text-muted-foreground">{period}</p>
+                <p className="text-xs text-muted-foreground">
+                  <Marked
+                    text={period}
+                    needle={needleFor(focused, `experience-${i}`)}
+                  />
+                </p>
                 {exp.description && (
                   <p className="mt-1 whitespace-pre-line text-sm text-foreground/90">
-                    {exp.description}
+                    <Marked
+                      text={exp.description}
+                      needle={needleFor(focused, `experience-${i}`)}
+                    />
                   </p>
                 )}
               </li>
@@ -873,6 +996,7 @@ function EducationEditor({
   cited,
   citedLabel,
   onCitedFocus,
+  focused,
 }: {
   value: ParsedResumeEducation[];
   collapsed: boolean;
@@ -990,13 +1114,24 @@ function EducationEditor({
               <GraduationCap className="mt-0.5 size-4 text-muted-foreground" />
               <div>
                 <p className="font-medium">
-                  {edu.institution || t("resumeEditorFieldInstitution")}
-                  {edu.degree ? ` — ${edu.degree}` : ""}
+                  <Marked
+                    text={
+                      (edu.institution || t("resumeEditorFieldInstitution")) +
+                      (edu.degree ? ` — ${edu.degree}` : "")
+                    }
+                    needle={needleFor(focused, `education-${i}`)}
+                  />
+                  {cited.has(`education-${i}`) && (
+                    <CitedMarker label={citedLabel} />
+                  )}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {[edu.field, edu.start_date, edu.end_date]
-                    .filter(Boolean)
-                    .join(" · ")}
+                  <Marked
+                    text={[edu.field, edu.start_date, edu.end_date]
+                      .filter(Boolean)
+                      .join(" · ")}
+                    needle={needleFor(focused, `education-${i}`)}
+                  />
                 </p>
               </div>
             </li>

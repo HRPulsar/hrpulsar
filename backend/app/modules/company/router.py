@@ -248,11 +248,18 @@ async def delete_division(
 )
 async def list_division_specializations(
     division_id: uuid.UUID,
+    include_sub_divisions: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """HRP-571: ``include_sub_divisions=true`` answers with the whole
+    subtree's mappings, so the division page's tiles show a child
+    department's specializations before anyone is hired into it."""
     return await service.list_division_specializations(
-        db, current_user.tenant_id, division_id
+        db,
+        current_user.tenant_id,
+        division_id,
+        include_sub_divisions=include_sub_divisions,
     )
 
 

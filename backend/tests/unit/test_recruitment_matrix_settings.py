@@ -614,7 +614,9 @@ class TestAssessmentMatrixRounds:
         result = await service.get_assessment_matrix(
             db, tenant.id, uuid.UUID(str(ctx["vacancy"]["id"]))
         )
-        assert result["round_count"] == 2
+        # Interview recordings alone build no Round slot — slots come from
+        # the Manager-assessments rounds (HRP-510 REDO).
+        assert result["round_slots"] == []
         assert result["round"] == "latest"
         cell = next(
             c
@@ -624,23 +626,26 @@ class TestAssessmentMatrixRounds:
         # Newest interview wins by default.
         assert cell["ai_score"] == 5.0
 
-    async def test_specific_round_scopes_to_that_interview(
+    async def test_slot_that_no_candidate_has_falls_back_to_latest(
         self, db: AsyncSession, tenant, user, matrix_scale
     ) -> None:
+        """HRP-510 REDO — the old numeric filter meant "the n-th interview
+        recording". Slots are rounds now, so a key nobody owns is not a
+        request for the first recording; it is not a slot at all."""
         ctx = await self._two_rounds(db, tenant, user, matrix_scale)
         result = await service.get_assessment_matrix(
             db,
             tenant.id,
             uuid.UUID(str(ctx["vacancy"]["id"])),
-            round_filter="1",
+            round_filter="interview_1",
         )
-        assert result["round"] == "1"
+        assert result["round"] == "latest"
         cell = next(
             c
             for c in result["candidates"][0]["cells"]
             if c["competence_id"] == service.normalize_competence_id("python-skills")
         )
-        assert cell["ai_score"] == 3.0
+        assert cell["ai_score"] == 5.0
 
     async def test_all_combined_averages_across_rounds(
         self, db: AsyncSession, tenant, user, matrix_scale
@@ -708,7 +713,6 @@ class TestAssessmentMatrixRounds:
         result = await service.get_assessment_matrix(
             db, tenant.id, uuid.UUID(str(ctx["vacancy"]["id"]))
         )
-        assert result["round_count"] == 1
         cell = next(
             c
             for c in result["candidates"][0]["cells"]
@@ -740,3 +744,403 @@ class TestAssessmentMatrixRounds:
         # Two rows per candidate: Manager then AI.
         assert ws.cell(row=5, column=2).value == "Manager"
         assert ws.cell(row=6, column=2).value == "AI"
+
+
+# ─── HRP-510 REDO: Round slots + vacancy Assessment scale ────────────
+
+
+class TestAssessmentMatrixRoundSlots:
+    """The Round selector lists the vacancy's Manager-assessment slots.
+
+    A round belongs to one candidate-vacancy pair, so the filter cannot be
+    a round id: "Interview 2" has to resolve to a different row for every
+    candidate, and to nothing at all for a candidate who never had it.
+    """
+
+    @staticmethod
+    async def _round_with_scores(
+        db: AsyncSession,
+        tenant,
+        user,
+        cv_id: uuid.UUID,
+        round_type: str,
+        scores: dict[str, int],
+    ) -> uuid.UUID:
+        from app.modules.recruitment import manager_assessment_service
+        from app.modules.recruitment.manager_assessment_schemas import (
+            CompetenceScoreIn,
+            RoundCreate,
+        )
+
+        rnd = await manager_assessment_service.create_round(
+            db, tenant.id, user.id, cv_id, RoundCreate(type=round_type)
+        )
+        round_id = uuid.UUID(str(rnd["id"]))
+        sheet = await manager_assessment_service.get_or_create_assessment(
+            db, tenant.id, round_id, evaluator_user_id=user.id
+        )
+        for slug, value in scores.items():
+            await manager_assessment_service.set_competence_score(
+                db,
+                tenant.id,
+                user.id,
+                sheet.id,
+                service.normalize_competence_id(slug),
+                CompetenceScoreIn(score_value=value),
+            )
+        return round_id
+
+    @staticmethod
+    async def _run(
+        db,
+        tenant,
+        cv_id: uuid.UUID,
+        mode: str,
+        assessments: list[dict],
+        *,
+        interview_id: uuid.UUID | None = None,
+    ):
+        from datetime import datetime, timezone
+
+        from app.modules.recruitment.models import AIAnalysisRun
+        from sqlalchemy import select as _select
+
+        # What every finalising task does first: only one active completed
+        # run per pair is allowed, older ones are archived. The archived
+        # resume-only run is still the only answer the Pre-interview slot
+        # has once a full top-up supersedes it.
+        prior = (
+            (
+                await db.execute(
+                    _select(AIAnalysisRun).where(
+                        AIAnalysisRun.candidate_vacancy_id == cv_id,
+                        AIAnalysisRun.archived_at.is_(None),
+                        AIAnalysisRun.status == "completed",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for row in prior:
+            row.archived_at = datetime.now(timezone.utc)
+        await db.flush()
+
+        run = AIAnalysisRun(
+            tenant_id=tenant.id,
+            candidate_vacancy_id=cv_id,
+            mode=mode,
+            status="completed",
+            interview_id=interview_id,
+            analysis_data={"mode": mode, "competence_assessments": assessments},
+        )
+        db.add(run)
+        await db.commit()
+        await db.refresh(run)
+        return run
+
+    async def test_slots_come_from_the_candidate_with_the_most_rounds(
+        self, db: AsyncSession, tenant, user
+    ) -> None:
+        ctx = await _vacancy_with_competences(
+            db, tenant, user, _COMPETENCE_SEED, n_candidates=2
+        )
+        deep = uuid.UUID(str(ctx["cv_links"][0]["id"]))
+        shallow = uuid.UUID(str(ctx["cv_links"][1]["id"]))
+        await self._round_with_scores(db, tenant, user, deep, "pre_interview", {})
+        for _ in range(3):
+            await self._round_with_scores(db, tenant, user, deep, "interview", {})
+        await self._round_with_scores(db, tenant, user, shallow, "interview", {})
+
+        result = await service.get_assessment_matrix(
+            db, tenant.id, uuid.UUID(str(ctx["vacancy"]["id"]))
+        )
+        assert [slot["key"] for slot in result["round_slots"]] == [
+            "pre_interview",
+            "interview_1",
+            "interview_2",
+            "interview_3",
+        ]
+        # No candidate reached a Final round, so the slot is not offered.
+        assert all(slot["type"] != "final" for slot in result["round_slots"])
+
+    async def test_slot_scopes_manager_cells_to_that_round(
+        self, db: AsyncSession, tenant, user
+    ) -> None:
+        ctx = await _vacancy_with_competences(
+            db, tenant, user, _COMPETENCE_SEED, n_candidates=2
+        )
+        scored = uuid.UUID(str(ctx["cv_links"][0]["id"]))
+        # Interview 1 says 2, Interview 2 says 4 — the slot decides which.
+        await self._round_with_scores(
+            db, tenant, user, scored, "interview", {"python-skills": 2}
+        )
+        await self._round_with_scores(
+            db, tenant, user, scored, "interview", {"python-skills": 4}
+        )
+        # The second candidate never got past Interview 1.
+        await self._round_with_scores(
+            db,
+            tenant,
+            user,
+            uuid.UUID(str(ctx["cv_links"][1]["id"])),
+            "interview",
+            {"python-skills": 3},
+        )
+
+        python_id = service.normalize_competence_id("python-skills")
+        first = await service.get_assessment_matrix(
+            db,
+            tenant.id,
+            uuid.UUID(str(ctx["vacancy"]["id"])),
+            round_filter="interview_1",
+        )
+        assert first["round"] == "interview_1"
+        by_cv = {c["candidate_vacancy_id"]: c for c in first["candidates"]}
+        cell = next(
+            c for c in by_cv[scored]["cells"] if c["competence_id"] == python_id
+        )
+        assert cell["manager_score"] == 2.0
+
+        second = await service.get_assessment_matrix(
+            db,
+            tenant.id,
+            uuid.UUID(str(ctx["vacancy"]["id"])),
+            round_filter="interview_2",
+        )
+        by_cv = {c["candidate_vacancy_id"]: c for c in second["candidates"]}
+        cell = next(
+            c for c in by_cv[scored]["cells"] if c["competence_id"] == python_id
+        )
+        assert cell["manager_score"] == 4.0
+        # A candidate who never had Interview 2 reads as dashes, not as
+        # their Interview 1 scores borrowed forward.
+        other = by_cv[uuid.UUID(str(ctx["cv_links"][1]["id"]))]
+        assert all(c["manager_score"] is None for c in other["cells"])
+        assert other["manager_percent"] is None
+
+    async def test_pre_interview_slot_takes_the_last_resume_only_run(
+        self, db: AsyncSession, tenant, user
+    ) -> None:
+        ctx = await _vacancy_with_competences(
+            db, tenant, user, _COMPETENCE_SEED, n_candidates=1
+        )
+        cv_id = uuid.UUID(str(ctx["cv_links"][0]["id"]))
+        await self._round_with_scores(db, tenant, user, cv_id, "pre_interview", {})
+        await self._run(
+            db,
+            tenant,
+            cv_id,
+            "resume_only",
+            [{"competence_id": "python-skills", "score": 0.25, "status": "assessed"}],
+        )
+        # Re-run of the same mode — the newer verdict wins.
+        await self._run(
+            db,
+            tenant,
+            cv_id,
+            "resume_only",
+            [{"competence_id": "python-skills", "score": 0.75, "status": "assessed"}],
+        )
+        # A full run must not answer for the Pre-interview slot.
+        await self._run(
+            db,
+            tenant,
+            cv_id,
+            "full",
+            [{"competence_id": "python-skills", "score": 1.0, "status": "assessed"}],
+        )
+
+        result = await service.get_assessment_matrix(
+            db,
+            tenant.id,
+            uuid.UUID(str(ctx["vacancy"]["id"])),
+            round_filter="pre_interview",
+        )
+        cell = next(
+            c
+            for c in result["candidates"][0]["cells"]
+            if c["competence_id"] == service.normalize_competence_id("python-skills")
+        )
+        # 0.75 across the vacancy's 1..4 range: 1 + 0.75 × 3.
+        assert cell["ai_score"] == 3.25
+
+    async def test_candidate_without_the_slot_round_reads_as_dashes(
+        self, db: AsyncSession, tenant, user
+    ) -> None:
+        """A slot exists because *some* candidate reached that round. For
+        everyone else the whole row is dashes — including the AI half: a
+        resume-only run is not the Pre-interview verdict of a candidate
+        who has no Pre-interview round."""
+        ctx = await _vacancy_with_competences(
+            db, tenant, user, _COMPETENCE_SEED, n_candidates=2
+        )
+        with_round = uuid.UUID(str(ctx["cv_links"][0]["id"]))
+        without_round = uuid.UUID(str(ctx["cv_links"][1]["id"]))
+        await self._round_with_scores(db, tenant, user, with_round, "pre_interview", {})
+        for cv_id in (with_round, without_round):
+            await self._run(
+                db,
+                tenant,
+                cv_id,
+                "resume_only",
+                [
+                    {
+                        "competence_id": "python-skills",
+                        "score": 1.0,
+                        "status": "assessed",
+                    }
+                ],
+            )
+
+        result = await service.get_assessment_matrix(
+            db,
+            tenant.id,
+            uuid.UUID(str(ctx["vacancy"]["id"])),
+            round_filter="pre_interview",
+        )
+        by_cv = {c["candidate_vacancy_id"]: c for c in result["candidates"]}
+        assert all(
+            cell["ai_score"] is None for cell in by_cv[without_round]["cells"]
+        )
+        assert by_cv[without_round]["ai_percent"] is None
+        # The candidate who does have the round still gets their verdict.
+        assert any(cell["ai_score"] == 4.0 for cell in by_cv[with_round]["cells"])
+
+    async def test_interview_slot_needs_the_interview_linked_to_that_round(
+        self, db: AsyncSession, tenant, user
+    ) -> None:
+        ctx = await _vacancy_with_competences(
+            db, tenant, user, _COMPETENCE_SEED, n_candidates=1
+        )
+        cv_id = uuid.UUID(str(ctx["cv_links"][0]["id"]))
+        round_id = await self._round_with_scores(
+            db, tenant, user, cv_id, "interview", {}
+        )
+        unlinked = Interview(
+            tenant_id=tenant.id,
+            candidate_vacancy_id=cv_id,
+            transcription_status="completed",
+        )
+        db.add(unlinked)
+        await db.commit()
+        await db.refresh(unlinked)
+        await self._run(
+            db,
+            tenant,
+            cv_id,
+            "full",
+            [{"competence_id": "python-skills", "score": 1.0, "status": "assessed"}],
+            interview_id=unlinked.id,
+        )
+        python_id = service.normalize_competence_id("python-skills")
+
+        # The transcript is not attached to the round, so the slot has no
+        # AI opinion — a dash, not the candidate's newest analysis.
+        unlinked_result = await service.get_assessment_matrix(
+            db,
+            tenant.id,
+            uuid.UUID(str(ctx["vacancy"]["id"])),
+            round_filter="interview_1",
+        )
+        cell = next(
+            c
+            for c in unlinked_result["candidates"][0]["cells"]
+            if c["competence_id"] == python_id
+        )
+        assert cell["ai_score"] is None
+        assert cell["ai_status"] == "missing"
+
+        unlinked.round_id = round_id
+        await db.commit()
+        linked_result = await service.get_assessment_matrix(
+            db,
+            tenant.id,
+            uuid.UUID(str(ctx["vacancy"]["id"])),
+            round_filter="interview_1",
+        )
+        cell = next(
+            c
+            for c in linked_result["candidates"][0]["cells"]
+            if c["competence_id"] == python_id
+        )
+        assert cell["ai_score"] == 4.0
+
+    async def test_bottom_and_top_marks_agree_across_both_halves(
+        self, db: AsyncSession, tenant, user, matrix_scale
+    ) -> None:
+        """Review finding — the AI was rebased as ``raw × max``, which puts
+        it on 0..max while manager levels sit on min..max. On "Standard
+        1-4" the AI's bottom mark printed 0.0 against the manager's 1: a
+        full threshold apart, so two verdicts that agree the candidate is
+        at the floor of the scale were counted as a divergence."""
+        ctx = await _vacancy_with_competences(
+            db, tenant, user, _COMPETENCE_SEED, n_candidates=1
+        )
+        cv_id = uuid.UUID(str(ctx["cv_links"][0]["id"]))
+        # Bottom of the scale on one competence, top on another.
+        await self._round_with_scores(
+            db,
+            tenant,
+            user,
+            cv_id,
+            "interview",
+            {"python-skills": 1, "communication": 4},
+        )
+        await self._run(
+            db,
+            tenant,
+            cv_id,
+            "resume_only",
+            [
+                {"competence_id": "python-skills", "score": 0.0, "status": "assessed"},
+                {"competence_id": "communication", "score": 1.0, "status": "assessed"},
+            ],
+        )
+
+        result = await service.get_assessment_matrix(
+            db, tenant.id, uuid.UUID(str(ctx["vacancy"]["id"]))
+        )
+        candidate = result["candidates"][0]
+        cells = {str(c["competence_id"]): c for c in candidate["cells"]}
+        bottom = cells[str(service.normalize_competence_id("python-skills"))]
+        assert bottom["manager_score"] == 1.0
+        assert bottom["ai_score"] == 1.0
+        assert bottom["divergence"] is False
+        top = cells[str(service.normalize_competence_id("communication"))]
+        assert top["manager_score"] == 4.0
+        assert top["ai_score"] == 4.0
+        assert top["divergence"] is False
+        assert candidate["divergence_count"] == 0
+
+    async def test_matrix_renders_the_vacancy_assessment_scale(
+        self, db: AsyncSession, tenant, user, matrix_scale
+    ) -> None:
+        """HRP-510 REDO task 2 — the Scale selector names the vacancy's
+        Assessment scale, and its top level is the matrix maximum. The
+        tenant ScaleConfig (0..5 here) is not what the recruiter picked
+        for the vacancy, and printing a top mark as 5 on a 1-4 vacancy is
+        what the tester rejected."""
+        ctx = await _vacancy_with_competences(
+            db, tenant, user, _COMPETENCE_SEED, n_candidates=1
+        )
+        await self._round_with_scores(
+            db,
+            tenant,
+            user,
+            uuid.UUID(str(ctx["cv_links"][0]["id"])),
+            "interview",
+            {"python-skills": 4},
+        )
+
+        result = await service.get_assessment_matrix(
+            db, tenant.id, uuid.UUID(str(ctx["vacancy"]["id"]))
+        )
+        assert result["max_score"] == 4.0
+        assert result["scale_name"] == "Standard 1-4"
+        cell = next(
+            c
+            for c in result["candidates"][0]["cells"]
+            if c["competence_id"] == service.normalize_competence_id("python-skills")
+        )
+        assert cell["manager_score"] == 4.0

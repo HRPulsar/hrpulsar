@@ -198,9 +198,27 @@ export function InternalCandidatesBlock({
               data-testid={`vacancy-internal-candidate-${item.employee_id}`}
             >
               <span className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">
-                  {item.employee_name ?? t("internalCandidatesUnnamed")}
-                </span>
+                {/* HRP-667 REDO: the name opens the employee's profile —
+                    but only for a viewer the API says may read it. The
+                    shortlist itself is the same for everyone who may open
+                    the vacancy (HRP-703); a name nobody could follow is
+                    plain text, not a link to a 403. */}
+                {item.can_view_profile ? (
+                  <Link
+                    href={`/employees/${item.employee_id}`}
+                    className="font-medium text-primary underline-offset-2 hover:underline"
+                    data-testid={`vacancy-internal-candidate-${item.employee_id}-name`}
+                  >
+                    {item.employee_name ?? t("internalCandidatesUnnamed")}
+                  </Link>
+                ) : (
+                  <span
+                    className="font-medium"
+                    data-testid={`vacancy-internal-candidate-${item.employee_id}-name`}
+                  >
+                    {item.employee_name ?? t("internalCandidatesUnnamed")}
+                  </span>
+                )}
                 <Badge
                   variant="outline"
                   className={cn("border text-[10px]", BADGE_OUTLINE.indigo)}

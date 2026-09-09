@@ -892,6 +892,7 @@
     "vacancy_funnel_empty": "Der Funnel der Stelle muss mindestens eine Phase enthalten.",
     "vacancy_funnel_no_active_stage": "Der Funnel der Stelle muss mindestens eine aktive (nicht abschließende) Phase enthalten.",
     "vacancy_already_in_talent_market": "Diese Stelle wurde bereits im internen Talentmarkt veröffentlicht.",
+    "vacancy_internal_search_locked_by_card": "Die interne Suche bleibt aktiv, solange diese Stelle im internen Talentmarkt veröffentlicht ist. Entfernen Sie zuerst ihre Talentmarkt-Karte.",
     "vacancy_internal_search_disabled": "Die interne Suche ist für diese Stelle deaktiviert. Aktivieren Sie sie in den Stelleneinstellungen, um die Stelle im internen Talentmarkt zu veröffentlichen.",
     "vacancy_has_no_library_competences": "Fügen Sie erforderliche Kompetenzen aus der Bibliothek hinzu, bevor Sie diese Stelle im internen Talentmarkt veröffentlichen — der interne Abgleich wird anhand dieser Kompetenzen bewertet.",
     "vacancy_competences_required_while_posted": "Eine im internen Talentmarkt veröffentlichte Stelle braucht mindestens eine erforderliche Kompetenz — entfernen Sie die Stelle zuerst aus dem Talentmarkt, wenn Sie die Liste leeren möchten.",
@@ -935,6 +936,41 @@
       "llm_yandex_model_not_self_contained": "Das Yandex-Modell muss eine vollständige gpt://<folder>/<model>-URI sein, sofern keine Basis-URL konfiguriert ist."
     },
     "llm_yandex_model_not_dispatchable": "Das Yandex-Modell {model} benötigt eine vollständige gpt://<folder>/<model>-URI, sofern keine Basis-URL konfiguriert ist.",
-    "no_pending_consent_request": "Keine offene Einwilligungsanfrage zum erneuten Senden"
+    "no_pending_consent_request": "Keine offene Einwilligungsanfrage zum erneuten Senden",
+    "vacancy_no_longer_available": "Die Stelle zu dieser Einladung ist nicht mehr verfügbar"
+  },
+  "dev_loop": {
+    "finding": {
+      "gaps_without_plan": "Personen unter der Grade-Messlatte ohne Entwicklungsplan",
+      "pdp_overdue": "Entwicklungspläne mit überschrittener Frist",
+      "pdp_stuck_review": "Pläne, die ohne Bewegung im Review feststecken",
+      "assessment_coverage": "aktive Personen ohne aktuelle Bewertung",
+      "survey_pending": "Umfragen, die auf Ihre Antworten warten",
+      "pdp_returned": "Ihr Entwicklungsplan wurde zur Überarbeitung zurückgegeben",
+      "pdp_deadline_soon": "die Frist Ihres Entwicklungsplans rückt näher",
+      "gap_without_plan": "Ihre Kompetenzen unter der Messlatte ohne Entwicklungsplan",
+      "assessment_stale": "keine aktuelle eigene Bewertung"
+    }
+  },
+  "reference": {
+    "dictionary": {
+      "grade": {
+        "junior": {
+          "label": "Junior"
+        },
+        "middle": {
+          "label": "Middle"
+        },
+        "senior": {
+          "label": "Senior"
+        },
+        "lead": {
+          "label": "Lead"
+        },
+        "principal": {
+          "label": "Principal"
+        }
+      }
+    }
   }
 }

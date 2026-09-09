@@ -27,12 +27,7 @@ import {
   type ScaleLevel,
 } from "@/components/recruitment/evaluation-sheet-form";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { toast } from "sonner";
 
@@ -57,13 +52,24 @@ interface PublicAssessment {
 // load. The server classifies the file and — for anything text-bearing —
 // extracts it so the pane shows a real preview; the raw file is fetched
 // only when the evaluator clicks Download.
+interface ParsedResumeSections {
+  summary: string | null;
+  experience: string[];
+  education: string[];
+  skills: string[];
+}
+
 interface ResumePreview {
-  kind: "pdf" | "text" | "unsupported" | "none";
+  kind: "pdf" | "text" | "parsed" | "unsupported" | "none";
   filename: string | null;
   mime_type: string | null;
   preview_url: string | null;
   download_url: string | null;
   blocks: string[];
+  // HRP-371 REDO case 2: a candidate entered by hand has no file —
+  // ``parsed_resume_jsonb`` is the resume, and there is nothing to
+  // download.
+  parsed: ParsedResumeSections | null;
   truncated: boolean;
 }
 
@@ -78,17 +84,21 @@ type PublicContext = {
   assessment_id: string | null;
   personal_message: string | null;
   consent_accepted: boolean;
+  // HRP-376 REDO: the sheet is read-only whenever its *round* is closed,
+  // so the round's state travels with the context instead of being
+  // guessed from the error code of a mutation that already failed.
+  round_status?: "in_progress" | "completed" | "archived";
   tenant_name: string | null;
   // Everything below is withheld by the server until consent is accepted
   // (the payload carries candidate PII and a presigned resume URL).
   candidate_name?: string;
   vacancy_title?: string | null;
-  resume_url?: string | null;
-  resume_filename?: string | null;
-  resume_mime_type?: string | null;
   questions?: PublicQuestion[];
   recruiter_name?: string | null;
   recruiter_email?: string | null;
+  // HRP-379: the person the submit notification actually goes to — the
+  // vacancy owner, or whoever sent the invitation when there is none.
+  owner_name?: string | null;
   scale_levels?: ScaleLevel[];
   competences?: RawProfileCompetence[];
   critical_submit_threshold?: number;
@@ -100,6 +110,11 @@ type Phase =
   | "expired"
   | "revoked"
   | "invalid"
+  // HRP-381: dead ends the evaluator can do nothing about, but which are
+  // not a broken link and must not read as one.
+  | "declined"
+  | "candidateGone"
+  | "vacancyGone"
   // HRP-383: the pre_interview slot was claimed by someone else before
   // this evaluator opened their link. Not an invalid link — the token is
   // fine, there is simply nothing left to fill in.
@@ -127,6 +142,9 @@ function formatTimeLeft(expiresAt: string, t: Translator): string {
 
 export default function PublicAssessmentPage() {
   const t = useTranslations("auth");
+  // The resume section headings already exist for the candidate card;
+  // the public pane renders the same four labels (HRP-371 REDO).
+  const tRecruitment = useTranslations("recruitment");
   const locale = useLocale();
   const { token } = useParams<{ token: string }>();
   const [phase, setPhase] = useState<Phase>("loading");
@@ -185,12 +203,27 @@ export default function PublicAssessmentPage() {
         }
       }
     } catch (err: unknown) {
-      const e = err as { status?: number; message?: string };
+      const e = err as { status?: number; message?: string; code?: string };
       if (e.status === 410) {
+        // HRP-381: route on the backend's error code. The old branch read
+        // English substrings out of the localized message, so a German
+        // reply fell through to "This link is invalid" for every case.
+        const byCode: Record<string, Phase> = {
+          invitation_revoked: "revoked",
+          invitation_expired: "expired",
+          invitation_declined: "declined",
+          candidate_no_longer_available: "candidateGone",
+          vacancy_no_longer_available: "vacancyGone",
+        };
         const m = (e.message || "").toLowerCase();
-        if (m.includes("revoked")) setPhase("revoked");
-        else if (m.includes("expired")) setPhase("expired");
-        else setPhase("invalid");
+        setPhase(
+          byCode[e.code ?? ""] ??
+            (m.includes("revoked")
+              ? "revoked"
+              : m.includes("expired")
+                ? "expired"
+                : "invalid"),
+        );
       } else if (e.status === 409) {
         // HRP-383: the round already has its single evaluator. Falling
         // through to "invalid" told the evaluator their link was broken,
@@ -211,7 +244,12 @@ export default function PublicAssessmentPage() {
   }, [load]);
 
   const submitted = ctx?.status === "submitted";
-  const readOnly = submitted && !ctx?.allow_reediting;
+  const roundStatus = ctx?.round_status ?? "in_progress";
+  const roundClosed = roundStatus === "completed" || roundStatus === "archived";
+  // "Allow re-editing after submit" only ever governed a *live* round:
+  // once the round is completed or archived nothing on it takes writes,
+  // and an editable form here just collects 409s (HRP-376 REDO).
+  const readOnly = roundClosed || (submitted && !ctx?.allow_reediting);
 
   async function acceptConsent() {
     try {
@@ -226,7 +264,10 @@ export default function PublicAssessmentPage() {
   async function decline() {
     try {
       await api.post(`/v1/public/assessments/${token}/consent/decline`);
-      setPhase("invalid");
+      // HRP-381: declining is an answer, not a broken link — and coming
+      // back to the same URL shows this page again (the token is dead,
+      // and the backend answers ``invitation_declined``).
+      setPhase("declined");
     } catch {
       // no-op
     }
@@ -543,6 +584,33 @@ export default function PublicAssessmentPage() {
       />
     );
   }
+  if (phase === "declined") {
+    return (
+      <ErrorPage
+        title={t("declinedTitle")}
+        testid="public-error-declined-page"
+        body={t("declinedBody")}
+      />
+    );
+  }
+  if (phase === "candidateGone") {
+    return (
+      <ErrorPage
+        title={t("candidateGoneTitle")}
+        testid="public-error-candidate-gone-page"
+        body={t("invalidLinkBody")}
+      />
+    );
+  }
+  if (phase === "vacancyGone") {
+    return (
+      <ErrorPage
+        title={t("vacancyGoneTitle")}
+        testid="public-error-vacancy-gone-page"
+        body={t("invalidLinkBody")}
+      />
+    );
+  }
   if (phase === "invalid") {
     return (
       <ErrorPage
@@ -669,10 +737,29 @@ export default function PublicAssessmentPage() {
           <CardContent className="space-y-1 py-4 text-sm">
             <p className="font-medium">
               {t("submittedBanner", {
-                recruiter: ctx?.recruiter_name ?? t("theRecruiter"),
+                recruiter:
+                  ctx?.owner_name ?? ctx?.recruiter_name ?? t("theRecruiter"),
               })}
             </p>
-            {ctx?.allow_reediting ? (
+            {roundStatus === "archived" ? (
+              <p
+                className="text-muted-foreground"
+                data-testid="public-assessment-round-closed-note"
+              >
+                {t("evaluationArchivedReadOnlyNote")}
+              </p>
+            ) : roundStatus === "completed" ? (
+              <p
+                className="text-muted-foreground"
+                data-testid="public-assessment-round-closed-note"
+              >
+                {/* The round is closed either way; the copy differs on
+                    whether re-editing was ever offered to this evaluator. */}
+                {ctx?.allow_reediting
+                  ? t("evaluationCompletedReadOnlyNote")
+                  : t("roundCompletedReadOnlyNote")}
+              </p>
+            ) : ctx?.allow_reediting ? (
               <p
                 className="text-muted-foreground"
                 data-testid="public-assessment-reedit-note"
@@ -720,7 +807,7 @@ export default function PublicAssessmentPage() {
               )}
             </CardHeader>
             <CardContent>
-              <ResumePane preview={resume} fallbackUrl={ctx?.resume_url} t={t} />
+              <ResumePane preview={resume} t={t} tRecruitment={tRecruitment} />
             </CardContent>
           </Card>
           {(ctx?.questions?.length ?? 0) > 0 && (
@@ -851,32 +938,31 @@ export default function PublicAssessmentPage() {
   );
 }
 
-/** HRP-371: resume pane — inline pdf, extracted text, or download-only. */
+/** HRP-371: resume pane — inline pdf, extracted text, parsed sections,
+ * or download-only. No branch here may point at the file itself: the
+ * only link to the bytes is the Download button in the card header, and
+ * it carries Content-Disposition: attachment. */
 function ResumePane({
   preview,
-  fallbackUrl,
   t,
+  tRecruitment,
 }: {
   preview: ResumePreview | null;
-  /** Pre-HRP-371 context field, still the source for the pdf iframe when
-   * the preview call itself failed (expired presign, transient 5xx). */
-  fallbackUrl?: string | null;
   t: Translator;
+  tRecruitment: Translator;
 }) {
   if (preview === null) {
-    return fallbackUrl ? (
-      <iframe
-        src={fallbackUrl}
-        title={t("resume")}
-        className="h-[480px] w-full rounded-md border"
-        data-testid="public-assessment-resume-frame"
-      />
-    ) : (
-      <p className="text-sm text-muted-foreground">{t("noResumeUploaded")}</p>
+    // Still loading. The pane used to fall back to an iframe on the
+    // context's presigned URL here, which is what downloaded the .docx
+    // before the evaluator had touched anything (HRP-371 REDO).
+    return (
+      <p className="text-sm text-muted-foreground">{t("loadingEllipsis")}</p>
     );
   }
   if (preview.kind === "none") {
-    return <p className="text-sm text-muted-foreground">{t("noResumeUploaded")}</p>;
+    return (
+      <p className="text-sm text-muted-foreground">{t("noResumeUploaded")}</p>
+    );
   }
   if (preview.kind === "pdf" && preview.preview_url) {
     return (
@@ -886,6 +972,44 @@ function ResumePane({
         className="h-[480px] w-full rounded-md border"
         data-testid="public-assessment-resume-frame"
       />
+    );
+  }
+  if (preview.kind === "parsed" && preview.parsed) {
+    const { summary, experience, education, skills } = preview.parsed;
+    return (
+      <div
+        className="h-[480px] space-y-3 overflow-y-auto rounded-md border p-3 text-sm"
+        data-testid="public-assessment-resume-parsed"
+      >
+        {summary && (
+          <ResumeSection title={tRecruitment("resumeEditorSectionSummary")}>
+            <p className="whitespace-pre-wrap break-words">{summary}</p>
+          </ResumeSection>
+        )}
+        {experience.length > 0 && (
+          <ResumeSection title={tRecruitment("resumeEditorSectionExperience")}>
+            {experience.map((line, i) => (
+              <p key={i} className="whitespace-pre-wrap break-words">
+                {line}
+              </p>
+            ))}
+          </ResumeSection>
+        )}
+        {education.length > 0 && (
+          <ResumeSection title={tRecruitment("resumeEditorSectionEducation")}>
+            {education.map((line, i) => (
+              <p key={i} className="whitespace-pre-wrap break-words">
+                {line}
+              </p>
+            ))}
+          </ResumeSection>
+        )}
+        {skills.length > 0 && (
+          <ResumeSection title={tRecruitment("resumeEditorSectionSkills")}>
+            <p className="break-words">{skills.join(", ")}</p>
+          </ResumeSection>
+        )}
+      </div>
     );
   }
   if (preview.kind === "text" && preview.blocks.length > 0) {
@@ -918,6 +1042,23 @@ function ResumePane({
   );
 }
 
+function ResumeSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-1">
+      <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
 function ErrorPage({
   title,
   body,
@@ -932,7 +1073,9 @@ function ErrorPage({
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">{body}</CardContent>
+      <CardContent className="text-sm text-muted-foreground">
+        {body}
+      </CardContent>
     </Card>
   );
 }

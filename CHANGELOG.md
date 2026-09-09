@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.23.1] - 2026-09-09
+
+### Fixed
+- A candidate's Manager score for a vacancy now comes from the last completed round in hiring order — pre-interview, interviews, final — instead of the last one closed by the clock, and both the candidate page and the vacancy candidates table name that round in the score's tooltip (HRP-727)
+- Round average per competence always carries an icon and lists every evaluator's own score in its tooltip — initials for colleagues, full name for external evaluators — with the warning icon kept for genuine disagreement (HRP-374)
+- Missing Pre-interview and Final rounds hold their place in the round tab strip instead of trailing after the New round button (HRP-372)
+- Divergence threshold of an existing assessment scale is shown on the scales page and can be changed there (HRP-742)
+- Managers and hiring managers can no longer change candidate stages, assessment rounds, interview questions or evaluator invites on a neighbouring division's vacancy (HRP-630)
+- Question generation from a previous round only reads interviews of the same candidate and vacancy (HRP-772)
+- The "Interview questions ready" email link scrolls the candidate page to the Interview questions block, not just to the right tab (HRP-442)
+- A regenerated question set is dated by its latest generation instead of its first (HRP-740)
+- Add question dialogs open with no field focused, and the competence picker is wide enough to keep Search, Expand all and Collapse all on one line (HRP-485)
+- Vacancy candidate rows leave "Analyzing…" for the verdict on their own once the analysis finishes, without reloading the page (HRP-493)
+- Schedule interview no longer offers Pre-interview in the Round list (HRP-741)
+- Internal candidate names on a vacancy link to the employee profile only for viewers who may open it, and Allow internal search is locked on once the vacancy has a talent market card (HRP-667)
+- Division page shows the specializations mapped to its child departments even when nobody works there yet (HRP-571)
+- Employees can open the Talent Market section again and see the cards they are a candidate on, with their own row and match breakdown only (HRP-765)
+- Talent Market match drawer offers Open development plan as a button rather than a text link once the plan exists (HRP-665)
+- Vacancy owner is emailed when an invited external evaluator submits their evaluation, with a link straight to the candidate's manager assessments (HRP-379)
+- External evaluation sheet is read-only once its round is completed or archived, and archiving a round now revokes the links still outstanding on it (HRP-376)
+- Opening an external evaluation link no longer downloads the candidate's resume file on its own, and a resume entered by hand is shown as text instead of an empty panel (HRP-371)
+- External evaluation link explains itself when it stops working: declining, an archived candidate and an archived vacancy each get their own page instead of "This link is invalid" (HRP-381)
+- Vacancy XLSX report prints the AI score, verdict and summary of the candidate's last completed analysis instead of leaving the AI blocks empty (HRP-685)
+- Assessment canvas scopes both manager and AI scores to the round picked in the Round filter (Pre-interview, Interview 1..N, Final), renders the vacancy's own assessment scale, and keeps the Candidate column and competence header on screen while the matrix scrolls (HRP-510)
+- Assessment canvas XLSX and CSV export exactly what the toolbar is showing — view, round, scale, candidate checkboxes and both filters — and the CSV now carries the Total column (HRP-744)
+- AI dashboard summaries name grades the way the workspace's Grades reference does and describe findings in the interface's own wording instead of metric codes (HRP-764)
+- Dashboard period switch now moves the Completed tile as well as Development dynamics, and the demo workspace spreads its finished plans and assessments across the year so 30, 90 and 365 days report different figures (HRP-766)
+- Demo development plans link to the course, book or article their material actually names, and in-house workshops carry no link instead of pointing at the product's own documentation (HRP-767)
+- Parsed resume opens with no highlighting, and a citation chip now marks the quoted words in that one entry instead of washing over every cited entry at once (HRP-680)
+- Development page shows employees why they cannot start a plan themselves instead of hiding the button, so the dashboard's "Plan development" prompt no longer ends on an empty page (HRP-768)
+- Demo's flagship vacancy ranks its three candidates apart and in order, with the uncovered competences of a partial interview shown as such instead of quietly deflating the match (HRP-657)
+
 ## [1.23.0] - 2026-09-07
 
 ### Added

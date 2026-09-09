@@ -94,14 +94,14 @@ test.describe("HRP-680 — resume citations link both ways", () => {
     await expect(citedItems.first()).toBeVisible({ timeout: 15000 });
 
     // --- Forward leg: chip → resume item -------------------------------
-    // The 2 s focus ring is applied by class (`ring-amber-400`), which is
-    // the only signal the highlighted item exposes — it carries no
-    // attribute of its own. See the report note on `data-resume-focused`.
+    // HRP-680 (redo): the chip marks the words it quoted, inside the one
+    // entry it came from. Nothing is marked before the click — the card
+    // used to open with every cited entry washed over, which is what made
+    // the click's own target indistinguishable from its neighbours.
+    await expect(resumeCard.locator("mark")).toHaveCount(0);
     await chips.first().click();
-    const highlighted = resumeCard.locator(
-      "[data-resume-item-key].ring-amber-400",
-    );
-    await expect(highlighted).toHaveCount(1, { timeout: 5000 });
+    const marked = resumeCard.locator("[data-resume-item-key] mark");
+    await expect(marked).toHaveCount(1, { timeout: 5000 });
 
     // --- Return leg: resume item → chip --------------------------------
     // The chip the item was marked with picks up `data-focused` for the

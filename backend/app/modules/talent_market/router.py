@@ -31,6 +31,7 @@ from app.modules.talent_market.schemas import (
 from app.modules.talent_market.scope import (
     TalentScope,
     assert_division_in_scope,
+    assert_employee_card_visible,
     card_scope,
     talent_scope,
 )
@@ -64,11 +65,10 @@ async def search_cards(
     # board's published cards plus their own department's and the ones
     # they authored. Before this, a division head with a subtree got no
     # filter at all and read every department's drafts.
-    candidate_only = (
-        is_employee_only(current_user)
-        and not scope.division_ids
-        and scope.employee_id is not None
-    )
+    # HRP-765: no ``employee_id is not None`` arm — a role-employee user
+    # without an Employee row used to fall through to the board's
+    # published cards while the detail route refused them the same card.
+    candidate_only = is_employee_only(current_user) and not scope.division_ids
     items, total = await service.search_cards(
         db,
         current_user.tenant_id,
@@ -310,7 +310,12 @@ async def get_candidate_breakdown(
     Add / Change picker dialogs.
 
     HRP-209: Employees can only open the drawer on their own row;
-    other employees' breakdowns return 403."""
+    other employees' breakdowns return 403.
+
+    HRP-765: and only on a card they may read at all. "Is this row mine"
+    was the whole check, so an employee could pass their own id with any
+    card id and read that card's requirements, levels, specializations and
+    threshold — a draft they were never a candidate on included."""
     from fastapi import status as _status
 
     from app.core.access_scope import (
@@ -323,6 +328,9 @@ async def get_candidate_breakdown(
         emp = await get_current_employee(db, current_user)
         if emp is None or emp.id != employee_id:
             raise AppError("tm_insufficient_permissions", _status.HTTP_403_FORBIDDEN)
+        await assert_employee_card_visible(
+            db, current_user.tenant_id, card_id, emp.id
+        )
     return await service.get_candidate_breakdown(
         db, current_user.tenant_id, card_id, employee_id
     )

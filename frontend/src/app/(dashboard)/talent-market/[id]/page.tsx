@@ -627,9 +627,11 @@ export default function TalentCardDetailPage() {
   // manager has closed the drawer.
   const [deepLinkOpened, setDeepLinkOpened] = useState(false);
   useEffect(() => {
-    if (!deepLinkCandidateId || deepLinkOpened || !card || !canManage) return;
+    if (!deepLinkCandidateId || deepLinkOpened || !card) return;
     const target = card.candidates.find((c) => c.id === deepLinkCandidateId);
-    if (!target) return;
+    // HRP-765: the employee follows the same link to their own row —
+    // the drawer is the one place their match is explained.
+    if (!target || (!canManage && !target.is_me)) return;
     setDeepLinkOpened(true);
     openMatchDrawer(target.employee_id, target.employee_name, {
       id: target.id,

@@ -368,7 +368,7 @@ test.describe("Public assessment page (HRP-186)", () => {
     await expect(page.getByTestId("public-assessment-reedit-note")).toBeVisible();
   });
 
-  test("decline lands on the invalid-token page", async ({ page }) => {
+  test("decline lands on the declined page (HRP-381)", async ({ page }) => {
     const admin = await registerUser(page);
     const setup = await createInviteSetup(page, admin.accessToken);
 
@@ -378,8 +378,13 @@ test.describe("Public assessment page (HRP-186)", () => {
     ).toBeVisible({ timeout: 15000 });
     await page.getByTestId("public-assessment-consent-decline-btn").click();
 
-    await expect(
-      page.getByTestId("public-error-invalid-token-page"),
-    ).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId("public-error-declined-page")).toBeVisible({
+      timeout: 10000,
+    });
+    // The declined state is remembered: a later visit shows the same page.
+    await page.goto(`/public/assessments/${setup.rawToken}`);
+    await expect(page.getByTestId("public-error-declined-page")).toBeVisible({
+      timeout: 10000,
+    });
   });
 });

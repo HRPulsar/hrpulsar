@@ -508,6 +508,112 @@ _ROUND_TYPE_RANK = case(
 )
 
 
+#: Python-side twin of :data:`_ROUND_TYPE_RANK`.
+_ROUND_TYPE_ORDER = {"pre_interview": 0, "interview": 1, "final": 2}
+
+
+def round_order_key(rd: AssessmentRound) -> tuple[int, int]:
+    """Sort key for the hiring order: Pre-interview < Interview N < Final."""
+    return (_ROUND_TYPE_ORDER.get(rd.type, 3), rd.round_number or 0)
+
+
+def select_manager_score_round(
+    rounds: Sequence[AssessmentRound], scored_round_ids: set[uuid.UUID]
+) -> AssessmentRound | None:
+    """Pick the round the vacancy's Manager score is computed from.
+
+    HRP-727 — one rule for every surface that names or uses that score
+    (the recompute, the vacancy candidates table, the candidate page):
+
+    (a) an archived round never counts;
+    (b) "last" means last in hiring order — Pre-interview, Interview 1..N,
+        Final — not last by date. A Final closed before the interview that
+        follows it still wins, and an Interview N closed after the Final
+        does not;
+    (c) once any round is complete only complete rounds are eligible, and
+        the last of them carrying a score wins; with no complete round the
+        last scored round does.
+
+    ``scored_round_ids`` must be built with the same "counted sheet"
+    predicate :func:`_round_average` uses, so a round it names always
+    yields an average.
+    """
+    live = sorted((r for r in rounds if r.archived_at is None), key=round_order_key)
+    scored = [r for r in live if r.id in scored_round_ids]
+    if any(r.status == "complete" for r in live):
+        complete = [r for r in scored if r.status == "complete"]
+        return complete[-1] if complete else None
+    return scored[-1] if scored else None
+
+
+async def scored_round_ids(
+    db: AsyncSession, round_ids: Sequence[uuid.UUID]
+) -> set[uuid.UUID]:
+    """Which of ``round_ids`` carry at least one counted competence score."""
+    if not round_ids:
+        return set()
+    result = await db.execute(
+        select(RecruitmentAssessment.round_id)
+        .join(
+            AssessmentCompetenceScore,
+            AssessmentCompetenceScore.assessment_id == RecruitmentAssessment.id,
+        )
+        .where(
+            RecruitmentAssessment.round_id.in_(round_ids),
+            AssessmentCompetenceScore.score_value.is_not(None),
+            _COUNTABLE_SHEET,
+        )
+        .distinct()
+    )
+    return set(result.scalars().all())
+
+
+async def resolve_score_rounds(
+    db: AsyncSession, tenant_id: uuid.UUID, cv_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, AssessmentRound]:
+    """Bulk :func:`select_manager_score_round`, keyed by candidate-vacancy.
+
+    Read-side twin of :func:`recompute_manager_score`: the source round is
+    derived on read (two queries for a whole page) rather than stored, so
+    the tooltip can never name a round the score no longer comes from.
+    Candidate-vacancies with no eligible round are absent from the map.
+    """
+    if not cv_ids:
+        return {}
+    rounds = (
+        (
+            await db.execute(
+                select(AssessmentRound).where(
+                    AssessmentRound.candidate_vacancy_id.in_(cv_ids),
+                    AssessmentRound.tenant_id == tenant_id,
+                    AssessmentRound.archived_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rounds:
+        return {}
+    scored = await scored_round_ids(db, [r.id for r in rounds])
+    by_cv: dict[uuid.UUID, list[AssessmentRound]] = {}
+    for rd in rounds:
+        by_cv.setdefault(rd.candidate_vacancy_id, []).append(rd)
+    out: dict[uuid.UUID, AssessmentRound] = {}
+    for cv_id, cv_rounds in by_cv.items():
+        chosen = select_manager_score_round(cv_rounds, scored)
+        if chosen is not None:
+            out[cv_id] = chosen
+    return out
+
+
+def round_ref(rd: AssessmentRound | None) -> dict[str, Any] | None:
+    """Round descriptor for read payloads — the client owns the label."""
+    if rd is None:
+        return None
+    return {"id": rd.id, "type": rd.type, "round_number": rd.round_number}
+
+
 async def list_rounds(
     db: AsyncSession, tenant_id: uuid.UUID, cv_id: uuid.UUID
 ) -> list[dict[str, Any]]:
@@ -636,7 +742,8 @@ async def apply_round_action(
       and we would have no record of who still has it. Re-inviting is one
       click and leaves an audit trail (decision recorded on HRP-376 §7c).
     * ``archive`` — drops the round out of the candidate's aggregate while
-      keeping every score readable.
+      keeping every score readable, and revokes its live invites for the
+      same reason ``complete`` does.
     * ``restore`` — returns the round to whichever side of complete it was
       archived from.
     """
@@ -672,6 +779,11 @@ async def apply_round_action(
         rd.status = "archived"
         rd.archived_at = datetime.now(timezone.utc)
         rd.archived_reason = archived_reason
+        # REDO 04.09: archiving closes the round to writes exactly like
+        # completing it, so the links handed out for it have to die the
+        # same way — otherwise an evaluator opens a sheet whose scores
+        # are already excluded from the candidate's aggregate.
+        await _revoke_round_invites(db, rd, user_id)
     else:  # restore
         if rd.archived_at is None:
             raise AppError("round_not_archived", status.HTTP_409_CONFLICT)
@@ -1461,46 +1573,19 @@ async def recompute_manager_score(
 ) -> None:
     """Recompute ``candidate_vacancies.manager_score`` for one CV.
 
-    Picks the last round (by created_at) whose status is ``complete``;
-    if none is complete, falls back to the last round with any scored
-    competences. The CV's snapshot scale weights determine the
-    normalized weight; ``manager_score`` itself is the rounded mean of
-    ``score_value`` levels across all evaluators / competences in the
-    chosen round.
+    The round it aggregates is chosen by :func:`select_manager_score_round`
+    (HRP-727: hiring order, not chronology); ``manager_score`` is the mean
+    of the ``score_value`` levels across every counted evaluator and
+    competence in that one round, and the CV's snapshot scale weights
+    rebase it onto ``manager_score_weight``.
     """
 
     cv = await db.get(CandidateVacancy, cv_id)
     if cv is None or cv.tenant_id != tenant_id:
         return
 
-    rounds_result = await db.execute(
-        select(AssessmentRound)
-        .where(
-            AssessmentRound.candidate_vacancy_id == cv_id,
-            AssessmentRound.tenant_id == tenant_id,
-            AssessmentRound.archived_at.is_(None),
-        )
-        .order_by(AssessmentRound.created_at)
-    )
-    rounds = rounds_result.scalars().all()
-    if not rounds:
-        cv.manager_score = None
-        cv.manager_score_weight = None
-        cv.manager_score_source_round_id = None
-        cv.manager_score_updated_at = datetime.now(timezone.utc)
-        await db.commit()
-        return
-
-    complete = [r for r in rounds if r.status == "complete"]
-    candidates = complete or rounds
-    chosen: AssessmentRound | None = None
-    chosen_avg: float | None = None
-    for r in reversed(candidates):
-        avg = await _round_average(db, r.id)
-        if avg is not None:
-            chosen = r
-            chosen_avg = avg
-            break
+    chosen = (await resolve_score_rounds(db, tenant_id, [cv_id])).get(cv_id)
+    chosen_avg = await _round_average(db, chosen.id) if chosen is not None else None
     if chosen is None or chosen_avg is None:
         cv.manager_score = None
         cv.manager_score_weight = None
@@ -1578,6 +1663,12 @@ async def round_aggregate(
                 {
                     "evaluator": evaluator_names[a.id],
                     "evaluator_type": "internal" if is_internal else "external",
+                    # HRP-374 REDO: an internal evaluator is named in the
+                    # tooltip by the very initials their avatar shows;
+                    # an external one by their full name.
+                    "initials": (
+                        _initials(evaluator_names[a.id]) if is_internal else None
+                    ),
                     "score": sc.score_value,
                 }
             )

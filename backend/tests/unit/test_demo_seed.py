@@ -1376,11 +1376,18 @@ async def test_seed_fills_plan_items_with_materials(
     # these Material rows through the product's own filler. So pin the
     # links where they live: every material behind the three sales
     # competences has to open on something.
-    sales_titles = {
+    gtm = {"c-sales-discovery", "c-product-knowledge", "c-objection-handling"}
+    sales_titles = {m["title"] for m in MATERIALS if m["competence_key"] in gtm}
+    # HRP-767 narrowed this from "all nine carry a link". Six of them are
+    # the fictional company's own workshops and playbooks, and the links
+    # they used to carry were invented — an internal product tour opening
+    # our documentation site. What the sales script actually needs is one
+    # material the presenter can open, at the level the plan reaches:
+    # Will Gapp is a junior grade, so his plan caps at level 1.
+    entry_level_titles = {
         m["title"]
         for m in MATERIALS
-        if m["competence_key"]
-        in {"c-sales-discovery", "c-product-knowledge", "c-objection-handling"}
+        if m["competence_key"] in gtm and m["skill_level_key"] == "sl-l1"
     }
     sales_materials = [
         m
@@ -1392,10 +1399,15 @@ async def test_seed_fills_plan_items_with_materials(
         if m.title in sales_titles
     ]
     assert len(sales_materials) == 9, "three GTM competences x three levels"
-    unlinked = [m.title for m in sales_materials if not m.link]
-    assert not unlinked, (
-        f"GTM material without a link — the demo opens one on stage: {unlinked}"
+    openable = [
+        m for m in sales_materials if m.link and m.title in entry_level_titles
+    ]
+    assert openable, (
+        "no openable GTM material at level 1 — the sales script clicks one "
+        "inside the plan it builds on stage"
     )
+    ours = [m.title for m in sales_materials if m.link and "hrpulsar.com" in m.link]
+    assert not ours, f"GTM material pointing at our own site: {ours}"
 
 
 @pytest.mark.asyncio
@@ -1770,9 +1782,9 @@ async def test_seeded_tenant_tells_the_dev_loop_story(
     )
     assert payload["stages"]["developing"]["gap_employees_with_plan"] >= 3
     # Storyline C: Bella Martins closed her Python gap in a re-assessment.
-    assert payload["stages"]["closed"]["gaps_closed_90d"] >= 1
+    assert payload["stages"]["closed"]["gaps_closed"] >= 1
     # Anna's Q3 plan finished before its deadline — the sub-line is alive.
-    assert payload["stages"]["closed"]["plans_done_on_time_90d"] >= 1
+    assert payload["stages"]["closed"]["plans_done_on_time"] >= 1
 
     # The demo employee persona (Will Gapp, HRP-713) opens a live
     # personal dashboard: the two findings the sales script names, three
@@ -1803,6 +1815,58 @@ async def test_seeded_tenant_tells_the_dev_loop_story(
     assert personal["growth"] is not None
     assert personal["growth"]["next_grade"]["title"] == "Middle"
     assert len(personal["growth"]["missing"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_seeded_tenant_answers_each_period_differently(
+    db: AsyncSession,
+    tenant,
+    user,
+    assessment_statuses,
+    assessment_types,
+    default_answer_scale,
+):
+    """HRP-766: the 30 / 90 / 365 switch has to move numbers.
+
+    Two halves, and the bug needed both. The tiles ignored the period
+    outright, and every event the seed laid down sat inside the last
+    month -- so even after the code read the parameter, three periods
+    would still have printed one snapshot three times.
+    """
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    from app.modules.analytics.service import dev_loop
+
+    by_period = {
+        days: await dev_loop(db, tenant.id, None, days=days)
+        for days in (30, 90, 365)
+    }
+    completed = {
+        days: payload["dynamics"]["plans_completed"]
+        for days, payload in by_period.items()
+    }
+    assert completed[30] < completed[90] < completed[365], completed
+    on_time = {
+        days: payload["stages"]["closed"]["plans_done_on_time"]
+        for days, payload in by_period.items()
+    }
+    assert on_time[30] < on_time[90] < on_time[365], on_time
+    # The tile has to say which window it is answering over, or the
+    # reader cannot tell a changed period from changed data.
+    assert [p["stages"]["closed"]["window_days"] for p in by_period.values()] == [
+        30,
+        90,
+        365,
+    ]
+    # HRP-766 asks the shortest and the longest period to disagree; assert
+    # the whole block so a future seed cannot quietly flatten one of them.
+    assert by_period[30]["stages"] != by_period[365]["stages"]
+    # A competence raised is measured against a reading taken before the
+    # window opened, so the year-old baseline has to survive: without it
+    # the longest period reports the least progress.
+    assert by_period[365]["dynamics"]["competences_improved"] >= 1
 
 
 @pytest.mark.asyncio
@@ -1862,6 +1926,95 @@ async def test_demo_recruiting_funnel_tells_the_recommendation_story(
     priya = by_name["Priya Shah"]
     assert priya["manager_score"] is None
     assert priya["ai_verdict"] == "not_recommended"
+
+
+@pytest.mark.asyncio
+async def test_flagship_funnel_reads_as_a_real_pipeline(
+    db: AsyncSession, tenant, user
+):
+    """HRP-657 (redo): three candidates, three obviously different matches.
+
+    The complaint was a funnel that looked staged: resumes with empty
+    fields behind rows that printed a verdict. The resumes arrived with
+    v1.22.0; what was left was the ranking. The AI % match is scored over
+    the competences a round actually covered, so a strong senior whose
+    interview only reached three of eight competences landed at 36% —
+    below the junior the same screen calls "not recommended". A demo that
+    ranks the wrong way round is worse than one with blank fields.
+
+    Pins the shape rather than the exact numbers: the resumes are
+    complete, every candidate has a run, and the three matches are far
+    enough apart, and in the right order, to be read off the list.
+    """
+    from app.modules.recruitment.models import AIAnalysisRun, Candidate, Vacancy
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    vacancy = (
+        await db.execute(
+            select(Vacancy).where(
+                Vacancy.tenant_id == tenant.id,
+                Vacancy.title.like("Senior Backend Engineer%"),
+            )
+        )
+    ).scalar_one()
+
+    rows = (
+        (
+            await db.execute(
+                select(CandidateVacancy, Candidate)
+                .join(Candidate, Candidate.id == CandidateVacancy.candidate_id)
+                .where(CandidateVacancy.vacancy_id == vacancy.id)
+            )
+        )
+        .all()
+    )
+    assert len(rows) == 3, "the flagship funnel is the one a visitor reads first"
+
+    for cv, candidate in rows:
+        parsed = candidate.parsed_resume_jsonb or {}
+        # Every section the candidate card renders — a blank one is the
+        # reported symptom, and the card gives no hint which is missing.
+        assert parsed.get("summary"), candidate.full_name
+        for section in ("experience", "education", "skills", "languages"):
+            assert parsed.get(section), f"{candidate.full_name}: {section}"
+        runs = (
+            (
+                await db.execute(
+                    select(AIAnalysisRun).where(
+                        AIAnalysisRun.candidate_vacancy_id == cv.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(runs) == 1, candidate.full_name
+        assert cv.ai_score is not None, candidate.full_name
+
+    # The per-competence match the list column actually prints, not the
+    # headline ai_score — that is the number the redo was about.
+    from app.modules.recruitment.assessment_service import get_assessment_matrix
+
+    matrix = await get_assessment_matrix(db, tenant.id, vacancy.id)
+    by_name = {
+        c["name"]: c["ai_percent"] for c in matrix["candidates"]
+    }
+    elena = by_name["Elena Volkov"]
+    tomas = by_name["Tomás Becker"]
+    priya = by_name["Priya Shah"]
+    assert elena is not None and tomas is not None
+    assert elena > tomas, (by_name, "the offer-stage candidate must lead")
+    assert tomas > (priya or 0), (
+        by_name,
+        "the seven-year senior must outrank the three-year junior",
+    )
+    # Far enough apart to be told apart at a glance: the funnel used to
+    # separate second from third by under two points.
+    assert elena - tomas >= 10, by_name
+    assert tomas - (priya or 0) >= 10, by_name
 
 
 @pytest.mark.asyncio

@@ -502,12 +502,29 @@ def _spec_div_to_read(sd: SpecializationDivision) -> dict:
 
 
 async def list_division_specializations(
-    db: AsyncSession, tenant_id: uuid.UUID, division_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    division_id: uuid.UUID,
+    *,
+    include_sub_divisions: bool = False,
 ) -> list[dict]:
+    """HRP-571: ``include_sub_divisions`` widens the answer to the subtree.
+
+    The Specializations tiles on a division page count employees across the
+    whole subtree (HRP-58), but the mapped catalogue came from the division's
+    own rows, so a child department with a mapping and nobody in it yet
+    contributed nothing — the mapping existed and the parent never showed it.
+    Each row carries its ``division_id``, so the caller can narrow back to the
+    division itself without a second request, the way the employee list does.
+    """
     await _get_division(db, tenant_id, division_id)
+    division_ids: Sequence[uuid.UUID] = [division_id]
+    if include_sub_divisions:
+        division_ids = await get_division_subtree_ids(db, tenant_id, [division_id])
     result = await db.execute(
         select(SpecializationDivision).where(
-            SpecializationDivision.division_id == division_id,
+            SpecializationDivision.tenant_id == tenant_id,
+            SpecializationDivision.division_id.in_(division_ids),
         )
     )
     return [_spec_div_to_read(sd) for sd in result.scalars().all()]

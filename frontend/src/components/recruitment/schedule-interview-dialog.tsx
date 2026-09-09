@@ -46,6 +46,23 @@ const NOTES_MAX = 1000;
 
 const NO_ROUND = "__none__";
 
+/**
+ * HRP-741: a pre-interview round is not something an interview gets
+ * scheduled into, so it is dropped from the Round options.
+ *
+ * The round an interview is already bound to survives the filter: an
+ * older interview may well sit on a pre-interview round, and hiding its
+ * own value would blank the field the moment the user opened Edit.
+ */
+export function schedulableRounds(
+  rounds: InterviewRoundOption[],
+  currentRoundId: string,
+): InterviewRoundOption[] {
+  return rounds.filter(
+    (r) => r.type !== "pre_interview" || r.id === currentRoundId,
+  );
+}
+
 const TYPE_ORDER: InterviewType[] = [
   "audio",
   "video",
@@ -325,7 +342,7 @@ export function ScheduleInterviewDialog({
                 <SelectItem value={NO_ROUND}>
                   {t("candidateInterviewsRoundNone")}
                 </SelectItem>
-                {rounds.map((r) => (
+                {schedulableRounds(rounds, roundId).map((r) => (
                   <SelectItem key={r.id} value={r.id}>
                     {labelForAssessmentRound(t, r)}
                   </SelectItem>

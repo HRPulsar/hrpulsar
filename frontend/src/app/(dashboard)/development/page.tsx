@@ -447,11 +447,42 @@ export default function DevelopmentPage() {
           {/* HRP-290: counter respects active filters (Assessments parity). */}
           <p className="text-sm text-muted-foreground" data-testid="development-count">{t("plansCount", { count: filtered.length })}</p>
         </div>
-        {canManage && (
+        {/* HRP-768: a plan is authored by an admin or a manager — POST /pdp
+            is gated on those roles, and reviewing your own plan is the point
+            of the workflow. Employees used to get no button at all, so the
+            "Plan development" card on their dashboard sent them to a page
+            with nothing on it and no word about why. The action stays
+            denied; what changes is that it now says so. */}
+        {canManage ? (
           <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="development-btn-create">
             <Plus className="mr-1 h-4 w-4" />
             {t("createPlan")}
           </Button>
+        ) : (
+          /* A disabled button takes no focus and fires no hover, so the
+             reason has to reach a keyboard and a screen reader by another
+             route: the trigger span is focusable, and the reason rides on
+             the button itself as the accessible name and the native title
+             (review follow-up — hover was the only way to read it). */
+          <Tooltip>
+            <TooltipTrigger
+              render={<span tabIndex={0} className="inline-flex" />}
+            >
+              <Button
+                size="sm"
+                disabled
+                title={t("createPlanDeniedHint")}
+                aria-label={`${t("createPlan")}. ${t("createPlanDeniedHint")}`}
+                data-testid="development-btn-create"
+              >
+                <Plus className="mr-1 h-4 w-4" />
+                {t("createPlan")}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent data-testid="development-btn-create-denied-hint">
+              {t("createPlanDeniedHint")}
+            </TooltipContent>
+          </Tooltip>
         )}
       </div>
 

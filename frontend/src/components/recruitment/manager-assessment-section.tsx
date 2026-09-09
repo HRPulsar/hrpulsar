@@ -5,7 +5,9 @@ import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import {
+  labelForRound,
   nextInterviewNumber,
+  roundStrip,
   sortRounds,
 } from "@/lib/manager-assessment-rounds";
 import { useAuth } from "@/context/auth-context";
@@ -828,38 +830,66 @@ export function ManagerAssessmentSection({
               {loadingRounds && (
                 <Loader2 className="size-4 animate-spin text-muted-foreground" />
               )}
-              {rounds.map((r) => (
-                <span key={r.id} className="flex items-center gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => selectRound(r.id)}
-                    className={`rounded-full px-3 py-1 text-xs ${
-                      r.id === activeRoundId
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-muted-foreground"
-                    } ${r.status === "archived" ? "line-through opacity-60" : ""}`}
-                    data-testid={`assessment-round-tab-${r.id}`}
+              {/* HRP-372 REDO: the missing Pre-interview / Final read as
+                  placeholders in their own slot, so the strip keeps the
+                  hiring order whether or not those rounds exist. */}
+              {roundStrip(rounds).map((slot) =>
+                slot.kind === "placeholder" ? (
+                  <Button
+                    key={`add-${slot.type}`}
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => createRound(slot.type)}
+                    data-testid={`assessment-round-add-${slot.type}`}
                   >
-                    {labelForRound(t, r)}
-                    {r.status === "complete" && <span className="ml-1">·✓</span>}
-                  </button>
-                  {/* HRP-376: Complete / Reopen / Archive / Restore. */}
-                  <RoundKebab
-                    round={r}
-                    onAction={runRoundAction}
-                    // HRP-348: Complete obeys the same gate as the button.
-                    // `canComplete` is only knowable for the round whose
-                    // sheet is loaded, so any other tab has to be opened
-                    // first rather than completed blind from the strip.
-                    canComplete={r.id === activeRoundId ? canComplete : false}
-                    completeHint={
-                      r.id === activeRoundId
-                        ? completeHint
-                        : t("managerAssessmentRoundCompleteHintInactive")
-                    }
-                  />
-                </span>
-              ))}
+                    {slot.type === "pre_interview"
+                      ? t("managerAssessmentAddPreInterview")
+                      : t("managerAssessmentAddFinal")}
+                  </Button>
+                ) : (
+                  <span
+                    key={slot.round.id}
+                    className="flex items-center gap-0.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => selectRound(slot.round.id)}
+                      className={`rounded-full px-3 py-1 text-xs ${
+                        slot.round.id === activeRoundId
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground"
+                      } ${
+                        slot.round.status === "archived"
+                          ? "line-through opacity-60"
+                          : ""
+                      }`}
+                      data-testid={`assessment-round-tab-${slot.round.id}`}
+                    >
+                      {labelForRound(t, slot.round)}
+                      {slot.round.status === "complete" && (
+                        <span className="ml-1">·✓</span>
+                      )}
+                    </button>
+                    {/* HRP-376: Complete / Reopen / Archive / Restore. */}
+                    <RoundKebab
+                      round={slot.round}
+                      onAction={runRoundAction}
+                      // HRP-348: Complete obeys the same gate as the button.
+                      // `canComplete` is only knowable for the round whose
+                      // sheet is loaded, so any other tab has to be opened
+                      // first rather than completed blind from the strip.
+                      canComplete={
+                        slot.round.id === activeRoundId ? canComplete : false
+                      }
+                      completeHint={
+                        slot.round.id === activeRoundId
+                          ? completeHint
+                          : t("managerAssessmentRoundCompleteHintInactive")
+                      }
+                    />
+                  </span>
+                ),
+              )}
               <Button
                 size="sm"
                 variant="outline"
@@ -868,24 +898,6 @@ export function ManagerAssessmentSection({
               >
                 <Plus className="size-3" /> {t("managerAssessmentNewRound")}
               </Button>
-              {!rounds.some((r) => r.type === "pre_interview") && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => createRound("pre_interview")}
-                >
-                  {t("managerAssessmentAddPreInterview")}
-                </Button>
-              )}
-              {!rounds.some((r) => r.type === "final") && rounds.length > 0 && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => createRound("final")}
-                >
-                  {t("managerAssessmentAddFinal")}
-                </Button>
-              )}
             </div>
 
             {/* Evaluators on this round (HRP-373) */}
@@ -1158,17 +1170,6 @@ export function ManagerAssessmentSection({
       />
     </Card>
   );
-}
-
-function labelForRound(
-  t: (key: string, values?: Record<string, string | number>) => string,
-  r: RoundDto,
-): string {
-  if (r.type === "pre_interview") return t("managerAssessmentRoundPreInterview");
-  if (r.type === "final") return t("managerAssessmentRoundFinal");
-  return t("managerAssessmentRoundInterview", {
-    number: r.round_number ?? "?",
-  });
 }
 
 function AddSelfAsEvaluator({

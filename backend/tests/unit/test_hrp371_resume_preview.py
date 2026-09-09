@@ -271,3 +271,137 @@ class TestResumePreviewEndpoint:
 
         assert out["truncated"] is True
         assert len(out["blocks"]) == public_service.RESUME_PREVIEW_MAX_BLOCKS
+
+
+class TestRedoNoRawFileUrlOnTheContext:
+    """REDO 03.09: the context still shipped a raw presigned file URL.
+
+    The preview endpoint fixed the pane, but ``public_get_context`` kept
+    returning ``resume_url`` — a presigned link to the file itself — and
+    the page pointed an iframe at it while the preview request was still
+    in flight. A browser cannot render a .docx, so that iframe downloaded
+    it: once on the first paint, again after F5, which is exactly the
+    duplicate ``(1)`` / ``(2)`` files in the tester's Downloads folder.
+    No URL to the file belongs on the context at all.
+    """
+
+    async def test_context_carries_no_file_url(self, db: AsyncSession, tenant, user):
+        token, _ = await _invited_evaluator(db, tenant, user)
+        with patch("app.core.s3.get_presigned_url", return_value="https://s3/raw-docx"):
+            ctx = await public_service.public_get_context(db, token)
+
+        assert "resume_url" not in ctx
+        assert not [
+            key
+            for key, value in ctx.items()
+            if isinstance(value, str) and value.startswith("https://s3/")
+        ]
+
+    async def test_download_url_only_comes_from_the_preview_call(
+        self, db: AsyncSession, tenant, user
+    ):
+        token, _ = await _invited_evaluator(db, tenant, user)
+        with (
+            patch("app.core.s3.download_bytes", return_value=_docx_bytes(["Jane Doe"])),
+            patch("app.core.s3.get_presigned_url", return_value="https://s3/signed"),
+        ):
+            out = await public_service.public_resume_preview(db, token)
+
+        assert out["kind"] == "text"
+        assert out["blocks"] == ["Jane Doe"]
+        # The one link to the bytes, behind the Download button.
+        assert out["download_url"] == "https://s3/signed"
+        assert out["preview_url"] is None
+
+
+class TestRedoManuallyEnteredResume:
+    """REDO 03.09 case 2: a candidate typed in by hand has no file.
+
+    ``parsed_resume_jsonb`` is the resume for those candidates, and the
+    pane used to say "No resume uploaded" while the page still had a URL
+    to *something* to open. There is nothing to download here, so the
+    panel renders the structured payload and offers no Download at all.
+    """
+
+    async def _parsed_only(self, db, tenant, user, parsed):
+        from app.modules.recruitment.models import Candidate, CandidateVacancy
+
+        token, cv_id = await _invited_evaluator(db, tenant, user, with_file=False)
+        cv = await db.get(CandidateVacancy, cv_id.id)
+        candidate = await db.get(Candidate, cv.candidate_id)
+        candidate.parsed_resume_jsonb = parsed
+        await db.commit()
+        return token
+
+    async def test_parsed_sections_are_returned(self, db: AsyncSession, tenant, user):
+        token = await self._parsed_only(
+            db,
+            tenant,
+            user,
+            {
+                "summary": "Ten years of QA.",
+                "experience": [
+                    {
+                        "position": "QA Lead",
+                        "company": "Acme",
+                        "start_date": "2019",
+                        "end_date": "now",
+                        "description": "Built the test process.",
+                    }
+                ],
+                "education": [
+                    {"institution": "TU", "degree": "BSc", "end_date": "2015"}
+                ],
+                "skills": ["pytest", "Playwright"],
+            },
+        )
+        out = await public_service.public_resume_preview(db, token)
+
+        assert out["kind"] == "parsed"
+        assert out["download_url"] is None
+        assert out["preview_url"] is None
+        parsed = out["parsed"]
+        assert parsed["summary"] == "Ten years of QA."
+        assert any("QA Lead" in line for line in parsed["experience"])
+        assert any("Acme" in line for line in parsed["experience"])
+        assert any("TU" in line for line in parsed["education"])
+        assert parsed["skills"] == ["pytest", "Playwright"]
+
+    async def test_the_role_mirror_is_not_printed_twice(
+        self, db: AsyncSession, tenant, user
+    ):
+        """The parser writes ``position`` and mirrors it into ``role``.
+
+        Treating them as two parts of the line rendered "QA Lead — QA Lead
+        — Acme" on the page (caught in the browser, not by the shape
+        assertions above).
+        """
+        token = await self._parsed_only(
+            db,
+            tenant,
+            user,
+            {
+                "experience": [
+                    {"position": "QA Lead", "role": "QA Lead", "company": "Acme"}
+                ]
+            },
+        )
+        out = await public_service.public_resume_preview(db, token)
+        assert out["parsed"]["experience"] == ["QA Lead — Acme"]
+
+    async def test_no_file_and_no_parsed_resume_is_still_empty(
+        self, db: AsyncSession, tenant, user
+    ):
+        token, _ = await _invited_evaluator(db, tenant, user, with_file=False)
+        out = await public_service.public_resume_preview(db, token)
+        assert out["kind"] == "none"
+        assert out["download_url"] is None
+
+    async def test_empty_parsed_payload_does_not_fake_a_resume(
+        self, db: AsyncSession, tenant, user
+    ):
+        token = await self._parsed_only(
+            db, tenant, user, {"summary": "", "experience": [], "skills": []}
+        )
+        out = await public_service.public_resume_preview(db, token)
+        assert out["kind"] == "none"

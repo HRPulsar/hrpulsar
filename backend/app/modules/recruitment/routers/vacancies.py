@@ -402,7 +402,7 @@ async def get_vacancy_internal_candidates(
     requisition may see the internal shortlist for it.
     """
     return await service.get_vacancy_internal_candidates(
-        db, current_user.tenant_id, vacancy_id
+        db, current_user.tenant_id, vacancy_id, current_user=current_user
     )
 
 
@@ -447,7 +447,11 @@ async def post_vacancy_to_talent_market(
     later action on it goes back through the talent market's own rules.
     """
     return await service.post_vacancy_to_talent_market(
-        db, current_user.tenant_id, vacancy_id, current_user.id
+        db,
+        current_user.tenant_id,
+        vacancy_id,
+        current_user.id,
+        current_user=current_user,
     )
 
 

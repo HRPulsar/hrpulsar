@@ -25,6 +25,7 @@ DB / S3 access.
 
 from __future__ import annotations
 
+import csv
 import io
 from typing import Any
 
@@ -921,110 +922,292 @@ def _autosize(ws: Worksheet, headers: list[str], default: int = 24) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_canvas_xlsx(matrix: dict, *, vacancy_title: str) -> bytes:
+# HRP-744 — the export is "what is on screen", so the toolbar travels
+# with it: View, Round slot, Points/Percent, the candidate checkboxes and
+# both filters. One builder answers for both formats; a second
+# implementation is how CSV drifted into a Total-less copy of the
+# workbook in the first place.
+_CANVAS_VIEWS = frozenset({"manager_ai", "manager", "ai", "aggregated"})
+
+_CANVAS_SOURCE_LABELS = {
+    "manager": "Manager",
+    "ai": "AI",
+    "aggregated": "Aggregated",
+}
+
+
+def _canvas_value(score: Any, *, percent: bool, max_score: float) -> Any:
+    """One score in the units the toolbar asked for."""
+    if score is None:
+        return "—"
+    value = float(score)
+    if percent:
+        if max_score <= 0:
+            return "—"
+        return f"{round(value / max_score * 100, 1)}%"
+    return round(value, 1)
+
+
+def build_canvas_rows(
+    matrix: dict,
+    *,
+    view: str = "manager_ai",
+    scale: str = "points",
+    only_divergences: bool = False,
+    hide_unscored: bool = False,
+    candidate_ids: set[str] | None = None,
+) -> dict:
+    """Flatten the matrix into exactly the rows the canvas is showing.
+
+    Row filters run in the same order as the page: the visibility
+    checkboxes first, then "hide candidates with no scores", then "show
+    only divergences". Under "only divergences" a competence column
+    survives only if one of the *remaining* candidates diverges on it,
+    otherwise the export would keep columns that are empty for everyone
+    left on screen.
+    """
+
+    percent = scale == "percent"
+    view = view if view in _CANVAS_VIEWS else "manager_ai"
+    max_score = float(matrix.get("max_score") or 0)
+
+    candidates = [
+        cand
+        for cand in (matrix.get("candidates") or [])
+        if candidate_ids is None
+        or str(cand.get("candidate_vacancy_id")) in candidate_ids
+    ]
+    if hide_unscored:
+        candidates = [
+            cand
+            for cand in candidates
+            if any(
+                cell.get("manager_score") is not None
+                or cell.get("ai_score") is not None
+                for cell in (cand.get("cells") or [])
+            )
+        ]
+    if only_divergences:
+        candidates = [
+            cand for cand in candidates if (cand.get("divergence_count") or 0) > 0
+        ]
+
+    competences: list[dict] = matrix.get("competences") or []
+    cells_by_cand = [
+        {str(cell.get("competence_id")): cell for cell in (cand.get("cells") or [])}
+        for cand in candidates
+    ]
+    if only_divergences:
+        competences = [
+            comp
+            for comp in competences
+            if any(
+                (by_comp.get(str(comp.get("id"))) or {}).get("divergence")
+                for by_comp in cells_by_cand
+            )
+        ]
+
+    sources: tuple[str, ...] = (
+        ("aggregated",)
+        if view == "aggregated"
+        else ("manager",)
+        if view == "manager"
+        else ("ai",)
+        if view == "ai"
+        else ("manager", "ai")
+    )
+
+    rows: list[dict] = []
+    for cand, by_comp in zip(candidates, cells_by_cand, strict=True):
+        for source in sources:
+            cells: list[dict] = []
+            for comp in competences:
+                entry = by_comp.get(str(comp.get("id"))) or {}
+                diverges = bool(entry.get("divergence"))
+                manager_score = entry.get("manager_score")
+                ai_score = entry.get("ai_score")
+                if source == "manager":
+                    text = _canvas_value(
+                        manager_score, percent=percent, max_score=max_score
+                    )
+                elif source == "ai":
+                    if (entry.get("ai_status") or "").lower() == "not_covered":
+                        text = "n/a"
+                    else:
+                        text = _canvas_value(
+                            ai_score, percent=percent, max_score=max_score
+                        )
+                else:
+                    parts = [v for v in (manager_score, ai_score) if v is not None]
+                    text = _canvas_value(
+                        sum(parts) / len(parts) if parts else None,
+                        percent=percent,
+                        max_score=max_score,
+                    )
+                cells.append({"text": text, "divergence": diverges})
+
+            manager_percent = cand.get("manager_percent")
+            ai_percent = cand.get("ai_percent")
+            if source == "manager":
+                total = manager_percent
+            elif source == "ai":
+                total = ai_percent
+            else:
+                halves = [p for p in (manager_percent, ai_percent) if p is not None]
+                total = round(sum(halves) / len(halves), 1) if halves else None
+
+            rows.append(
+                {
+                    # Only the first row of a candidate repeats the name,
+                    # the way the grid stacks Manager over AI.
+                    "candidate": (cand.get("name") if source == sources[0] else ""),
+                    "source": _CANVAS_SOURCE_LABELS[source],
+                    "cells": cells,
+                    "total": total,
+                }
+            )
+
+    return {
+        "competences": [comp.get("name") or "" for comp in competences],
+        "rows": rows,
+        "candidate_count": len(candidates),
+        "header": [
+            "Candidate",
+            "Source",
+            *(c.get("name") or "" for c in competences),
+            "Total",
+        ],
+    }
+
+
+def _canvas_round_label(matrix: dict) -> str:
+    """The Round selector's own wording, not the wire key.
+
+    "interview_1" is what the filter is called on the wire; the reader of
+    the export knows the round as "Interview 1".
+    """
+    value = str(matrix.get("round") or "latest")
+    for slot in matrix.get("round_slots") or []:
+        if slot.get("key") != value:
+            continue
+        if slot.get("type") == "pre_interview":
+            return "Pre-interview"
+        if slot.get("type") == "final":
+            return "Final"
+        return f"Interview {slot.get('number')}"
+    return value
+
+
+def _canvas_subtitle(matrix: dict, built: dict) -> str:
+    return (
+        f"{built['candidate_count']} candidates × "
+        f"{len(built['competences'])} competences | "
+        f"Scale: {matrix.get('scale_name') or 'default'} "
+        f"(max {matrix.get('max_score')}) | "
+        f"Round: {_canvas_round_label(matrix)} | "
+        f"Divergence threshold: {matrix.get('divergence_threshold')}"
+    )
+
+
+def _cell_text(cell: dict) -> Any:
+    text = cell["text"]
+    if cell["divergence"] and text not in {"—", "n/a"}:
+        return f"{text} ⚠"
+    return text
+
+
+def render_canvas_xlsx(
+    matrix: dict, *, vacancy_title: str, built: dict | None = None
+) -> bytes:
     """Flatten the assessment-matrix payload into a one-sheet workbook.
 
     Mirrors what the fullscreen canvas shows: candidates down the rows,
     competences across the columns, Manager and AI side by side, plus a
-    totals block. Reuses the report palette so both exports look like the
+    Total column. Reuses the report palette so both exports look like the
     same product.
     """
+
+    built = built if built is not None else build_canvas_rows(matrix)
 
     wb = Workbook()
     ws = wb.active
     assert ws is not None
     ws.title = "Canvas"
 
-    competences: list[dict] = matrix.get("competences") or []
-    candidates: list[dict] = matrix.get("candidates") or []
-
     ws.cell(row=1, column=1, value=f"Assessment canvas — {vacancy_title}").font = Font(
         size=14, bold=True
     )
-    ws.cell(
-        row=2,
-        column=1,
-        value=(
-            f"{len(candidates)} candidates × {len(competences)} competences | "
-            f"Scale: {matrix.get('scale_name') or 'default'} "
-            f"(max {matrix.get('max_score')}) | "
-            f"Round: {matrix.get('round') or 'latest'} | "
-            f"Divergence threshold: {matrix.get('divergence_threshold')}"
-        ),
-    ).font = Font(size=10, color="6B7280")
+    ws.cell(row=2, column=1, value=_canvas_subtitle(matrix, built)).font = Font(
+        size=10, color="6B7280"
+    )
 
     header_row = 4
-    _set_header_cell(ws, header_row, 1, "Candidate")
-    _set_header_cell(ws, header_row, 2, "Source")
-    for offset, comp in enumerate(competences):
-        _set_header_cell(ws, header_row, 3 + offset, comp.get("name"))
-    total_col = 3 + len(competences)
-    _set_header_cell(ws, header_row, total_col, "Total")
+    for offset, title in enumerate(built["header"]):
+        _set_header_cell(ws, header_row, 1 + offset, title)
+    total_col = len(built["header"])
     ws.row_dimensions[header_row].height = 30
 
-    row_idx = header_row + 1
-    for cand in candidates:
-        cell_by_comp = {
-            str(c.get("competence_id")): c for c in (cand.get("cells") or [])
-        }
-        # Two rows per candidate — Manager then AI — so a reader can scan
-        # either side without the cell text running together.
-        for source in ("manager", "ai"):
+    for row_idx, row in enumerate(built["rows"], start=header_row + 1):
+        _set_body_cell(ws, row_idx, 1, row["candidate"], bold=bool(row["candidate"]))
+        _set_body_cell(ws, row_idx, 2, row["source"])
+        for offset, cell in enumerate(row["cells"]):
             _set_body_cell(
                 ws,
                 row_idx,
-                1,
-                cand.get("name") if source == "manager" else "",
-                bold=source == "manager",
-            )
-            _set_body_cell(ws, row_idx, 2, "Manager" if source == "manager" else "AI")
-            for offset, comp in enumerate(competences):
-                entry = cell_by_comp.get(str(comp.get("id"))) or {}
-                diverges = bool(entry.get("divergence"))
-                if source == "manager":
-                    score = entry.get("manager_score")
-                    text: Any = "—" if score is None else round(float(score), 1)
-                else:
-                    status = (entry.get("ai_status") or "").lower()
-                    score = entry.get("ai_score")
-                    if status == "not_covered":
-                        text = "n/a"
-                    elif score is None:
-                        text = "—"
-                    else:
-                        text = round(float(score), 1)
-                if diverges and text not in {"—", "n/a"}:
-                    text = f"{text} ⚠"
-                _set_body_cell(
-                    ws,
-                    row_idx,
-                    3 + offset,
-                    text,
-                    align=_CENTER_ALIGN,
-                    fill=_AMBER_FILL if diverges else None,
-                )
-            percent = (
-                cand.get("manager_percent")
-                if source == "manager"
-                else cand.get("ai_percent")
-            )
-            _set_body_cell(
-                ws,
-                row_idx,
-                total_col,
-                "—" if percent is None else f"{percent}%",
+                3 + offset,
+                _cell_text(cell),
                 align=_CENTER_ALIGN,
-                fill=_total_fill_for(percent),
-                bold=True,
+                fill=_AMBER_FILL if cell["divergence"] else None,
             )
-            row_idx += 1
+        percent = row["total"]
+        _set_body_cell(
+            ws,
+            row_idx,
+            total_col,
+            "—" if percent is None else f"{percent}%",
+            align=_CENTER_ALIGN,
+            fill=_total_fill_for(percent),
+            bold=True,
+        )
 
     ws.column_dimensions["A"].width = 28
     ws.column_dimensions["B"].width = 12
-    for offset in range(len(competences)):
+    for offset in range(len(built["competences"])):
         ws.column_dimensions[get_column_letter(3 + offset)].width = 16
     ws.column_dimensions[get_column_letter(total_col)].width = 12
 
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+def _csv_safe(value: str) -> str:
+    """A cell opening with =, +, - or @ is executed as a formula by Excel
+    and Sheets. The apostrophe keeps the text visible and inert; candidate
+    and competence names are free text, so every cell goes through it."""
+    return f"'{value}" if value[:1] in {"=", "+", "-", "@"} else value
+
+
+def render_canvas_csv(matrix: dict, *, built: dict | None = None) -> bytes:
+    """The same rows as the workbook, as CSV.
+
+    HRP-744: the CSV used to be built in the browser from a second copy of
+    the rendering rules and shipped without the Total column. It is the
+    same builder now, so the two formats cannot disagree again.
+    """
+
+    built = built if built is not None else build_canvas_rows(matrix)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\r\n", quoting=csv.QUOTE_ALL)
+    writer.writerow([_csv_safe(str(title)) for title in built["header"]])
+    for row in built["rows"]:
+        writer.writerow(
+            [
+                _csv_safe(str(row["candidate"])),
+                _csv_safe(str(row["source"])),
+                *(_csv_safe(str(_cell_text(cell))) for cell in row["cells"]),
+                "—" if row["total"] is None else f"{row['total']}%",
+            ]
+        )
+    # BOM so Excel opens the UTF-8 file with the right encoding.
+    return b"\xef\xbb\xbf" + buffer.getvalue().encode("utf-8")

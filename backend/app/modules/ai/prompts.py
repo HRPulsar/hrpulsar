@@ -154,11 +154,16 @@ DEV_LOOP_SUMMARY = """Here is the current development-loop snapshot as JSON:
 
 {payload}
 
-Field notes: "stages" is the assess -> gaps -> develop -> close pipeline;
-"findings" are detected problems ("gaps_without_plan" = employees scoring
-below the grade bar with no open development plan, "pdp_overdue" = plans past
-their deadline, "pdp_stuck_review" = plans sitting in review/returned,
-"assessment_coverage" = active employees without a recent assessment).
+Field notes: "stages" is the assess -> gaps -> develop -> close pipeline.
+"findings" are detected problems; each one already carries the wording the
+interface uses for it in its "finding" field.
+
+Naming rules, both mandatory:
+- Refer to a finding by the wording in its "finding" field. Never invent a
+  short identifier for it and never write one in snake_case.
+- Grade levels are named in "grades". Use those names exactly as written and
+  no others; do not translate them and do not substitute conventional
+  ladder names.
 
 In 3-5 sentences: describe the overall state of the loop, name the single
 most pressing problem (mention concrete employee names if provided), and say
@@ -183,10 +188,18 @@ MY_LOOP_SUMMARY = """Here is the employee's personal development snapshot as JSO
 {payload}
 
 Field notes: "stages" covers their latest assessment, competence gaps below
-the bar, active development plan and confirmed closures; "strengths" lists
-their top and rare competences; "growth" shows the next grade on their career
-ladder and what is still missing; "history" is their assessment score
-timeline.
+the bar, active development plan and confirmed closures; "findings" are
+detected problems, each already carrying the wording the interface uses for
+it in its "finding" field; "strengths" lists their top and rare competences;
+"growth" shows the next grade on their career ladder and what is still
+missing; "history" is their assessment score timeline.
+
+Naming rules, both mandatory:
+- Refer to a finding by the wording in its "finding" field. Never invent a
+  short identifier for it and never write one in snake_case.
+- Grade levels are named in "grades". Use those names exactly as written and
+  no others; do not translate them and do not substitute conventional
+  ladder names.
 
 In 3-5 sentences, speaking to the employee as "you": acknowledge what is
 going well (strengths, progress, closed gaps), then suggest what to focus on

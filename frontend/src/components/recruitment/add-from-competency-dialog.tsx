@@ -12,7 +12,7 @@
 // and the competence id rides along so the question stays linked to the
 // profile competence (HRP-503).
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronRight, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -93,6 +93,7 @@ export function AddFromCompetencyDialog({
   const tc = useTranslations("common");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const popupRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [expandedDetail, setExpandedDetail] = useState<Set<string>>(new Set());
 
@@ -167,7 +168,15 @@ export function AddFromCompetencyDialog({
       }}
     >
       <DialogContent
-        className="flex max-h-[85vh] max-w-3xl flex-col"
+        // HRP-485 REDO: ``sm:`` on purpose. DialogContent's own base
+        // class is ``sm:max-w-sm``, and an unprefixed ``max-w-3xl``
+        // loses to it at every width above the sm breakpoint — which is
+        // why Search / Expand all / Collapse all wrapped onto two rows.
+        className="flex max-h-[85vh] sm:max-w-3xl flex-col"
+        // HRP-485 REDO: open with the popup focused, not the search box:
+        // its blue ring read as an error. Tab still reaches the field.
+        ref={popupRef}
+        initialFocus={popupRef}
         data-testid="recruitment-interview-questions-competency-dialog"
       >
         <DialogHeader>

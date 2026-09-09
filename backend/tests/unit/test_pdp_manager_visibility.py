@@ -211,3 +211,61 @@ class TestManagerSeesDraftPDPs:
         assert resp.status_code == 200, resp.text
         ids = {str(p["id"]) for p in resp.json()}
         assert str(draft["id"]) not in ids
+
+
+class TestEmployeeCannotAuthorTheirOwnPlan:
+    """HRP-768: the "take a plan yourself" gate, pinned where it lives.
+
+    Reported from the demo as a greyed-out button. It is not a bug: a
+    development plan is authored and reviewed by an admin or a manager,
+    and ``POST /pdp`` has always said so. The employee-side fix was to
+    make the denial legible instead of rendering nothing at all — so the
+    rule the tooltip now states has to keep being true, or the tooltip
+    starts lying about a request that would succeed.
+    """
+
+    async def test_employee_post_pdp_is_denied(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        tenant,
+        employee_role: Role,
+    ) -> None:
+        emp_user = await _make_user_with_role(
+            db, tenant.id, employee_role, prefix="selfplan"
+        )
+        emp = await _make_employee(db, tenant.id, emp_user.id)
+
+        resp = await client.post(
+            "/api/pdp",
+            json={"title": "My own plan", "employee_id": str(emp.id)},
+            headers=_auth_headers(emp_user, tenant.id),
+        )
+        assert resp.status_code == 403, resp.text
+
+    async def test_admin_post_pdp_is_allowed(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        tenant,
+        employee_role: Role,
+    ) -> None:
+        """The other half of the claim: the tooltip names an administrator
+        or the employee's manager as the people to ask, so one of them has
+        to actually be able to. Admin, because a manager also answers to
+        the division scope and that is a different rule."""
+        admin_role = await _get_or_create_role(db, "admin", "Admin")
+        admin_user = await _make_user_with_role(
+            db, tenant.id, admin_role, prefix="admin-author"
+        )
+        emp_user = await _make_user_with_role(
+            db, tenant.id, employee_role, prefix="admin-authored"
+        )
+        emp = await _make_employee(db, tenant.id, emp_user.id)
+
+        resp = await client.post(
+            "/api/pdp",
+            json={"title": "Plan for a report", "employee_id": str(emp.id)},
+            headers=_auth_headers(admin_user, tenant.id),
+        )
+        assert resp.status_code == 201, resp.text

@@ -19,7 +19,7 @@ function devLoopStages(employees: number, withoutPlan: number) {
     assessed: { covered: 8, total_active: 10, percent: 80 },
     gaps: { employees, competences: employees * 2, without_plan: withoutPlan },
     developing: { open_pdps: 1, gap_employees_with_plan: 1 },
-    closed: { gaps_closed_90d: 0, plans_done_on_time_90d: 0 },
+    closed: { window_days: 90, gaps_closed: 0, plans_done_on_time: 0 },
   };
 }
 
@@ -46,7 +46,7 @@ function myLoop(competences: number, hasPlan: boolean) {
             }
           : null,
       },
-      closed: { gaps_closed_90d: 0 },
+      closed: { window_days: 90, gaps_closed: 0 },
     },
     findings: [],
     strengths: { top: [], rare_skills: [] },

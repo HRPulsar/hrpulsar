@@ -7,7 +7,7 @@
 // must stay visually identical, so the JSX lives here once.
 
 import { useTranslations } from "next-intl";
-import { AlertTriangle, ChevronRight } from "lucide-react";
+import { AlertTriangle, ChevronRight, Info } from "lucide-react";
 
 import {
   competenceScoreId,
@@ -203,24 +203,35 @@ export function findCompetenceComment(
   );
 }
 
-/** HRP-374: "Evaluators disagree: Internal A P: 4, External Ivan Petrov: 2".
+/** HRP-374 REDO: who scored this competence, one evaluator per line —
+ * "AL = 4", "Ivan Petrov = 2".
  *
- * Each entry is rendered through its own ICU message so the evaluator name
- * and the score stay translator-visible arguments rather than glued-together
- * substrings. */
-function divergenceTooltip(
+ * An internal evaluator is named by the initials their avatar already
+ * shows in the round header; an invited external one by their full name,
+ * which is the only name the panel has for them. Name and score stay
+ * translator-visible ICU arguments rather than glued-together substrings.
+ * The lines are prefixed by the "Evaluators disagree" header only when
+ * they actually do. */
+export function scorersTooltip(
   t: (key: string, values?: Record<string, string | number>) => string,
   aggregate: CompetenceAggregate,
 ): string {
-  const entries = aggregate.scorers.map((s) =>
-    t(
-      s.evaluator_type === "external"
-        ? "evalSheetDivergenceEntryExternal"
-        : "evalSheetDivergenceEntryInternal",
-      { name: s.evaluator, score: s.score },
-    ),
+  const lines = aggregate.scorers.map((s) =>
+    t("evalSheetScorerEntry", {
+      name:
+        s.evaluator_type === "internal" && s.initials
+          ? s.initials
+          : s.evaluator,
+      score: s.score,
+    }),
   );
-  return t("evalSheetDivergenceTooltip", { entries: entries.join(", ") });
+  if (!aggregate.diverges) return lines.join("\n");
+  // The header names the first evaluator inline, so the message keeps its
+  // "Evaluators disagree: {entries}" shape without a dangling colon.
+  return [
+    t("evalSheetDivergenceTooltip", { entries: lines[0] ?? "" }),
+    ...lines.slice(1),
+  ].join("\n");
 }
 
 /** HRP-374: one competence's cross-evaluator roll-up for the round. */
@@ -230,6 +241,8 @@ export interface CompetenceAggregate {
   scorers: {
     evaluator: string;
     evaluator_type: "internal" | "external";
+    /** Avatar initials — internal evaluators only. */
+    initials?: string | null;
     score: number;
   }[];
 }
@@ -309,22 +322,31 @@ export function CompetenceScoreList({
                 )}
               </span>
               {aggregate && (
-                <span className="flex items-center gap-1 text-[11px] font-normal text-muted-foreground">
-                  {aggregate.diverges && (
+                <span
+                  className="flex items-center gap-1 text-[11px] font-normal text-muted-foreground"
+                  title={scorersTooltip(t, aggregate)}
+                >
+                  {/* HRP-374 REDO: a scored competence always carries an
+                      icon, so the per-evaluator breakdown is discoverable
+                      whether or not the panel disagrees — amber (!) when it
+                      does, neutral (i) when it does not. */}
+                  {aggregate.diverges ? (
                     <AlertTriangle
                       role="img"
                       aria-label={t("evalSheetDivergenceAria")}
                       className="size-3.5 text-amber-600"
                       data-testid={`assessment-competence-divergence-icon-${comp.id}`}
                     />
+                  ) : (
+                    <Info
+                      role="img"
+                      aria-label={t("evalSheetScorersAria")}
+                      className="size-3.5 text-muted-foreground"
+                      data-testid={`assessment-competence-scorers-icon-${comp.id}`}
+                    />
                   )}
                   <span
                     data-testid={`assessment-competence-round-average-${comp.id}`}
-                    title={
-                      aggregate.diverges
-                        ? divergenceTooltip(t, aggregate)
-                        : undefined
-                    }
                   >
                     {t("evalSheetRoundAverage", {
                       score: aggregate.average.toFixed(1),

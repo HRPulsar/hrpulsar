@@ -206,6 +206,7 @@ async def change_candidate_status(
     data: CandidateVacancyStatusUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    _scope: None = Depends(cv_scope),
 ):
     return await service.change_candidate_status(
         db, current_user.tenant_id, cv_id, data
@@ -369,6 +370,7 @@ async def patch_candidate_vacancy(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
     if_match: str | None = Header(default=None, alias="If-Match"),
+    _scope: None = Depends(cv_scope),
 ):
     payload = await service.patch_candidate_vacancy(
         db,

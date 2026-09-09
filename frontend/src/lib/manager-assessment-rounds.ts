@@ -52,3 +52,60 @@ export function nextInterviewNumber(rounds: readonly SortableRound[]): number {
     .reduce((acc, r) => Math.max(acc, r.round_number ?? 0), 0);
   return highest + 1;
 }
+
+/** One cell of the tab strip: an existing round, or the slot where a
+ * missing `pre_interview` / `final` would sit. */
+export type RoundSlot<T> =
+  | { kind: "round"; round: T }
+  | { kind: "placeholder"; type: "pre_interview" | "final" };
+
+/**
+ * Build the tab strip: `[Pre-interview | + Pre-interview] [Interview 1..N]
+ * [Final | + Final]`.
+ *
+ * HRP-372 REDO: the two "create this round" buttons used to hang after
+ * `+ New round`, so the strip changed shape depending on which rounds
+ * existed. Their slot is now fixed — a missing Pre-interview always reads
+ * first, a missing Final always last — and the strip a recruiter learns on
+ * one candidate is the strip they get on the next.
+ *
+ * A placeholder shows whenever its round is missing — including on an
+ * empty section, so the strip has one shape everywhere.
+ */
+export function roundStrip<T extends SortableRound & { id?: string }>(
+  rounds: readonly T[],
+): RoundSlot<T>[] {
+  const sorted = sortRounds(rounds);
+  const slots: RoundSlot<T>[] = [];
+  const pre = sorted.filter((r) => r.type === "pre_interview");
+  const interviews = sorted.filter((r) => r.type === "interview");
+  const final = sorted.filter((r) => r.type === "final");
+
+  if (pre.length > 0) {
+    for (const r of pre) slots.push({ kind: "round", round: r });
+  } else {
+    slots.push({ kind: "placeholder", type: "pre_interview" });
+  }
+  for (const r of interviews) slots.push({ kind: "round", round: r });
+  if (final.length > 0) {
+    for (const r of final) slots.push({ kind: "round", round: r });
+  } else {
+    slots.push({ kind: "placeholder", type: "final" });
+  }
+  return slots;
+}
+
+/** HRP-727: the round's tab label, shared with the Manager score tooltips
+ * on the candidate page and the vacancy candidates table — the tooltip has
+ * to name the round exactly as the tab strip does. */
+export function labelForRound(
+  t: (key: string, values?: Record<string, string | number>) => string,
+  round: SortableRound,
+): string {
+  if (round.type === "pre_interview")
+    return t("managerAssessmentRoundPreInterview");
+  if (round.type === "final") return t("managerAssessmentRoundFinal");
+  return t("managerAssessmentRoundInterview", {
+    number: round.round_number ?? "?",
+  });
+}

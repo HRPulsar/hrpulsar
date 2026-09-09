@@ -29,6 +29,7 @@ from sqlalchemy import ColumnElement, Row, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, exception_summary
+from app.core.i18n import translate
 from app.core.redis import redis_client
 from app.modules.assessment.models import (
     CPA,
@@ -518,6 +519,8 @@ async def pdp_progress_timeline(
 # because ``my_loop`` and the unit tests read them from here.
 DEV_LOOP_STALE_DAYS = issues.STALE_DAYS
 DEV_LOOP_STUCK_REVIEW_DAYS = issues.STUCK_REVIEW_DAYS
+# HRP-766: the Completed tile follows the reader's period now, so this
+# is only the default the API applies when no period is asked for.
 DEV_LOOP_CLOSED_WINDOW_DAYS = issues.CLOSED_WINDOW_DAYS
 DEV_LOOP_DEFAULT_PASSING = issues.DEFAULT_PASSING
 
@@ -582,8 +585,14 @@ async def dev_loop(
     frontend i18n layer. ``data_version`` fingerprints the derived state
     so the AI-summary cache can detect "same data, same summary".
 
-    ``days`` only sizes the HRP-724 ``dynamics`` block; every other number
-    keeps its own fixed window.
+    ``days`` sizes every backward-looking number on the hero: the HRP-724
+    ``dynamics`` block and the Completed stage (HRP-766 — the period switch
+    used to move the dynamics tile alone, which reads as a filter that does
+    nothing). The other three stages answer "right now", not "over a
+    period": who is below the bar today, how many plans are open, how many
+    people carry a current assessment. Their windows are cohort rules
+    shared with the ``?issue=`` employee filter and must not follow a
+    reading choice made on the dashboard.
     """
     facts = await issues.collect_issue_facts(
         db, tenant_id, visible_employee_ids=visible_employee_ids
@@ -651,7 +660,7 @@ async def dev_loop(
             }
         )
 
-    payload = {
+    payload: dict[str, Any] = {
         "stages": {
             "assessed": {
                 "covered": len(facts.assessed_recent),
@@ -675,25 +684,90 @@ async def dev_loop(
                     facts.gap_employees & facts.open_pdp_employees
                 ),
             },
-            "closed": {
-                "gaps_closed_90d": facts.gaps_closed,
-                "plans_done_on_time_90d": facts.plans_done_on_time,
-            },
+            # HRP-766: filled in below, after the fingerprint — the window
+            # is the reader's choice, not a change of state.
+            "closed": {},
         },
         "findings": findings,
     }
     payload["data_version"] = hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode()
     ).hexdigest()[:16]
-    # HRP-724: added after the fingerprint on purpose. The period switch is a
-    # reading choice, not a change of state — folding it in would mint a new
-    # cache key (and a new LLM call) every time somebody flips 30 / 90 / 365
-    # over data the summary describes identically.
+    # HRP-724 (and HRP-766, which joined it): both blocks are added after
+    # the fingerprint on purpose. The period switch is a reading choice, not
+    # a change of state — folding it in would mint a new cache key (and a
+    # new LLM call) every time somebody flips 30 / 90 / 365 over data the
+    # summary describes identically.
+    payload["stages"]["closed"] = issues.closed_in_window(facts, days)
     payload["dynamics"] = issues.development_dynamics(facts, days)
     return payload
 
 
 # --- On-demand AI summary over the loop snapshot ---
+
+
+# HRP-764: what the model is allowed to be handed. Both loops build their
+# prompt payload through these, because the bug was one thing said twice —
+# the snapshot is machine-facing (issue codes, English origin titles) and
+# the summary is user-facing, so anything the model echoes verbatim has to
+# be swapped for the wording the interface itself shows, in the tenant's
+# AI content language.
+
+
+def _localized_dict_label(item: dict | None, locale: str) -> str | None:
+    """A dictionary item's title as the interface renders it.
+
+    Origin rows store their English title and a stable ``i18n_key``; the
+    frontend resolves ``reference.dictionary.<type>.<key>.label`` and the
+    backend catalogs now carry the same path. Tenant-created rows have no
+    key and are already in the tenant's own words. A key with no catalog
+    entry degrades to the stored title -- ``translate`` returns the key
+    itself on a miss, which is exactly the string we must not emit.
+    """
+    if item is None:
+        return None
+    title = item.get("title") or ""
+    key = item.get("i18n_key")
+    if not key:
+        return title
+    path = f"reference.dictionary.{item.get('type')}.{key}.label"
+    label = translate(path, locale)
+    return title if label == path else label
+
+
+async def _tenant_grade_names(
+    db: AsyncSession, tenant_id: uuid.UUID, locale: str
+) -> list[str]:
+    """Active grade names from Reference -> Grades, in ladder order.
+
+    (a) of HRP-764: without them the model reaches for the ladder it knows
+    (Junior / Middle / Senior) over the one the workspace actually uses.
+    """
+    from app.modules.dictionary import service as dictionary_service
+
+    return [
+        label
+        for item in await dictionary_service.list_items(db, tenant_id, "grade")
+        if item["is_active"] and (label := _localized_dict_label(item, locale))
+    ]
+
+
+def _findings_for_prompt(findings: Sequence[dict], locale: str) -> list[dict]:
+    """Findings with the interface's wording in place of the issue code.
+
+    (b) of HRP-764: ``code`` is a registry key, not a phrase anybody has
+    read on a screen, and a model handed ``gaps_without_plan`` prints it
+    straight back. ``href`` goes for the same reason -- the query string
+    repeats the code and the model has no use for a URL.
+    """
+    return [
+        {
+            **{k: v for k, v in finding.items() if k not in ("code", "href")},
+            "finding": translate(f"dev_loop.finding.{finding['code']}", locale),
+        }
+        for finding in findings
+    ]
+
 
 _AI_SUMMARY_TTL_SECONDS = 7 * 24 * 3600
 # The summaries are free (BILLING_EXEMPT), so a per-tenant daily cap is the
@@ -795,9 +869,16 @@ async def generate_dev_loop_summary(
     from app.modules.ai_settings import service as ai_settings_service
 
     tenant_settings = await ai_settings_service.get_or_default(db, tenant_id)
+    language = tenant_settings.content_language
     prompt = prompts.DEV_LOOP_SUMMARY.format(
         payload=json.dumps(
-            {k: payload[k] for k in ("stages", "findings")}, indent=2, default=str
+            {
+                "stages": payload["stages"],
+                "findings": _findings_for_prompt(payload["findings"], language),
+                "grades": await _tenant_grade_names(db, tenant_id, language),
+            },
+            indent=2,
+            default=str,
         )
     )
     try:
@@ -932,7 +1013,10 @@ async def my_loop(
 
     now = datetime.now(UTC)
     stale_cutoff = now - timedelta(days=DEV_LOOP_STALE_DAYS)
-    closed_cutoff = now - timedelta(days=DEV_LOOP_CLOSED_WINDOW_DAYS)
+    # HRP-766: the personal hero carries the same period switch, so its
+    # Completed tile answers over the same window the reader picked. Sits
+    # outside the fingerprint below, like the company loop's.
+    closed_cutoff = now - timedelta(days=days)
     soon_cutoff = now + timedelta(days=DEV_LOOP_DEADLINE_SOON_DAYS)
 
     # My done assessments (newest first) and their results with titles.
@@ -1307,7 +1391,8 @@ async def my_loop(
                     else None
                 )
             },
-            "closed": {"gaps_closed_90d": gaps_closed},
+            # HRP-766: filled in below, after the fingerprint.
+            "closed": {},
         },
         "findings": findings,
         "strengths": {"top": top, "rare_skills": rare_skills},
@@ -1317,7 +1402,8 @@ async def my_loop(
     payload["data_version"] = hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode()
     ).hexdigest()[:16]
-    # HRP-724: outside the fingerprint — see the note in ``dev_loop``.
+    # HRP-724 / HRP-766: outside the fingerprint — see the note in ``dev_loop``.
+    payload["stages"]["closed"] = {"window_days": days, "gaps_closed": gaps_closed}
     window_start = now - timedelta(days=days)
     inside, before = issues.split_by_window(my_done, window_start)
     payload["dynamics"] = {
@@ -1344,11 +1430,28 @@ async def generate_my_loop_summary(
     from app.modules.ai_settings import service as ai_settings_service
 
     tenant_settings = await ai_settings_service.get_or_default(db, tenant_id)
+    language = tenant_settings.content_language
+    growth = payload["growth"]
+    if growth is not None:
+        # The grade rungs are the whole point of this block, and they reach
+        # here as origin rows carrying their English title (HRP-764).
+        growth = {
+            **growth,
+            "current_grade": _localized_dict_label(growth["current_grade"], language),
+            "specialization": _localized_dict_label(
+                growth["specialization"], language
+            ),
+            "next_grade": _localized_dict_label(growth["next_grade"], language),
+        }
     prompt = prompts.MY_LOOP_SUMMARY.format(
         payload=json.dumps(
             {
-                k: payload[k]
-                for k in ("stages", "findings", "strengths", "growth", "history")
+                "stages": payload["stages"],
+                "findings": _findings_for_prompt(payload["findings"], language),
+                "strengths": payload["strengths"],
+                "growth": growth,
+                "history": payload["history"],
+                "grades": await _tenant_grade_names(db, tenant_id, language),
             },
             indent=2,
             default=str,

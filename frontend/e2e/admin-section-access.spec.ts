@@ -84,7 +84,7 @@ test.describe("Admin section access", () => {
     await expect(page.getByTestId("sidebar-link-invitations")).toHaveCount(0);
   });
 
-  test("employee sees neither recruitment nor talent market (HRP-622)", async ({
+  test("employee sees the talent market but not recruitment (HRP-622, HRP-765)", async ({
     page,
   }) => {
     await setAuthTokens(page, employeeAccess, employeeRefresh);
@@ -95,7 +95,9 @@ test.describe("Admin section access", () => {
     // Recruitment reads are role-gated server-side (HRP-615); the entry
     // used to be rendered for everyone and led straight into a 403.
     await expect(page.getByTestId("sidebar-link-recruitment")).toHaveCount(0);
-    await expect(page.getByTestId("sidebar-link-talent-market")).toHaveCount(0);
+    // The talent market is open to employees again, scoped to the cards
+    // they are candidates on (HRP-765).
+    await expect(page.getByTestId("sidebar-link-talent-market")).toBeVisible();
     // Everyday surfaces stay reachable.
     await expect(page.getByTestId("sidebar-link-employees")).toBeVisible();
     await expect(page.getByTestId("sidebar-link-company")).toBeVisible();

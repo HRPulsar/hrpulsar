@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 
 import sqlalchemy as sa
 from fastapi import status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -40,7 +40,12 @@ from app.modules.talent_market.models import (
     TalentCard,
     TalentCardCompetence,
 )
-from app.modules.talent_market.scope import TalentScope, resolve_talent_scope
+from app.modules.talent_market.scope import (
+    TalentScope,
+    assert_employee_card_visible,
+    employee_read_filter,
+    resolve_talent_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,24 +93,11 @@ async def search_cards(
     count_q = select(func.count(TalentCard.id)).where(TalentCard.tenant_id == tenant_id)
 
     scope_clause: sa.ColumnElement[bool] | None = None
-    if candidate_only and assignee_employee_id is not None:
-        # HRP-209: pure-Employee viewers only see cards they're a
-        # candidate on. Draft cards stay hidden unless the employee is
-        # appointed on them (pre-publish nomination by the recruiter).
-        # Everything else is invisible to that role.
-        visible_card_ids = (
-            select(TalentCandidate.card_id)
-            .join(TalentCard, TalentCard.id == TalentCandidate.card_id)
-            .where(
-                TalentCandidate.employee_id == assignee_employee_id,
-                or_(
-                    TalentCard.status != "draft",
-                    TalentCandidate.status == "appointed",
-                ),
-            )
-            .scalar_subquery()
-        )
-        scope_clause = TalentCard.id.in_(visible_card_ids)
+    if candidate_only:
+        # HRP-209 / HRP-765: pure-Employee viewers only see cards they're
+        # a candidate on. The rule lives in ``scope.employee_read_filter``
+        # so the detail route asks the same question of one row.
+        scope_clause = employee_read_filter(assignee_employee_id)
     elif scope is not None and not scope.unrestricted:
         scope_clause = scope.read_filter()
     if scope_clause is not None:
@@ -206,26 +198,23 @@ async def get_card_detail(
     # rather than 403, the way this module has always hidden a card, so the
     # answer does not confirm that somebody else's draft exists.
     scope = None
+    employee_view = False
     if current_user is not None:
         from app.core.access_scope import is_employee_only
 
         scope = await resolve_talent_scope(db, current_user)
+        employee_view = (
+            not scope.unrestricted
+            and is_employee_only(current_user)
+            and not scope.division_ids
+        )
         if not scope.unrestricted:
-            if is_employee_only(current_user) and not scope.division_ids:
-                if scope.employee_id is None:
-                    raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
-                cand = next(
-                    (
-                        ca
-                        for ca in card.candidates
-                        if ca.employee_id == scope.employee_id
-                    ),
-                    None,
+            if employee_view:
+                # HRP-765: the same condition the list narrows on, asked
+                # about this one row — one rule, so the two cannot drift.
+                await assert_employee_card_visible(
+                    db, tenant_id, card.id, scope.employee_id
                 )
-                if cand is None:
-                    raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
-                if card.status == "draft" and cand.status != "appointed":
-                    raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
             elif not scope.readable(card):
                 raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
     # HRP-149: viewer-scoped profile-link gating. Skip the lookup when no
@@ -253,11 +242,16 @@ async def get_card_detail(
     # cards with empty Candidates so we don't pay the per-employee
     # matcher cost when there's nothing to score.
     breakdown_by_emp: dict[uuid.UUID, dict] = {}
+    # HRP-765: an employee viewer keeps their own row and nothing else, so
+    # scoring the rest of the shortlist is work whose result is dropped.
+    scored_ids = (
+        [scope.employee_id]
+        if employee_view and scope is not None and scope.employee_id is not None
+        else [ca.employee_id for ca in card.candidates]
+    )
     if card.candidates:
-        breakdown_by_emp = await _compute_candidates_breakdown(
-            db, card, [ca.employee_id for ca in card.candidates]
-        )
-    return _card_to_detail(
+        breakdown_by_emp = await _compute_candidates_breakdown(db, card, scored_ids)
+    detail = _card_to_detail(
         card,
         visible_employee_ids=visible,
         breakdown_by_emp=breakdown_by_emp,
@@ -265,6 +259,13 @@ async def get_card_detail(
         reacted_by_me=reacted_by_me,
         can_manage=scope.writable(card) if scope is not None else True,
     )
+    if employee_view:
+        # HRP-765: an employee reads the card for their own sake — they get
+        # their row and their match breakdown, not the shortlist they are
+        # being ranked in. Cut here rather than in the UI: the names and
+        # scores of colleagues must not be on the wire at all.
+        detail["candidates"] = [c for c in detail["candidates"] if c["is_me"]]
+    return detail
 
 
 async def _compute_candidates_breakdown(

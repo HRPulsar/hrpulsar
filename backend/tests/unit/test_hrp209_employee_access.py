@@ -11,7 +11,8 @@ HRP-209 narrows that down:
   this suite spot-checks one write path to catch a regression.
 * The detail payload stamps ``is_me=True`` on the viewer's own
   candidate row so the UI can render "it's me", gate the drawer arrow
-  and hide Appoint.
+  and hide Appoint. HRP-765 then cut the other rows out of that payload
+  for the same viewer.
 """
 
 from __future__ import annotations
@@ -205,4 +206,6 @@ async def test_card_detail_marks_self_with_is_me(
     )
     by_emp = {c["employee_id"]: c["is_me"] for c in detail["candidates"]}
     assert by_emp[emp_self.id] is True
-    assert by_emp[emp_other.id] is False
+    # HRP-765: the colleague's row is not on the wire for an employee
+    # viewer at all — they read the card for their own sake.
+    assert emp_other.id not in by_emp

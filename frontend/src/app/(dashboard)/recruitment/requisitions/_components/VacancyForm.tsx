@@ -95,6 +95,10 @@ type Props = {
   testId?: string;
   footer: React.ReactNode;
   heading?: React.ReactNode;
+  /** HRP-667 REDO: the vacancy already has a card on the internal talent
+   *  market, so the internal-search switch is on and stays on — the
+   *  backend refuses to turn it off (422) while the card exists. */
+  internalSearchLocked?: boolean;
 };
 
 interface PositionOption {
@@ -119,6 +123,7 @@ export function VacancyForm({
   testId = "recruitment-vacancy-create-form",
   footer,
   heading,
+  internalSearchLocked = false,
 }: Props) {
   const t = useTranslations("recruitment");
 
@@ -572,8 +577,8 @@ export function VacancyForm({
               <Checkbox
                 id="internal_search_allowed"
                 data-testid="recruitment-vacancy-input-internal-search"
-                checked={values.internal_search_allowed}
-                disabled={disabled}
+                checked={internalSearchLocked || values.internal_search_allowed}
+                disabled={disabled || internalSearchLocked}
                 onCheckedChange={(checked) =>
                   updateField("internal_search_allowed", !!checked)
                 }
@@ -582,8 +587,13 @@ export function VacancyForm({
                 {t("vacancyFieldInternalSearch")}
               </Label>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {t("vacancyInternalSearchHint")}
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid="recruitment-vacancy-internal-search-hint"
+            >
+              {internalSearchLocked
+                ? t("vacancyInternalSearchLockedHint")
+                : t("vacancyInternalSearchHint")}
             </p>
           </div>
         </div>

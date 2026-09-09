@@ -47,6 +47,7 @@ from app.modules.recruitment.routers.common import RECRUITMENT_VIEWER_ROLES
 from app.modules.recruitment.scope import (
     assessment_scope,
     cv_scope,
+    invite_scope,
     round_scope,
 )
 
@@ -154,6 +155,7 @@ async def create_round_endpoint(
     payload: RoundCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    _scope: None = Depends(cv_scope),
 ) -> dict[str, Any]:
     return await service.create_round(
         db, current_user.tenant_id, current_user.id, cv_id, payload
@@ -166,6 +168,7 @@ async def update_round_endpoint(
     payload: dict[str, Any] = Body(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    _scope: None = Depends(round_scope),
 ) -> dict[str, Any]:
     # HRP-376: the kebab sends an explicit action ("restore" cannot be
     # expressed as a target status — it lands on complete or in_progress
@@ -200,6 +203,7 @@ async def add_evaluator_endpoint(
     payload: RoundEvaluatorAdd,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    _scope: None = Depends(round_scope),
 ) -> dict[str, Any]:
     return await service.add_evaluator(
         db, current_user.tenant_id, current_user.id, round_id, payload.user_id
@@ -274,6 +278,7 @@ async def set_competence_score_endpoint(
     payload: CompetenceScoreIn,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    _scope: None = Depends(assessment_scope),
 ) -> dict[str, Any]:
     return await service.set_competence_score(
         db,
@@ -292,6 +297,7 @@ async def set_indicator_score_endpoint(
     payload: IndicatorScoreIn,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    _scope: None = Depends(assessment_scope),
 ) -> dict[str, Any]:
     return await service.set_indicator_score(
         db,
@@ -309,6 +315,7 @@ async def submit_assessment_endpoint(
     payload: dict[str, Any] = Body(default_factory=dict),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    _scope: None = Depends(assessment_scope),
 ) -> dict[str, Any]:
     return await service.submit_assessment(
         db,
@@ -331,6 +338,7 @@ async def create_invites_endpoint(
     payload: ManagerAssessmentInviteCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    _scope: None = Depends(cv_scope),
 ) -> list[dict[str, Any]]:
     return await service.create_invites(
         db,
@@ -356,6 +364,7 @@ async def revoke_invite_endpoint(
     invite_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    _scope: None = Depends(invite_scope),
 ) -> dict[str, Any]:
     return await service.revoke_invite(
         db, current_user.tenant_id, current_user.id, invite_id
@@ -367,6 +376,7 @@ async def resend_invite_endpoint(
     invite_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    _scope: None = Depends(invite_scope),
 ) -> dict[str, Any]:
     """HRP-377: mail the same invitation link again (bounced / lost email)."""
     return await service.resend_invite(
@@ -380,6 +390,7 @@ async def extend_invite_endpoint(
     payload: ExtendInviteIn,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    _scope: None = Depends(invite_scope),
 ) -> dict[str, Any]:
     return await service.extend_invite(
         db,

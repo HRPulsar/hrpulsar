@@ -10,7 +10,9 @@ import { describe, expect, it } from "vitest";
 // the real implementation instead of a copy.
 
 import {
+  labelForRound,
   nextInterviewNumber,
+  roundStrip,
   sortRounds,
   type SortableRound,
 } from "@/lib/manager-assessment-rounds";
@@ -125,5 +127,67 @@ describe("sortRounds (HRP-372)", () => {
       { id: "a", type: "interview" as const, round_number: 1 },
     ];
     expect(sortRounds(rounds).map((r) => r.id)).toEqual(["a", "b"]);
+  });
+});
+
+// HRP-372 REDO: the "+ Pre-interview" / "+ Final" buttons are part of the
+// strip, not a tail after "+ New round" — a missing round holds its slot.
+describe("roundStrip (HRP-372 REDO)", () => {
+  const shape = (rounds: SortableRound[]) =>
+    roundStrip(rounds).map((slot) =>
+      slot.kind === "placeholder"
+        ? `+${slot.type}`
+        : slot.round.type === "interview"
+          ? `interview-${slot.round.round_number}`
+          : slot.round.type,
+    );
+
+  it("holds the slot of both missing rounds around the interviews", () => {
+    expect(
+      shape([
+        { type: "interview", round_number: 1 },
+        { type: "interview", round_number: 2 },
+      ]),
+    ).toEqual(["+pre_interview", "interview-1", "interview-2", "+final"]);
+  });
+
+  it("shows the real rounds once they exist", () => {
+    expect(
+      shape([
+        { type: "final", round_number: null },
+        { type: "interview", round_number: 1 },
+        { type: "pre_interview", round_number: null },
+      ]),
+    ).toEqual(["pre_interview", "interview-1", "final"]);
+  });
+
+  it("keeps the pre-interview placeholder when only Final exists", () => {
+    expect(shape([{ type: "final", round_number: null }])).toEqual([
+      "+pre_interview",
+      "final",
+    ]);
+  });
+
+  it("offers both placeholders on an empty section", () => {
+    // A placeholder stands for a missing round, empty section included —
+    // the strip must not change shape with the data.
+    expect(shape([])).toEqual(["+pre_interview", "+final"]);
+  });
+});
+
+describe("labelForRound (HRP-727)", () => {
+  const t = (key: string, values?: Record<string, string | number>) =>
+    values ? `${key}:${JSON.stringify(values)}` : key;
+
+  it("names each round type the way the tabs do", () => {
+    expect(labelForRound(t, { type: "pre_interview", round_number: null })).toBe(
+      "managerAssessmentRoundPreInterview",
+    );
+    expect(labelForRound(t, { type: "final", round_number: null })).toBe(
+      "managerAssessmentRoundFinal",
+    );
+    expect(labelForRound(t, { type: "interview", round_number: 3 })).toBe(
+      'managerAssessmentRoundInterview:{"number":3}',
+    );
   });
 });

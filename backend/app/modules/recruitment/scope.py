@@ -39,10 +39,15 @@ from app.modules.recruitment.manager_assessment_models import (
     RecruitmentAssessment,
 )
 from app.modules.recruitment.models import (
+    AssessmentInvite,
     CandidateFile,
+    CandidateQuestion,
     CandidateVacancy,
     ConsolidatedReport,
+    HumanAssessment,
     Interview,
+    Question,
+    QuestionSet,
     Vacancy,
 )
 
@@ -204,6 +209,53 @@ def _by_assessment(assessment_id: uuid.UUID) -> Select:
     )
 
 
+def _by_human_assessment(assessment_id: uuid.UUID) -> Select:
+    """``HumanAssessment``, not ``RecruitmentAssessment`` (HRP-630).
+
+    Two unrelated tables answer to "an assessment": the manager-assessment
+    sheet (``recruitment_assessments``, reached by ``_by_assessment``) and
+    the per-competence human score behind
+    ``PATCH /recruitment/assessments/{assessment_id}``. Same path word,
+    different rows — pointing the wrong guard at either one refuses every
+    scoped caller, since no id is ever found in the other table.
+    """
+    return _CV_TO_VACANCY.join(
+        HumanAssessment, HumanAssessment.candidate_vacancy_id == CandidateVacancy.id
+    ).where(HumanAssessment.id == assessment_id)
+
+
+def _by_candidate_question(question_id: uuid.UUID) -> Select:
+    """The R3-era interview question, keyed straight off its vacancy."""
+    return (
+        select(Vacancy.id)
+        .join(CandidateQuestion, CandidateQuestion.vacancy_id == Vacancy.id)
+        .where(CandidateQuestion.id == question_id)
+    )
+
+
+def _by_question_set(set_id: uuid.UUID) -> Select:
+    return _CV_TO_VACANCY.join(
+        QuestionSet, QuestionSet.candidate_vacancy_id == CandidateVacancy.id
+    ).where(QuestionSet.id == set_id)
+
+
+def _by_question(question_id: uuid.UUID) -> Select:
+    """The HRP-486 question, which hangs off a set rather than a vacancy."""
+    return (
+        _CV_TO_VACANCY.join(
+            QuestionSet, QuestionSet.candidate_vacancy_id == CandidateVacancy.id
+        )
+        .join(Question, Question.question_set_id == QuestionSet.id)
+        .where(Question.id == question_id)
+    )
+
+
+def _by_invite(invite_id: uuid.UUID) -> Select:
+    return _CV_TO_VACANCY.join(
+        AssessmentInvite, AssessmentInvite.candidate_vacancy_id == CandidateVacancy.id
+    ).where(AssessmentInvite.id == invite_id)
+
+
 # --- FastAPI dependencies -------------------------------------------------
 #
 # These are guards, not gates: each route keeps whatever ``require_role``
@@ -320,6 +372,57 @@ async def assessment_scope(
     scope: RecruitmentScope = Depends(recruitment_scope),
 ) -> None:
     await assert_in_scope(db, current_user, scope, _by_assessment(assessment_id))
+
+
+async def human_assessment_scope(
+    assessment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    scope: RecruitmentScope = Depends(recruitment_scope),
+) -> None:
+    """Guard for ``/recruitment/assessments/{assessment_id}``.
+
+    Deliberately not ``assessment_scope``: that one is keyed by the same
+    parameter name but resolves a different table — see
+    ``_by_human_assessment``.
+    """
+    await assert_in_scope(db, current_user, scope, _by_human_assessment(assessment_id))
+
+
+async def candidate_question_scope(
+    question_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    scope: RecruitmentScope = Depends(recruitment_scope),
+) -> None:
+    await assert_in_scope(db, current_user, scope, _by_candidate_question(question_id))
+
+
+async def question_set_scope(
+    set_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    scope: RecruitmentScope = Depends(recruitment_scope),
+) -> None:
+    await assert_in_scope(db, current_user, scope, _by_question_set(set_id))
+
+
+async def question_scope(
+    question_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    scope: RecruitmentScope = Depends(recruitment_scope),
+) -> None:
+    await assert_in_scope(db, current_user, scope, _by_question(question_id))
+
+
+async def invite_scope(
+    invite_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    scope: RecruitmentScope = Depends(recruitment_scope),
+) -> None:
+    await assert_in_scope(db, current_user, scope, _by_invite(invite_id))
 
 
 # Query-parameter variants. A list route that accepts ``?vacancy_id=`` is

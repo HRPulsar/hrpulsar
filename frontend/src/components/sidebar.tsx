@@ -31,6 +31,10 @@ interface NavItem {
   requireRecruit?: boolean;
   /** HRP-732: admin / manager / HR (see usePermissions.canViewAnalytics). */
   requireAnalytics?: boolean;
+  /** HRP-765: the employee role, or the roles that manage the surface —
+   *  the talent market is read by the people on its cards and written by
+   *  admin / manager, and belongs in neither gate alone. */
+  requireEmployeeOrManage?: boolean;
 }
 
 interface NavSection {
@@ -113,9 +117,12 @@ const navigation: NavItem[] = [
     id: "talent-market",
     labelKey: "talentMarket",
     href: "/talent-market",
-    // HRP-622: every mutation behind it is admin/manager-gated and the
-    // catalogue is not a rank-and-file surface.
-    requireManage: true,
+    // HRP-765: the employee role reads the cards it is a candidate on
+    // (HRP-209), so the entry is theirs as well as admin/manager's. Every
+    // mutation behind it stays admin/manager-gated. Not ungated outright:
+    // recruiter and hiring_manager work the shortlist from the vacancy,
+    // and the ticket asked for the employee.
+    requireEmployeeOrManage: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18 9 11.25l4.306 4.306a11.95 11.95 0 0 1 5.814-5.518l2.74-1.22m0 0-5.94-2.281m5.94 2.28-2.28 5.941" />
@@ -221,7 +228,8 @@ export function Sidebar() {
   const locale = useLocale();
   const tPlatform = useTranslations("platform");
   const { resolvedTheme } = useTheme();
-  const { canManage, canRecruit, isAdmin, canViewAnalytics } = usePermissions();
+  const { canManage, canRecruit, isAdmin, isEmployee, canViewAnalytics } =
+    usePermissions();
   const { user } = useAuth();
   const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
 
@@ -292,6 +300,8 @@ export function Sidebar() {
               if (item.requireManage && !canManage) return false;
               if (item.requireRecruit && !canRecruit) return false;
               if (item.requireAnalytics && !canViewAnalytics) return false;
+              if (item.requireEmployeeOrManage && !isEmployee && !canManage)
+                return false;
               return true;
             });
           if (visible.length === 0) return null;

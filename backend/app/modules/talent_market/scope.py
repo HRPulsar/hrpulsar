@@ -30,6 +30,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
+import sqlalchemy as sa
 from fastapi import Depends, status
 from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -103,6 +104,66 @@ class TalentScope:
                 )
             )
         return or_(*clauses)
+
+
+def employee_read_filter(employee_id: uuid.UUID | None) -> ColumnElement[bool]:
+    """HRP-765: which cards a rank-and-file employee may read.
+
+    Narrower than :meth:`TalentScope.read_filter` — the board is not a
+    catalogue for the people on it. An employee sees a card when
+
+    (a) they are on its candidate list and the card has left Draft, or
+    (b) they are on its candidate list as ``appointed`` — a pre-publish
+        nomination, so the card's own status does not matter.
+
+    One condition rather than two hand-written checks: the list narrows a
+    query with it and the detail route re-asks the same question about one
+    row, so the two cannot drift (they did — the list let a role-employee
+    user with no Employee row read every published card, the detail route
+    refused them).
+    """
+    if employee_id is None:
+        return sa.false()
+    return TalentCard.id.in_(
+        select(TalentCandidate.card_id)
+        .join(TalentCard, TalentCard.id == TalentCandidate.card_id)
+        .where(
+            TalentCandidate.employee_id == employee_id,
+            or_(
+                TalentCard.status != "draft",
+                TalentCandidate.status == "appointed",
+            ),
+        )
+        .scalar_subquery()
+    )
+
+
+async def assert_employee_card_visible(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    card_id: uuid.UUID,
+    employee_id: uuid.UUID | None,
+) -> None:
+    """404 unless :func:`employee_read_filter` lets this employee read the card.
+
+    Every employee-reachable read of one card asks through here — the
+    detail route and the match breakdown behind it. The breakdown used to
+    check only "is this row mine", so an employee could hand it their own
+    id with any card id and read the requirements, levels, specializations
+    and threshold of a draft they were never on.
+
+    "Not found" rather than 403, the way this module has always hidden a
+    card: the answer must not confirm that somebody else's draft exists.
+    """
+    allowed = await db.scalar(
+        select(TalentCard.id).where(
+            TalentCard.id == card_id,
+            TalentCard.tenant_id == tenant_id,
+            employee_read_filter(employee_id),
+        )
+    )
+    if allowed is None:
+        raise AppError("tm_card_not_found", status.HTTP_404_NOT_FOUND)
 
 
 async def resolve_talent_scope(db: AsyncSession, current_user: User) -> TalentScope:

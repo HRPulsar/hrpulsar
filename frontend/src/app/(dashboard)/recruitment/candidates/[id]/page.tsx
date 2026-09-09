@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { BADGE_OUTLINE } from "@/lib/badge-tones";
 import { AiInsightsSection } from "@/components/recruitment/ai-insights-section";
 import { AiVerdictBadge } from "@/components/recruitment/ai-verdict-badge";
+import { labelForRound } from "@/lib/manager-assessment-rounds";
 import { CandidateInterviewsSection } from "@/components/recruitment/candidate-interviews-section";
 import { InterviewQuestionSets } from "@/components/recruitment/interview-question-sets";
 import { ManagerAssessmentSection } from "@/components/recruitment/manager-assessment-section";
@@ -227,6 +228,10 @@ export default function CandidateDetailPage() {
     if (!card || deepLinkHandled.current) return;
     const anchorId = window.location.hash.slice(1);
     if (!anchorId) return;
+    // HRP-442 REDO: Interview questions scrolls itself, once its own
+    // request has landed — its height here is a loading placeholder, so
+    // jumping now leaves the reader above the finished block.
+    if (anchorId === "interview-questions") return;
     deepLinkHandled.current = true;
     document.getElementById(anchorId)?.scrollIntoView({
       block: "start",
@@ -753,6 +758,16 @@ function VacancyApplicationsCard({
                       className={cn(
                         "rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums",
                       )}
+                      // HRP-727: the score comes from exactly one round, so
+                      // hovering it says which — a hand-typed score names none.
+                      title={
+                        a.manager_score_round
+                          ? t("candidatesTableScoreRoundTooltip", {
+                              round: labelForRound(t, a.manager_score_round),
+                            })
+                          : undefined
+                      }
+                      data-testid={`candidate-card-application-${a.cv_id}-manager-score`}
                     >
                       {t("candidateManagerScore", {
                         score: a.manager_score.toFixed(1),

@@ -239,3 +239,48 @@ describe("Add to candidates — who may do it (HRP-711)", () => {
     expect(addedLink()).not.toBeNull();
   });
 });
+
+// HRP-667 REDO — the name is a link to the employee's profile, but only
+// for a viewer the API says may open it. The shortlist itself is the same
+// for everyone who may read the vacancy (HRP-703); only the link is
+// scoped, so nobody is offered a link that lands on a 403.
+const NAMED = (canView: boolean): VacancyInternalCandidates => ({
+  talent_card_id: "card-1",
+  talent_card_status: "draft",
+  has_library_competences: true,
+  internal_search_allowed: true,
+  items: [
+    {
+      employee_id: "emp-1",
+      employee_name: "Ada Byron",
+      position_title: "Engineer",
+      match_score: 71,
+      status: "matched",
+      candidate_id: null,
+      can_view_profile: canView,
+    },
+  ],
+});
+
+const nameCell = () =>
+  container.querySelector('[data-testid="vacancy-internal-candidate-emp-1-name"]');
+
+describe("Internal candidate name links (HRP-667)", () => {
+  it("links the name when the viewer may open that profile", async () => {
+    await render(["recruiter"], NAMED(true));
+    const cell = nameCell();
+    expect(cell).not.toBeNull();
+    expect(cell!.tagName).toBe("A");
+    expect(cell!.getAttribute("href")).toBe("/employees/emp-1");
+    expect(cell!.textContent).toContain("Ada Byron");
+  });
+
+  it("renders plain text when they may not", async () => {
+    await render(["recruiter"], NAMED(false));
+    const cell = nameCell();
+    expect(cell).not.toBeNull();
+    expect(cell!.tagName).not.toBe("A");
+    // The row itself is untouched — the shortlist is not narrowed.
+    expect(cell!.textContent).toContain("Ada Byron");
+  });
+});

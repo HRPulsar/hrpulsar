@@ -245,13 +245,13 @@ export function MatchDrawer({
           {/* HRP-665: the plan is created where the gap is visible. An
               existing plan links out instead of offering a second one. */}
           {candidateId && pdpId && (
-            <Link
-              href={`/development/${pdpId}`}
-              className="inline-flex text-sm font-medium text-primary underline-offset-2 hover:underline"
+            <Button
+              size="sm"
               data-testid="talent-market-match-drawer-plan-link"
+              render={<Link href={`/development/${pdpId}`} />}
             >
               {t("drawerOpenPlan")}
-            </Link>
+            </Button>
           )}
           {candidateId && !pdpId && canCreatePlan && gaps.length > 0 && (
             <div className="space-y-1">

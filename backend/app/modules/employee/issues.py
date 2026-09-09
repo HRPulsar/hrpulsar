@@ -280,6 +280,11 @@ async def collect_issue_facts(
 
     Three queries regardless of cohort size — active employees, their done
     assessments, the per-competence results — plus one for the plans.
+
+    The ``gaps_closed`` / ``plans_done_on_time`` fields here answer over
+    the default :data:`CLOSED_WINDOW_DAYS`. A caller that lets the reader
+    pick a window asks :func:`closed_in_window` instead — it derives the
+    same two numbers from these facts without a second query (HRP-766).
     """
     now = now or datetime.now(UTC)
     stale_cutoff = now - timedelta(days=STALE_DAYS)
@@ -531,6 +536,65 @@ async def collect_issue_facts(
         pdp_stuck_days=pdp_stuck_days,
         pdp_rows=pdp_rows,
     )
+
+
+def closed_in_window(
+    facts: IssueFacts, days: int, *, now: datetime | None = None
+) -> dict:
+    """HRP-766: the Completed stage over the period the reader picked.
+
+    The two numbers the dashboard's Completed tile shows — competence gaps
+    a re-assessment confirmed closed, and development plans that finished
+    on or before their deadline. Both used to be pinned to the fixed
+    90-day window, so the period switch above them changed nothing.
+
+    A pure function over ``facts`` rather than a parameter on
+    ``collect_issue_facts``, for the same reason ``development_dynamics``
+    is one: the window is a reading choice, and re-querying per period
+    would put it inside the AI-summary fingerprint and mint a fresh LLM
+    call every time somebody flipped 30 / 90 / 365 over unchanged data
+    (the HRP-724 contract).
+
+    The cohort rules keep their own fixed clocks regardless: a stale
+    assessment must age out on the same day for the tile and for the
+    ``?issue=`` list behind it, whatever period is on screen.
+    """
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=days)
+
+    done_by_employee: dict[uuid.UUID, list[Row]] = {}
+    for row in facts.done_rows:
+        if row.employee_id in facts.active_by_id:
+            done_by_employee.setdefault(row.employee_id, []).append(row)
+
+    gaps_closed = 0
+    for emp_id, latest in facts.latest_done.items():
+        if latest.finished_at is None or latest.finished_at < cutoff:
+            continue
+        latest_bar = passing_bar(latest.passing_score)
+        passed_now = {
+            res.competence_id
+            for res in facts.results_by_assessment.get(latest.id, [])
+            if not is_gap(res.percent, latest_bar)
+        }
+        earlier = [r for r in done_by_employee.get(emp_id, []) if r.id != latest.id]
+        gaps_closed += len(
+            closed_against_previous(passed_now, earlier, facts.results_by_assessment)
+        )
+
+    plans_done_on_time = sum(
+        1
+        for r in facts.pdp_rows
+        if r.status == "done"
+        and r.finished_at is not None
+        and r.finished_at >= cutoff
+        and r.deadline is not None
+        and r.finished_at <= r.deadline
+    )
+    return {
+        "window_days": days,
+        "gaps_closed": gaps_closed,
+        "plans_done_on_time": plans_done_on_time,
+    }
 
 
 def development_dynamics(

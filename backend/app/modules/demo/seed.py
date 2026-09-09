@@ -1260,15 +1260,20 @@ async def _seed_assessments_and_pdps(
         if spec["status"] in {"in_progress", "review", "returned"}:
             started_at = now - timedelta(days=30)
         if spec["status"] in {"done", "cancelled"}:
-            started_at = now - timedelta(days=90)
-            finished_at = now - timedelta(days=7)
+            # HRP-766: ``finished_days_ago`` spreads the finished plans over
+            # the year. Without it every closed plan landed in the same week
+            # and the dashboard's 30 / 90 / 365 switch reported one number
+            # three times — a filter that visibly does nothing.
+            finished_at = now - timedelta(days=spec.get("finished_days_ago", 7))
+            started_at = finished_at - timedelta(days=83)
 
         if spec["status"] == "cancelled":
             deadline = None
-        elif spec["status"] == "done":
-            # Finished a week ago, comfortably before its deadline —
-            # feeds the Closed stage's "plans done on time" sub-line.
-            deadline = now + timedelta(days=30)
+        elif finished_at is not None:  # done
+            # Comfortably ahead of its own finish date — feeds the Closed
+            # stage's "plans done on time" sub-line whatever period it
+            # was finished in.
+            deadline = finished_at + timedelta(days=30)
         elif spec.get("overdue"):
             # Dev-loop storyline: an open plan two weeks past its
             # deadline so the dashboard's action queue has a real row.
@@ -1302,6 +1307,12 @@ async def _seed_assessments_and_pdps(
             started_at=started_at,
             finished_at=finished_at,
         )
+        if started_at is not None and started_at < now:
+            # HRP-766: a plan finished eight months ago cannot have been
+            # created today. The list sorts finished plans by finish date
+            # and the detail page prints Created — both would contradict
+            # the dates the dashboard counts.
+            pdp.created_at = started_at
         if spec.get("stuck"):
             # Dev-loop storyline: pin updated_at three weeks back so the
             # review/returned plan reads as stalled on the dashboard

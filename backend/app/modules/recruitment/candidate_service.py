@@ -1002,6 +1002,29 @@ async def apply_matrix_aggregates(
         payload["divergence_top"] = previews
 
 
+async def apply_manager_score_rounds(
+    db: AsyncSession, tenant_id: uuid.UUID, payloads: list[dict]
+) -> None:
+    """Name the round each row's ``manager_score`` was computed from.
+
+    HRP-727: the source round is derived on read by the one selector the
+    recompute uses (``manager_assessment_service.resolve_score_rounds``),
+    so the Manager-score tooltip can never name a round the number no
+    longer comes from. Two queries for a whole page.
+    """
+    if not payloads:
+        return
+    from app.modules.recruitment.manager_assessment_service import (
+        resolve_score_rounds,
+        round_ref,
+    )
+
+    cv_ids = [p["id"] for p in payloads if p.get("manager_score") is not None]
+    sources = await resolve_score_rounds(db, tenant_id, cv_ids)
+    for payload in payloads:
+        payload["manager_score_round"] = round_ref(sources.get(payload["id"]))
+
+
 async def find_active_candidate_by_email(
     db: AsyncSession, tenant_id: uuid.UUID, email: str
 ) -> Candidate | None:
@@ -1821,6 +1844,7 @@ async def list_vacancy_candidates_enriched(
     # Single Compact-matrix call powers the per-row % match aggregates
     # + Divergence column shown in the candidates table (HRP-267).
     await apply_matrix_aggregates(db, tenant_id, vacancy_id, items)
+    await apply_manager_score_rounds(db, tenant_id, items)
     # HRP-493: AI DATA / AI VERDICT read the inputs the model can see
     # and whether a run is in flight — both derived, never a stale
     # mirror column.
@@ -1925,6 +1949,7 @@ async def patch_candidate_vacancy(
     await apply_matrix_aggregates(
         db, tenant_id, cv.vacancy_id, [payload], only_cv_ids=[cv.id]
     )
+    await apply_manager_score_rounds(db, tenant_id, [payload])
     # HRP-493: keep the PATCH response's AI block consistent with the
     # list endpoint — the table swaps the row in place from this body.
     from app.modules.recruitment.resume_analysis_service import (
@@ -1997,6 +2022,14 @@ async def get_candidate_full_card(
         .all()
     )
 
+    from app.modules.recruitment.manager_assessment_service import (
+        resolve_score_rounds,
+        round_ref,
+    )
+
+    score_rounds = await resolve_score_rounds(
+        db, tenant_id, [cv.id for cv in cv_rows if cv.manager_score is not None]
+    )
     applications: list[dict] = []
     for cv in cv_rows:
         applications.append(
@@ -2009,6 +2042,8 @@ async def get_candidate_full_card(
                 "stage_type": cv.stage.stage_type if cv.stage else None,
                 "status": cv.status,
                 "manager_score": cv.manager_score,
+                # HRP-727: which round that score came from.
+                "manager_score_round": round_ref(score_rounds.get(cv.id)),
                 "ai_score": cv.ai_score,
                 "ai_verdict": cv.ai_verdict,
                 "ai_verdict_summary": cv.ai_verdict_summary,

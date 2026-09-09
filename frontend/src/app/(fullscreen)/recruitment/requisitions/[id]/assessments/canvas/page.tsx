@@ -17,6 +17,7 @@ import {
   type AssessmentMatrixCellDetail,
   type AssessmentMatrixCompetence,
   type AssessmentMatrixData,
+  type AssessmentMatrixRoundSlot,
   type Vacancy,
 } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
@@ -125,7 +126,30 @@ export default function AssessmentCanvasPage() {
 
   const allCandidates = useMemo(() => data?.candidates ?? [], [data]);
   const allCompetences = useMemo(() => data?.competences ?? [], [data]);
+  // The vacancy's Assessment scale (HRP-510 REDO) — its top level is the
+  // matrix maximum, and Percent is taken against it.
   const maxScore = data?.max_score ?? 5;
+  const roundSlots = useMemo(() => data?.round_slots ?? [], [data]);
+
+  // Slots are machine keys; only their wording is translated.
+  const roundSlotLabel = useCallback(
+    (slot: AssessmentMatrixRoundSlot): string =>
+      slot.type === "pre_interview"
+        ? t("canvasRoundPreInterview")
+        : slot.type === "final"
+          ? t("canvasRoundFinal")
+          : t("canvasRoundInterviewNumber", { number: String(slot.number) }),
+    [t],
+  );
+  const roundLabel =
+    round === "latest"
+      ? t("canvasRoundLatest")
+      : round === "all"
+        ? t("canvasRoundAll")
+        : (() => {
+            const slot = roundSlots.find((s) => s.key === round);
+            return slot ? roundSlotLabel(slot) : t("canvasRoundLatest");
+          })();
 
   const cellIndex = useMemo(() => {
     const out = new Map<string, Map<string, AssessmentMatrixCell>>();
@@ -254,78 +278,39 @@ export default function AssessmentCanvasPage() {
     return parts.reduce((a, b) => a + b, 0) / parts.length;
   }
 
-  /** CSV injection guard: a cell opening with =, +, - or @ is executed as
-   *  a formula by Excel / Sheets. Prefixing with an apostrophe keeps the
-   *  text visible and inert. Candidate and competence names are free
-   *  text, so the whole row goes through this. */
-  function csvSafe(value: string): string {
-    return /^[=+\-@]/.test(value) ? `'${value}` : value;
-  }
-
-  function handleExportCsv() {
-    const header = [
-      t("canvasColCandidate"),
-      t("canvasColSource"),
-      ...visibleCompetences.map((c) => c.name),
-    ];
-    const lines = [header];
-    // Source labels mirror the View selector — same wording as the
-    // on-screen option the export was taken from.
-    const managerLabel = t("canvasViewManagerOnly");
-    const aiLabel = t("canvasViewAiOnly");
-    for (const cand of visibleCandidates) {
-      const rowsForCandidate: [string, (c: AssessmentMatrixCell) => string][] =
-        view === "aggregated"
-          ? [
-              [
-                t("canvasViewAggregated"),
-                (c) => formatValue(aggregatedValue(c)),
-              ],
-            ]
-          : view === "manager"
-            ? [[managerLabel, (c) => formatValue(c.manager_score)]]
-            : view === "ai"
-              ? [[aiLabel, (c) => aiText(c)]]
-              : [
-                  [managerLabel, (c) => formatValue(c.manager_score)],
-                  [aiLabel, (c) => aiText(c)],
-                ];
-      for (const [label, render] of rowsForCandidate) {
-        lines.push([
-          cand.name,
-          label,
-          ...visibleCompetences.map((comp) => render(cellFor(cand, comp))),
-        ]);
-      }
-    }
-    const csv = lines
-      .map((row) =>
-        row
-          .map((v) => `"${csvSafe(String(v)).replace(/"/g, '""')}"`)
-          .join(","),
-      )
-      .join("\n");
-    // Prepend a BOM so Excel opens the UTF-8 file with the right encoding.
-    const blob = new Blob([`﻿${csv}`], {
-      type: "text/csv;charset=utf-8",
+  /** HRP-744 — the export is whatever the toolbar is showing, so the
+   *  toolbar goes with the request: view, round slot, points/percent,
+   *  both filters and the candidates still ticked. The rows themselves
+   *  are built server-side for both formats — the browser used to hold a
+   *  second copy of the rendering rules, and that copy is what shipped
+   *  CSV without a Total column. Candidate ids are sent only when some
+   *  are unticked, so the common case keeps a short URL. */
+  function exportQuery(): string {
+    const params = new URLSearchParams({
+      round,
+      view,
+      scale,
+      only_divergences: String(onlyDivergences),
+      hide_unscored: String(hideUnscored),
     });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `canvas-${id}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (hidden.size > 0) {
+      params.set(
+        "candidates",
+        visibleCandidates.map((c) => c.candidate_vacancy_id).join(","),
+      );
+    }
+    return params.toString();
   }
 
-  /** XLSX comes from the API, which is bearer-authenticated — a plain
-   *  <a href> would send no Authorization header and 401. Fetch it,
-   *  then hand the blob to a synthetic download link. */
-  async function handleExportXlsx() {
+  /** The export API is bearer-authenticated — a plain <a href> would send
+   *  no Authorization header and 401. Fetch it, then hand the blob to a
+   *  synthetic download link. */
+  async function handleExport(format: "xlsx" | "csv") {
     setXlsxLoading(true);
     try {
       const token = localStorage.getItem("access_token");
       const res = await fetch(
-        `${API_BASE}/recruitment/vacancies/${id}/assessment-matrix/export.xlsx?round=${round}`,
+        `${API_BASE}/recruitment/vacancies/${id}/assessment-matrix/export.${format}?${exportQuery()}`,
         { headers: token ? { Authorization: `Bearer ${token}` } : {} },
       );
       if (!res.ok) throw new Error(String(res.status));
@@ -333,7 +318,7 @@ export default function AssessmentCanvasPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `canvas-${id}.xlsx`;
+      a.download = `canvas-${id}.${format}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -418,9 +403,9 @@ export default function AssessmentCanvasPage() {
               onChange={(e) => setRound(e.target.value)}
             >
               <option value="latest">{t("canvasRoundLatest")}</option>
-              {Array.from({ length: data?.round_count ?? 0 }, (_, i) => (
-                <option key={i + 1} value={String(i + 1)}>
-                  {t("canvasRoundNumber", { number: String(i + 1) })}
+              {roundSlots.map((slot) => (
+                <option key={slot.key} value={slot.key}>
+                  {roundSlotLabel(slot)}
                 </option>
               ))}
               <option value="all">{t("canvasRoundAll")}</option>
@@ -438,8 +423,12 @@ export default function AssessmentCanvasPage() {
               onChange={(e) => setScale(e.target.value as CanvasScale)}
             >
               <option value="points">
-                {data?.scale_name ??
-                  t("canvasScalePoints", { max: String(maxScore) })}
+                {data?.scale_name
+                  ? t("canvasScaleNamed", {
+                      name: data.scale_name,
+                      max: String(maxScore),
+                    })
+                  : t("canvasScalePoints", { max: String(maxScore) })}
               </option>
               <option value="percent">{t("canvasScalePercent")}</option>
             </select>
@@ -449,7 +438,8 @@ export default function AssessmentCanvasPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={handleExportCsv}
+              onClick={() => void handleExport("csv")}
+              disabled={xlsxLoading}
               data-testid="canvas-export-csv"
             >
               <Download className="mr-1 size-3.5" />
@@ -458,7 +448,7 @@ export default function AssessmentCanvasPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={handleExportXlsx}
+              onClick={() => void handleExport("xlsx")}
               disabled={xlsxLoading}
               data-testid="canvas-export-xlsx"
             >
@@ -534,11 +524,7 @@ export default function AssessmentCanvasPage() {
                       candidateVacancyStatusLabel(t, cand.status)}
                   </span>
                   <span className="block truncate text-muted-foreground">
-                    {round === "latest"
-                      ? t("canvasRoundLatest")
-                      : round === "all"
-                        ? t("canvasRoundAll")
-                        : t("canvasRoundNumber", { number: round })}
+                    {roundLabel}
                   </span>
                 </span>
               </li>
@@ -565,18 +551,22 @@ export default function AssessmentCanvasPage() {
             </p>
           ) : (
             <table
-              className="border-collapse text-xs"
+              className="border-separate border-spacing-0 text-xs"
               data-testid="canvas-matrix"
             >
               <thead>
                 <tr>
-                  <th className="border-b border-r px-2 py-1.5 text-left font-medium">
+                  {/* HRP-510 REDO — with rows hidden by the checkboxes or
+                      by "no scores", the left panel no longer lines up
+                      with the grid, so the Candidate column has to stay
+                      on screen while the competences scroll. */}
+                  <th className="sticky left-0 top-0 z-20 border-b border-r bg-background px-2 py-1.5 text-left font-medium">
                     {t("canvasColCandidate")}
                   </th>
                   {visibleCompetences.map((comp) => (
                     <th
                       key={comp.id}
-                      className="min-w-[6.5rem] border-b border-r px-2 py-1.5 text-left font-medium"
+                      className="sticky top-0 z-10 min-w-[6.5rem] border-b border-r bg-background px-2 py-1.5 text-left font-medium"
                       title={comp.group ? `${comp.group} · ${comp.name}` : comp.name}
                     >
                       <span className="block max-w-[8rem] truncate">
@@ -588,8 +578,8 @@ export default function AssessmentCanvasPage() {
               </thead>
               <tbody>
                 {visibleCandidates.map((cand) => (
-                  <tr key={cand.candidate_vacancy_id} className="border-t">
-                    <td className="border-r px-2 py-1.5 font-medium">
+                  <tr key={cand.candidate_vacancy_id}>
+                    <td className="sticky left-0 z-10 border-b border-r bg-background px-2 py-1.5 font-medium">
                       {cand.name}
                     </td>
                     {visibleCompetences.map((comp) => {
@@ -604,7 +594,7 @@ export default function AssessmentCanvasPage() {
                         <td
                           key={comp.id}
                           className={cn(
-                            "border-r p-0",
+                            "border-b border-r p-0",
                             cell.divergence && "bg-amber-50 dark:bg-amber-950/30",
                             empty && "bg-muted/20",
                             isSelected && "outline outline-2 outline-accent",

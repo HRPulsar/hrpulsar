@@ -7,8 +7,10 @@ AI-summary requests over unchanged data free of LLM calls.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -27,6 +29,7 @@ from app.modules.auth.models import User
 from app.modules.company.models import Tenant
 from app.modules.competence.models import Competence, CompetenceGroup, SkillLevel
 from app.modules.dictionary.models import DictionaryItem
+from app.modules.employee import issues
 from app.modules.employee.models import Employee
 from app.modules.grade_system.models import GradeCompetenceLink, GradeSpecialization
 from app.modules.position.models import Position
@@ -350,7 +353,7 @@ async def test_gap_closed_by_reassessment(
     )
 
     payload = await analytics_service.dev_loop(db, tenant.id, None)
-    assert payload["stages"]["closed"]["gaps_closed_90d"] == 1
+    assert payload["stages"]["closed"]["gaps_closed"] == 1
     # the fresh result sits above the bar — no current gap either
     assert payload["stages"]["gaps"] == {
         "employees": 0,
@@ -388,7 +391,7 @@ async def test_closure_outside_window_not_counted(
     )
 
     payload = await analytics_service.dev_loop(db, tenant.id, None)
-    assert payload["stages"]["closed"]["gaps_closed_90d"] == 0
+    assert payload["stages"]["closed"]["gaps_closed"] == 0
 
 
 @pytest.mark.asyncio
@@ -428,7 +431,7 @@ async def test_plans_done_on_time_in_closed_window(db: AsyncSession, tenant):
     await db.commit()
 
     payload = await analytics_service.dev_loop(db, tenant.id, None)
-    assert payload["stages"]["closed"]["plans_done_on_time_90d"] == 1
+    assert payload["stages"]["closed"]["plans_done_on_time"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -652,7 +655,7 @@ async def test_my_loop_personal_closure_and_strengths(
     )
 
     payload = await analytics_service.my_loop(db, tenant.id, emp.user_id)
-    assert payload["stages"]["closed"]["gaps_closed_90d"] == 1
+    assert payload["stages"]["closed"]["gaps_closed"] == 1
     assert payload["strengths"]["top"][0]["percent"] == 85
     # I'm the only holder of this competence in the tenant → rare skill
     assert [s["percent"] for s in payload["strengths"]["rare_skills"]] == [85]
@@ -849,10 +852,10 @@ async def test_reclosure_not_recounted_on_next_assessment(
     )
 
     payload = await analytics_service.dev_loop(db, tenant.id, None)
-    assert payload["stages"]["closed"]["gaps_closed_90d"] == 0
+    assert payload["stages"]["closed"]["gaps_closed"] == 0
 
     personal = await analytics_service.my_loop(db, tenant.id, emp.user_id)
-    assert personal["stages"]["closed"]["gaps_closed_90d"] == 0
+    assert personal["stages"]["closed"]["gaps_closed"] == 0
 
 
 @pytest.mark.asyncio
@@ -1183,7 +1186,7 @@ async def test_dynamics_counts_a_strict_rise_against_the_earlier_result(
     # Still under the bar, so no gap was closed -- but it moved, and moving
     # is what this block reports.
     assert payload["dynamics"]["competences_improved"] == 1
-    assert payload["stages"]["closed"]["gaps_closed_90d"] == 0
+    assert payload["stages"]["closed"]["gaps_closed"] == 0
 
 
 @pytest.mark.asyncio
@@ -1421,3 +1424,197 @@ async def test_loop_routes_reject_an_unlisted_period(db: AsyncSession, tenant, c
     admin = await _role_user(db, tenant, "admin")
     for url in ("/api/analytics/dev-loop?days=45", "/api/analytics/my-loop?days=45"):
         assert (await client.get(url, headers=_headers(admin))).status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# HRP-764 — what the AI summary is allowed to be handed
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def captured_prompt(monkeypatch):
+    """Record the prompt the dev-loop summary sends to the model."""
+    import app.modules.ai.llm_client as llm_client
+
+    seen: dict[str, str] = {}
+
+    async def _fake_generate(prompt, *args, **kwargs):
+        seen["prompt"] = prompt
+        seen["system"] = kwargs.get("system", "")
+        return "summary"
+
+    monkeypatch.setattr(llm_client, "generate", _fake_generate)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_prompt_payload_carries_no_issue_codes(
+    db: AsyncSession, tenant, status_done, type_self, captured_prompt
+):
+    """No key from the issue registry may reach the model.
+
+    The reported symptom was the summary printing ``gaps_without_plan``
+    and ``assessment_coverage`` mid-sentence -- it could hardly do
+    otherwise, having been handed those strings and nothing else to call
+    the findings. Every seeded finding fires here so the assertion covers
+    the registry, not one row of it.
+    """
+    emp = await _make_employee(db, tenant)
+    await _make_done_assessment(
+        db, tenant, emp, status_done, type_self, percent=40
+    )
+    stale = await _make_employee(db, tenant, last_name="Stale")
+    await _make_done_assessment(
+        db, tenant, stale, status_done, type_self, finished_days_ago=300
+    )
+    overdue = await _make_employee(db, tenant, last_name="Overdue")
+    db.add(
+        _pdp(
+            tenant,
+            overdue,
+            status="in_progress",
+            deadline=datetime.now(UTC) - timedelta(days=5),
+        )
+    )
+    await db.commit()
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
+    assert {f["code"] for f in payload["findings"]} >= {
+        "gaps_without_plan",
+        "pdp_overdue",
+        "assessment_coverage",
+    }
+
+    await analytics_service.generate_dev_loop_summary(db, tenant.id, payload)
+    prompt = captured_prompt["prompt"]
+    leaked = [code for code in issues.ISSUE_CODES if code in prompt]
+    # ``assessment_coverage`` is the dev-loop's own name for the stale
+    # cohort and is not in ISSUE_CODES; the payload must not carry it either.
+    leaked += [code for code in ("assessment_coverage",) if code in prompt]
+    assert not leaked, f"issue codes reached the prompt: {leaked}"
+    assert "employees below the grade bar with no development plan" in prompt
+
+
+@pytest.mark.asyncio
+async def test_prompt_payload_names_the_tenant_grades(
+    db: AsyncSession, tenant, captured_prompt
+):
+    """(a) of HRP-764: the ladder in the prompt is the tenant's, not the
+    model's favourite one. A workspace that renamed its rungs must not read
+    "Junior" back out of the summary."""
+    db.add_all(
+        [
+            DictionaryItem(
+                type="grade", title="Apprentice", tenant_id=tenant.id, sort_index=0
+            ),
+            DictionaryItem(
+                type="grade", title="Craftsman", tenant_id=tenant.id, sort_index=1
+            ),
+            DictionaryItem(
+                type="grade",
+                title="Retired rung",
+                tenant_id=tenant.id,
+                sort_index=2,
+                is_active=False,
+            ),
+        ]
+    )
+    await db.commit()
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
+    await analytics_service.generate_dev_loop_summary(db, tenant.id, payload)
+    prompt = captured_prompt["prompt"]
+    assert '"Apprentice"' in prompt and '"Craftsman"' in prompt
+    assert "Retired rung" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_origin_grade_reaches_the_prompt_in_the_content_language(
+    db: AsyncSession, tenant, captured_prompt
+):
+    """An origin grade stores its English title plus a stable ``i18n_key``;
+    the interface renders the catalog label. Handing the model the stored
+    title is how "Junior" survived into a German summary (HRP-770)."""
+    from app.modules.ai_settings import service as ai_settings_service
+
+    stored_title = f"Junior {uuid.uuid4().hex[:6]}"
+    db.add(
+        DictionaryItem(
+            type="grade",
+            title=stored_title,
+            i18n_key="junior",
+            tenant_id=tenant.id,
+        )
+    )
+    await db.commit()
+    settings_row = await ai_settings_service.get_or_default(db, tenant.id)
+    settings_row.content_language = "de"
+    await db.commit()
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
+    await analytics_service.generate_dev_loop_summary(db, tenant.id, payload)
+    prompt = captured_prompt["prompt"]
+    assert '"Junior"' in prompt
+    assert stored_title not in prompt
+
+
+# The codes ``my_loop`` can emit, harvested from the source rather than
+# retyped: a code added to the personal loop tomorrow joins this guard on
+# its own, which is the whole point — the leak was never about one code.
+_MY_LOOP_CODE_RE = re.compile(r'"code": "([a-z_]+)"')
+
+
+def _my_loop_finding_codes() -> list[str]:
+    source = Path(analytics_service.__file__).read_text(encoding="utf-8")
+    start = source.index("async def my_loop(")
+    codes = sorted(set(_MY_LOOP_CODE_RE.findall(source[start:])))
+    assert codes, "code literal scan found nothing — my_loop or the regex moved"
+    return codes
+
+
+@pytest.fixture
+def captured_my_prompt(monkeypatch):
+    """Record the prompt the personal summary sends to the model."""
+    import app.modules.ai.llm_client as llm_client
+
+    seen: dict[str, str] = {}
+
+    async def _fake_generate(prompt, *args, **kwargs):
+        seen["prompt"] = prompt
+        return "summary"
+
+    monkeypatch.setattr(llm_client, "generate", _fake_generate)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_my_loop_prompt_carries_no_issue_codes(
+    db: AsyncSession, tenant, status_done, type_self, captured_my_prompt
+):
+    """HRP-764, the personal half.
+
+    The company summary was the reported one, but ``my_loop`` hands the
+    model the same machine codes off the same registry — and this one
+    speaks to the employee about themselves, so ``gap_without_plan``
+    mid-sentence reads even worse. Every code the personal loop can emit
+    is forced into the payload at once, so the assertion covers the
+    registry rather than whichever finding this fixture happened to fire.
+    """
+    emp = await _make_employee(db, tenant, last_name="Personal")
+    await _make_done_assessment(
+        db, tenant, emp, status_done, type_self, percent=40
+    )
+
+    payload = await analytics_service.my_loop(db, tenant.id, emp.user_id)
+    codes = _my_loop_finding_codes()
+    payload["findings"] = [
+        {"code": code, "severity": "alert", "count": 1, "href": f"/x?issue={code}"}
+        for code in codes
+    ]
+
+    await analytics_service.generate_my_loop_summary(db, tenant.id, payload)
+    prompt = captured_my_prompt["prompt"]
+    leaked = [code for code in codes if code in prompt]
+    assert not leaked, f"issue codes reached the personal prompt: {leaked}"
+    # And the model was given something to call them instead.
+    assert "no development plan" in prompt

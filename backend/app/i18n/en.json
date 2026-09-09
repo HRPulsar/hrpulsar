@@ -892,6 +892,7 @@
     "vacancy_funnel_empty": "Vacancy funnel must contain at least one stage.",
     "vacancy_funnel_no_active_stage": "Vacancy funnel must contain at least one active (non-terminal) stage.",
     "vacancy_already_in_talent_market": "This vacancy has already been posted to the internal talent market.",
+    "vacancy_internal_search_locked_by_card": "Internal search stays on while this vacancy is posted to the internal talent market. Remove its talent market card first.",
     "vacancy_internal_search_disabled": "Internal search is turned off for this vacancy. Turn it on in the vacancy settings to post it to the internal talent market.",
     "vacancy_has_no_library_competences": "Add required competencies from the library before posting this vacancy to the internal talent market — the internal match is scored against them.",
     "vacancy_competences_required_while_posted": "A vacancy posted to the internal talent market needs at least one required competency — remove it from the talent market first if you want to clear the list.",
@@ -935,6 +936,41 @@
       "llm_yandex_model_not_self_contained": "Yandex model must be a full gpt://<folder>/<model> URI unless a base URL is configured"
     },
     "llm_yandex_model_not_dispatchable": "The Yandex model {model} needs a full gpt://<folder>/<model> URI unless a base URL is configured.",
-    "no_pending_consent_request": "No pending consent request to resend"
+    "no_pending_consent_request": "No pending consent request to resend",
+    "vacancy_no_longer_available": "The vacancy for this invitation is no longer available"
+  },
+  "dev_loop": {
+    "finding": {
+      "gaps_without_plan": "employees below the grade bar with no development plan",
+      "pdp_overdue": "development plans past their deadline",
+      "pdp_stuck_review": "plans stuck in review with no movement",
+      "assessment_coverage": "active employees with no recent assessment",
+      "survey_pending": "surveys waiting for your answers",
+      "pdp_returned": "your development plan was returned for changes",
+      "pdp_deadline_soon": "your development plan deadline is coming up",
+      "gap_without_plan": "your competences below the bar with no development plan",
+      "assessment_stale": "no recent assessment of your own"
+    }
+  },
+  "reference": {
+    "dictionary": {
+      "grade": {
+        "junior": {
+          "label": "Junior"
+        },
+        "middle": {
+          "label": "Middle"
+        },
+        "senior": {
+          "label": "Senior"
+        },
+        "lead": {
+          "label": "Lead"
+        },
+        "principal": {
+          "label": "Principal"
+        }
+      }
+    }
   }
 }

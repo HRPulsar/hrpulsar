@@ -77,10 +77,9 @@ const hrefs = () =>
   [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
 
 describe("sidebar role gating (HRP-622)", () => {
-  it("hides recruitment and talent market from a rank-and-file employee", async () => {
+  it("hides recruitment from a rank-and-file employee", async () => {
     await renderAs(["employee"]);
     expect(hrefs()).not.toContain("/recruitment");
-    expect(hrefs()).not.toContain("/talent-market");
     // The everyday surfaces stay.
     expect(hrefs()).toContain("/dashboard");
     expect(hrefs()).toContain("/employees");
@@ -118,5 +117,36 @@ describe("sidebar role gating (HRP-622)", () => {
     expect(hrefs()).toContain("/recruitment");
     expect(hrefs()).toContain("/talent-market");
     expect(hrefs()).toContain("/settings/invitations");
+  });
+});
+
+// HRP-765 — the talent market entry was admin/manager-only, which shut
+// out the one role the board is about: the employee whose name is on a
+// card's candidate list. Reading is scoped per role on the API (an
+// employee sees the cards they are a candidate on), so the entry is the
+// employee's as well — and stays out of the menus of the roles the ticket
+// did not name.
+describe("talent market entry (HRP-765)", () => {
+  it("is there for a rank-and-file employee", async () => {
+    await renderAs(["employee"]);
+    expect(hrefs()).toContain("/talent-market");
+  });
+
+  it("is still there for the roles that manage it", async () => {
+    for (const code of ["admin", "manager"]) {
+      await renderAs([code]);
+      expect(hrefs(), `role ${code} lost the talent market entry`).toContain(
+        "/talent-market",
+      );
+    }
+  });
+
+  it("stays out of the menu for the roles the ticket did not name", async () => {
+    for (const code of ["hr", "recruiter", "hiring_manager"]) {
+      await renderAs([code]);
+      expect(hrefs(), `role ${code} gained the talent market entry`).not.toContain(
+        "/talent-market",
+      );
+    }
   });
 });

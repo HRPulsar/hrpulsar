@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { validateSalaryRange } from "@/lib/vacancy-salary";
 import type { Vacancy } from "@/lib/types";
+import type { VacancyInternalCandidates } from "@/lib/recruitment-types";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
@@ -31,6 +32,11 @@ export default function EditVacancyPage() {
   const [vacancy, setVacancy] = useState<Vacancy | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // HRP-667 REDO: once the vacancy has a card on the internal talent
+  // market the switch is locked on — this is the same answer the vacancy
+  // page's internal-candidates block reads, so a card deleted from the
+  // market unlocks the checkbox exactly when the backend unlocks it.
+  const [internalSearchLocked, setInternalSearchLocked] = useState(false);
 
   const loadVacancy = useCallback(async () => {
     setLoading(true);
@@ -41,7 +47,26 @@ export default function EditVacancyPage() {
       );
       setVacancy(data);
       setEtag(headers.get("ETag"));
+      let locked = false;
+      try {
+        const internal = await api.get<VacancyInternalCandidates>(
+          `/recruitment/vacancies/${id}/internal-candidates`,
+        );
+        locked = internal.talent_card_id !== null;
+      } catch {
+        // The lock is a refinement of the form, not a precondition for
+        // editing it — a failed read leaves the switch as it was.
+        locked = false;
+      }
+      setInternalSearchLocked(locked);
       const values = vacancyToFormValues(data as unknown as Record<string, unknown>);
+      if (locked) {
+        // A vacancy posted before this rule existed can be sitting on the
+        // wrong side of it. The checkbox renders on regardless, so seed
+        // the form with what it shows — otherwise the first Save sends the
+        // stale false back and the next one heals nothing.
+        values.internal_search_allowed = true;
+      }
       initialRef.current = values;
       setForm(values);
     } catch (err) {
@@ -177,6 +202,7 @@ export default function EditVacancyPage() {
         values={form}
         onChange={setForm}
         disabled={saving}
+        internalSearchLocked={internalSearchLocked}
         testId="vacancy-edit-form"
         footer={
           <>

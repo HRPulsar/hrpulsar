@@ -224,6 +224,39 @@ export default function ScaleSettingsPage() {
     }
   }
 
+  // HRP-742: the threshold was write-once at creation — invisible and
+  // unchangeable afterwards, so a tenant that picked the wrong one had to
+  // build a new scale. Archived scales stay read-only (the API refuses
+  // them anyway).
+  async function handleThresholdChange(
+    scale: Scale,
+    raw: string,
+    input: HTMLInputElement,
+  ) {
+    const next = Number(raw);
+    if (!Number.isInteger(next) || next < 1 || next > 10) {
+      // A rejected edit is not a server round-trip: re-reading the list
+      // returns the value already on screen, so the field would silently
+      // keep the bad draft. Put the saved value back and say why.
+      input.value = String(scale.divergence_threshold);
+      toast.error(t("scaleDivergenceRange"));
+      return;
+    }
+    if (next === scale.divergence_threshold) return;
+    setSavingId(scale.id);
+    try {
+      await api.patch(`/v1/assessment-scales/${scale.id}`, {
+        divergence_threshold: next,
+      });
+      void load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("scaleUpdateFailed"));
+      void load();
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   async function handleDelete(scale: Scale) {
     if (!confirm(t("scaleDeleteConfirm", { name: scale.name }))) return;
     setSavingId(scale.id);
@@ -489,6 +522,36 @@ export default function ScaleSettingsPage() {
                       <Trash2 className="size-3.5" />
                     </Button>
                   </div>
+                </div>
+                <div
+                  className="flex items-center gap-2 text-xs"
+                  data-testid={`assessment-scale-divergence-${s.id}`}
+                >
+                  <span className="text-muted-foreground">
+                    {t("scaleDivergenceLabel")}
+                  </span>
+                  {s.archived_at ? (
+                    <span className="font-medium tabular-nums">
+                      {s.divergence_threshold}
+                    </span>
+                  ) : (
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      // Uncontrolled on purpose: the row re-keys on the
+                      // saved value, so a rejected edit snaps back to what
+                      // the server holds instead of stranding a draft.
+                      key={`${s.id}-${s.divergence_threshold}`}
+                      defaultValue={s.divergence_threshold}
+                      disabled={savingId === s.id}
+                      onBlur={(e) =>
+                        void handleThresholdChange(s, e.target.value, e.target)
+                      }
+                      className="h-7 w-16"
+                      data-testid={`assessment-scale-divergence-input-${s.id}`}
+                    />
+                  )}
                 </div>
                 <div className="grid gap-1 text-xs">
                   {s.levels.map((lvl) => (

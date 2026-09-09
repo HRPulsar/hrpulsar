@@ -58,6 +58,14 @@ export interface DivergentCompetencePreview {
   ai_score: number | null;
 }
 
+/** HRP-727 — the round a Manager score was computed from, resolved per
+ * request by the backend so a tooltip can name it. */
+export interface ManagerScoreRoundRef {
+  id: string;
+  type: "pre_interview" | "interview" | "final";
+  round_number: number | null;
+}
+
 export interface CandidateVacancyEnrichedRow {
   id: string;
   candidate_id: string;
@@ -72,6 +80,8 @@ export interface CandidateVacancyEnrichedRow {
   stage: VacancyStage | null;
   status: string;
   manager_score: number | null;
+  // HRP-727 — which round that score came from, for its tooltip.
+  manager_score_round?: ManagerScoreRoundRef | null;
   ai_score: number | null;
   // HRP-274 — ``ai_score`` rebased onto [0..1] against the tenant's
   // active ScaleConfig. ``null`` when no analysis has completed or the
@@ -136,6 +146,8 @@ export interface CandidateVacancyApplication {
   stage_type: StageType | null;
   status: string;
   manager_score: number | null;
+  // HRP-727 — which round that score came from, for its tooltip.
+  manager_score_round?: ManagerScoreRoundRef | null;
   ai_score: number | null;
   ai_verdict: AiVerdict;
   ai_verdict_summary: string | null;
@@ -751,6 +763,10 @@ export interface VacancyInternalCandidate {
   /** HRP-711 — set once this employee is in the vacancy's own pipeline;
    *  the row then links to the candidate instead of offering Add. */
   candidate_id: string | null;
+  /** HRP-667 REDO — whether this viewer may open the employee's profile.
+   *  The shortlist is the same for everyone who may read the vacancy
+   *  (HRP-703); only the link is scoped. */
+  can_view_profile?: boolean;
 }
 
 export interface VacancyInternalCandidates {

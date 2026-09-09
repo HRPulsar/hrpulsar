@@ -332,41 +332,45 @@ class TestArchiveAndRestore:
 
 
 class TestArchivedRoundOnThePublicSurface:
-    """An archived round hands out no revocations, so the links stay live.
+    """An archived round takes no writes over the public token either.
 
-    Only ``complete`` kills the outstanding tokens (HRP-376 §7c), which
-    leaves the external evaluator's page fully reachable after an archive.
-    Every write it can make has to be refused server-side — otherwise the
-    score endpoints 409 (they already check the round) while Submit sails
-    through and flips the invite *and* its sheet to ``submitted`` with
-    nothing scored behind them.
+    REDO 04.09 made ``archive`` revoke the live links, so a still-open
+    invite now dies at the token check. The invite that survives the
+    archive is the ``submitted`` one — re-editing keeps its page
+    reachable — and every write it can attempt has to be refused by the
+    round guard, otherwise Submit would sail through and re-stamp a sheet
+    on a round that no longer counts.
     """
 
-    async def test_submit_is_refused(self, db: AsyncSession, tenant, user):
+    async def _submitted_invite(self, db, tenant, user):
         cv, rd_id = await _round(db, tenant, user)
         inv = await _invite(db, tenant, user, cv, rd_id)
+        inv.consent_accepted_at = datetime.now(timezone.utc)
+        inv.allow_reediting = True
+        await db.commit()
+        await public_service.public_submit(db, inv.token)
         await service.apply_round_action(db, tenant.id, user.id, rd_id, "archive")
+        return cv, rd_id, inv
+
+    async def test_submit_is_refused(self, db: AsyncSession, tenant, user):
+        _, _, inv = await self._submitted_invite(db, tenant, user)
+        stamped = inv.submitted_at
 
         with pytest.raises(HTTPException) as exc:
             await public_service.public_submit(db, inv.token)
         assert exc.value.status_code == 409
         await db.refresh(inv)
-        assert inv.status != "submitted"
-        assert inv.submitted_at is None
+        assert inv.submitted_at == stamped
 
     async def test_final_notes_are_refused(self, db: AsyncSession, tenant, user):
-        cv, rd_id = await _round(db, tenant, user)
-        inv = await _invite(db, tenant, user, cv, rd_id)
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "archive")
+        _, _, inv = await self._submitted_invite(db, tenant, user)
 
         with pytest.raises(HTTPException) as exc:
             await public_service.public_save_final_notes(db, inv.token, "late note")
         assert exc.value.status_code == 409
 
     async def test_renaming_is_refused(self, db: AsyncSession, tenant, user):
-        cv, rd_id = await _round(db, tenant, user)
-        inv = await _invite(db, tenant, user, cv, rd_id)
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "archive")
+        _, _, inv = await self._submitted_invite(db, tenant, user)
 
         with pytest.raises(HTTPException) as exc:
             await public_service.public_update_name(db, inv.token, "New Name")
@@ -376,11 +380,13 @@ class TestArchivedRoundOnThePublicSurface:
 
     async def test_restoring_hands_the_page_back(self, db: AsyncSession, tenant, user):
         cv, rd_id = await _round(db, tenant, user)
-        inv = await _invite(db, tenant, user, cv, rd_id)
         await service.apply_round_action(db, tenant.id, user.id, rd_id, "archive")
         await service.apply_round_action(db, tenant.id, user.id, rd_id, "restore")
 
-        out = await public_service.public_submit(db, inv.token)
+        # The links the archive killed stay dead (§7c), so the round being
+        # writable again is shown through a freshly issued invite.
+        fresh = await _invite(db, tenant, user, cv, rd_id)
+        out = await public_service.public_submit(db, fresh.token)
         assert out["status"] == "submitted"
 
 
@@ -431,3 +437,111 @@ class TestRevokeHelper:
             .all()
         )
         assert sorted(i.status for i in rows) == ["declined", "revoked", "revoked"]
+
+
+class TestRedoArchiveRevokesInvites:
+    """REDO 04.09, task 2 (a): archiving kills the live links too.
+
+    ``complete`` revoked them from the start; ``archive`` left every
+    pending / opened / in_progress invite alive, so a link to an archived
+    round still opened a sheet nobody would ever read.
+    """
+
+    async def test_archive_revokes_non_terminal_invites(
+        self, db: AsyncSession, tenant, user
+    ):
+        cv, rd_id = await _round(db, tenant, user)
+        pending = await _invite(db, tenant, user, cv, rd_id)
+        opened = await _invite(db, tenant, user, cv, rd_id, status="opened")
+        started = await _invite(db, tenant, user, cv, rd_id, status="in_progress")
+
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "archive")
+
+        for inv in (pending, opened, started):
+            await db.refresh(inv)
+            assert inv.status == "revoked"
+            assert inv.revoked_at is not None
+
+    async def test_archive_leaves_terminal_invites_alone(
+        self, db: AsyncSession, tenant, user
+    ):
+        cv, rd_id = await _round(db, tenant, user)
+        submitted = await _invite(db, tenant, user, cv, rd_id, status="submitted")
+        declined = await _invite(db, tenant, user, cv, rd_id, status="declined")
+
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "archive")
+
+        await db.refresh(submitted)
+        await db.refresh(declined)
+        assert submitted.status == "submitted"
+        assert declined.status == "declined"
+
+    async def test_revoked_link_shows_the_documented_error(
+        self, db: AsyncSession, tenant, user
+    ):
+        cv, rd_id = await _round(db, tenant, user)
+        inv = await _invite(db, tenant, user, cv, rd_id, status="opened")
+        token = inv.token
+
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "archive")
+
+        with pytest.raises(HTTPException) as exc:
+            await public_service.resolve_invite_by_token(db, token)
+        assert exc.value.status_code == 410
+        assert exc.value.code == "invitation_revoked"
+
+    async def test_restore_does_not_resurrect_them(
+        self, db: AsyncSession, tenant, user
+    ):
+        cv, rd_id = await _round(db, tenant, user)
+        inv = await _invite(db, tenant, user, cv, rd_id, status="opened")
+
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "archive")
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "restore")
+
+        await db.refresh(inv)
+        assert inv.status == "revoked"
+
+
+class TestRedoPublicContextRoundStatus:
+    """REDO 04.09, task 1: the sheet decides read-only from the round.
+
+    The page used to derive read-only from ``allow_reediting`` alone, so a
+    submitted evaluator on a *completed* round with re-editing enabled got
+    an editable form and a "Failed to save" toast on every click. The
+    round's own state has to travel with the context.
+    """
+
+    async def _submitted_invite(self, db, tenant, user):
+        cv, rd_id = await _round(db, tenant, user)
+        inv = await _invite(db, tenant, user, cv, rd_id)
+        inv.consent_accepted_at = datetime.now(timezone.utc)
+        inv.allow_reediting = True
+        await db.commit()
+        await public_service.public_submit(db, inv.token)
+        return inv, rd_id
+
+    async def test_open_round_reports_in_progress(
+        self, db: AsyncSession, tenant, user
+    ):
+        inv, _ = await self._submitted_invite(db, tenant, user)
+        ctx = await public_service.public_get_context(db, inv.token)
+        assert ctx["round_status"] == "in_progress"
+
+    async def test_completed_round_reports_completed(
+        self, db: AsyncSession, tenant, user
+    ):
+        inv, rd_id = await self._submitted_invite(db, tenant, user)
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+
+        ctx = await public_service.public_get_context(db, inv.token)
+        assert ctx["round_status"] == "completed"
+
+    async def test_archived_round_reports_archived(
+        self, db: AsyncSession, tenant, user
+    ):
+        inv, rd_id = await self._submitted_invite(db, tenant, user)
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "archive")
+
+        ctx = await public_service.public_get_context(db, inv.token)
+        assert ctx["round_status"] == "archived"

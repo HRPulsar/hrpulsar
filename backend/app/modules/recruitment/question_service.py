@@ -98,6 +98,13 @@ def _set_to_dict(qs: QuestionSet) -> dict:
         "archived_at": qs.archived_at,
         "version": qs.version,
         "created_at": qs.created_at,
+        # HRP-740: regeneration overwrites the set in place, so
+        # ``created_at`` stays pinned to the first generation. The
+        # "Generated <date>" line wants the last one — which is what the
+        # regeneration write moves ``updated_at`` to. Nothing else
+        # writes to a ``question_sets`` row: questions live in their own
+        # table and there is no rename or archive endpoint.
+        "updated_at": qs.updated_at,
         "questions": [
             _question_to_dict(q) for q in qs.questions if q.status == "active"
         ],
@@ -347,6 +354,7 @@ async def _load_profile_competences(
 async def _load_transcripts(
     db: AsyncSession,
     tenant_id: uuid.UUID,
+    cv_id: uuid.UUID,
     round_ids: list[uuid.UUID],
 ) -> list[dict]:
     """Fetch transcripts for the rounds the dynamic_next set covers.
@@ -358,6 +366,12 @@ async def _load_transcripts(
     finished transcription on a live interview. Text alone is not
     enough — a run still in progress can already hold a partial
     transcript, and an archived interview should not seed a new round.
+
+    HRP-772: ``round_ids`` arrive in the request body, so they are
+    narrowed to interviews of this candidate-vacancy — a scoped manager
+    who knows an interview id from a neighbouring division could
+    otherwise feed it into generation on their own pair. The tenant
+    filter alone does not cover that.
     """
     if not round_ids:
         return []
@@ -367,6 +381,7 @@ async def _load_transcripts(
                 select(Interview).where(
                     Interview.id.in_(round_ids),
                     Interview.tenant_id == tenant_id,
+                    Interview.candidate_vacancy_id == cv_id,
                     Interview.transcription_status == "completed",
                     Interview.archived_at.is_(None),
                 )
@@ -433,6 +448,7 @@ async def _previous_sets_payload(
 async def _collect_blind_spots(
     db: AsyncSession,
     tenant_id: uuid.UUID,
+    cv_id: uuid.UUID,
     round_ids: list[uuid.UUID],
 ) -> list[dict]:
     """Pull blind-spot suggestions stored by the interview analysis.
@@ -440,6 +456,12 @@ async def _collect_blind_spots(
     The interview-analysis task stores its full payload (including
     ``blind_spots``) in ``interviews.analysis_data``. We don't bind to a
     Pydantic shape here — pull verbatim and let the prompt deal with it.
+
+    HRP-772: ``round_ids`` arrive in the request body, so they are
+    narrowed to interviews of this candidate-vacancy — a scoped manager
+    who knows an interview id from a neighbouring division could
+    otherwise feed it into generation on their own pair. The tenant
+    filter alone does not cover that.
     """
     if not round_ids:
         return []
@@ -449,6 +471,7 @@ async def _collect_blind_spots(
                 select(Interview).where(
                     Interview.id.in_(round_ids),
                     Interview.tenant_id == tenant_id,
+                    Interview.candidate_vacancy_id == cv_id,
                 )
             )
         )
@@ -475,6 +498,7 @@ async def _collect_blind_spots(
 async def _collect_prior_analyses(
     db: AsyncSession,
     tenant_id: uuid.UUID,
+    cv_id: uuid.UUID,
     round_ids: list[uuid.UUID],
 ) -> list[dict]:
     """Per-round AI analysis digest for the dynamic_next prompt (HRP-444).
@@ -483,6 +507,12 @@ async def _collect_prior_analyses(
     can deepen shallow coverage) and red flags. Human manager scores are
     NOT included here — the anti-bias rule in the system prompt only
     holds if they never reach the model.
+
+    HRP-772: ``round_ids`` arrive in the request body, so they are
+    narrowed to interviews of this candidate-vacancy — a scoped manager
+    who knows an interview id from a neighbouring division could
+    otherwise feed it into generation on their own pair. The tenant
+    filter alone does not cover that.
     """
     if not round_ids:
         return []
@@ -492,6 +522,7 @@ async def _collect_prior_analyses(
                 select(Interview).where(
                     Interview.id.in_(round_ids),
                     Interview.tenant_id == tenant_id,
+                    Interview.candidate_vacancy_id == cv_id,
                 )
             )
         )
@@ -861,20 +892,32 @@ async def generate_question_set(
         assessment_round_id = target.assessment_round_id
         round_label = None
         set_type = target.set_type
+        source_round_ids = None
     elif data.mode == "dynamic_next":
         round_ids = data.source_round_ids or ([data.round_id] if data.round_id else [])
         round_ids = [r for r in round_ids if r is not None]
         # HRP-444: a next-round set is derived from a transcript, never
         # generated from scratch.
-        transcripts = await _load_transcripts(db, tenant_id, round_ids)
+        transcripts = await _load_transcripts(db, tenant_id, cv.id, round_ids)
         if not transcripts:
             raise AppError("transcribed_round_required", status.HTTP_409_CONFLICT)
+        # HRP-772: from here on the only round ids in play are the ones
+        # ``_load_transcripts`` actually returned — interviews of this
+        # candidate-vacancy, transcribed and live. The per-select filters
+        # below cover the collectors that read ``interviews``, but
+        # ``_collect_manager_divergence`` reaches AIAssessment, which
+        # hangs off ``interview_id`` and has no candidate_vacancy_id of
+        # its own to filter on. Narrowing the list once is what keeps a
+        # foreign interview out of every downstream reader, including the
+        # ``source_round_ids`` persisted on the set.
+        round_ids = [uuid.UUID(t["interview_id"]) for t in transcripts]
+        source_round_ids = round_ids
         assessment_round_id, round_label = await _resolve_target_round(
             db, tenant_id, cv.id, data, current_user_id=current_user_id
         )
         previous_questions = await _previous_sets_payload(db, tenant_id, cv.id)
-        blind_spots = await _collect_blind_spots(db, tenant_id, round_ids)
-        prior_analyses = await _collect_prior_analyses(db, tenant_id, round_ids)
+        blind_spots = await _collect_blind_spots(db, tenant_id, cv.id, round_ids)
+        prior_analyses = await _collect_prior_analyses(db, tenant_id, cv.id, round_ids)
         manager_divergence = await _collect_manager_divergence(
             db, tenant_id, cv.id, round_ids
         )
@@ -889,6 +932,7 @@ async def generate_question_set(
         prior_analyses = []
         manager_divergence = []
         target = None
+        source_round_ids = data.source_round_ids
         # Binding a round is optional for a first set, but when a caller
         # does bind one the one-set-per-round rule still has to hold —
         # otherwise the guard is only as good as the UI that calls it.
@@ -978,7 +1022,7 @@ async def generate_question_set(
             name=data.name or round_label or _default_set_name(data.mode, set_type),
             status="ready",
             generation_mode=data.mode,
-            source_round_ids=data.source_round_ids,
+            source_round_ids=source_round_ids,
             coverage_note=generated.coverage_note,
             created_by=current_user_id,
         )
@@ -1060,6 +1104,7 @@ SAMPLE_QUESTION_SET: dict[str, Any] = {
     "archived_at": None,
     "version": 1,
     "created_at": None,
+    "updated_at": None,
     "questions": [
         {
             "id": None,

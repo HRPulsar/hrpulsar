@@ -331,6 +331,239 @@ class TestRegenerate:
         assert len(ai_questions) == 10
         assert regenerated["generation_mode"] == "regenerated"
 
+    async def test_regeneration_moves_the_generation_date(
+        self, db: AsyncSession, tenant, user
+    ):
+        """HRP-740: the header reads "Generated <date>" off the payload.
+
+        Regeneration rewrites the set in place, so ``created_at`` stays
+        pinned to the first run forever — the block kept advertising a
+        date the questions no longer came from. ``updated_at`` is the
+        one the write moves, and nothing else writes to the row.
+        """
+        ctx = await _bootstrap(db, tenant, user)
+
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = _gen_questions(10)
+            first = await question_service.generate_question_set(
+                db,
+                tenant.id,
+                uuid.UUID(str(ctx["cv"]["id"])),
+                GenerateQuestionSetRequest(mode="initial"),
+                current_user_id=user.id,
+            )
+
+        # A first generation has nothing to inherit: both stamps agree.
+        assert first["updated_at"] == first["created_at"]
+
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = _gen_questions(10)
+            regenerated = await question_service.generate_question_set(
+                db,
+                tenant.id,
+                uuid.UUID(str(ctx["cv"]["id"])),
+                GenerateQuestionSetRequest(
+                    mode="regenerated", target_set_id=uuid.UUID(str(first["id"]))
+                ),
+                current_user_id=user.id,
+            )
+
+        # Same row — the set was rewritten, not replaced.
+        assert regenerated["id"] == first["id"]
+        assert regenerated["created_at"] == first["created_at"]
+        assert regenerated["updated_at"] > first["updated_at"]
+
+
+class TestDynamicNextScope:
+    """HRP-772 — ``source_round_ids`` is attacker-controlled input.
+
+    The three dynamic_next collectors filtered interviews by tenant
+    alone, so a manager scoped to one division could name an interview
+    of another and pull its transcript, blind spots and AI analysis into
+    a generation on their own candidate-vacancy. Writing stayed put; the
+    read did not.
+    """
+
+    async def test_foreign_interview_is_not_read(self, db: AsyncSession, tenant, user):
+        ours = await _bootstrap(db, tenant, user)
+        # A second pair in the same tenant — the neighbouring division.
+        other_vac = await _make_vacancy(db, tenant, user)
+        other_cand = await _make_candidate(db, tenant, user)
+        other_cv = await _attach(db, tenant, user, other_cand["id"], other_vac["id"])
+        foreign = await _add_interview(
+            db,
+            tenant,
+            other_cv["id"],
+            transcript="Candidate: my salary at the competitor was confidential.",
+            analysis_data={
+                "blind_spots": [
+                    {
+                        "competence_id": None,
+                        "suggested_question": "Leaked blind spot",
+                    }
+                ],
+                "competence_assessments": [
+                    {"competence_id": None, "status": "weak", "confidence": 0.9}
+                ],
+                "red_flags": [
+                    {
+                        "flag_type": "leak",
+                        "severity": "high",
+                        "description": "Leaked red flag",
+                    }
+                ],
+            },
+        )
+
+        captured: dict[str, Any] = {}
+
+        async def fake_call_llm(**kw):
+            captured.update(kw)
+            return _gen_questions(10)
+
+        # No transcript of our own pair, so the foreign one is all the
+        # request offers — and the generation must refuse rather than
+        # quietly build on someone else's interview.
+        with (
+            patch(
+                "app.modules.recruitment.question_service._call_llm",
+                new=fake_call_llm,
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await question_service.generate_question_set(
+                db,
+                tenant.id,
+                uuid.UUID(str(ours["cv"]["id"])),
+                GenerateQuestionSetRequest(
+                    mode="dynamic_next",
+                    source_round_ids=[foreign.id],
+                    create_round=True,
+                ),
+                current_user_id=user.id,
+            )
+
+        assert exc.value.status_code == 409
+        assert captured == {}, "the LLM must not be called at all"
+
+    async def test_foreign_interview_never_reaches_the_prompt(
+        self, db: AsyncSession, tenant, user
+    ):
+        ours = await _bootstrap(db, tenant, user)
+        mine = await _add_interview(
+            db,
+            tenant,
+            ours["cv"]["id"],
+            transcript="Candidate: I led the migration.",
+            analysis_data={
+                "blind_spots": [
+                    {"competence_id": None, "suggested_question": "Own blind spot"}
+                ],
+                "red_flags": [
+                    {
+                        "flag_type": "own",
+                        "severity": "low",
+                        "description": "Own red flag",
+                    }
+                ],
+            },
+        )
+        other_vac = await _make_vacancy(db, tenant, user)
+        other_cand = await _make_candidate(db, tenant, user)
+        other_cv = await _attach(db, tenant, user, other_cand["id"], other_vac["id"])
+        foreign = await _add_interview(
+            db,
+            tenant,
+            other_cv["id"],
+            transcript="Candidate: my salary at the competitor was confidential.",
+            analysis_data={
+                "blind_spots": [
+                    {"competence_id": None, "suggested_question": "Leaked blind spot"}
+                ],
+                "red_flags": [
+                    {
+                        "flag_type": "leak",
+                        "severity": "high",
+                        "description": "Leaked red flag",
+                    }
+                ],
+            },
+        )
+
+        # The divergence collector joins our own manager scores to AI
+        # scores by ``interview_id`` — and ai_assessments has no
+        # candidate_vacancy_id to filter on. Scoring the same competence
+        # on the foreign interview is what turns that into a leak: the
+        # pair diverges, and "they disagree on competence X" is emitted
+        # into our prompt off a neighbouring division's assessment.
+        comp_id = uuid.uuid4()
+        db.add(
+            HumanAssessment(
+                tenant_id=tenant.id,
+                candidate_vacancy_id=uuid.UUID(str(ours["cv"]["id"])),
+                competence_id=comp_id,
+                evaluator_id=user.id,
+                evaluator_name="Boss",
+                score=5.0,
+                comment="outstanding leader",
+            )
+        )
+        db.add(
+            AIAssessment(
+                tenant_id=tenant.id,
+                interview_id=foreign.id,
+                competence_id=comp_id,
+                score=1.0,
+                status="assessed",
+                reasoning="thin evidence",
+            )
+        )
+        await db.commit()
+
+        captured: dict[str, Any] = {}
+
+        async def fake_call_llm(**kw):
+            captured.update(kw)
+            return _gen_questions(10)
+
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new=fake_call_llm,
+        ):
+            out = await question_service.generate_question_set(
+                db,
+                tenant.id,
+                uuid.UUID(str(ours["cv"]["id"])),
+                GenerateQuestionSetRequest(
+                    mode="dynamic_next",
+                    source_round_ids=[mine.id, foreign.id],
+                    create_round=True,
+                ),
+                current_user_id=user.id,
+            )
+
+        payload = str(captured)
+        assert "I led the migration" in payload
+        assert "confidential" not in payload
+        assert "Leaked blind spot" not in payload
+        assert "Leaked red flag" not in payload
+        # Our own round is still read in full.
+        assert "Own blind spot" in payload
+        assert str(foreign.id) not in payload
+        # No divergence fact may be built from the foreign interview's
+        # AI scores — our own round carries no AIAssessment at all.
+        assert captured["manager_divergence"] == []
+        assert str(comp_id) not in payload
+        # And the id must not survive onto the stored set either: the
+        # tab header reads ``source_round_ids`` back to name its rounds.
+        assert out["source_round_ids"] == [mine.id]
+
 
 class TestDynamicNext:
     async def test_does_not_repeat_covered_questions(

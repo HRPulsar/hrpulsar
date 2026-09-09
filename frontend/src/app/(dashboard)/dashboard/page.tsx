@@ -38,7 +38,14 @@ interface DevLoopStages {
   assessed: { covered: number; total_active: number; percent: number };
   gaps: { employees: number; competences: number; without_plan: number };
   developing: { open_pdps: number; gap_employees_with_plan: number };
-  closed: { gaps_closed_90d: number; plans_done_on_time_90d: number };
+  // HRP-766: the Completed tile answers over the period the reader
+  // picked, so the window travels with the numbers instead of being
+  // baked into their names.
+  closed: {
+    window_days: number;
+    gaps_closed: number;
+    plans_done_on_time: number;
+  };
 }
 
 interface DevLoopFindingEmployee {
@@ -106,7 +113,7 @@ interface MyLoop {
         deadline: string | null;
       } | null;
     };
-    closed: { gaps_closed_90d: number };
+    closed: { window_days: number; gaps_closed: number };
   };
   findings: { code: string; severity: "alert" | "warn" | "info"; count: number; href: string }[];
   strengths: { top: MyCompetence[]; rare_skills: MyCompetence[] };
@@ -264,19 +271,22 @@ export function buildStages(
     {
       key: "closed",
       href: "/development?status=done",
-      value: String(stages.closed.gaps_closed_90d),
-      sub: t("stageClosedSub", { count: stages.closed.plans_done_on_time_90d }),
-      tone: stages.closed.gaps_closed_90d > 0 ? "positive" : undefined,
+      value: String(stages.closed.gaps_closed),
+      sub: t("stageClosedSub", {
+        count: stages.closed.plans_done_on_time,
+        days: stages.closed.window_days,
+      }),
+      tone: stages.closed.gaps_closed > 0 ? "positive" : undefined,
       // Closure rate: closed gaps against everything still below the bar.
       progress:
-        stages.closed.gaps_closed_90d + stages.gaps.competences > 0
+        stages.closed.gaps_closed + stages.gaps.competences > 0
           ? Math.round(
-              (stages.closed.gaps_closed_90d /
-                (stages.closed.gaps_closed_90d + stages.gaps.competences)) *
+              (stages.closed.gaps_closed /
+                (stages.closed.gaps_closed + stages.gaps.competences)) *
                 100,
             )
           : 0,
-      hint: t("hintStageClosed"),
+      hint: t("hintStageClosed", { days: stages.closed.window_days }),
     },
     // HRP-724: the loop's own result over a period the reader picks —
     // "did the last quarter change anything", which the fixed-window
@@ -701,10 +711,10 @@ export function buildMyStages(
     {
       key: "closed",
       href: "/development?status=done",
-      value: String(closed.gaps_closed_90d),
-      sub: t("myStageClosedSub"),
-      tone: closed.gaps_closed_90d > 0 ? "positive" : undefined,
-      hint: t("hintMyStageClosed"),
+      value: String(closed.gaps_closed),
+      sub: t("myStageClosedSub", { days: closed.window_days }),
+      tone: closed.gaps_closed > 0 ? "positive" : undefined,
+      hint: t("hintMyStageClosed", { days: closed.window_days }),
     },
     // HRP-724: the same period question on the personal hero — my plans
     // finished and my competences raised since the window opened.

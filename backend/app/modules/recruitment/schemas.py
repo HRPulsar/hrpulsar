@@ -389,6 +389,18 @@ class CandidateCanonicalRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ManagerScoreRoundRef(BaseModel):
+    """HRP-727: the round a row's ``manager_score`` was computed from.
+
+    Derived per request, never stored — the client turns ``type`` /
+    ``round_number`` into the same label the round tabs show.
+    """
+
+    id: uuid.UUID
+    type: str
+    round_number: int | None = None
+
+
 class CandidateVacancyApplicationRead(BaseModel):
     """Compact CandidateVacancy view for the candidate full-card."""
 
@@ -400,6 +412,7 @@ class CandidateVacancyApplicationRead(BaseModel):
     stage_type: str | None = None
     status: str
     manager_score: float | None = None
+    manager_score_round: ManagerScoreRoundRef | None = None
     ai_score: float | None = None
     ai_verdict: str
     ai_verdict_summary: str | None = None
@@ -492,6 +505,8 @@ class CandidateVacancyEnrichedRead(BaseModel):
     stage: VacancyStageRead | None = None
     status: str
     manager_score: float | None = None
+    # HRP-727: which round the Manager score came from, for its tooltip.
+    manager_score_round: ManagerScoreRoundRef | None = None
     ai_score: float | None = None
     # HRP-274: raw ``ai_score`` is on the canonical 0..1 LLM scale;
     # ``ai_score_normalized`` rebases it onto the tenant's active
@@ -537,6 +552,10 @@ class VacancyInternalCandidateRead(BaseModel):
     # candidate pipeline. The row then links to the candidate instead of
     # offering the Add action again.
     candidate_id: uuid.UUID | None = None
+    # HRP-667 REDO: whether this viewer may open the employee's profile
+    # (the product's own read scope). False renders the name as plain
+    # text — the shortlist itself stays whole for everyone (HRP-703).
+    can_view_profile: bool = False
 
 
 class VacancyInternalCandidatesRead(BaseModel):
@@ -1432,6 +1451,9 @@ class QuestionSetRead(BaseModel):
     archived_at: datetime | None = None
     version: int
     created_at: datetime
+    # HRP-740: the last generation. Regeneration rewrites the set in
+    # place, so ``created_at`` only ever names the first one.
+    updated_at: datetime
     questions: list[QuestionRead2] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}

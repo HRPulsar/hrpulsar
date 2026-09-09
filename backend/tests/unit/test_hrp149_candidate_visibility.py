@@ -200,4 +200,6 @@ class TestCanViewProfile:
         )
         by_emp = {c["employee_id"]: c["can_view_profile"] for c in detail["candidates"]}
         assert by_emp[self_emp.id] is True
-        assert by_emp[other_emp.id] is False
+        # HRP-765 went one better than gating the link: an employee viewer
+        # is not handed the colleague's row at all.
+        assert other_emp.id not in by_emp

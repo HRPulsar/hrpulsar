@@ -1313,3 +1313,226 @@ class TestAddInternalCandidateReviewFollowUps:
             db, tenant.id, vacancy["id"]
         )
         assert [i["candidate_id"] for i in block["items"]] == [twin.id]
+
+
+# --- HRP-667 REDO ----------------------------------------------------------
+
+
+async def _viewer_with_role(db: AsyncSession, tenant_id, code: str) -> User:
+    """A user carrying one role, with roles eager-loaded (production shape)."""
+    from app.modules.auth.models import Role, user_roles
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    role = (await db.execute(select(Role).where(Role.code == code))).scalars().first()
+    if role is None:
+        role = Role(name=code.title(), code=code, is_system=True)
+        db.add(role)
+        await db.commit()
+        await db.refresh(role)
+    u = User(
+        email=f"{code}-{uuid.uuid4().hex[:8]}@test.com",
+        password_hash=hash_password("testpass123"),
+        first_name=code.title(),
+        last_name="Viewer",
+        tenant_id=tenant_id,
+        email_verified_at=datetime.now(timezone.utc),
+    )
+    db.add(u)
+    await db.commit()
+    await db.refresh(u)
+    await db.execute(user_roles.insert().values(user_id=u.id, role_id=role.id))
+    await db.commit()
+    db.expunge(u)
+    return (
+        await db.execute(
+            select(User).options(selectinload(User.roles)).where(User.id == u.id)
+        )
+    ).scalar_one()
+
+
+class TestShortlistNameLinks:
+    """HRP-667 REDO task 1: the name links only where the viewer may look.
+
+    The shortlist itself stays whole for everyone who may open the vacancy
+    — that is HRP-703's decision and it stands. What was missing is the
+    per-row answer to "may this viewer open that profile", so the block
+    rendered a link that lands on a 403 for half the roles that see it.
+    """
+
+    async def test_an_admin_viewer_links_every_row(
+        self, db: AsyncSession, tenant, user
+    ):
+        employee = await _employee_with_profile(db, tenant.id)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+
+        payload = await service.get_vacancy_internal_candidates(
+            db, tenant.id, vacancy["id"], current_user=user
+        )
+        assert [i["employee_id"] for i in payload["items"]] == [employee.id]
+        assert payload["items"][0]["can_view_profile"] is True
+
+    async def test_a_recruiter_outside_the_scope_gets_plain_text(
+        self, db: AsyncSession, tenant, user
+    ):
+        """A recruiter reads the whole shortlist and can open nobody's HR
+        card — the row is still there, the name is simply not a link."""
+        employee = await _employee_with_profile(db, tenant.id)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+        recruiter = await _viewer_with_role(db, tenant.id, "recruiter")
+
+        payload = await service.get_vacancy_internal_candidates(
+            db, tenant.id, vacancy["id"], current_user=recruiter
+        )
+        # The shortlist is not narrowed — only the link is.
+        assert [i["employee_id"] for i in payload["items"]] == [employee.id]
+        assert payload["items"][0]["can_view_profile"] is False
+
+    async def test_without_a_viewer_nothing_links(self, db: AsyncSession, tenant, user):
+        employee = await _employee_with_profile(db, tenant.id)
+        vacancy, _ = await _posted_vacancy_with_roster(db, tenant.id, user.id, employee)
+
+        payload = await service.get_vacancy_internal_candidates(
+            db, tenant.id, vacancy["id"]
+        )
+        assert payload["items"][0]["can_view_profile"] is False
+
+
+class TestInternalSearchSwitchLocksOncePosted:
+    """HRP-667 REDO task 2: the switch cannot be turned off behind a card.
+
+    Turning it off on a posted vacancy froze the shortlist and left it on
+    screen, so the requisition showed internal candidates it claimed not
+    to search for. The UI renders the checkbox on and disabled; this is
+    the same rule on the API, where it actually holds.
+    """
+
+    async def test_turning_it_off_while_posted_is_refused(
+        self, db: AsyncSession, tenant, user
+    ):
+        from app.modules.recruitment.schemas import VacancyUpdate
+
+        vacancy, _ = await _vacancy_with_competence(db, tenant.id, user.id)
+        posted = await service.post_vacancy_to_talent_market(
+            db, tenant.id, vacancy["id"], user.id
+        )
+        assert posted["talent_card_id"] is not None
+
+        with pytest.raises(AppError) as exc:
+            await service.update_vacancy(
+                db,
+                tenant.id,
+                vacancy["id"],
+                VacancyUpdate(internal_search_allowed=False),
+            )
+        assert exc.value.code == "vacancy_internal_search_locked_by_card"
+        assert exc.value.status_code == 422
+        assert (
+            await service.get_vacancy_internal_candidates(db, tenant.id, vacancy["id"])
+        )["internal_search_allowed"] is True
+
+    async def test_other_edits_still_go_through_on_a_posted_vacancy(
+        self, db: AsyncSession, tenant, user
+    ):
+        from app.modules.recruitment.schemas import VacancyUpdate
+
+        vacancy, _ = await _vacancy_with_competence(db, tenant.id, user.id)
+        await service.post_vacancy_to_talent_market(
+            db, tenant.id, vacancy["id"], user.id
+        )
+        updated = await service.update_vacancy(
+            db, tenant.id, vacancy["id"], VacancyUpdate(title="Renamed")
+        )
+        assert updated["title"] == "Renamed"
+        # Leaving it on is not a change and must not trip the guard.
+        assert (
+            await service.update_vacancy(
+                db,
+                tenant.id,
+                vacancy["id"],
+                VacancyUpdate(internal_search_allowed=True),
+            )
+        )["internal_search_allowed"] is True
+
+    async def test_an_unposted_vacancy_can_still_be_switched_off(
+        self, db: AsyncSession, tenant, user
+    ):
+        from app.modules.recruitment.schemas import VacancyUpdate
+
+        vacancy, _ = await _vacancy_with_competence(db, tenant.id, user.id)
+        updated = await service.update_vacancy(
+            db, tenant.id, vacancy["id"], VacancyUpdate(internal_search_allowed=False)
+        )
+        assert updated["internal_search_allowed"] is False
+
+    async def test_a_legacy_row_switched_off_before_the_rule_stays_editable(
+        self, db: AsyncSession, tenant, user
+    ):
+        """A vacancy posted on 1.22/1.23 and switched off afterwards sits on
+        the wrong side of this rule. The guard must fire on the flip, not on
+        the value: the form PATCHes the whole vacancy, so refusing every
+        payload that merely carries ``false`` makes the row uneditable."""
+        from app.modules.recruitment.models import Vacancy
+        from app.modules.recruitment.schemas import VacancyUpdate
+
+        vacancy, _ = await _vacancy_with_competence(db, tenant.id, user.id)
+        await service.post_vacancy_to_talent_market(
+            db, tenant.id, vacancy["id"], user.id
+        )
+        row = await db.get(Vacancy, vacancy["id"])
+        assert row is not None
+        row.internal_search_allowed = False
+        await db.commit()
+
+        # An edit that does not touch the switch goes through.
+        renamed = await service.update_vacancy(
+            db, tenant.id, vacancy["id"], VacancyUpdate(title="Renamed legacy")
+        )
+        assert renamed["title"] == "Renamed legacy"
+
+        # ...and so does the full payload the form actually sends, which
+        # carries the unchanged false.
+        saved = await service.update_vacancy(
+            db,
+            tenant.id,
+            vacancy["id"],
+            VacancyUpdate(title="Saved again", internal_search_allowed=False),
+        )
+        assert saved["internal_search_allowed"] is False
+
+        # The form shows the box on, so its next Save heals the row — and
+        # the flip back off is refused from there on.
+        healed = await service.update_vacancy(
+            db, tenant.id, vacancy["id"], VacancyUpdate(internal_search_allowed=True)
+        )
+        assert healed["internal_search_allowed"] is True
+        with pytest.raises(AppError) as exc:
+            await service.update_vacancy(
+                db,
+                tenant.id,
+                vacancy["id"],
+                VacancyUpdate(internal_search_allowed=False),
+            )
+        assert exc.value.code == "vacancy_internal_search_locked_by_card"
+
+    async def test_deleting_the_card_unlocks_the_switch(
+        self, db: AsyncSession, tenant, user
+    ):
+        """The lock follows the live link, the same one the block reads —
+        a card deleted in the talent market unlocks both at once."""
+        from app.modules.recruitment.schemas import VacancyUpdate
+        from app.modules.talent_market.models import TalentCard
+
+        vacancy, _ = await _vacancy_with_competence(db, tenant.id, user.id)
+        posted = await service.post_vacancy_to_talent_market(
+            db, tenant.id, vacancy["id"], user.id
+        )
+        card = await db.get(TalentCard, posted["talent_card_id"])
+        assert card is not None
+        await db.delete(card)
+        await db.commit()
+
+        updated = await service.update_vacancy(
+            db, tenant.id, vacancy["id"], VacancyUpdate(internal_search_allowed=False)
+        )
+        assert updated["internal_search_allowed"] is False

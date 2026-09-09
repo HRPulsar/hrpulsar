@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
+from app.core.access_scope import get_visible_employee_ids
 from app.core.errors import AppError
 from app.modules.auth.models import User
 from app.modules.company.models import Division
@@ -1261,6 +1262,25 @@ async def update_vacancy(
     ):
         await _validate_hiring_manager(db, tenant_id, updates["hiring_manager_id"])
 
+    # HRP-667 REDO: the switch is one-way once the vacancy has a card on
+    # the internal market. Turning it off there used to freeze the
+    # shortlist while leaving it on screen, so the vacancy showed internal
+    # candidates it claimed not to search for. The UI renders the checkbox
+    # on and disabled; this is the same rule where it actually holds.
+    # Only an actual flip: the form PATCHes the whole vacancy, so every
+    # Save carries this field. A row switched off before the rule existed
+    # would otherwise be refused on every edit — uneditable, and the one
+    # state the rule cannot repair.
+    if (
+        updates.get("internal_search_allowed") is False
+        and vacancy.internal_search_allowed
+        and await _linked_card_id(db, tenant_id, vacancy) is not None
+    ):
+        raise AppError(
+            "vacancy_internal_search_locked_by_card",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
     old_owner_id = vacancy.owner_id
     for field, value in updates.items():
         # An explicit ``"internal_search_allowed": null`` would hit the
@@ -1967,6 +1987,8 @@ async def post_vacancy_to_talent_market(
     tenant_id: uuid.UUID,
     vacancy_id: uuid.UUID,
     user_id: uuid.UUID,
+    *,
+    current_user: User | None = None,
 ) -> dict:
     """Create the internal-mobility twin of a vacancy and match employees.
 
@@ -2108,7 +2130,7 @@ async def post_vacancy_to_talent_market(
     # HRP-706: the row is loaded and current (the session does not expire
     # on commit), so the shortlist read skips a second hydration.
     return await get_vacancy_internal_candidates(
-        db, tenant_id, vacancy_id, vacancy=vacancy
+        db, tenant_id, vacancy_id, vacancy=vacancy, current_user=current_user
     )
 
 
@@ -2118,6 +2140,7 @@ async def get_vacancy_internal_candidates(
     vacancy_id: uuid.UUID,
     *,
     vacancy: Vacancy | None = None,
+    current_user: User | None = None,
 ) -> dict:
     """Employees the talent-market matcher found for this vacancy.
 
@@ -2143,8 +2166,13 @@ async def get_vacancy_internal_candidates(
     are matched at all, and ``vacancy_scope`` decides who may open the
     vacancy. Whoever may open it sees its whole internal shortlist.
 
-    Reversing this decision is a one-line ``can_view_profile`` filter over
-    ``items`` plus a ``current_user`` argument - see HRP-703.
+    HRP-667 REDO draws the line where it belongs: the shortlist stays
+    whole, but each row says whether this viewer may open that employee's
+    profile. ``can_view_profile`` is the product's own read scope
+    (``get_visible_employee_ids``, the one the talent market and the
+    assessment participant list already use), so a name links to a card
+    the viewer can actually open and is plain text otherwise. Without a
+    ``current_user`` nothing links — a background caller has no scope.
 
     ``vacancy`` lets a caller that already holds the row skip the reload
     (HRP-706); the two scalars below are all this needs from it.
@@ -2236,6 +2264,12 @@ async def get_vacancy_internal_candidates(
         ).all()
         candidate_by_person = {p: c for p, c in rows_by_person if p is not None}
 
+    # HRP-667 REDO: whose profile this viewer may open. ``None`` back from
+    # the helper means an unrestricted viewer (admin / hr / platform_admin).
+    visible_employee_ids: set[uuid.UUID] | None = set()
+    if current_user is not None:
+        visible_employee_ids = await get_visible_employee_ids(db, current_user)
+
     items = []
     for row in rows:
         emp = row.employee
@@ -2251,6 +2285,10 @@ async def get_vacancy_internal_candidates(
                 "status": row.status,
                 "candidate_id": (
                     candidate_by_person.get(user.person_id) if user else None
+                ),
+                "can_view_profile": (
+                    visible_employee_ids is None
+                    or row.employee_id in visible_employee_ids
                 ),
             }
         )

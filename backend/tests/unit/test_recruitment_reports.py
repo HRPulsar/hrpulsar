@@ -1401,6 +1401,250 @@ class TestGenerateReportTask:
         assert export_after.status == "failed"
         assert export_after.file_id is None
 
+    # ── HRP-685 REDO — the report reads the analysis run, not the newest
+    # interview row (QA case 2: AI Insights full on screen, AI columns
+    # empty in the workbook). Cases 1/3/4/5 of the same QA pass are
+    # pinned by the neighbouring tests so this change cannot undo them.
+
+    @staticmethod
+    async def _seed_analysed_candidate(
+        db,
+        tenant,
+        user,
+        *,
+        with_resume: bool,
+        mode: str,
+        extra_unanalysed_interview: bool,
+        verdict: str = "recommended",
+    ):
+        """One candidate with a completed analysis run, prod-shaped.
+
+        ``mode`` is the run's mode (``full`` / ``resume_only``);
+        ``extra_unanalysed_interview`` adds a newer recording that never
+        got analysed — the shape that made the report read an empty
+        ``analysis_data`` while AI Insights read the run.
+        """
+        import datetime as _dt
+
+        from app.modules.recruitment.models import (
+            AIAnalysisRun,
+            Candidate,
+            Interview,
+            VacancyProfile,
+        )
+
+        vac = await _make_vacancy(db, tenant, user, title="RunSource")
+        vacancy_id = uuid.UUID(str(vac["id"]))
+        comp_ids = [uuid.uuid4() for _ in range(2)]
+        db.add(
+            VacancyProfile(
+                tenant_id=tenant.id,
+                vacancy_id=vacancy_id,
+                profile_data={
+                    "competences": [
+                        {"id": str(cid), "name": f"Competence {n}"}
+                        for n, cid in enumerate(comp_ids, start=1)
+                    ]
+                },
+            )
+        )
+        cand = Candidate(
+            tenant_id=tenant.id,
+            full_name="Ekaterina Velikaya",
+            parsed_resume_jsonb=(
+                {"summary": "Ten years of technical writing."}
+                if with_resume
+                else None
+            ),
+        )
+        db.add(cand)
+        await db.flush()
+        cv = await service.attach_candidate(
+            db,
+            tenant.id,
+            user.id,
+            CandidateVacancyCreate(candidate_id=cand.id, vacancy_id=vacancy_id),
+        )
+        cv_id = uuid.UUID(str(cv["id"]))
+
+        now = _dt.datetime.now(_dt.timezone.utc)
+        interview_id = None
+        if mode == "full":
+            analysed = Interview(
+                tenant_id=tenant.id,
+                candidate_vacancy_id=cv_id,
+                transcript="Interviewer: walk me through your docs work.",
+                transcription_status="completed",
+                analysis_status="completed",
+                created_at=now - _dt.timedelta(days=2),
+            )
+            db.add(analysed)
+            await db.flush()
+            interview_id = analysed.id
+            if extra_unanalysed_interview:
+                # Uploaded after the analysed one and never analysed —
+                # exactly what the vacancy in the ticket looks like.
+                db.add(
+                    Interview(
+                        tenant_id=tenant.id,
+                        candidate_vacancy_id=cv_id,
+                        transcription_status="pending",
+                        created_at=now,
+                    )
+                )
+
+        db.add(
+            AIAnalysisRun(
+                tenant_id=tenant.id,
+                candidate_vacancy_id=cv_id,
+                mode=mode,
+                status="completed",
+                interview_id=interview_id,
+                verdict=verdict,
+                verdict_summary="Strong documentation background.",
+                analysis_data={
+                    "verdict": verdict,
+                    "verdict_summary": "Strong documentation background.",
+                    "key_strength": "Writes precise specs.",
+                    "competence_assessments": [
+                        {
+                            "competence_id": str(comp_ids[0]),
+                            "score": 0.8,
+                            "status": "assessed",
+                            "reasoning": "Cited three published guides.",
+                        },
+                        {
+                            "competence_id": str(comp_ids[1]),
+                            "score": 0.6,
+                            "status": "assessed",
+                            "reasoning": "Some gaps on GOST.",
+                        },
+                    ],
+                },
+            )
+        )
+        await db.flush()
+        return vacancy_id, cv_id, comp_ids
+
+    @staticmethod
+    async def _run_report(db, tenant, user, vacancy_id, sections, monkeypatch):
+        from app.config import settings as app_settings
+
+        from tests.conftest import TEST_DB_URL
+
+        monkeypatch.setattr(app_settings, "database_url", TEST_DB_URL)
+
+        from app.modules.recruitment.tasks import generate_report_task
+
+        with patch(
+            "app.modules.recruitment.tasks.generate_report_task.delay"
+        ) as mock_delay:
+            mock_delay.return_value.id = "tid"
+            res = await service.enqueue_report(
+                db,
+                tenant.id,
+                user.id,
+                vacancy_id,
+                ReportGenerateRequest(sections=sections),
+            )
+        await db.commit()
+
+        captured: dict[str, bytes] = {}
+
+        def _fake_upload(data: bytes, path: str, content_type: str) -> str:
+            captured["bytes"] = data
+            return f"http://example/{path}"
+
+        monkeypatch.setattr("app.core.s3.upload_file", _fake_upload, raising=True)
+        monkeypatch.setattr("app.core.s3.get_s3_client", lambda: None, raising=True)
+
+        result = generate_report_task.run(str(res["export_id"]), str(tenant.id))
+        assert result["status"] == "completed", result
+        return load_workbook(io.BytesIO(captured["bytes"]))
+
+    @staticmethod
+    def _sheet_values(ws) -> list[str]:
+        return [
+            str(cell.value)
+            for row in ws.iter_rows()
+            for cell in row
+            if cell.value is not None
+        ]
+
+    async def test_full_run_analysis_reaches_the_report(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """HRP-685 REDO (QA case 2) — a candidate with a parsed resume and
+        a completed full run shows AI score, verdict and summary on screen
+        but had empty AI blocks in the workbook: the report read the
+        newest ``Interview.analysis_data`` instead of the run that
+        produced the analysis, and the newest recording was a later upload
+        nobody analysed.
+        """
+        vacancy_id, _cv_id, _comps = await self._seed_analysed_candidate(
+            db, tenant, user, with_resume=True, mode="full",
+            extra_unanalysed_interview=True,
+        )
+        wb = await self._run_report(
+            db,
+            tenant,
+            user,
+            vacancy_id,
+            ["summary_ranking", "detailed_analysis"],
+            monkeypatch,
+        )
+        detail = wb["Detail · Ekaterina Velikaya"]
+        values = self._sheet_values(detail)
+        assert "Strong documentation background." in values
+        assert "Writes precise specs." in values
+        # 0.8 of the tenant's 5-point scale — the AI score column of the
+        # COMPETENCE SCORES table, empty before the fix.
+        assert "4.0" in values
+
+        summary = wb["Summary"]
+        assert summary.cell(row=6, column=4).value == "AI score"
+        assert summary.cell(row=7, column=4).value not in (None, "— (no data)")
+
+    async def test_resume_only_run_keeps_its_no_transcript_label(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """HRP-685 QA case 5 — reading the run for scores must not turn a
+        resume-only candidate into "Full data"; readiness is derived from
+        the inputs on file, never from the run that happened to exist."""
+        vacancy_id, _cv_id, _comps = await self._seed_analysed_candidate(
+            db, tenant, user, with_resume=True, mode="resume_only",
+            extra_unanalysed_interview=False,
+        )
+        wb = await self._run_report(
+            db, tenant, user, vacancy_id, ["summary_ranking"], monkeypatch
+        )
+        ws = wb["Summary"]
+        assert ws.cell(row=6, column=5).value == "AI data"
+        assert ws.cell(row=7, column=5).value == "No transcript"
+
+    async def test_run_scores_do_not_recommend_a_candidate_without_a_resume(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """HRP-685 QA cases 3 + 4 — a candidate the model scored well off a
+        transcript alone still reads "No resume", lands in the Incomplete
+        data sheet and cannot be auto-Recommended."""
+        vacancy_id, _cv_id, _comps = await self._seed_analysed_candidate(
+            db, tenant, user, with_resume=False, mode="full",
+            extra_unanalysed_interview=False,
+        )
+        wb = await self._run_report(
+            db,
+            tenant,
+            user,
+            vacancy_id,
+            ["summary_ranking", "incomplete_data"],
+            monkeypatch,
+        )
+        ws = wb["Summary"]
+        assert ws.cell(row=7, column=5).value == "No resume"
+        assert ws.cell(row=7, column=6).value != "Recommended"
+        assert "Resume not parsed" in self._sheet_values(wb["Incomplete data"])
+
 
 # ---------------------------------------------------------------------------
 # R4d — Inline XLSX preview (FR-23 / SCR-83)

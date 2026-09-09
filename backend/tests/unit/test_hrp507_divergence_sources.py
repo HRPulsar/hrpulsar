@@ -12,11 +12,13 @@ These tests drive the real product flows end to end instead of seeding the
 legacy tables directly.
 
 Everything below runs on the production default pairing: the manager side
-scores on the seeded ``Standard 1-4`` AssessmentScale (weights
-0/33/66/100) while the matrix renders the tenant ``ScaleConfig`` 0..5.
-Levels therefore land on 0.0 / 1.65 / 3.3 / 5.0 — a fixture that wrote
-score_value=5 into the 1..4 scale hid the mismatch that made a manager's
-top mark disagree with the AI's top mark.
+scores on the seeded ``Standard 1-4`` AssessmentScale, and since HRP-510
+REDO that is also the scale the matrix renders — levels land on
+themselves (1..4) and the AI's raw 0..1 is rebased onto the same 4. A
+fixture that wrote score_value=5 into the 1..4 scale would hide the
+mismatch that made a manager's top mark disagree with the AI's top mark.
+Legacy ``HumanAssessment`` cells are still entered against the tenant
+``ScaleConfig`` (0..5 here) and are rebased by the 4/5 ratio.
 """
 
 from __future__ import annotations
@@ -148,25 +150,24 @@ class TestManagerSideReachesTheMatrix:
         matrix = await service.get_assessment_matrix(db, tenant.id, vacancy_id)
         cells = {str(c["competence_id"]): c for c in matrix["candidates"][0]["cells"]}
         python = cells[str(service.normalize_competence_id("python-skills"))]
-        # Level 4 is the top of the 1..4 scale (weight 100) → 5.0 of 5.
-        assert python["manager_score"] == 5.0
+        # Level 4 is the top of the vacancy's 1..4 scale — the scale the
+        # matrix itself renders since HRP-510 REDO, so nothing to rebase.
+        assert python["manager_score"] == 4.0
         assert python["manager_evaluator_count"] == 1
         comms = cells[str(service.normalize_competence_id("communication"))]
-        # Level 3 → weight 66 → 3.3 of 5.
-        assert comms["manager_score"] == 3.3
-        # (5.0 + 3.3) / (5 * 3) * 100
-        assert matrix["candidates"][0]["manager_percent"] == 55.3
+        assert comms["manager_score"] == 3.0
+        # (4.0 + 3.0) / (4 * 3) * 100
+        assert matrix["candidates"][0]["manager_percent"] == 58.3
 
     async def test_top_marks_on_both_sides_reach_full_match(
         self, db: AsyncSession, tenant, user, matrix_scale
     ) -> None:
-        """Production default: manager 1..4 scale, tenant 0..5 ScaleConfig.
+        """Production default: the vacancy's 1..4 Assessment scale.
 
         The two halves of a cell used to be compared in different units,
-        so a manager's maximum (4) sat 1.0 away from the AI's maximum
-        (raw 1.0 → 5.0) — exactly the tenant divergence threshold — and
-        perfect agreement was reported as disagreement, with manager %
-        match unable to pass 80.
+        so a manager's maximum sat a full threshold away from the AI's
+        maximum and perfect agreement was reported as disagreement, with
+        manager % match unable to pass 80.
         """
         vacancy_id, cv_id = await _vacancy_with_candidate(db, tenant, user)
         await _score_via_round(
@@ -193,7 +194,7 @@ class TestManagerSideReachesTheMatrix:
         assert candidate["manager_percent"] == 100.0
         assert candidate["ai_percent"] == 100.0
         for cell in candidate["cells"]:
-            assert cell["manager_score"] == cell["ai_score"] == 5.0
+            assert cell["manager_score"] == cell["ai_score"] == 4.0
 
     async def test_archived_round_scores_are_ignored(
         self, db: AsyncSession, tenant, user, matrix_scale
@@ -222,8 +223,9 @@ class TestManagerSideReachesTheMatrix:
     ) -> None:
         """One human, two surfaces — the newer opinion wins, no averaging.
 
-        Canvas cells are entered against the tenant ScaleConfig already,
-        so 3.0 stays 3.0 while the round's level 4 would have read 5.0.
+        Canvas cells are entered against the tenant ScaleConfig (0..5),
+        so 3.0 lands on 2.4 of the vacancy's 1..4 scale, while the round's
+        level 4 it supersedes would have read 4.0.
         """
         vacancy_id, cv_id = await _vacancy_with_candidate(db, tenant, user)
         await _score_via_round(db, tenant, user, cv_id, {"python-skills": 4})
@@ -241,7 +243,7 @@ class TestManagerSideReachesTheMatrix:
         matrix = await service.get_assessment_matrix(db, tenant.id, vacancy_id)
         cells = {str(c["competence_id"]): c for c in matrix["candidates"][0]["cells"]}
         python = cells[str(service.normalize_competence_id("python-skills"))]
-        assert python["manager_score"] == 3.0
+        assert python["manager_score"] == 2.4
         assert python["manager_evaluator_count"] == 1
 
     async def test_cell_detail_agrees_with_the_cell(
@@ -270,11 +272,12 @@ class TestManagerSideReachesTheMatrix:
         )
 
         assert [e["score"] for e in detail["manager_entries"]] == [cell["manager_score"]]
-        assert detail["manager_entries"][0]["score"] == 5.0
+        assert detail["manager_entries"][0]["score"] == 4.0
         # Resume-only candidate: no AIAssessment row exists, so the
         # popover has to reach for the same analysis run the cell used.
         assert detail["ai_latest"] is not None
-        assert detail["ai_latest"]["score"] == cell["ai_score"] == 2.0
+        # Raw 0.4 across the 1..4 range: 1 + 0.4 × 3.
+        assert detail["ai_latest"]["score"] == cell["ai_score"] == 2.2
         assert detail["ai_latest"]["status"] == "ready"
 
     async def test_cell_detail_rebases_interview_ai_scores(
@@ -402,8 +405,10 @@ class TestDivergenceEndToEnd:
         self, db: AsyncSession, tenant, user, matrix_scale
     ) -> None:
         vacancy_id, cv_id = await _vacancy_with_candidate(db, tenant, user)
-        # Manager levels 4 / 4 / 3 → 5.0 / 5.0 / 3.3 of 5.
-        # AI raw 1.0 / 0.4 / 0.66 → 5.0 / 2.0 / 3.3 — only the middle one moves.
+        # Manager levels 4 / 4 / 3 land on themselves (the vacancy's 1..4
+        # scale is what the matrix renders); AI raw is spread over the
+        # same 1..4 range, so 1.0 / 0.4 / 0.66 → 4.0 / 2.2 / 2.98. Only
+        # the middle one clears the tenant Manager-vs-AI threshold of 1.
         await _score_via_round(
             db,
             tenant,
@@ -430,8 +435,8 @@ class TestDivergenceEndToEnd:
         assert len(row["divergence_top"]) == 1
         top = row["divergence_top"][0]
         assert top["competence_name"] == "Communication"
-        assert top["manager_score"] == 5.0
-        assert top["ai_score"] == 2.0
+        assert top["manager_score"] == 4.0
+        assert top["ai_score"] == 2.2
 
     async def test_tooltip_preview_is_capped_at_five(
         self, db: AsyncSession, tenant, user, matrix_scale

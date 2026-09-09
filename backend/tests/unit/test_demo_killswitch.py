@@ -169,7 +169,15 @@ async def test_analyze_killswitch_uses_seed_for_demo_tenant(
         )
     ).scalars().all()
     assert rows, "AIAssessment rows must be seeded under killswitch"
-    assert all(r.citations for r in rows)
+    # Every competence the round actually scored quotes the transcript —
+    # that is the acceptance criterion. HRP-657 added a ``not_covered``
+    # cell to the fixture, and a competence the interview never reached
+    # must carry no evidence at all: an empty citation list there is the
+    # invariant, not a gap in the seed.
+    scored = [r for r in rows if r.status == "assessed"]
+    assert scored, "the seeded analysis scored nothing"
+    assert all(r.citations for r in scored)
+    assert all(not r.citations for r in rows if r.status != "assessed")
 
 
 @pytest.mark.asyncio

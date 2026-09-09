@@ -136,7 +136,13 @@ export default function DivisionDetailPage() {
       const [div, specs, empList, divsAll, empsAll, posAll] =
         await Promise.allSettled([
           api.get<Division>(`/divisions/${id}`),
-          api.get<SpecializationDivision[]>(`/divisions/${id}/specializations`),
+          // HRP-571: the subtree's mappings, not just this division's —
+          // a child department that is mapped but not yet staffed has
+          // specializations to show, and the tiles below scope the rows
+          // back down with the same toggle the employees use.
+          api.get<SpecializationDivision[]>(
+            `/divisions/${id}/specializations?include_sub_divisions=true`,
+          ),
           // HRP-58: `include_sub_divisions` widens the filter to the
           // division subtree server-side, so nested departments are in
           // the payload once and the scope toggle stays a client-side
@@ -191,9 +197,17 @@ export default function DivisionDetailPage() {
     [employees, includeSubDivisions, id],
   );
 
+  const scopedSpecializations = useMemo(
+    () =>
+      includeSubDivisions
+        ? specializations
+        : specializations.filter((s) => s.division_id === id),
+    [specializations, includeSubDivisions, id],
+  );
+
   const specializationTiles = useMemo(
-    () => deriveSpecializationTiles(specializations, scopedEmployees),
-    [specializations, scopedEmployees],
+    () => deriveSpecializationTiles(scopedSpecializations, scopedEmployees),
+    [scopedSpecializations, scopedEmployees],
   );
 
   const filteredEmployees = useMemo(
@@ -223,8 +237,8 @@ export default function DivisionDetailPage() {
   // the catalogue would make those rows unreachable by this filter, and
   // taking only the employees would leave a tile with no matching option.
   const specializationOptions = useMemo(
-    () => deriveSpecializationOptions(specializations, scopedEmployees),
-    [specializations, scopedEmployees],
+    () => deriveSpecializationOptions(scopedSpecializations, scopedEmployees),
+    [scopedSpecializations, scopedEmployees],
   );
   // HRP-58: narrowing the scope shrinks the option lists, so a value
   // picked under the wider one would linger as a dangling id — "Unknown"

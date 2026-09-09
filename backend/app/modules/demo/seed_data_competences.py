@@ -1296,31 +1296,92 @@ INDICATORS: list[dict] = [
 # ---------------------------------------------------------------------------
 
 
-# HRP-713 — the three GTM competences carry real, locale-neutral links.
-# The sales demo creates a development plan on stage and opens a material
-# from it, so "Open" has to land on something that exists. Keyed by
-# (competence, level) rather than folded into the catalogue tuples below
-# so the other ~40 competences keep their three-element rows. Every URL
-# was checked for a 200 before it landed here; ``link`` is not a
-# TRANSLATABLE_KEY, so these never reach the locale catalogs.
+# HRP-767 — one public link per material, and it has to be the thing the
+# title names. Two rules, both enforced by
+# ``tests/unit/test_demo_seed_materials.py``:
+#
+# * ``material_type == "internal"`` is a workshop or playbook that exists
+#   only inside the fictional company — there is no public URL to give, so
+#   it carries none and the UI says "no link" (HRP-712). The reported bug
+#   was the opposite: an internal product tour pointed at
+#   ``hrpulsar.com/docs/features``, which is neither a course nor the
+#   demo company's own material.
+# * an external material links to the resource its title names — the
+#   publisher or author page for a book, the actual documentation or
+#   course page for a course, the article itself for an article. A book
+#   pointing at an encyclopedia entry about its author is the same bug in
+#   a quieter form, so book links never resolve to Wikipedia.
+#
+# Every URL here answered 200 when it landed. Titles are translated per
+# locale but ``link`` is not a TRANSLATABLE_KEY, so one link serves all
+# three catalogs — which is why they are documentation, publisher and
+# reference pages rather than locale-specific landing pages.
 _MATERIAL_LINKS: dict[tuple[str, str], str] = {
-    ("c-sales-discovery", "sl-l1"): "https://en.wikipedia.org/wiki/Sales_process",
-    ("c-sales-discovery", "sl-l2"): "https://en.wikipedia.org/wiki/Neil_Rackham",
-    ("c-sales-discovery", "sl-l3"): "https://en.wikipedia.org/wiki/Needs_assessment",
-    ("c-product-knowledge", "sl-l1"): "https://hrpulsar.com/docs/features",
-    ("c-product-knowledge", "sl-l2"): "https://hrpulsar.com/docs/cloud",
-    ("c-product-knowledge", "sl-l3"): (
-        "https://en.wikipedia.org/wiki/Competitor_analysis"
+    ("c-python", "sl-l1"): "https://nostarch.com/python-crash-course-3rd-edition",
+    ("c-python", "sl-l2"): "https://www.fluentpython.com/",
+    ("c-python", "sl-l3"): "https://openlibrary.org/works/OL19547492W",
+    ("c-fastapi", "sl-l1"): "https://fastapi.tiangolo.com/tutorial/",
+    ("c-fastapi", "sl-l2"): (
+        "https://fastapi.tiangolo.com/tutorial/bigger-applications/"
     ),
-    ("c-objection-handling", "sl-l1"): (
-        "https://en.wikipedia.org/wiki/Active_listening"
+    ("c-postgres", "sl-l1"): "https://openlibrary.org/works/OL27075277W",
+    ("c-postgres", "sl-l2"): "https://use-the-index-luke.com/",
+    ("c-postgres", "sl-l3"): "https://dataintensive.net/",
+    ("c-distributed", "sl-l1"): "https://openlibrary.org/works/OL19543542W",
+    ("c-distributed", "sl-l2"): "https://stripe.com/blog/idempotency",
+    ("c-distributed", "sl-l3"): "https://dataintensive.net/",
+    ("c-typescript", "sl-l1"): (
+        "https://www.typescriptlang.org/docs/handbook/2/narrowing.html"
     ),
-    ("c-objection-handling", "sl-l2"): (
-        "https://en.wikipedia.org/wiki/Value-based_pricing"
+    ("c-typescript", "sl-l2"): "https://effectivetypescript.com/",
+    ("c-typescript", "sl-l3"): "https://www.totaltypescript.com/",
+    ("c-react", "sl-l1"): "https://react.dev/learn/thinking-in-react",
+    ("c-react", "sl-l2"): "https://www.patterns.dev/react",
+    ("c-web-perf", "sl-l1"): "https://web.dev/articles/vitals",
+    ("c-web-perf", "sl-l2"): (
+        "https://web.dev/articles/reduce-javascript-payloads-with-code-splitting"
     ),
-    ("c-objection-handling", "sl-l3"): (
-        "https://en.wikipedia.org/wiki/Practice_(learning_method)"
+    ("c-user-research", "sl-l1"): "https://openlibrary.org/works/OL17308038W",
+    ("c-user-research", "sl-l2"): (
+        "https://www.producttalk.org/continuous-discovery-habits/"
     ),
+    ("c-roadmap", "sl-l1"): "https://basecamp.com/shapeup",
+    ("c-roadmap", "sl-l2"): (
+        "https://www.svpg.com/books/inspired-how-to-create-tech-products-customers-love/"
+    ),
+    ("c-design-systems", "sl-l1"): (
+        "https://bradfrost.com/blog/post/atomic-web-design/"
+    ),
+    ("c-design-systems", "sl-l2"): "https://openlibrary.org/works/OL38056351W",
+    ("c-written", "sl-l1"): "https://openlibrary.org/works/OL2742235W",
+    ("c-written", "sl-l2"): "https://www.workingbackwards.com/",
+    ("c-async", "sl-l1"): (
+        "https://handbook.gitlab.com/handbook/company/culture/all-remote/"
+    ),
+    ("c-async", "sl-l2"): "https://basecamp.com/books/remote",
+    ("c-cross-fn", "sl-l1"): "https://www.crucialconversations.com/",
+    ("c-mentoring", "sl-l1"): "https://openlibrary.org/works/OL19860807W",
+    ("c-hiring", "sl-l2"): "https://ghsmart.com/who-the-a-method-for-hiring/",
+    ("c-conflict", "sl-l1"): "https://www.difficultconversationsbook.com/",
+    ("c-conflict", "sl-l2"): "https://en.wikipedia.org/wiki/Conflict_resolution",
+    ("c-prompt", "sl-l1"): (
+        "https://docs.anthropic.com/en/docs/build-with-claude/"
+        "prompt-engineering/overview"
+    ),
+    ("c-prompt", "sl-l2"): "https://www.promptfoo.dev/docs/intro/",
+    ("c-agentic", "sl-l1"): (
+        "https://www.anthropic.com/engineering/building-effective-agents"
+    ),
+    ("c-customer-discovery", "sl-l1"): "https://www.momtestbook.com/",
+    ("c-customer-discovery", "sl-l2"): (
+        "https://www.producttalk.org/continuous-discovery-habits/"
+    ),
+    ("c-okrs", "sl-l1"): "https://openlibrary.org/works/OL19746884W",
+    ("c-sales-discovery", "sl-l2"): "https://openlibrary.org/works/OL1990870W",
+    # HRP-713's on-stage beat needs one openable material inside the plan
+    # the presenter builds from Will Gapp's card, and his junior grade caps
+    # that plan at level 1 — so the GTM ladder keeps a linked entry here.
+    ("c-objection-handling", "sl-l1"): "https://en.wikipedia.org/wiki/Active_listening",
 }
 
 
@@ -1389,7 +1450,7 @@ def _build_materials() -> list[dict]:
         "c-web-perf": (
             ("Web Vitals — how to read a Lighthouse report", "article", "external", 60),
             (
-                "Smashing Magazine — bundle analysis playbook",
+                "Reduce JavaScript payloads with code splitting",
                 "article",
                 "external",
                 120,
@@ -1466,7 +1527,7 @@ def _build_materials() -> list[dict]:
             (
                 "EM/PM/Design triad — shared ownership patterns",
                 "article",
-                "external",
+                "internal",
                 120,
             ),
             (
@@ -1548,7 +1609,7 @@ def _build_materials() -> list[dict]:
         ),
         "c-agentic": (
             ("Anatomy of an agent loop — Anthropic primer", "article", "external", 90),
-            ("Building a single-task agent with evals", "course", "external", 240),
+            ("Building a single-task agent with evals", "course", "internal", 240),
             (
                 "Agent orchestration — observability and safety",
                 "workshop",
@@ -1572,7 +1633,7 @@ def _build_materials() -> list[dict]:
             ("Designing a function-wide OKR program", "workshop", "internal", 180),
         ),
         "c-sales-discovery": (
-            ("MEDDIC and MEDDPICC — qualification primer", "article", "external", 90),
+            ("MEDDIC and MEDDPICC — qualification primer", "article", "internal", 90),
             ("SPIN Selling — Neil Rackham", "book", "external", 360),
             (
                 "Coaching AEs on discovery — calibration sessions",
@@ -1598,7 +1659,7 @@ def _build_materials() -> list[dict]:
         ),
         "c-objection-handling": (
             (
-                "Objection handling basics — listen, restate, answer",
+                "Active listening — hear the objection before answering it",
                 "article",
                 "external",
                 60,
@@ -1606,7 +1667,7 @@ def _build_materials() -> list[dict]:
             (
                 "Value-based selling — pricing conversations that hold",
                 "book",
-                "external",
+                "internal",
                 300,
             ),
             (

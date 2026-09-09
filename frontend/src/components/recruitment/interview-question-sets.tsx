@@ -124,6 +124,8 @@ interface QuestionSet {
   archived_at: string | null;
   version: number;
   created_at: string | null;
+  /** HRP-740: moved by every regeneration; ``created_at`` is not. */
+  updated_at: string | null;
   questions: QuestionRow[];
 }
 
@@ -343,6 +345,29 @@ export function InterviewQuestionSets({
     loadSets();
   }, [loadSets]);
 
+  // HRP-442 REDO: the "Interview questions ready" email links to
+  // ``...?questionSet=...#interview-questions``. The page-level anchor
+  // jump (HRP-494) fires as soon as the candidate card lands, while this
+  // block is still a one-line placeholder — the viewport ends up at an
+  // offset the finished block no longer occupies, and the reader has to
+  // scroll by hand. Jump from the resolved sets request instead, which
+  // is the point the block has its real height. Once per visit: the list
+  // reloads after every generation and a page that yanks itself back
+  // each time is worse than one that never scrolled.
+  const sectionRef = useRef<HTMLElement>(null);
+  const anchorScrolled = useRef(false);
+  useEffect(() => {
+    if (loading || anchorScrolled.current) return;
+    if (window.location.hash !== "#interview-questions") return;
+    anchorScrolled.current = true;
+    sectionRef.current?.scrollIntoView({
+      block: "start",
+      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+  }, [loading]);
+
   const currentSet =
     sample ?? sets.find((s) => s.id === activeSetId) ?? null;
 
@@ -359,10 +384,14 @@ export function InterviewQuestionSets({
   // tell, so they get no subtitle.
   const setSubtitle = useMemo(() => {
     if (!currentSet || currentSet.status === "sample") return null;
-    if (currentSet.generation_mode === "manual" || !currentSet.created_at) {
+    // HRP-740: the date of the *last* generation. A regenerated set is
+    // rewritten in place, so ``created_at`` keeps naming the first run
+    // and the header kept advertising a date the content no longer had.
+    const generatedAt = currentSet.updated_at ?? currentSet.created_at;
+    if (currentSet.generation_mode === "manual" || !generatedAt) {
       return null;
     }
-    const date = formatDate(currentSet.created_at);
+    const date = formatDate(generatedAt);
     const names = setSourceInterviewIds(currentSet)
       .map((id) => interviewLabels.get(id))
       .filter((n): n is string => Boolean(n));
@@ -561,6 +590,7 @@ export function InterviewQuestionSets({
   return (
     <section
       id="interview-questions"
+      ref={sectionRef}
       data-testid="recruitment-interview-questions-section"
       className="space-y-3"
     >
@@ -1411,7 +1441,7 @@ interface AddQuestionDialogProps {
  * AddFromCompetencyDialog instead, so the old free-choice Source select
  * is gone.
  */
-function AddQuestionDialog({
+export function AddQuestionDialog({
   open,
   onOpenChange,
   onSubmit,
@@ -1422,6 +1452,11 @@ function AddQuestionDialog({
   const [goal, setGoal] = useState<QuestionGoal>("verify_skill");
   const [priority, setPriority] = useState<QuestionPriority>("should_ask");
   const [anchor, setAnchor] = useState("");
+  // HRP-485 REDO: the dialog opened with the question textarea focused,
+  // and its blue ring reads as a validation error on an empty form.
+  // Focus the popup itself instead of dropping focus altogether — the
+  // dialog stays keyboard-reachable and Tab still lands on the field.
+  const popupRef = useRef<HTMLDivElement>(null);
 
   function reset() {
     setText("");
@@ -1444,6 +1479,8 @@ function AddQuestionDialog({
     >
       <DialogContent
         className="max-w-lg"
+        ref={popupRef}
+        initialFocus={popupRef}
         data-testid="recruitment-interview-questions-add-dialog"
       >
         <DialogHeader>

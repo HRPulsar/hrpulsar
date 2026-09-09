@@ -240,15 +240,21 @@ ASSESSMENTS: list[dict] = [
         ],
     },
     # --- Done: dev-loop storyline C — a gap confirmed closed by
-    # re-assessment. Bella scored below the 75% bar on Python ~80 days
-    # ago and above it in a fresh review, so the dashboard's "Closed"
-    # stage shows a confirmed closure inside the 90-day window.
+    # re-assessment. Bella scored below the 75% bar on Python in last
+    # year's review and above it in a fresh one, so the dashboard's
+    # "Closed" stage shows a confirmed closure in every period.
+    #
+    # HRP-766: the baseline sits more than a year back on purpose. The
+    # dynamics tile counts a competence as raised only against a reading
+    # taken BEFORE the window opened, so a baseline 80 days old answered
+    # "2 raised" over 30 days and "0" over 90 and 365 — the longer the
+    # period, the less the demo appeared to have achieved.
     {
         "title": "Staff review — Bella Martins (spring)",
         "employee_index": 1,  # Backend L4 Staff → manager Adam Kovacs (idx 0)
         "type_code": "360",
         "status_code": "done",
-        "finished_days_ago": 80,
+        "finished_days_ago": 470,
         "criteria_type": "competences",
         "specialization_key": "backend-dev",
         "grade_key": "g-lead",
@@ -537,6 +543,9 @@ PDPS: list[dict] = [
         ],
     },
     # --- Done ---
+    # HRP-766: three completed plans, one per period band (7 / 55 / 250
+    # days back), so the dashboard's 30 / 90 / 365 switch reports 1, 2 and
+    # 3 rather than the same snapshot three times.
     {
         "title": "Plan completed — Anna Rising (Q3)",
         "employee_index": 2,
@@ -552,6 +561,46 @@ PDPS: list[dict] = [
             {
                 "competence_key": "c-mentoring",
                 "title": "Mentored two L2 engineers through promotion",
+                "is_passed": True,
+            },
+        ],
+    },
+    {
+        "title": "Plan completed — Kate Highmore (H1)",
+        "employee_index": 19,  # Kate Highmore, Senior PM
+        "status": "done",
+        "finished_days_ago": 55,
+        "specialization_key": "product-mgmt",
+        "grade_key": "g-senior",
+        "items": [
+            {
+                "competence_key": "c-customer-discovery",
+                "title": "Ran the first enterprise discovery interview series",
+                "is_passed": True,
+            },
+            {
+                "competence_key": "c-okrs",
+                "title": "Introduced the quarterly OKR check-in ritual",
+                "is_passed": True,
+            },
+        ],
+    },
+    {
+        "title": "Plan completed — Marcus Johnson (last year)",
+        "employee_index": 12,  # Marcus Johnson, Frontend L3
+        "status": "done",
+        "finished_days_ago": 250,
+        "specialization_key": "frontend-dev",
+        "grade_key": "g-senior",
+        "items": [
+            {
+                "competence_key": "c-typescript",
+                "title": "Reached L3 Builder on the TypeScript rubric",
+                "is_passed": True,
+            },
+            {
+                "competence_key": "c-react",
+                "title": "Led the component library upgrade to React 19",
                 "is_passed": True,
             },
         ],

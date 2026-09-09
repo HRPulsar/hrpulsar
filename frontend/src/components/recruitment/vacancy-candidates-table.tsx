@@ -32,6 +32,7 @@ import { ApiError, api } from "@/lib/api";
 import { formatDate } from "@/lib/date-format";
 import { cn } from "@/lib/utils";
 import { BADGE_OUTLINE } from "@/lib/badge-tones";
+import { labelForRound } from "@/lib/manager-assessment-rounds";
 import { AiVerdictBadge } from "./ai-verdict-badge";
 import { AI_ANALYSIS_PRICING } from "@/lib/recruitment-types";
 import type {
@@ -109,6 +110,11 @@ interface VacancyCandidatesTableProps {
   onRowCountChange?: (count: number) => void;
 }
 
+// HRP-493: how often the table re-reads itself while an analysis is
+// running. Matches the Interviews block, which polls its own statuses
+// on the same cadence.
+const ANALYSIS_POLL_MS = 5000;
+
 const STAGE_TONE: Record<string, string> = {
   active: BADGE_OUTLINE.blue,
   terminal_positive: BADGE_OUTLINE.emerald,
@@ -158,34 +164,62 @@ export function VacancyCandidatesTable({
     candidateName: string;
   } | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      const [list, funnel] = await Promise.all([
-        api.get<CandidateVacancyEnrichedRow[]>(
-          `/recruitment/vacancies/${vacancyId}/candidates/enriched`,
-        ),
-        api.get<VacancyStage[]>(
-          `/recruitment/vacancies/${vacancyId}/funnel-stages`,
-        ),
-      ]);
-      setRows(list);
-      setStages(funnel);
-      onRowCountChange?.(list.length);
-    } catch (err) {
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : t("candidatesTableLoadFailed"),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [vacancyId, onRowCountChange, t]);
+  // ``silent`` is for the HRP-493 poll below: a background re-read must
+  // not raise the loading state (the table would blank out every five
+  // seconds) and must not toast, or one flaky tick stacks an error
+  // notification on the recruiter every five seconds.
+  const load = useCallback(
+    async (silent = false) => {
+      try {
+        if (!silent) setLoading(true);
+        const [list, funnel] = await Promise.all([
+          api.get<CandidateVacancyEnrichedRow[]>(
+            `/recruitment/vacancies/${vacancyId}/candidates/enriched`,
+          ),
+          api.get<VacancyStage[]>(
+            `/recruitment/vacancies/${vacancyId}/funnel-stages`,
+          ),
+        ]);
+        setRows(list);
+        setStages(funnel);
+        onRowCountChange?.(list.length);
+      } catch (err) {
+        if (!silent) {
+          toast.error(
+            err instanceof Error
+              ? err.message
+              : t("candidatesTableLoadFailed"),
+          );
+        }
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [vacancyId, onRowCountChange, t],
+  );
 
   useEffect(() => {
     load();
   }, [load, reloadToken]);
+
+  // HRP-493 REDO: a row showing "Analyzing…" kept showing it after the
+  // run had finished — the table is fetched once and nothing told it the
+  // verdict had landed, so only F5 cleared it. Poll while at least one
+  // row has a run in flight and stop as soon as none does.
+  //
+  // ``ai_analysis_in_progress`` is derived server-side from the status
+  // of the AIAnalysisRun — the same row AI Insights reads to decide it
+  // is still working — so the two surfaces flip on the same fact rather
+  // than on two guesses that can drift apart.
+  const analysisInFlight = rows.some((r) => r.ai_analysis_in_progress);
+  useEffect(() => {
+    if (!analysisInFlight) return;
+    const timer = setInterval(() => {
+      // Nobody is watching a hidden tab; don't keep the backend busy.
+      if (document.visibilityState === "visible") void load(true);
+    }, ANALYSIS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [analysisInFlight, load]);
 
   const applyStageChange = useCallback(
     async (row: CandidateVacancyEnrichedRow, targetStage: VacancyStage) => {
@@ -625,6 +659,7 @@ function Row({
           emptyLabel={t("candidatesTableManagerNotAssessed")}
           emptyHint={t("candidatesTableManagerNotAssessedHint")}
           emptyTestId={`vacancy-candidates-row-${row.id}-manager-empty`}
+          tooltipSuffix={managerRoundLine(t, row)}
         />
       </td>
       <td
@@ -772,6 +807,7 @@ function MobileCard({
             emptyLabel={t("candidatesTableManagerNotAssessed")}
             emptyHint={t("candidatesTableManagerNotAssessedHint")}
             emptyTestId={`vacancy-candidates-mobile-row-${row.id}-manager-empty`}
+            tooltipSuffix={managerRoundLine(t, row)}
           />
         </div>
         <div>
@@ -959,6 +995,19 @@ function SortControl({ sortBy, sortDir, onChange }: SortControlProps) {
  * 2. "No opinion yet" says so. A bare em dash cannot tell "nobody has
  *    assessed this candidate" from "the value failed to load".
  */
+/** HRP-727: "Round: Final" — the second tooltip line on the Manager cell,
+ * naming the round the score was computed from. Absent for a score with no
+ * round behind it (a hand-typed one). */
+function managerRoundLine(
+  t: (key: string, values?: Record<string, string | number>) => string,
+  row: CandidateVacancyEnrichedRow,
+): string | null {
+  const round = row.manager_score_round;
+  return round
+    ? t("candidatesTableScoreRoundTooltip", { round: labelForRound(t, round) })
+    : null;
+}
+
 function ScoreCell({
   percent,
   score,
@@ -967,6 +1016,7 @@ function ScoreCell({
   emptyLabel,
   emptyHint,
   emptyTestId,
+  tooltipSuffix,
 }: {
   percent: number | null | undefined;
   score: string | null;
@@ -975,6 +1025,9 @@ function ScoreCell({
   emptyLabel: string;
   emptyHint: string;
   emptyTestId: string;
+  /** HRP-727: extra tooltip line under "Underlying score" — the Manager
+   * column uses it to name the round the score was computed from. */
+  tooltipSuffix?: string | null;
 }) {
   const t = useTranslations("recruitment");
   const hasScore = score !== null && score !== "—";
@@ -994,10 +1047,17 @@ function ScoreCell({
   // underlying score moves into the tooltip rather than sitting under
   // it as a second, differently-scaled number.
   if (hasPercent) {
+    const scoreLine = hasScore
+      ? t("candidatesTableScoreTooltip", { score })
+      : null;
+    const tooltip =
+      scoreLine && tooltipSuffix
+        ? `${scoreLine}\n${tooltipSuffix}`
+        : (scoreLine ?? undefined);
     return (
       <span
         className="font-medium tabular-nums"
-        title={hasScore ? t("candidatesTableScoreTooltip", { score }) : undefined}
+        title={tooltip}
         data-testid={percentTestId}
       >
         {formatPercent(percent)}
