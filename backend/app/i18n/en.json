@@ -972,5 +972,18 @@
         }
       }
     }
+  },
+  "recruitment": {
+    "stage": {
+      "new": "New",
+      "screening": "Screening",
+      "tech_interview": "Tech interview",
+      "manager_interview": "Interview with manager",
+      "final_interview": "Final interview",
+      "offer": "Offer",
+      "hired": "Hired",
+      "rejected": "Rejected",
+      "withdrew": "Withdrew"
+    }
   }
 }

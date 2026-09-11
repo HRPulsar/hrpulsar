@@ -4283,7 +4283,7 @@
     "stagesNamePlaceholder": "Phasenname",
     "stagesRemoveStage": "Phase entfernen",
     "stagesCodePlaceholder": "Code",
-    "stagesColorPlaceholder": "Farbe",
+    "stagesColorLabel": "Phasenfarbe",
     "stagesActiveColorHint": "Aktive Phasen sind immer blau",
     "evalSheetRoundAverage": "Durchschnitt der Runde: {score}",
     "evalSheetDivergenceAria": "Bewertende sind sich uneinig",

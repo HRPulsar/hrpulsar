@@ -430,7 +430,11 @@ export default function OnboardingPage() {
                   }
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder={t("selectSize")} />
+                    <SelectValue placeholder={t("selectSize")}>
+                      {companyForm.company_size
+                        ? t("sizeEmployees", { size: companyForm.company_size })
+                        : undefined}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {COMPANY_SIZES.map((s) => (

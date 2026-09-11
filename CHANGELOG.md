@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [1.23.2] - 2026-09-11
+
+### Fixed
+- Request paths that match no route are counted under a single `{unmatched}` metrics label, so probing traffic can no longer grow the metrics agent until it is OOM-killed and the site stops reporting
+- Startup warns when `S3_PUBLIC_ENDPOINT` repeats the bucket in its hostname, the misconfiguration that makes every report, resume and avatar link open a storage error page (HRP-780)
+- Select fields name the picked option in the interface language instead of printing its raw code: 360° participant role, exam status change, dictionary source and status filters, company size (HRP-778)
+- Default recruitment funnel stages are named in the workspace's language instead of always in English, on existing workspaces as well as new ones (HRP-781)
+- Stage colour in the funnel editor is picked from swatches instead of typed as a palette keyword, so it reads the same in every language and only real colours can be stored (HRP-781)
+
 ## [1.23.1] - 2026-09-09
 
 ### Fixed

@@ -495,6 +495,48 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _warn_when_public_endpoint_repeats_the_bucket(self) -> "Settings":
+        """Name the shape that 404s every file link (HRP-780).
+
+        ``app.core.s3`` signs path-style URLs — ``<endpoint>/<bucket>/<key>``
+        — because the bundled self-hosted proxy matches the bucket as a path
+        prefix. A provider that serves buckets as subdomains instead hands
+        the operator ``https://<bucket>.<host>``; pasted here, the signed key
+        becomes ``<bucket>/<key>`` because storage already resolved the
+        bucket from the host, and every report, resume and avatar link opens
+        a ``NoSuchKey`` error page — the GF fleet site's broken downloads.
+
+        Only a warning, and never a rewrite: the very same shape is correct
+        when the public origin is the instance's own domain proxying
+        ``/<bucket>/*`` to storage, which is exactly what a bucket named
+        ``hrpulsar`` behind ``https://hrpulsar.com`` looks like. What
+        separates the two is whether the value is the app's own origin, so
+        that is what this skips.
+        """
+        endpoint = self.s3_public_endpoint.strip()
+        if not endpoint or not self.s3_bucket:
+            return self
+        host = urlsplit(endpoint).hostname or ""
+        if not host.startswith(f"{self.s3_bucket}."):
+            return self
+        app_origin = self.frontend_url.strip().rstrip("/")
+        if app_origin and endpoint.rstrip("/") == app_origin:
+            return self  # the self-hosted proxy shape, bucket lives in the path
+        logging.getLogger(__name__).warning(
+            "S3_PUBLIC_ENDPOINT '%s' starts with the bucket name '%s'. File "
+            "links are signed path-style, so if your storage provider "
+            "resolves the bucket from the hostname the signed key becomes "
+            "'%s/<key>' and every download fails with NoSuchKey — drop the "
+            "bucket from S3_PUBLIC_ENDPOINT. Ignore this if the value is an "
+            "origin that proxies /%s/* to storage.",
+            endpoint,
+            self.s3_bucket,
+            self.s3_bucket,
+            self.s3_bucket,
+        )
+        return self
+
+    @model_validator(mode="after")
     def _trusted_proxies_fallback(self) -> "Settings":
         """Inherit ``demo_trusted_proxies`` when the global list is unset.
 

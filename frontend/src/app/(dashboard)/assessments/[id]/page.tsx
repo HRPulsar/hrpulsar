@@ -110,6 +110,10 @@ const roleColors: Record<string, string> = {
   subordinate: BADGE_COLOR.orange,
 };
 
+// Roles a participant can be added in — "self" is the assessee's own
+// answer sheet and is never picked from this list.
+const PARTICIPANT_ROLES = ["manager", "peer", "subordinate", "external"] as const;
+
 // HRP-190 / HRP-192: the Details action buttons read as verbs ("send",
 // "cancel"); keys live in the `assessments` namespace, unknown codes fall
 // back to the raw code with underscores turned into spaces.
@@ -161,6 +165,13 @@ export default function AssessmentDetailPage() {
 
   // Add participant
   const [partOpen, setPartOpen] = useState(false);
+  // HRP-778: Base UI's <SelectValue/> prints the raw value unless the Select
+  // root gets a value->label map, so the Role field showed "subordinate"
+  // instead of the translated role.
+  const roleItems = useMemo(
+    () => PARTICIPANT_ROLES.map((value) => ({ value, label: roleLabel(t, value) })),
+    [t],
+  );
   const [partForm, setPartForm] = useState({ employee_id: "", role: "peer" });
   const [employees, setEmployees] = useState<Employee[]>([]);
 
@@ -1778,13 +1789,13 @@ export default function AssessmentDetailPage() {
             </div>
             <div className="space-y-2">
               <Label>{t("colRole")}</Label>
-              <Select value={partForm.role} onValueChange={(val) => setPartForm({ ...partForm, role: val })}>
+              <Select value={partForm.role} items={roleItems} onValueChange={(val) => setPartForm({ ...partForm, role: val })}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {["manager", "peer", "subordinate", "external"].map((r) => (
-                    <SelectItem key={r} value={r}>{roleLabel(t, r)}</SelectItem>
+                  {roleItems.map(({ value, label }) => (
+                    <SelectItem key={value} value={value}>{label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

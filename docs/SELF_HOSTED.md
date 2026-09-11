@@ -128,7 +128,7 @@ the hosted-product entry surface.
 | `S3_ACCESS_KEY` | No | — | S3 access key |
 | `S3_SECRET_KEY` | No | — | S3 secret key |
 | `S3_BUCKET` | No | `hrpulsar` | S3 bucket name |
-| `S3_PUBLIC_ENDPOINT` | No | `FRONTEND_URL` | Public base URL for file links when `S3_ENDPOINT` is internal-only (bundled MinIO). Set it only when storage is served from another origin than the app |
+| `S3_PUBLIC_ENDPOINT` | No | `FRONTEND_URL` | Public base URL for file links when `S3_ENDPOINT` is internal-only (bundled MinIO). Set it only when storage is served from another origin than the app. File URLs are signed path-style (`<endpoint>/<S3_BUCKET>/<key>`), so give the bare storage host — if your provider serves buckets as subdomains, do **not** paste `https://<bucket>.<host>` here or every download fails with `NoSuchKey` |
 | `BRAND_NAME` | No | `HRPulsar` | Installation name in outgoing emails and the API title |
 | `BRAND_LOGO_URL` | No | Stock logo | Absolute URL of the email-header logo |
 | `BRAND_ACCENT_COLOR` | No | `#0066FF` | Accent color for email buttons and links |
@@ -285,8 +285,15 @@ Or set up a daily cron job:
 
 ```bash
 crontab -e
-# Add: 0 3 * * * /path/to/hrpulsar/scripts/backup_db.sh /path/to/backups
+# Add: 0 3 * * * cd /path/to/hrpulsar && ./scripts/backup_db.sh ./backups
 ```
+
+If your `.env` has `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` /
+`S3_BUCKET` set, every dump is also uploaded there under the `backups/`
+prefix (override with `BACKUP_S3_PREFIX`) — a backup that lives on the
+same disk as the database is not a backup. With `SLACK_BOT_TOKEN` and
+`BACKUP_SLACK_CHANNEL` set, a failed backup posts to that channel
+instead of failing silently.
 
 ### Restore
 

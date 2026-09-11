@@ -1496,7 +1496,16 @@ async def close_vacancy(
 # HRP-181 REDO: canonical default funnel (FR-08). Order, names, codes,
 # colors and terminal classification are spec-mandated — keep aligned
 # with the seed in ``hrp181redo02_seed_default_stages``. Tuples are
-# ``(code, name, sort_order, stage_type, color)``.
+# ``(code, en_name, sort_order, stage_type, color)``.
+#
+# HRP-781: ``en_name`` is the English baseline only — it is what
+# ``recruitment.stage.<code>`` holds in the en catalog (pinned by
+# ``test_hrp781_stage_name_locale.py``) and what the migration matches on
+# to recognise an untouched row. Seeded rows take the name from the
+# catalog in the tenant's locale, because every consumer reads
+# ``VacancyStage.name`` straight out of the DB — candidate lists, funnel
+# analytics, XLSX reports, emails — and none of them could localize a
+# stored English string after the fact.
 DEFAULT_RECRUITMENT_STAGES: tuple[tuple[str, str, int, str, str], ...] = (
     ("new", "New", 10, "active", "slate"),
     ("screening", "Screening", 20, "active", "blue"),
@@ -1510,6 +1519,22 @@ DEFAULT_RECRUITMENT_STAGES: tuple[tuple[str, str, int, str, str], ...] = (
 )
 
 
+async def _tenant_stage_locale(db: AsyncSession, tenant_id: uuid.UUID) -> str:
+    """Locale the tenant's default stage names are written in (HRP-781).
+
+    The tenant row is the only locale signal available at seed time:
+    ``register()`` creates the Tenant before anybody has picked a
+    language, so a brand-new workspace falls through to the deployment's
+    ``DEFAULT_LOCALE`` — which is exactly what a single-language
+    white-label install sets.
+    """
+    from app.core.i18n import resolve_locale
+    from app.modules.company.models import Tenant
+
+    tenant = await db.get(Tenant, tenant_id)
+    return resolve_locale(tenant_default=tenant.default_locale if tenant else None)
+
+
 async def seed_default_recruitment_stages(
     db: AsyncSession, tenant_id: uuid.UUID
 ) -> int:
@@ -1519,8 +1544,13 @@ async def seed_default_recruitment_stages(
     exists. Called from ``auth.service.register`` for new tenants; the
     migration ``hrp181redo02`` populates the existing fleet.
 
+    Stage names are written in the tenant's locale (HRP-781).
+
     Returns the number of stages actually inserted (0 on a re-run).
     """
+    from app.core.i18n import translate
+
+    locale = await _tenant_stage_locale(db, tenant_id)
     result = await db.execute(
         select(VacancyStage.code).where(
             VacancyStage.tenant_id == tenant_id,
@@ -1530,14 +1560,14 @@ async def seed_default_recruitment_stages(
     existing_codes = {row[0] for row in result.all()}
 
     inserted = 0
-    for code, name, sort_order, stage_type, color in DEFAULT_RECRUITMENT_STAGES:
+    for code, _en_name, sort_order, stage_type, color in DEFAULT_RECRUITMENT_STAGES:
         if code in existing_codes:
             continue
         db.add(
             VacancyStage(
                 tenant_id=tenant_id,
                 vacancy_id=None,
-                name=name,
+                name=translate(f"recruitment.stage.{code}", locale),
                 code=code,
                 sort_order=sort_order,
                 is_terminal=stage_type != "active",

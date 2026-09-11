@@ -4283,7 +4283,7 @@
     "stagesNamePlaceholder": "Stage name",
     "stagesRemoveStage": "Remove stage",
     "stagesCodePlaceholder": "code",
-    "stagesColorPlaceholder": "color",
+    "stagesColorLabel": "Stage color",
     "stagesActiveColorHint": "Active stages always use blue",
     "evalSheetRoundAverage": "Round average: {score}",
     "evalSheetDivergenceAria": "Evaluators disagree",

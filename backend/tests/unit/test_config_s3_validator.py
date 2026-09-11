@@ -99,3 +99,48 @@ def test_schemeless_internal_endpoint_is_rejected():
 def test_storage_disabled_is_accepted():
     s = _settings(s3_endpoint="")
     assert s.s3_endpoint == ""
+
+
+class TestBucketQualifiedPublicEndpoint:
+    """HRP-780: a public endpoint that repeats the bucket in the hostname.
+
+    File URLs are signed path-style, so a provider that resolves the bucket
+    from the hostname sees the key as ``<bucket>/<key>`` and answers
+    NoSuchKey for every download. The same shape is legitimate when the
+    value is the app's own origin proxying ``/<bucket>/*`` to storage, so
+    this is a warning discriminated by that origin — never a rewrite.
+    """
+
+    ENDPOINT = "https://hrpulsar.s3c2.example.com"
+
+    def test_provider_endpoint_warns(self, caplog):
+        with caplog.at_level("WARNING"):
+            settings = _settings(
+                s3_endpoint="https://s3c2.example.com",
+                s3_public_endpoint=self.ENDPOINT,
+                s3_bucket="hrpulsar",
+            )
+        assert settings.s3_public_endpoint == self.ENDPOINT, "must not rewrite"
+        assert "NoSuchKey" in caplog.text
+
+    def test_app_origin_proxying_the_bucket_is_silent(self, caplog):
+        """The stock self-hosted shape: bucket ``hrpulsar`` behind
+        ``https://hrpulsar.com``, which the bundled Caddyfile proxies."""
+        with caplog.at_level("WARNING"):
+            _settings(
+                s3_endpoint="http://minio:9000",
+                s3_public_endpoint="https://hrpulsar.com",
+                s3_bucket="hrpulsar",
+                frontend_url="https://hrpulsar.com",
+            )
+        assert "NoSuchKey" not in caplog.text
+
+    def test_unrelated_host_is_silent(self, caplog):
+        with caplog.at_level("WARNING"):
+            _settings(
+                s3_endpoint="http://minio:9000",
+                s3_public_endpoint="https://files.example.com",
+                s3_bucket="hrpulsar",
+                frontend_url="https://app.example.com",
+            )
+        assert "NoSuchKey" not in caplog.text

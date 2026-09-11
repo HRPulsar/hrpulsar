@@ -348,7 +348,9 @@ function ManagerExamsView() {
             <Label>{t("newStatus")}</Label>
             <Select value={newStatus} onValueChange={setNewStatus}>
               <SelectTrigger className="w-full">
-                <SelectValue placeholder={t("selectStatus")} />
+                <SelectValue placeholder={t("selectStatus")}>
+                  {newStatus ? statusLabel(t, newStatus) : undefined}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {allowedNextStatuses.length === 0 ? (

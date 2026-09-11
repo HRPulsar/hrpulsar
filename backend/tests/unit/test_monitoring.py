@@ -54,6 +54,30 @@ class TestMetrics:
         body = resp.text
         assert "hrpulsar_http_request_duration_seconds" in body
 
+    def test_unknown_url_does_not_mint_a_path_label(self):
+        """A URL that matched no route shares one label value.
+
+        Seen on a fleet site, 09.2026: scanner probes like `/api/.env` each
+        became their own series, the alloy agent outgrew its memory limit and
+        OOM-looped, and the fleet "postgres down" rule fired on NoData while
+        Postgres was fine.
+        """
+        from app.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        client.get("/api/.env")
+        body = client.get("/metrics").text
+        assert "/api/.env" not in body
+        assert 'path="{unmatched}"' in body
+
+    def test_known_route_keeps_its_normalised_path(self):
+        from app.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        client.get("/health")
+        body = client.get("/metrics").text
+        assert 'path="/health"' in body
+
     def test_prometheus_counter_exists(self):
         from app.core.metrics import REQUEST_COUNT, REQUEST_LATENCY
 

@@ -41,7 +41,11 @@ import {
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ApiError, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { BADGE_OUTLINE } from "@/lib/badge-tones";
+import {
+  BADGE_OUTLINE,
+  type BadgeColor,
+  resolveBadgeColor,
+} from "@/lib/badge-tones";
 import type { StageType, VacancyStage } from "@/lib/recruitment-types";
 import {
   type StageDraftRow,
@@ -69,12 +73,78 @@ const STAGE_TYPE_OPTIONS: Array<{ value: StageType; labelKey: string }> = [
   { value: "terminal_neutral", labelKey: "stagesTypeTerminalNeutral" },
 ];
 
-const STAGE_TYPE_TONE: Record<StageType, string> = {
-  active: BADGE_OUTLINE.blue,
-  terminal_positive: BADGE_OUTLINE.emerald,
-  terminal_negative: BADGE_OUTLINE.rose,
-  terminal_neutral: BADGE_OUTLINE.neutral,
+const STAGE_TYPE_COLOR: Record<StageType, BadgeColor> = {
+  active: "blue",
+  terminal_positive: "emerald",
+  terminal_negative: "rose",
+  terminal_neutral: "neutral",
 };
+
+const STAGE_TYPE_TONE: Record<StageType, string> = {
+  active: BADGE_OUTLINE[STAGE_TYPE_COLOR.active],
+  terminal_positive: BADGE_OUTLINE[STAGE_TYPE_COLOR.terminal_positive],
+  terminal_negative: BADGE_OUTLINE[STAGE_TYPE_COLOR.terminal_negative],
+  terminal_neutral: BADGE_OUTLINE[STAGE_TYPE_COLOR.terminal_neutral],
+};
+
+// HRP-781: the colour used to be a free-text field holding a palette token,
+// so a Russian workspace read "emerald" and anything mistyped was stored and
+// then silently ignored at render time. Swatches need no wording in any
+// language — the token stays as each option's accessible name, which is
+// enough because the colour only tints a badge that already carries the
+// stage name.
+const STAGE_COLORS: readonly BadgeColor[] = [
+  "neutral",
+  "blue",
+  "cyan",
+  "teal",
+  "green",
+  "emerald",
+  "yellow",
+  "amber",
+  "orange",
+  "red",
+  "rose",
+  "pink",
+  "purple",
+  "violet",
+  "indigo",
+];
+
+// Saturated fills for the swatches, keyed by the same palette. The badge
+// tones themselves are bg-*-50 — made to sit behind text, so as swatches
+// they read as fifteen near-white bars, and on an active stage's own
+// blue-tinted row the control looks empty. currentColor is no good either:
+// a highlighted option inherits the accent foreground, so the swatch turns
+// white exactly while the pointer is on it.
+const SWATCH_FILL: Record<BadgeColor, string> = {
+  // Grey, not the theme's near-black muted-foreground: as a swatch that
+  // reads as "black" rather than "no colour".
+  neutral: "bg-slate-400",
+  blue: "bg-blue-500",
+  cyan: "bg-cyan-500",
+  teal: "bg-teal-500",
+  green: "bg-green-500",
+  emerald: "bg-emerald-500",
+  yellow: "bg-yellow-500",
+  amber: "bg-amber-500",
+  orange: "bg-orange-500",
+  red: "bg-red-500",
+  rose: "bg-rose-500",
+  pink: "bg-pink-500",
+  purple: "bg-purple-500",
+  violet: "bg-violet-500",
+  indigo: "bg-indigo-500",
+};
+
+function ColorSwatch({ color }: { color: BadgeColor }) {
+  return (
+    <span
+      aria-hidden
+      className={cn("block h-4 w-full min-w-4 rounded-sm", SWATCH_FILL[color])}
+    />
+  );
+}
 
 function genKey() {
   return Math.random().toString(36).slice(2, 10);
@@ -346,6 +416,14 @@ function SortableStageRow({
     opacity: isDragging ? 0.6 : 1,
   };
 
+  // Active stages always render blue whatever is stored; a terminal stage
+  // falls back to its type's colour when the stored value names none, which
+  // is what the funnel table paints for the same row.
+  const swatch =
+    stage.stage_type === "active"
+      ? STAGE_TYPE_COLOR.active
+      : (resolveBadgeColor(stage.color) ?? STAGE_TYPE_COLOR[stage.stage_type]);
+
   return (
     <li
       ref={setNodeRef}
@@ -392,18 +470,33 @@ function SortableStageRow({
         />
         {/* HRP-357 REDO: active stages always render blue — the stored
             color only applies to terminal stages. */}
-        <Input
-          value={stage.stage_type === "active" ? "blue" : stage.color}
-          onChange={(e) => onChange({ color: e.target.value })}
-          placeholder={t("stagesColorPlaceholder")}
+        <Select
+          value={swatch}
+          onValueChange={(v) => onChange({ color: v })}
           disabled={stage.stage_type === "active"}
-          title={
-            stage.stage_type === "active"
-              ? t("stagesActiveColorHint")
-              : undefined
-          }
-          data-testid={`vacancy-stage-manage-item-${stage.id ?? stage.key}-color`}
-        />
+        >
+          <SelectTrigger
+            className="w-full"
+            aria-label={t("stagesColorLabel")}
+            title={
+              stage.stage_type === "active"
+                ? t("stagesActiveColorHint")
+                : t("stagesColorLabel")
+            }
+            data-testid={`vacancy-stage-manage-item-${stage.id ?? stage.key}-color`}
+          >
+            <SelectValue>
+              <ColorSwatch color={swatch} />
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {STAGE_COLORS.map((c) => (
+              <SelectItem key={c} value={c} aria-label={c}>
+                <ColorSwatch color={c} />
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select
           value={stage.stage_type}
           onValueChange={(v) => onChange({ stage_type: v as StageType })}

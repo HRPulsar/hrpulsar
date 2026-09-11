@@ -381,7 +381,11 @@ export default function CompanyProfilePage() {
                     className="w-full"
                     data-testid="company-profile-input-size"
                   >
-                    <SelectValue placeholder={t("selectSize")} />
+                    <SelectValue placeholder={t("selectSize")}>
+                      {form.company_size
+                        ? t("sizeEmployees", { size: form.company_size })
+                        : t("notSpecified")}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={NO_SIZE}>

@@ -71,6 +71,17 @@ const DICT_TYPES = [
   { key: "project", labelKey: "typeProjects", emptyKey: "emptyProjects" },
 ];
 
+// HRP-778: Base UI's <SelectValue/> falls back to the raw value, so the two
+// filter triggers need the label of the picked code spelled out.
+const SOURCE_LABEL_KEYS = {
+  system: "sourceSystem",
+  custom: "sourceCustom",
+} as const;
+const STATUS_LABEL_KEYS = {
+  active: "statusActive",
+  inactive: "statusInactive",
+} as const;
+
 const emptyForm = { title: "", description: "", sort_index: 0, is_active: true };
 
 // HRP-436: guard the whole component, not just its JSX, so the page's
@@ -289,7 +300,9 @@ function DictionariesPageContent() {
           }
         >
           <SelectTrigger className="w-40" data-testid="dictionaries-filter-source">
-            <SelectValue placeholder={t("filterAllSources")} />
+            <SelectValue placeholder={t("filterAllSources")}>
+              {sourceFilter ? t(SOURCE_LABEL_KEYS[sourceFilter]) : undefined}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="system">{t("sourceSystem")}</SelectItem>
@@ -303,7 +316,9 @@ function DictionariesPageContent() {
           }
         >
           <SelectTrigger className="w-40" data-testid="dictionaries-filter-status">
-            <SelectValue placeholder={t("filterAllStatuses")} />
+            <SelectValue placeholder={t("filterAllStatuses")}>
+              {statusFilter ? t(STATUS_LABEL_KEYS[statusFilter]) : undefined}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="active">{t("statusActive")}</SelectItem>

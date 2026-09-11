@@ -31,7 +31,7 @@ import {
 import { ApiError, api } from "@/lib/api";
 import { formatDate } from "@/lib/date-format";
 import { cn } from "@/lib/utils";
-import { BADGE_OUTLINE } from "@/lib/badge-tones";
+import { BADGE_OUTLINE, resolveBadgeColor } from "@/lib/badge-tones";
 import { labelForRound } from "@/lib/manager-assessment-rounds";
 import { AiVerdictBadge } from "./ai-verdict-badge";
 import { AI_ANALYSIS_PRICING } from "@/lib/recruitment-types";
@@ -122,25 +122,14 @@ const STAGE_TONE: Record<string, string> = {
   terminal_neutral: BADGE_OUTLINE.neutral,
 };
 
-// HRP-357: seeded stage colors use ``slate``/``gray``, which have no
-// BADGE_OUTLINE entry of their own.
-const STAGE_COLOR_ALIASES: Record<string, keyof typeof BADGE_OUTLINE> = {
-  slate: "neutral",
-  gray: "neutral",
-  grey: "neutral",
-};
-
 /** HRP-357 REDO: active stages are always blue (per-stage colors made the
  * funnel too loud); only terminal stages keep their own color. */
 function stageToneFor(stage: VacancyStage | null | undefined): string {
   if (!stage?.stage_type || stage.stage_type === "active") {
     return STAGE_TONE.active;
   }
-  if (stage.color) {
-    const key = STAGE_COLOR_ALIASES[stage.color] ?? stage.color;
-    const tone = BADGE_OUTLINE[key as keyof typeof BADGE_OUTLINE];
-    if (tone) return tone;
-  }
+  const color = resolveBadgeColor(stage.color);
+  if (color) return BADGE_OUTLINE[color];
   return STAGE_TONE[stage.stage_type] ?? STAGE_TONE.active;
 }
 

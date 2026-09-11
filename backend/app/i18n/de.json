@@ -972,5 +972,18 @@
         }
       }
     }
+  },
+  "recruitment": {
+    "stage": {
+      "new": "Neu",
+      "screening": "Vorauswahl",
+      "tech_interview": "Fachgespräch",
+      "manager_interview": "Gespräch mit der Führungskraft",
+      "final_interview": "Abschlussgespräch",
+      "offer": "Angebot",
+      "hired": "Eingestellt",
+      "rejected": "Abgelehnt",
+      "withdrew": "Zurückgezogen"
+    }
   }
 }

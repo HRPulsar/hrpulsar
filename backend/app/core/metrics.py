@@ -64,6 +64,23 @@ def _normalize_path(path: str) -> str:
     return path
 
 
+def _label_path(request: Request) -> str:
+    """Path label for a request, bounded by the routing table.
+
+    Recording `request.url.path` verbatim let anyone on the internet mint a new
+    series per probed URL (`/api/.env`, `/wp-admin/...`), so the metrics agent
+    grew until it was OOM-killed. Requests that matched no route now share one
+    label value; matched ones keep the normalised path they always had.
+
+    Only valid after the router has run, i.e. after `call_next`. Checked via
+    `endpoint`, which every matched route sets — `route` is FastAPI-only and
+    would drop the plain Starlette routes (`/health` and friends) here.
+    """
+    if request.scope.get("endpoint") is None:
+        return "{unmatched}"
+    return _normalize_path(request.url.path)
+
+
 class PrometheusMiddleware(BaseHTTPMiddleware):
     """Middleware that records Prometheus metrics for each request."""
 
@@ -74,7 +91,6 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         method = request.method
-        path = _normalize_path(request.url.path)
 
         REQUESTS_IN_PROGRESS.labels(method=method).inc()
         start = time.perf_counter()
@@ -82,9 +98,12 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception:
-            REQUEST_COUNT.labels(method=method, path=path, status=500).inc()
+            REQUEST_COUNT.labels(
+                method=method, path=_label_path(request), status=500
+            ).inc()
             raise
         finally:
+            path = _label_path(request)
             duration = time.perf_counter() - start
             REQUESTS_IN_PROGRESS.labels(method=method).dec()
             REQUEST_LATENCY.labels(method=method, path=path).observe(duration)

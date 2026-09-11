@@ -18,6 +18,27 @@ export const BADGE_COLOR = {
 
 export type BadgeColor = keyof typeof BADGE_COLOR;
 
+// Stage colors seeded before the palette settled (``slate``/``gray``) have no
+// tone of their own. Kept here rather than at the two call sites — the funnel
+// table paints the badge from a stored value and the stages drawer has to
+// preselect the swatch for that same value, and they must agree.
+const TONE_ALIASES: Record<string, BadgeColor> = {
+  slate: "neutral",
+  gray: "neutral",
+  grey: "neutral",
+};
+
+/** Canonical palette key for a stored color, or null when it names none. */
+export function resolveBadgeColor(
+  value: string | null | undefined,
+): BadgeColor | null {
+  if (!value) return null;
+  // Object.hasOwn, not `in`/`??`: both walk Object.prototype, so "toString"
+  // would resolve to a function and get painted as a class name.
+  const key = Object.hasOwn(TONE_ALIASES, value) ? TONE_ALIASES[value] : value;
+  return Object.hasOwn(BADGE_COLOR, key) ? (key as BadgeColor) : null;
+}
+
 export const BADGE_OUTLINE = {
   neutral: "bg-muted text-muted-foreground border-border",
   blue: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-900",
