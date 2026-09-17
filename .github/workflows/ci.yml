@@ -51,11 +51,12 @@ jobs:
           pip install -r requirements.test.txt
           [ -f ee/requirements.txt ] && pip install -r ee/requirements.txt || true
 
+      # ee/ is monorepo-only too: lint it where it exists.
       - name: Lint (ruff)
-        run: cd backend && ruff check app/ ee/
+        run: cd backend && ruff check app/ $([ -d ee ] && echo ee/)
 
       - name: Type check (mypy)
-        run: cd backend && mypy app/ ee/ --ignore-missing-imports
+        run: cd backend && mypy app/ $([ -d ee ] && echo ee/) --ignore-missing-imports
 
       - name: Run tests
         run: cd backend && pytest tests/ -v --tb=short
