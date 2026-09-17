@@ -50,8 +50,13 @@ import {
 } from "@/components/ui/table";
 import { Hint } from "@/components/ui/hint";
 import { toast } from "sonner";
-import { Mail, Pencil, Plus, RotateCw, X } from "lucide-react";
+import { Info, Mail, Pencil, Plus, RotateCw, X } from "lucide-react";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+
+// HRP-813: a demo sends only this many invitations per session and never
+// resends one. Copy of DEMO_INVITATION_LIMIT in
+// backend/app/modules/auth/service.py, pinned by demo-email-limit-parity.test.ts.
+const DEMO_INVITATION_LIMIT = 5;
 
 const statusColors: Record<string, string> = {
   pending: BADGE_COLOR.yellow,
@@ -116,6 +121,7 @@ function InvitationsPageContent() {
   const isAdmin = !!(
     user?.is_platform_admin || user?.roles?.includes("admin")
   );
+  const isDemo = !!user?.tenant_is_demo;
   const inviterRoles: string[] = user?.is_platform_admin
     ? ["platform_admin", ...(user?.roles ?? [])]
     : (user?.roles ?? []);
@@ -313,6 +319,15 @@ function InvitationsPageContent() {
           <p className="text-sm text-muted-foreground">
             {t("inviteSubtitle")}
           </p>
+          {isDemo && (
+            <p
+              className="mt-2 flex items-start gap-1.5 text-xs font-medium text-foreground"
+              data-testid="invitations-demo-limit-note"
+            >
+              <Info className="mt-px h-3.5 w-3.5 shrink-0 text-primary" />
+              {t("inviteDemoLimitNote", { limit: DEMO_INVITATION_LIMIT })}
+            </p>
+          )}
         </div>
         <Button data-testid="invitations-btn-invite" onClick={() => setInviteOpen(true)}>
           <Plus className="mr-1 h-4 w-4" />
@@ -393,7 +408,7 @@ function InvitationsPageContent() {
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <span>{inv.email}</span>
-                            {editable && isAdmin && (
+                            {editable && isAdmin && !isDemo && (
                               <Button
                                 variant="ghost"
                                 size="icon-sm"
@@ -525,14 +540,17 @@ function InvitationsPageContent() {
                         <TableCell className="text-right">
                           {editable && (
                             <div className="flex justify-end gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                onClick={() => handleResend(inv.id)}
-                                title={t("inviteResendTitle")}
-                              >
-                                <RotateCw className="h-3.5 w-3.5" />
-                              </Button>
+                              {!isDemo && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  data-testid={`invitations-row-${inv.id}-btn-resend`}
+                                  onClick={() => handleResend(inv.id)}
+                                  title={t("inviteResendTitle")}
+                                >
+                                  <RotateCw className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="icon-sm"

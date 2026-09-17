@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, Lock, ShieldOff, Wrench, MonitorX, ServerCrash } from "lucide-react";
+import { AlertTriangle, ServerCrash } from "lucide-react";
 import type { ReactNode } from "react";
-import { getBrandName } from "@/lib/brand";
 
 interface SystemScreenProps {
   icon: ReactNode;
@@ -49,32 +48,6 @@ export function NotFoundScreen() {
   );
 }
 
-export function UnauthorizedScreen() {
-  const t = useTranslations("common");
-  return (
-    <SystemScreen
-      testId="system-screen-401"
-      icon={<Lock className="h-6 w-6" />}
-      title={t("unauthorizedTitle")}
-      description={t("unauthorizedDescription")}
-      cta={{ label: t("signIn"), href: "/login" }}
-    />
-  );
-}
-
-export function ForbiddenScreen() {
-  const t = useTranslations("common");
-  return (
-    <SystemScreen
-      testId="system-screen-403"
-      icon={<ShieldOff className="h-6 w-6" />}
-      title={t("forbiddenTitle")}
-      description={t("forbiddenDescription")}
-      cta={{ label: t("goHome"), href: "/" }}
-    />
-  );
-}
-
 export function ServerErrorScreen({ onRetry }: { onRetry?: () => void }) {
   const t = useTranslations("common");
   return (
@@ -104,31 +77,5 @@ export function ServerErrorScreen({ onRetry }: { onRetry?: () => void }) {
         </Link>
       )}
     </div>
-  );
-}
-
-export function MaintenanceScreen() {
-  const t = useTranslations("common");
-  return (
-    <SystemScreen
-      testId="system-screen-maintenance"
-      icon={<Wrench className="h-6 w-6" />}
-      title={t("maintenanceTitle")}
-      description={t("maintenanceDescription")}
-    />
-  );
-}
-
-export function BrowserUnsupportedScreen() {
-  const t = useTranslations("common");
-  return (
-    <SystemScreen
-      testId="system-screen-browser-unsupported"
-      icon={<MonitorX className="h-6 w-6" />}
-      title={t("browserUnsupportedTitle")}
-      description={t("browserUnsupportedDescription", {
-        brand: getBrandName(),
-      })}
-    />
   );
 }

@@ -44,14 +44,24 @@ Every account holds at least `employee`; the role is granted on every creation p
 - `POST /api/employees/{id}/events`
 - `POST/PUT/DELETE /api/employees/{id}/work-experience`
 - `POST/PUT/DELETE /api/employees/{id}/previous-employment`
-- `POST/PUT/DELETE /api/employees/{id}/education`
-- `POST/PUT/DELETE /api/employees/{id}/courses`
+- `POST/PUT/DELETE /api/employees/{id}/education` — plus the self-service
+  carve-out below
+- `POST/PUT/DELETE /api/employees/{id}/courses` — plus the self-service
+  carve-out below
 - `POST/PUT/DELETE /api/employees/{id}/compensation` — admin-only (manager `403`)
 
-No `/employees/*` write gate names `hr`: they all spell
+**Self-service carve-out (HRP-66).** Education and Courses are the two sections
+anyone may write on their *own* card: those routes gate on authentication only
+(`get_current_user`, no `require_role`), and the service layer allows the write
+when the target employee's `user_id` is the caller's. Everyone else — including
+`hr` and a `manager` writing on someone else's card — falls back to the matrix
+above. Reads are unchanged.
+
+No `/employees/*` write gate names `hr`: outside that carve-out they all spell
 `require_role("admin", "manager")` or `require_role("admin")`, so an HR user is
 rejected at the router before the scope check (which does treat them as an
-admin) ever runs. The same holds for dictionaries and assessments. `hr` is a
+admin) ever runs — and inside it the service asks for ownership, which an HR
+user writing on somebody else's card does not have. The same holds for dictionaries and assessments. `hr` is a
 read-and-hiring role today; giving it the write surface this table used to
 claim is a product decision, not a documentation fix.
 
@@ -373,6 +383,37 @@ company — so the boundary there is a product decision still open, and not
 part of this fence. (The positions catalogue was the same class of question;
 HRP-637 answered that one — see "The positions catalogue" above.)
 
+## Coverage (`/api/work`)
+
+A process (a work container) is not tied to a division, so the fence is the
+process itself (HRP-810): its visibility, its access rules and its owner.
+`admin` and `hr` run the section; that pair is a constant in
+`app/modules/work/access.py` until the tenant section access matrix
+(HRP-820) takes its place.
+
+| Actor | List | Read a process, its steps, coverage, To do, skills, runs | Edit steps, run AI, accept | Access panel | Change owner, delete | Hire need, register an agent |
+|-------|------|------|------|------|------|------|
+| `admin`, `hr` | every process | x | x | x | x | x |
+| owner | own and readable ones | x | x | x | `403` | `403` |
+| reader: the process is `company`-wide, a rule names their role / position / them, or they do or check one of its steps | readable ones | x | `403` `work_container_edit_forbidden` | `403` | `403` | `403` |
+| anyone else | nothing | `404` | `404` | `404` | `404` / `403` | `404` / `403` |
+
+A hidden process answers 404 on every route that names it or one of its steps
+or runs, so the answer does not confirm it exists. Every container payload
+carries `my_access` (`manage`, `edit`, `read`), and `GET /auth/me` carries
+`sections.coverage` - `manage` for `admin` / `hr`, `view` once the caller reads
+at least one process, absent otherwise - which is what opens the menu entry.
+Skills in a profile never grant access: being able to do the work is not a
+reason to read somebody else's process.
+
+A reader outside the roles that read HR data (`admin`, `hr`, `platform_admin`,
+`manager` - `access_scope.is_employee_only`, inverted) gets the coverage with
+the matched colleague removed and an assignee's missing capabilities emptied;
+the verdicts stay. `GET /api/work/containers/{id}/people` - the people an
+editor can name as owner, rule or assignee - is the owner's and the managers',
+tenant-wide rather than directory-scoped, and carries only what the directory
+already shows plus `assignable`.
+
 ## Error codes returned on `/employees/*` write rejections
 
 | HTTP | `error_code`                | Reason |
@@ -434,6 +475,12 @@ Rejections:
 | `employee`             | nothing — `403 role_above_inviter`                                            |
 
 The invitations page mirrors this table; `frontend/src/__tests__/invite-tiers-parity.test.ts` fails if the two drift.
+
+The invitation *registry* is narrower than the create endpoint: listing, editing,
+cancelling and resending invitations are admin-only (`require_admin()`), so
+`/settings/invitations` is an admin page. `hr` and `manager` can create an
+invitation through `POST /api/invitations` (the tiers above still apply) but have
+no UI for it.
 
 Same matrix applies to `PATCH /api/invitations/{id}` when changing `role_code`.
 

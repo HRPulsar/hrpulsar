@@ -204,7 +204,18 @@ describe("reference catalog invariants", () => {
     // c3fc300775f8, cr12s1y2s3t4c5, asr1a1b2c3d4e5) and the pre-i18n
     // scale-levels shim. Any edit here changes rendered English output —
     // that's the F5 invariant this test exists to protect.
-    expect(en.reference).toEqual({
+    // HRP-748: reference.primitive is generated from the backend catalog
+    // seed and pinned there (test_primitive_catalog_seed.py asserts the en
+    // label/description equal catalog_data title_en/scope_en, plus a golden
+    // hash of the seed), so it is excluded from this literal. HRP-752:
+    // reference.agentPack is pinned the same way by
+    // test_ai_workforce_packs.py against pack_data.PACKS.
+    const pinned = Object.fromEntries(
+      Object.entries(en.reference).filter(
+        ([key]) => key !== "primitive" && key !== "agentPack",
+      ),
+    );
+    expect(pinned).toEqual({
       dictionary: {
         grade: {
           junior: { label: "Junior", description: "Entry-level position" },

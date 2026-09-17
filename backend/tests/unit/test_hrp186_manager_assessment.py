@@ -213,6 +213,22 @@ class TestScales:
         assert len(defaults) == 1
         assert str(defaults[0]["id"]) != str(first_id)
 
+    async def test_promote_scale_with_lower_id_than_current_default(
+        self, db: AsyncSession, tenant, user
+    ):
+        # The unit of work orders same-table UPDATEs by primary key, so the
+        # promoted row must not be written before the old default is cleared.
+        a = await service.create_scale(db, tenant.id, user.id, _scale_payload("A"))
+        b = await service.create_scale(db, tenant.id, user.id, _scale_payload("B"))
+        low, high = sorted([uuid.UUID(str(a["id"])), uuid.UUID(str(b["id"]))])
+        promote = ScaleUpdate(is_default=True)
+        await service.update_scale(db, tenant.id, user.id, high, promote)
+        await service.update_scale(db, tenant.id, user.id, low, promote)
+        defaults = [
+            s for s in await service.list_scales(db, tenant.id) if s["is_default"]
+        ]
+        assert [uuid.UUID(str(s["id"])) for s in defaults] == [low]
+
     async def test_default_scale_is_seeded_when_missing(
         self, db: AsyncSession, tenant, user
     ):

@@ -30,6 +30,8 @@ test.describe("Sidebar navigation", () => {
     await expect(page.getByTestId("sidebar-link-development")).toBeVisible();
     await expect(page.getByTestId("sidebar-link-exams")).toBeVisible();
     await expect(page.getByTestId("sidebar-link-competences")).toBeVisible();
+    // HRP-756: the work-design surface, for admin / hr / manager.
+    await expect(page.getByTestId("sidebar-link-coverage")).toBeVisible();
   });
 
   test("navigate via sidebar links", async ({ page }) => {
@@ -49,6 +51,10 @@ test.describe("Sidebar navigation", () => {
 
     await page.getByTestId("sidebar-link-company").click();
     await expect(page).toHaveURL(/\/company/);
+
+    await page.getByTestId("sidebar-link-coverage").click();
+    await expect(page).toHaveURL(/\/coverage/, { timeout: 10000 });
+    await expect(page.getByTestId("coverage-heading")).toBeVisible({ timeout: 10000 });
   });
 
   test("dashboard development loop renders", async ({ page }) => {

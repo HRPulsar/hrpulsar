@@ -98,7 +98,7 @@ export function RecruitmentShareDialog({ reportId, open, onClose }: ShareDialogP
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-xl" data-testid="recruitment-share-dialog">
+      <DialogContent className="sm:max-w-xl" data-testid="recruitment-share-dialog">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Share2 className="h-4 w-4" />

@@ -56,12 +56,12 @@ const VACANCY_STATUS_OPTION_KEYS: Record<VacancyStatusCode, string> = {
 };
 
 /** Badge i18n key for a known status code, or `null` for anything else. */
-export function vacancyStatusBadgeKey(status: string): string | null {
+function vacancyStatusBadgeKey(status: string): string | null {
   return VACANCY_STATUS_BADGE_KEYS[status as VacancyStatusCode] ?? null;
 }
 
 /** Filter-option i18n key for a known status code, or `null`. */
-export function vacancyStatusOptionKey(status: string): string | null {
+function vacancyStatusOptionKey(status: string): string | null {
   return VACANCY_STATUS_OPTION_KEYS[status as VacancyStatusCode] ?? null;
 }
 

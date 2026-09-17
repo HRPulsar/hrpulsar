@@ -33,6 +33,10 @@ interface ConfirmDialogProps {
   // HRP-103 redo: separately disable the confirm button even when the
   // dialog itself stays interactive (e.g. references still present).
   confirmDisabled?: boolean;
+  // A page that shows two confirms (Coverage: delete a breakdown, force an
+  // apply) needs to tell them apart in a spec. Defaults keep the shared ids.
+  confirmTestId?: string;
+  cancelTestId?: string;
 }
 
 export function ConfirmDialog({
@@ -47,6 +51,8 @@ export function ConfirmDialog({
   confirmVariant = "destructive",
   children,
   confirmDisabled,
+  confirmTestId = "confirm-dialog-btn-confirm",
+  cancelTestId = "confirm-dialog-btn-cancel",
 }: ConfirmDialogProps) {
   const t = useTranslations("common");
   const resolvedConfirmLabel = confirmLabel ?? t("delete");
@@ -64,7 +70,7 @@ export function ConfirmDialog({
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={loading}
-            data-testid="confirm-dialog-btn-cancel"
+            data-testid={cancelTestId}
           >
             {t("cancel")}
           </Button>
@@ -72,7 +78,7 @@ export function ConfirmDialog({
             variant={confirmVariant}
             onClick={onConfirm}
             disabled={loading || confirmDisabled}
-            data-testid="confirm-dialog-btn-confirm"
+            data-testid={confirmTestId}
           >
             {loading
               ? (loadingLabel ?? `${resolvedConfirmLabel}...`)

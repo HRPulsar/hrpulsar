@@ -87,13 +87,27 @@ def create_refresh_token(user_id: str, tenant_id: str, token_version: int = 0) -
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def create_reset_token(user_id: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+def create_reset_token(
+    user_id: str,
+    token_version: int,
+    *,
+    ttl: timedelta = timedelta(minutes=15),
+    accounts: dict[str, int] | None = None,
+) -> str:
+    expire = datetime.now(timezone.utc) + ttl
     payload = {
         "sub": user_id,
         "type": "reset",
+        # HRP-806: single use. Setting the password bumps
+        # ``User.token_version``, which voids this token along with the
+        # sessions — the set-password link emailed on import lives for days.
+        "ver": token_version,
         "exp": expire,
     }
+    if accounts:
+        # HRP-815: forgot-password resets every account of the address, each
+        # pinned to its own version; without the claim, only ``sub``.
+        payload["accounts"] = accounts
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 

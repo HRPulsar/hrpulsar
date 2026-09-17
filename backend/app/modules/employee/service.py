@@ -28,6 +28,7 @@ from app.core.s3 import get_presigned_url
 from app.modules.assessment.models import PDP, Assessment
 from app.modules.auth.models import Invitation, Role, User, user_roles
 from app.modules.auth.roles import BASELINE_ROLE_CODE
+from app.modules.auth.service import can_send_set_password_link
 from app.modules.company.models import Division
 from app.modules.employee.alerts import (
     ALERT_LABELS,
@@ -155,6 +156,9 @@ def _employee_to_read(
             f"{emp.user.first_name} {emp.user.last_name}" if emp.user else None
         ),
         "user_first_login_at": emp.user.first_login_at if emp.user else None,
+        "set_password_link_available": (
+            can_send_set_password_link(emp.user, emp.status) if emp.user else False
+        ),
         # HRP-621: the role was invisible everywhere except the holder's own
         # profile. ``User.roles`` is mapper-level ``lazy="selectin"``, so a
         # page of 100 rows costs one extra query, not one per row.

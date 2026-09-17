@@ -29,7 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatDateTime as formatIsoDateTime } from "@/lib/date-format";
+import { formatDateTime } from "@/lib/date-format";
 
 /** Participant role codes → keys in the `assessments` i18n namespace. */
 export const ROLE_KEYS: Record<string, string> = {
@@ -48,10 +48,6 @@ export function roleLabel(t: (key: string) => string, role: string): string {
 function formatPercent(value: number | null): string {
   if (value === null) return "—";
   return `${Math.round(value)}%`;
-}
-
-function formatDateTime(iso: string): string {
-  return formatIsoDateTime(iso, iso);
 }
 
 export interface AssessmentDetailedResultsProps {
@@ -560,7 +556,7 @@ export function AssessmentDetailedResults({
                                           {roleLabel(t, c.role)}
                                         </Badge>
                                       </span>
-                                      <span>{formatDateTime(c.created_at)}</span>
+                                      <span>{formatDateTime(c.created_at, c.created_at)}</span>
                                     </div>
                                     <div className="text-foreground">{c.text}</div>
                                   </div>

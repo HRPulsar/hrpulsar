@@ -18,7 +18,7 @@ import type {
 export const MEDIA_MAX_BYTES = 500 * 1024 * 1024;
 export const TRANSCRIPT_MAX_BYTES = 10 * 1024 * 1024;
 
-export const AUDIO_MIME = new Set([
+const AUDIO_MIME = new Set([
   "audio/mpeg",
   "audio/mp3",
   "audio/wav",
@@ -28,14 +28,14 @@ export const AUDIO_MIME = new Set([
   "audio/x-m4a",
   "audio/m4a",
 ]);
-export const VIDEO_MIME = new Set([
+const VIDEO_MIME = new Set([
   "video/mp4",
   "video/webm",
   "video/quicktime",
   "video/x-msvideo",
   "video/avi",
 ]);
-export const TRANSCRIPT_MIME = new Set(["application/pdf", "text/plain"]);
+const TRANSCRIPT_MIME = new Set(["application/pdf", "text/plain"]);
 
 // Browsers leave `File.type` empty for formats they do not recognise
 // (AVI is the usual offender), so extension is the fallback signal.
@@ -63,7 +63,7 @@ const EXT_MIME: Record<string, string> = {
   txt: "text/plain",
 };
 
-export function fileExtension(name: string): string {
+function fileExtension(name: string): string {
   const idx = name.lastIndexOf(".");
   return idx >= 0 ? name.slice(idx + 1).toLowerCase() : "";
 }

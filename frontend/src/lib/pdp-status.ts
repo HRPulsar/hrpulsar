@@ -16,7 +16,7 @@ export type PDPStatus =
   | "returned"
   | "cancelled";
 
-export const PDP_STATUSES: readonly PDPStatus[] = [
+const PDP_STATUSES: readonly PDPStatus[] = [
   "draft",
   "sent",
   "in_progress",
@@ -41,7 +41,7 @@ export const MAX_ACTIVE_PDPS_PER_EMPLOYEE = 3;
 // HRP-189: spec/grade is editable only while the plan is still in Draft;
 // pressing Send freezes it for the rest of the lifecycle. Mirrors
 // PDP_GRADE_LOCKED_STATUSES in backend/app/modules/assessment/pdp_service.py.
-export const PDP_GRADE_LOCKED_STATUSES: readonly PDPStatus[] = [
+const PDP_GRADE_LOCKED_STATUSES: readonly PDPStatus[] = [
   "sent",
   "in_progress",
   "review",
@@ -70,7 +70,7 @@ export const PDP_STATUS_KEYS: Record<PDPStatus, string> = {
 };
 
 /** i18n key for a known status code, or `null` for anything unexpected. */
-export function pdpStatusKey(status: string): string | null {
+function pdpStatusKey(status: string): string | null {
   return PDP_STATUS_KEYS[status as PDPStatus] ?? null;
 }
 
@@ -83,7 +83,7 @@ export function translatePdpStatus(
   return key ? t(key) : status;
 }
 
-export const PDP_STATUS_COLORS: Record<PDPStatus, string> = {
+const PDP_STATUS_COLORS: Record<PDPStatus, string> = {
   draft: BADGE_COLOR.neutral,
   sent: BADGE_COLOR.blue,
   in_progress: BADGE_COLOR.yellow,
@@ -97,7 +97,7 @@ export const PDP_STATUS_COLORS: Record<PDPStatus, string> = {
 // in_progress happens automatically when the owner ticks the first item.
 // HRP-198: ``returned`` accepts ``review`` (submit for review) or
 // ``cancelled``; the old ``returned → sent`` step was removed.
-export const PDP_STATUS_TRANSITIONS: Record<PDPStatus, PDPStatus[]> = {
+const PDP_STATUS_TRANSITIONS: Record<PDPStatus, PDPStatus[]> = {
   draft: ["sent", "cancelled"],
   sent: ["cancelled"],
   in_progress: ["review", "cancelled"],
@@ -110,7 +110,7 @@ export const PDP_STATUS_TRANSITIONS: Record<PDPStatus, PDPStatus[]> = {
 // HRP-197: statuses the admin can never set by hand from the list-page
 // Change-status dialog. They're reachable only via system events
 // (auto-promote when an item is ticked off in ``sent``).
-export const PDP_MANUAL_BLOCKED_STATUSES: readonly PDPStatus[] = [
+const PDP_MANUAL_BLOCKED_STATUSES: readonly PDPStatus[] = [
   "in_progress",
 ] as const;
 
@@ -152,7 +152,7 @@ export const PDP_STATUS_ACTION_KEYS: Record<PDPStatus, string> = {
 };
 
 /** i18n key for a status action verb, or `null` for unknown statuses. */
-export function pdpStatusActionKey(status: string): string | null {
+function pdpStatusActionKey(status: string): string | null {
   return PDP_STATUS_ACTION_KEYS[status as PDPStatus] ?? null;
 }
 

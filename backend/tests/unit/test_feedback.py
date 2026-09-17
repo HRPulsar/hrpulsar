@@ -164,14 +164,33 @@ async def test_rate_limited_after_the_hourly_cap(
     assert len(captured_events) == 2
 
 
-async def test_redis_outage_fails_open(
+async def test_redis_outage_fails_closed(
     auth_client: AsyncClient, captured_events, monkeypatch
 ):
-    """Feedback is a convenience channel — a flaky throttle store must
-    not refuse the submission itself."""
+    """With the throttle store down the cap is unknowable, and an
+    unthrottled path into the operators' chat is the worse outcome —
+    signup and demo start already fail closed (review §3)."""
     from app.config import settings
 
     monkeypatch.setattr(settings, "feedback_rate_limit_per_user_per_hour", 2)
+    monkeypatch.setattr(
+        "app.core.redis.aioredis.from_url",
+        lambda *_a, **_kw: (_ for _ in ()).throw(ConnectionError("redis down")),
+    )
+
+    res = await auth_client.post("/api/feedback", json={"rating": "up"})
+    assert res.status_code == 429
+    assert res.json()["code"] == "feedback_rate_limited"
+    assert captured_events == []
+
+
+async def test_disabled_cap_survives_a_redis_outage(
+    auth_client: AsyncClient, captured_events, monkeypatch
+):
+    """0 disables the cap, so the store is never consulted at all."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "feedback_rate_limit_per_user_per_hour", 0)
     monkeypatch.setattr(
         "app.core.redis.aioredis.from_url",
         lambda *_a, **_kw: (_ for _ in ()).throw(ConnectionError("redis down")),

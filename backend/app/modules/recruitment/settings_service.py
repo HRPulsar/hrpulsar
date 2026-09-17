@@ -80,6 +80,9 @@ async def _deactivate_other_scales(
         if exclude_id and scale.id == exclude_id:
             continue
         scale.is_active = False
+    # Flush now: same-table UPDATEs go out in primary-key order, so the
+    # caller's newly active row could hit the one-active index first.
+    await db.flush()
 
 
 async def create_scale(

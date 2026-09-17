@@ -172,7 +172,7 @@ function CellText({ value, className, testId }: CellTextProps) {
  * containers, uses semantic `role="row" / role="columnheader"` so the
  * grid layout still announces correctly to assistive tech.
  */
-export function EmployeeListHeader({
+function EmployeeListHeader({
   testIdPrefix = "employee-list-row",
   hrColumns = true,
 }: {
@@ -464,20 +464,4 @@ export function EmployeeList({
       </ul>
     </TooltipProvider>
   );
-}
-
-/**
- * @deprecated HRP-175: legacy single-string formatter that produced the
- * `Position (Specialization · Grade)` blob. Kept exported for callers
- * that still need a one-line summary outside the table layout — they
- * should migrate to the per-column rendering.
- */
-export function formatPositionLabel(emp: EmployeeListItem): string | null {
-  const specGrade = [emp.specialization_title, emp.grade_title]
-    .filter(Boolean)
-    .join(" · ");
-  if (emp.position_title && specGrade) {
-    return `${emp.position_title} (${specGrade})`;
-  }
-  return emp.position_title ?? specGrade ?? null;
 }

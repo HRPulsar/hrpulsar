@@ -26,12 +26,20 @@ export function usePermissions() {
     /** Admin or Manager */
     canManage: isAdmin || isManager,
     /**
-     * HRP-732: who may open /analytics. Deliberately its own flag rather
-     * than widening ``canManage`` — that one also unlocks every edit
-     * affordance in the product, which HR must not get for free. Mirrors
-     * ``require_role("admin", "manager", "hr")`` on the analytics routes.
+     * HRP-732: who may open the read-only management surface /analytics.
+     * Deliberately its own flag rather than widening ``canManage`` — that
+     * one also unlocks every edit affordance in the product, which HR must
+     * not get for free. Mirrors ``require_role("admin", "manager", "hr")``
+     * on the analytics routes.
      */
-    canViewAnalytics: isAdmin || isManager || isHr,
+    canViewManagementData: isAdmin || isManager || isHr,
+    /**
+     * HRP-810: Coverage opens by /auth/me, not by a role list - the roles
+     * that run it get "manage", anyone who reads at least one process gets
+     * "view". Editing one process is that process's `my_access`.
+     */
+    canViewCoverage: Boolean(user?.sections?.coverage),
+    canCreateCoverage: user?.sections?.coverage === "manage",
     /**
      * HRP-623: sees the HR record rather than the directory row. Mirrors
      * ``is_employee_only`` in backend/app/core/access_scope.py, inverted —
@@ -62,7 +70,14 @@ export function usePermissions() {
     canImport: isAdmin,
     /** Can manage roles and settings */
     canAdminister: isAdmin,
-    /** Can send tenant invitations */
+    /**
+     * Gates the two invitation affordances the UI actually has: the link to
+     * the invitation registry and "resend set-password link". Both sit behind
+     * ``require_admin()`` on the API (GET/PATCH/cancel/resend `/invitations`,
+     * POST `/employees/{id}/set-password-link`), so admin-only is correct
+     * here even though `POST /invitations` itself also accepts `hr` and
+     * `manager` — those two have no invitation UI (see rbac.md).
+     */
     canInvite: isAdmin || isPlatformAdmin,
     /** HRP-621: can change another user's role (PUT /employees/{id}/role) */
     canAssignRoles: isAdmin || isPlatformAdmin,

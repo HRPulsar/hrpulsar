@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.upload_validation import assert_declared_size_within_limit
 from app.database import get_db
 from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
@@ -12,7 +13,12 @@ from app.modules.data_import.schemas import ImportJobList, ImportJobRead
 router = APIRouter(tags=["data-import"])
 
 
-@router.post("/import/{import_type}", response_model=ImportJobRead, status_code=201)
+@router.post(
+    "/import/{import_type}",
+    response_model=ImportJobRead,
+    status_code=201,
+    dependencies=[Depends(assert_declared_size_within_limit)],
+)
 async def start_import(
     import_type: str,
     file: UploadFile = File(...),

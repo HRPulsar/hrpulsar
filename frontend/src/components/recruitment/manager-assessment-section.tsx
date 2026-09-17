@@ -176,7 +176,7 @@ const INVITE_STATUS_CHIPS: Record<
   },
 };
 
-export function inviteStatusChip(
+function inviteStatusChip(
   t: (key: string) => string,
   status: string,
 ): {

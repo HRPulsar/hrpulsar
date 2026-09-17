@@ -23,6 +23,7 @@ from app.modules.talent_market.schemas import (
 )
 from app.modules.talent_market.scope import TalentScope
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # --------------- helpers ---------------
@@ -1722,3 +1723,18 @@ class TestCandidateBlockedByHRP734:
 
         detail = await service.get_card_detail(db, tenant.id, card["id"])
         assert detail["candidates"][0]["blocked_by"] is None
+
+
+class TestSearchRequestBounds:
+    """Search is a POST body, so nothing else caps the page size (review §3)."""
+
+    def test_limit_over_the_ceiling_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            SearchRequest(limit=10_000)
+
+    def test_negative_skip_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            SearchRequest(skip=-1)
+
+    def test_default_page_is_unchanged(self) -> None:
+        assert (SearchRequest().skip, SearchRequest().limit) == (0, 50)

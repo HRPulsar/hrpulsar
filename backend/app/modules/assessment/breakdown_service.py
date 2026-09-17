@@ -10,7 +10,7 @@ from ``assessment.service``) so cross-module callers import a public, leaf funct
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.assessment.answer_scale_service import _load_scale_full
@@ -122,7 +122,15 @@ async def compute_per_level_breakdowns_batch(
 
     competence_ids = {ac.competence_id for ac in competences_all}
     ind_q = await db.execute(
-        select(Indicator).where(Indicator.competence_id.in_(competence_ids))
+        select(Indicator).where(
+            Indicator.competence_id.in_(competence_ids),
+            # Attached competences may be origin (shared) rows every tenant
+            # hangs its own indicators on - keep this batch to its tenants.
+            or_(
+                Indicator.tenant_id.in_({a.tenant_id for a in assessments}),
+                Indicator.tenant_id.is_(None),
+            ),
+        )
     )
     indicators_by_id: dict[uuid.UUID, Indicator] = {
         ind.id: ind for ind in ind_q.scalars().all()

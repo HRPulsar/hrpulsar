@@ -20,7 +20,7 @@
 export const DEFAULT_BRAND_NAME = "HRPulsar";
 const DEFAULT_LOGO_LIGHT = "/brand/logo-horizontal-color-light.svg";
 const DEFAULT_LOGO_DARK = "/brand/logo-horizontal-color.svg";
-const DEFAULT_ACCENT = "#0066FF";
+export const DEFAULT_ACCENT = "#0066FF";
 const DEFAULT_FAVICON = "/icon.svg";
 
 /** Whitelist of characters valid in a CSS color (hex, rgb()/oklch()/named);

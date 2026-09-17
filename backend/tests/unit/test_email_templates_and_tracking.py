@@ -1,8 +1,15 @@
 """I2/I3: Tests for HTML email templates, delivery tracking, and admin logs."""
 
+import base64
+import hashlib
+import hmac
+import json
+import time
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
+from app.config import settings
 from app.core.email_templates import (
     render_assessment_assigned_email,
     render_assessment_completed_email,
@@ -234,6 +241,27 @@ class TestSendEmailReturnTuple:
             mock_settings.smtp_host = ""
             result = send_email("test@test.com", "Test", "<p>test</p>")
         assert result == (False, None)
+
+    def test_subject_header_injection_is_stripped_for_every_sender(self):
+        """One guard at the choke point: ~40 renderers and the DB-template
+        path all reach a provider through ``send_email``, so a CR/LF in an
+        interpolated name cannot split the Subject header (review §3)."""
+        from app.core.email import send_email
+
+        with (
+            patch("app.core.email.settings") as mock_settings,
+            patch("app.core.email._send_via_smtp", return_value=(True, "id")) as smtp,
+        ):
+            mock_settings.resend_api_key = ""
+            mock_settings.smtp_host = "smtp.test"
+            send_email(
+                "test@test.com",
+                "Interview with Bob\r\nBcc: attacker@evil.example",
+                "<p>test</p>",
+            )
+        sent_subject = smtp.call_args[0][1]
+        assert "\r" not in sent_subject and "\n" not in sent_subject
+        assert sent_subject == "Interview with Bob Bcc: attacker@evil.example"
 
     def test_send_verification_email_uses_template(self):
         from app.core.email import send_verification_email
@@ -495,6 +523,32 @@ class TestEmailLogsEndpoint:
 # ---------------------------------------------------------------------------
 
 
+_WEBHOOK_SECRET = "whsec_" + base64.b64encode(b"resend-test-signing-key").decode()
+
+
+def _signed(payload: dict, *, secret: str = _WEBHOOK_SECRET, skew: int = 0) -> dict:
+    """Body + Svix headers exactly as Resend signs them (review M12)."""
+    body = json.dumps(payload).encode()
+    svix_id = "msg_test"
+    timestamp = str(int(time.time()) + skew)
+    key = base64.b64decode(secret.removeprefix("whsec_"))
+    mac = hmac.new(key, f"{svix_id}.{timestamp}.".encode() + body, hashlib.sha256)
+    return {
+        "content": body,
+        "headers": {
+            "content-type": "application/json",
+            "svix-id": svix_id,
+            "svix-timestamp": timestamp,
+            "svix-signature": f"v1,{base64.b64encode(mac.digest()).decode()}",
+        },
+    }
+
+
+@pytest.fixture(autouse=True)
+def _webhook_secret(monkeypatch):
+    monkeypatch.setattr(settings, "resend_webhook_secret", _WEBHOOK_SECRET)
+
+
 class TestResendWebhook:
     async def test_webhook_delivered(self, client, db, tenant):
         log = EmailLog(
@@ -509,13 +563,15 @@ class TestResendWebhook:
 
         resp = await client.post(
             "/api/webhooks/email",
-            json={
-                "type": "email.delivered",
-                "data": {
-                    "email_id": "resend-123",
-                    "created_at": "2026-04-20T10:00:00Z",
-                },
-            },
+            **_signed(
+                {
+                    "type": "email.delivered",
+                    "data": {
+                        "email_id": "resend-123",
+                        "created_at": "2026-04-20T10:00:00Z",
+                    },
+                }
+            ),
         )
         assert resp.status_code == 200
 
@@ -539,10 +595,7 @@ class TestResendWebhook:
 
         resp = await client.post(
             "/api/webhooks/email",
-            json={
-                "type": "email.bounced",
-                "data": {"email_id": "resend-456"},
-            },
+            **_signed({"type": "email.bounced", "data": {"email_id": "resend-456"}}),
         )
         assert resp.status_code == 200
 
@@ -554,10 +607,7 @@ class TestResendWebhook:
     async def test_webhook_unknown_message_id(self, client, db):
         resp = await client.post(
             "/api/webhooks/email",
-            json={
-                "type": "email.delivered",
-                "data": {"email_id": "unknown-id"},
-            },
+            **_signed({"type": "email.delivered", "data": {"email_id": "unknown-id"}}),
         )
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
@@ -565,14 +615,70 @@ class TestResendWebhook:
     async def test_webhook_unknown_event_type(self, client, db):
         resp = await client.post(
             "/api/webhooks/email",
-            json={
-                "type": "email.unknown_event",
-                "data": {"email_id": "some-id"},
-            },
+            **_signed({"type": "email.unknown_event", "data": {"email_id": "some-id"}}),
         )
         assert resp.status_code == 200
 
     async def test_webhook_invalid_payload(self, client, db):
-        resp = await client.post("/api/webhooks/email", json={})
+        resp = await client.post("/api/webhooks/email", **_signed({}))
         assert resp.status_code == 200
         assert resp.json()["ok"] is False
+
+    async def test_unsigned_webhook_is_rejected(self, client):
+        """Review M12: the endpoint used to accept anything, so anyone who
+        guessed a message id could rewrite a tenant's delivery log."""
+        resp = await client.post(
+            "/api/webhooks/email",
+            json={"type": "email.bounced", "data": {"email_id": "resend-456"}},
+        )
+        assert resp.status_code == 401
+
+    async def test_wrong_signature_is_rejected(self, client):
+        wrong = "whsec_" + base64.b64encode(b"not-the-signing-key").decode()
+        resp = await client.post(
+            "/api/webhooks/email",
+            **_signed(
+                {"type": "email.bounced", "data": {"email_id": "resend-456"}},
+                secret=wrong,
+            ),
+        )
+        assert resp.status_code == 401
+
+    async def test_replayed_signature_is_rejected(self, client):
+        resp = await client.post(
+            "/api/webhooks/email",
+            **_signed(
+                {"type": "email.bounced", "data": {"email_id": "resend-456"}},
+                skew=-3600,
+            ),
+        )
+        assert resp.status_code == 401
+
+    async def test_unconfigured_secret_refuses_the_webhook(self, client, monkeypatch):
+        """An operator who never set RESEND_WEBHOOK_SECRET gets no delivery
+        tracking — not an open endpoint."""
+        monkeypatch.setattr(settings, "resend_webhook_secret", "")
+        resp = await client.post(
+            "/api/webhooks/email",
+            **_signed({"type": "email.bounced", "data": {"email_id": "resend-456"}}),
+        )
+        assert resp.status_code == 401
+
+    async def test_smtp_site_refuses_without_a_warning(
+        self, client, monkeypatch, caplog
+    ):
+        """A site sending through SMTP never sees Resend call this endpoint;
+        a stray probe is refused without nagging the operator about a
+        secret they have no use for."""
+        monkeypatch.setattr(settings, "resend_webhook_secret", "")
+        monkeypatch.setattr(settings, "resend_api_key", "")
+        monkeypatch.setattr(settings, "smtp_host", "smtp.example.com")
+        with caplog.at_level("WARNING"):
+            resp = await client.post(
+                "/api/webhooks/email",
+                **_signed(
+                    {"type": "email.bounced", "data": {"email_id": "resend-456"}}
+                ),
+            )
+        assert resp.status_code == 401
+        assert "RESEND_WEBHOOK_SECRET" not in caplog.text

@@ -143,6 +143,3 @@ export function useTurnstileGate(): TurnstileGate {
 
   return { widget, token, isReady: token !== null, failed, reset };
 }
-
-/** Helper for places that just need to know whether CF is configured. */
-export const isTurnstileEnabled = (): boolean => Boolean(readSiteKey());

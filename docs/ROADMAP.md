@@ -12,19 +12,11 @@ Updated continuously. Plans shift as we learn — treat the upcoming sections as
 
 ---
 
-## In progress
-
-### Internationalization [Both]
-
-Full multi-language UI with runtime language switch. English stays the base; community translations land as a single JSON file per language via PR.
-
-### White-label for the cloud [Cloud]
-
-Per-tenant branding on managed plans — your logo, product name, colors, and favicon across the app and outgoing emails, plus custom domains. Builds on the white-label support that shipped for self-hosted installs in v1.15.
-
----
-
 ## Up next (next two quarters)
+
+### AI workforce screen [Both]
+
+The agent registry behind the Coverage verdicts already runs as an API — the built-in packs, the agents your company runs, their assignments to employees and the workflows they take part in. A screen that manages all of it from inside the app is next.
 
 ### Power-user features [Both]
 
@@ -39,6 +31,7 @@ Per-tenant branding on managed plans — your logo, product name, colors, and fa
 - Slack and Telegram notifications
 - HRIS connectors
 - **[Cloud]** SSO / SAML on managed plans
+- **[Cloud]** Custom domains on managed plans
 
 ### AI Assistant [Both]
 
@@ -53,6 +46,24 @@ Plugin API, Helm chart, and official SDKs for embedding HRPulsar into your own s
 ## Recently shipped
 
 Highlights — full per-version list lives in the [changelog](/changelog).
+
+### v2.0 — Coverage: who covers each step of a process
+
+- Describe a process or a project in plain language; the AI drafts the ordered steps and tags each one with the capabilities it needs, from a fixed catalog of seventeen **[Both]**
+- Per step, a verdict on who covers it: an agent type from the built-in packs or an agent you registered, a person on the team by their assessments or grade, or nobody yet — with the automation mode and a quality rating next to it
+- Hours a year and what they cost per process, from the hours you correct and one hourly rate you set; the share that moves to an agent, to review, or stays with people
+- A gap opens a draft vacancy in Recruitment; a step an agent can take gets a `SKILL.md` you download and run in your own tools
+- Process access: an owner, visibility per role, position or person, and a history of changes
+- An AI workforce registry as an API (`/api/ai-workforce/*`): built-in agent packs, the agents your company actually runs, their assignments to employees with a supervision level and an accountable owner, multi-agent workflows and an audit feed — a screen for it is next **[Both]**
+- Imported employees receive an email with a link to set their own password, resendable from the employee card, instead of a shared one **[Both]**
+- One password reset link covers every organization an email address has an account in **[Both]**
+- **[Cloud]** Branded workspaces for a single organization on a shared deployment: its own logo, a theme preset, an accent color and no version badge, set by our team on managed plans
+
+### v1.16–v1.23 — Multi-language interface
+
+- Full English and German UI with a runtime language switch, covering the app, emails and the reference catalogs **[Both]**
+- English stays the base and the hard fallback; a new language lands as one JSON file per side via PR, with parity checks in CI **[Both]**
+- Interface language, AI content language and region are three independent settings **[Both]**
 
 ### v1.15 — Self-hosted, ready out of the box
 

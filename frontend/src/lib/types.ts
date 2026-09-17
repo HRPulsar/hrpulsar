@@ -30,6 +30,19 @@ export interface User {
    *  specialization, as answered by `can_see_position_grades` on the
    *  backend — role set included, so the SPA does not mirror it. */
   can_view_job_profile?: boolean;
+  /** HRP-810: sections /auth/me opens for this caller and how far. */
+  sections?: Partial<Record<"coverage", "view" | "manage">>;
+  /** HRP-808: tenant branding set by the platform admin. With the platform
+   *  logo hidden the sidebar shows `tenant_logo_url` (signed only then),
+   *  or the tenant initials + name when the tenant has no logo. */
+  tenant_name?: string | null;
+  tenant_hide_platform_logo?: boolean;
+  tenant_hide_app_version?: boolean;
+  tenant_logo_url?: string | null;
+  /** Preset name from lib/brand-themes and `#RRGGBB` accent; null inherits
+   *  the site's env branding. */
+  tenant_brand_theme?: string | null;
+  tenant_brand_accent_color?: string | null;
 }
 
 export interface TokenResponse {
@@ -252,6 +265,8 @@ export interface Employee {
   // HRP-246: stamped on first successful auth; nullable for users who
   // have never logged in.
   user_first_login_at?: string | null;
+  // HRP-806: the card may resend the set-password link.
+  set_password_link_available?: boolean;
   division_name: string | null;
   avatar_url?: string | null;
   alert?: EmployeeAlert | null;
@@ -1223,7 +1238,7 @@ export interface ImportJob {
   total_rows: number;
   processed_rows: number;
   error_rows: number;
-  errors: { rows: { row: number; error: string }[] } | null;
+  errors: { rows: { row: number; error: string }[]; emails_failed?: number } | null;
   initiated_by: string;
   tenant_id: string;
   started_at: string | null;
@@ -1420,6 +1435,11 @@ export interface PlatformTenantDetail extends PlatformTenantItem {
   credit_warning_threshold: number;
   last_activity: string | null;
   admin_email: string | null;
+  /** HRP-808: tenant branding on top of the platform's env branding. */
+  hide_platform_logo: boolean;
+  hide_app_version: boolean;
+  brand_theme: string | null;
+  brand_accent_color: string | null;
 }
 
 export interface PlatformTenantList {
@@ -1750,7 +1770,7 @@ export const MATRIX_AI_STATUS_LABEL_KEYS: Record<string, string> = {
 };
 
 /** i18n key for a known matrix AI status, or `null` for anything else. */
-export function matrixAiStatusKey(status: string): string | null {
+function matrixAiStatusKey(status: string): string | null {
   return MATRIX_AI_STATUS_LABEL_KEYS[status] ?? null;
 }
 
@@ -1784,7 +1804,7 @@ export const CANDIDATE_VACANCY_TERMINAL_STATUSES: ReadonlySet<string> =
   new Set(["hired", "rejected", "withdrew", "withdrawn"]);
 
 /** i18n key for a known candidate status, or `null` for anything else. */
-export function candidateVacancyStatusKey(status: string): string | null {
+function candidateVacancyStatusKey(status: string): string | null {
   return CANDIDATE_VACANCY_STATUS_LABEL_KEYS[status.toLowerCase()] ?? null;
 }
 
@@ -2187,7 +2207,7 @@ export const REPORT_SECTION_LABEL_KEYS: Record<ReportSectionCode, string> = {
 };
 
 /** i18n key for a known report section code, or `null` for anything else. */
-export function reportSectionKey(section: string): string | null {
+function reportSectionKey(section: string): string | null {
   return REPORT_SECTION_LABEL_KEYS[section as ReportSectionCode] ?? null;
 }
 
@@ -2221,7 +2241,7 @@ export const REPORT_STATUS_LABEL_KEYS: Record<string, string> = {
 };
 
 /** i18n key for a known export status, or `null` for anything else. */
-export function reportStatusKey(status: string): string | null {
+function reportStatusKey(status: string): string | null {
   return REPORT_STATUS_LABEL_KEYS[status] ?? null;
 }
 

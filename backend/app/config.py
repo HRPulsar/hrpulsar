@@ -131,6 +131,10 @@ class Settings(BaseSettings):
 
     # Email (optional) — Resend (SaaS) or SMTP (self-hosted)
     resend_api_key: str = ""
+    # Svix signing secret for the Resend delivery webhook ("whsec_<base64>").
+    # Unset → POST /api/webhooks/email refuses every call: an unsigned
+    # webhook lets anyone rewrite this tenant's delivery log.
+    resend_webhook_secret: str = ""
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
@@ -417,20 +421,27 @@ class Settings(BaseSettings):
 
         ``jwt_secret`` seeds the derived ``encryption_key`` (see
         ``app.core.crypto``) and signs every access/refresh token, so a
-        leaked default is a full auth + at-rest-crypto bypass. Dev and E2E
-        stay permissive — the check fires only when ``sentry_environment``
-        is a deployed tier (production/staging), matching the other
-        prod-only validators above.
+        leaked default is a full auth + at-rest-crypto bypass. The secret
+        check therefore fires on *every* non-debug, non-E2E boot rather
+        than only on the tiers that happen to set ``SENTRY_ENVIRONMENT``:
+        a self-hosted install leaves that variable empty and would
+        otherwise come up signing tokens with the value published in the
+        repo. The S3 check stays tier-gated (it guards a deployment
+        mistake, not a published credential).
         """
         env = (self.sentry_environment or "").lower()
+        placeholder_secret = (
+            self.jwt_secret == self._DEFAULT_JWT_SECRET or not self.jwt_secret
+        )
+        if placeholder_secret and not self.debug and not self.e2e_mode:
+            raise ValueError(
+                "JWT_SECRET must be set to a strong random value "
+                "(DEBUG=false). Refusing to start with the placeholder "
+                "secret shipped in the repo — it also seeds ENCRYPTION_KEY "
+                "for at-rest BYOK crypto."
+            )
         if env not in {"production", "staging"}:
             return self
-        if self.jwt_secret == self._DEFAULT_JWT_SECRET or not self.jwt_secret:
-            raise ValueError(
-                f"JWT_SECRET must be set to a strong random value in '{env}' "
-                "environment. Refusing to start with the placeholder secret "
-                "(it also seeds ENCRYPTION_KEY for at-rest BYOK crypto)."
-            )
         # S3/MinIO configured but unauthenticated is a silent data-exposure
         # foot-gun: reject an endpoint with no secret key in prod.
         if self.s3_endpoint and not self.s3_secret_key:

@@ -39,10 +39,16 @@ import {
 import { Hint } from "@/components/ui/hint";
 import { toast } from "sonner";
 import { Pagination } from "@/components/pagination";
-import { AlertTriangle, CheckCircle2, Download, Upload, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Info, Upload, X } from "lucide-react";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { useAuth } from "@/context/auth-context";
 
 const PAGE_SIZE = 20;
+
+// HRP-806: a demo emails only this many new employees per session. Copy of
+// DEMO_IMPORT_EMAIL_LIMIT in backend/app/modules/data_import/tasks.py,
+// pinned by demo-email-limit-parity.test.ts.
+const DEMO_IMPORT_EMAIL_LIMIT = 5;
 
 /** Import type → key in the `settings` message namespace. */
 const importTypes = [
@@ -103,7 +109,15 @@ function downloadTemplate(type: string) {
   URL.revokeObjectURL(url);
 }
 
+/** A German Excel saves CSV with semicolons; the backend picks the delimiter
+ * the same way (`read_rows` in data_import/service.py). */
+function detectDelimiter(text: string): "," | ";" {
+  const header = text.split("\n").find((line) => line.trim()) ?? "";
+  return header.split(";").length > header.split(",").length ? ";" : ",";
+}
+
 function parseCSV(text: string): string[][] {
+  const delimiter = detectDelimiter(text);
   const rows: string[][] = [];
   let current = "";
   let inQuotes = false;
@@ -122,7 +136,7 @@ function parseCSV(text: string): string[][] {
       }
     } else if (ch === '"') {
       inQuotes = true;
-    } else if (ch === ",") {
+    } else if (ch === delimiter) {
       row.push(current.trim());
       current = "";
     } else if (ch === "\n" || (ch === "\r" && text[i + 1] === "\n")) {
@@ -140,7 +154,9 @@ function parseCSV(text: string): string[][] {
   return rows;
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// ISO, or DD.MM.YYYY as a German Excel writes dates into CSV — the formats
+// the import task reads.
+const DATE_RE = /^(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{4})$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Validation problems are stored as codes and rendered through the
@@ -191,6 +207,8 @@ export default function ImportPage() {
   const t = useTranslations("settings");
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
+  const { user } = useAuth();
+  const isDemo = !!user?.tenant_is_demo;
   const [jobs, setJobs] = useState<ImportJob[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -248,11 +266,18 @@ export default function ImportPage() {
   }, [jobs, loadJobs]);
 
   function handleFilePreview(file: File) {
+    // HRP-806: an XLSX is a zip — reading it as text used to fill the
+    // preview with garbage. The backend reads and validates it on import.
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      clearPreview();
+      setPreviewFile(file);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result;
       if (typeof text !== "string") return;
-      const parsed = parseCSV(text);
+      const parsed = parseCSV(text.replace(/^\uFEFF/, ""));
       if (parsed.length < 2) {
         toast.error(t("importFileNeedsRows"));
         return;
@@ -336,6 +361,8 @@ export default function ImportPage() {
 
   const errorCount = previewErrors.length;
   const hasErrors = errorCount > 0;
+  // An XLSX gets no preview table — see handleFilePreview.
+  const hasPreviewTable = previewHeaders.length > 0;
 
   return (
     <RequireRole admin>
@@ -418,7 +445,7 @@ export default function ImportPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".xlsx,.csv,.xls"
+                accept=".xlsx,.csv"
                 className="hidden"
                 onChange={onFileSelect}
                 disabled={uploading}
@@ -440,6 +467,31 @@ export default function ImportPage() {
             <p className="mt-1 text-xs text-muted-foreground">
               {templates[importType]?.columns.join(", ")}
             </p>
+            {importType === "employees" &&
+              (isDemo ? (
+                <p
+                  className="mt-2 flex items-start gap-1.5 text-xs font-medium text-foreground"
+                  data-testid="import-demo-email-limit-note"
+                >
+                  <Info className="mt-px h-3.5 w-3.5 shrink-0 text-primary" />
+                  {t("importEmployeesEmailNoteDemo", {
+                    limit: DEMO_IMPORT_EMAIL_LIMIT,
+                  })}
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {t("importEmployeesEmailNote")}
+                </p>
+              ))}
+            {isDemo && (
+              <p
+                className="mt-2 flex items-start gap-1.5 text-xs font-medium text-foreground"
+                data-testid="import-demo-credits-note"
+              >
+                <Info className="mt-px h-3.5 w-3.5 shrink-0 text-primary" />
+                {t("importDemoCreditsNote")}
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -453,17 +505,23 @@ export default function ImportPage() {
                 {t("importPreviewTitle", { name: previewFile.name })}
               </CardTitle>
               <CardDescription>
-                {t("importRowsFound", { count: previewRows.length })}
-                {hasErrors ? (
-                  <span className="ml-2 text-destructive">
-                    <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
-                    {t("importErrorsDetected", { count: errorCount })}
-                  </span>
+                {!hasPreviewTable ? (
+                  t("importPreviewCsvOnly")
                 ) : (
-                  <span className="ml-2 text-green-600">
-                    <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
-                    {t("importAllValid")}
-                  </span>
+                  <>
+                    {t("importRowsFound", { count: previewRows.length })}
+                    {hasErrors ? (
+                      <span className="ml-2 text-destructive">
+                        <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
+                        {t("importErrorsDetected", { count: errorCount })}
+                      </span>
+                    ) : (
+                      <span className="ml-2 text-green-600">
+                        <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
+                        {t("importAllValid")}
+                      </span>
+                    )}
+                  </>
                 )}
               </CardDescription>
             </div>
@@ -478,60 +536,62 @@ export default function ImportPage() {
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="max-h-96 overflow-auto rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-12 text-center">#</TableHead>
-                    {previewHeaders.map((h, i) => (
-                      <TableHead key={i}>
-                        {h}
-                        {templates[importType]?.required.includes(h) && (
-                          <span className="ml-0.5 text-destructive">*</span>
-                        )}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {previewRows.map((row, ri) => {
-                    const rowHasError = previewErrors.some((e) => e.row === ri);
-                    return (
-                      <TableRow key={ri} className={rowHasError ? "bg-destructive/5" : ""}>
-                        <TableCell className="text-center text-xs text-muted-foreground">
-                          {ri + 2}
-                        </TableCell>
-                        {previewHeaders.map((_, ci) => {
-                          const cellErr = getCellError(ri, ci);
-                          return (
-                            <TableCell
-                              key={ci}
-                              className={cellErr ? "relative" : ""}
-                            >
-                              <span className={cellErr ? "text-destructive font-medium" : ""}>
-                                {row[ci] || ""}
-                              </span>
-                              {cellErr && (
-                                <span className="block text-xs text-destructive mt-0.5">
-                                  {cellErrorMessage(cellErr)}
+          {hasPreviewTable && (
+            <CardContent>
+              <div className="max-h-96 overflow-auto rounded-lg border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12 text-center">#</TableHead>
+                      {previewHeaders.map((h, i) => (
+                        <TableHead key={i}>
+                          {h}
+                          {templates[importType]?.required.includes(h) && (
+                            <span className="ml-0.5 text-destructive">*</span>
+                          )}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {previewRows.map((row, ri) => {
+                      const rowHasError = previewErrors.some((e) => e.row === ri);
+                      return (
+                        <TableRow key={ri} className={rowHasError ? "bg-destructive/5" : ""}>
+                          <TableCell className="text-center text-xs text-muted-foreground">
+                            {ri + 2}
+                          </TableCell>
+                          {previewHeaders.map((_, ci) => {
+                            const cellErr = getCellError(ri, ci);
+                            return (
+                              <TableCell
+                                key={ci}
+                                className={cellErr ? "relative" : ""}
+                              >
+                                <span className={cellErr ? "text-destructive font-medium" : ""}>
+                                  {row[ci] || ""}
                                 </span>
-                              )}
-                            </TableCell>
-                          );
-                        })}
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-            {hasErrors && (
-              <p className="mt-3 text-xs text-muted-foreground">
-                {t("importErrorsWarning")}
-              </p>
-            )}
-          </CardContent>
+                                {cellErr && (
+                                  <span className="block text-xs text-destructive mt-0.5">
+                                    {cellErrorMessage(cellErr)}
+                                  </span>
+                                )}
+                              </TableCell>
+                            );
+                          })}
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              {hasErrors && (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  {t("importErrorsWarning")}
+                </p>
+              )}
+            </CardContent>
+          )}
         </Card>
       )}
 
@@ -602,6 +662,14 @@ export default function ImportPage() {
                         ) : (
                           <span className="text-sm text-muted-foreground">—</span>
                         )}
+                        {(job.errors?.emails_failed ?? 0) > 0 ? (
+                          <div
+                            className="text-xs text-muted-foreground"
+                            data-testid={`import-job-${job.id}-emails-failed`}
+                          >
+                            {t("importEmailsFailed", { count: job.errors?.emails_failed ?? 0 })}
+                          </div>
+                        ) : null}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {formatDate(job.created_at)}

@@ -113,10 +113,16 @@ class RoundOut(BaseModel):
     updated_at: datetime
 
 
+# Evaluator free text (per-score comments, closing notes) is fed verbatim
+# into the LLM report prompt, so it is bounded at the edge rather than
+# trusted to the textarea.
+MAX_EVALUATOR_TEXT = 2000
+
+
 class CompetenceScoreIn(BaseModel):
     score_value: int | None = Field(default=None, ge=0, le=99)
     score_source: Literal["manual", "computed_from_indicators"] = "manual"
-    comment: str | None = None
+    comment: str | None = Field(default=None, max_length=MAX_EVALUATOR_TEXT)
 
 
 class CompetenceScoreOut(BaseModel):
@@ -135,7 +141,7 @@ class CompetenceScoreOut(BaseModel):
 class IndicatorScoreIn(BaseModel):
     competence_id: uuid.UUID
     score_value: int | None = Field(default=None, ge=0, le=99)
-    comment: str | None = None
+    comment: str | None = Field(default=None, max_length=MAX_EVALUATOR_TEXT)
 
 
 class IndicatorScoreOut(BaseModel):
@@ -215,6 +221,10 @@ class PublicEvaluatorNameUpdate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
 
 
+class FinalNotesIn(BaseModel):
+    final_notes: str | None = Field(default=None, max_length=MAX_EVALUATOR_TEXT)
+
+
 class PublicAssessmentSubmit(BaseModel):
     confirm: bool = True
 
@@ -238,5 +248,6 @@ __all__ = [
     "ManagerInviteOut",
     "ExtendInviteIn",
     "PublicEvaluatorNameUpdate",
+    "FinalNotesIn",
     "PublicAssessmentSubmit",
 ]

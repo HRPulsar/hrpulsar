@@ -8,6 +8,16 @@ WORKDIR /app
 ARG APP_VERSION=
 ENV APP_VERSION=${APP_VERSION}
 
+# Sentry source-map upload (M31). Builder stage only, so the token never
+# reaches the runner image. All three empty (the default) = next.config.ts
+# skips withSentryConfig and the build is exactly what it is today.
+ARG SENTRY_AUTH_TOKEN=
+ARG SENTRY_ORG=
+ARG SENTRY_PROJECT=
+ENV SENTRY_AUTH_TOKEN=${SENTRY_AUTH_TOKEN} \
+    SENTRY_ORG=${SENTRY_ORG} \
+    SENTRY_PROJECT=${SENTRY_PROJECT}
+
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 
@@ -36,6 +46,12 @@ USER appuser
 
 ARG APP_VERSION=
 ENV APP_VERSION=${APP_VERSION}
+
+# So `docker image inspect` on a host answers "which release is this?" —
+# a :latest tag alone cannot (HRP review M28).
+LABEL org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.source="https://github.com/HRPulsar/hrpulsar"
+
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"

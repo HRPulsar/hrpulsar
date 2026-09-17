@@ -24,12 +24,27 @@ from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import select
 
+from app.modules.demo.seed_data_employees import EMPLOYEE_EMAIL_DOMAIN
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
 
 # The throw-away demo admin's email domain (see ``_create_demo_user``).
 DEMO_ADMIN_EMAIL_DOMAIN = "demo.hrpulsar.local"
+
+
+def is_demo_cast_email(email: str | None) -> bool:
+    """Whether the address belongs to the demo's own cast (HRP-806).
+
+    A demo sandbox emails only the people its visitor added during the
+    session — never the seeded employees or the throw-away admin. Both are
+    recognised by the domains the seed writes. Neither domain can receive
+    mail anywhere (``example.com`` is reserved, ``.local`` does not route),
+    so unlike :func:`demo_persona_for_email` this needs no demo-tenant check.
+    """
+    domain = (email or "").rpartition("@")[2]
+    return domain in {EMPLOYEE_EMAIL_DOMAIN, DEMO_ADMIN_EMAIL_DOMAIN}
 
 
 def demo_persona_for_email(email: str | None) -> Literal["admin", "employee"]:

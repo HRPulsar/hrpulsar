@@ -234,7 +234,9 @@ class GeneratedQuestion(BaseModel):
     resume_anchor: ResumeAnchor | None = None
     expected_answer_indicators: list[str] = Field(default_factory=list)
     follow_ups: list[str] = Field(default_factory=list)
-    rationale: str
+    # Nullable like ``Question.rationale``: a dropped explanation on one
+    # question must not fail the whole set.
+    rationale: str | None = None
     source: Literal[
         "ai_generated",
         "from_competency_indicator",

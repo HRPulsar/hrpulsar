@@ -495,7 +495,7 @@ export const questionSetGenerationModeLabel = labelResolver(
 // `lib/enum-labels.ts`.
 
 /** ``Interview.status`` lifecycle codes. */
-export const INTERVIEW_STATUS_LABEL_KEYS: Record<string, string> = {
+const INTERVIEW_STATUS_LABEL_KEYS: Record<string, string> = {
   scheduled: "interviewStatusScheduled",
   uploading: "interviewStatusUploading",
   uploaded: "interviewStatusUploaded",
@@ -513,7 +513,7 @@ export const interviewStatusLabel = labelResolver(
  * Generic background-pipeline codes — transcription/analysis columns and
  * GDPR export requests share this vocabulary.
  */
-export const PROCESSING_STATUS_LABEL_KEYS: Record<string, string> = {
+const PROCESSING_STATUS_LABEL_KEYS: Record<string, string> = {
   pending: "processingStatusPending",
   processing: "processingStatusProcessing",
   completed: "processingStatusCompleted",
@@ -530,7 +530,7 @@ export const processingStatusLabel = labelResolver(
  * ``CandidateFile.parse_status`` — reuses the add-candidate dialog's
  * wording so the files card and the import modal never disagree.
  */
-export const PARSE_STATUS_LABEL_KEYS: Record<string, string> = {
+const PARSE_STATUS_LABEL_KEYS: Record<string, string> = {
   pending: "addCandidateStatusQueued",
   processing: "addCandidateStatusParsing",
   completed: "addCandidateStatusParsed",
@@ -540,7 +540,7 @@ export const PARSE_STATUS_LABEL_KEYS: Record<string, string> = {
 export const parseStatusLabel = labelResolver(PARSE_STATUS_LABEL_KEYS, asIs);
 
 /** ``CandidateFile.file_type`` — only ``resume`` is ever written today. */
-export const FILE_TYPE_LABEL_KEYS: Record<string, string> = {
+const FILE_TYPE_LABEL_KEYS: Record<string, string> = {
   resume: "fileTypeResume",
 };
 
@@ -551,7 +551,7 @@ export const fileTypeLabel = labelResolver(FILE_TYPE_LABEL_KEYS, asIs);
  * Literal in prompts_interview.py). ``assessed``/``not_covered`` share
  * wording with the post-normalization canvas statuses.
  */
-export const COMPETENCE_ASSESSMENT_STATUS_LABEL_KEYS: Record<string, string> = {
+const COMPETENCE_ASSESSMENT_STATUS_LABEL_KEYS: Record<string, string> = {
   assessed: "canvasAiStatusReady",
   not_covered: "canvasAiStatusNotCovered",
   insufficient: "analysisCompetenceStatusInsufficient",

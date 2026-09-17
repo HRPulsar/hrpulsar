@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import enMessages from "../../messages/en.json";
 
 let roles: string[] = [];
+let sections: Record<string, string> = {};
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard",
@@ -30,7 +31,9 @@ vi.mock("@/context/auth-context", () => ({
       first_name: "Test",
       last_name: "User",
       roles,
+      sections,
     },
+    tenants: [],
   }),
 }));
 
@@ -62,8 +65,12 @@ afterEach(() => {
   container.remove();
 });
 
-async function renderAs(userRoles: string[]) {
+async function renderAs(
+  userRoles: string[],
+  userSections: Record<string, string> = {},
+) {
   roles = userRoles;
+  sections = userSections;
   await act(async () => {
     root.render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -112,10 +119,22 @@ describe("sidebar role gating (HRP-622)", () => {
     }
   });
 
+  // HRP-810: /auth/me decides - the managers get "manage", anyone who reads
+  // at least one process gets "view", everyone else no entry at all.
+  it("shows coverage when /auth/me opens the section", async () => {
+    await renderAs(["manager"]);
+    expect(hrefs(), "a role alone must not open coverage").not.toContain("/coverage");
+    await renderAs(["employee"], { coverage: "view" });
+    expect(hrefs(), "a reader of one process lost the entry").toContain("/coverage");
+    await renderAs(["hr"], { coverage: "manage" });
+    expect(hrefs(), "the section's manager lost the entry").toContain("/coverage");
+  });
+
   it("shows everything to an admin", async () => {
-    await renderAs(["admin"]);
+    await renderAs(["admin"], { coverage: "manage" });
     expect(hrefs()).toContain("/recruitment");
     expect(hrefs()).toContain("/talent-market");
+    expect(hrefs()).toContain("/coverage");
     expect(hrefs()).toContain("/settings/invitations");
   });
 });

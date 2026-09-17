@@ -1,6 +1,6 @@
 [tool.black]
 line-length = 88
-target-version = ["py312", "py313"]
+target-version = ["py314"]
 
 [tool.ruff]
 line-length = 88
@@ -15,7 +15,7 @@ ignore = ["E501", "B008", "E402", "B904"]
 "**/tests/**" = ["BLE001"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 check_untyped_defs = true
 ignore_missing_imports = true
 exclude = [".venv", "tests", "migrations"]

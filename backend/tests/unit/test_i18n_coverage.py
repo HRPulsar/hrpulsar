@@ -219,13 +219,15 @@ def test_template_seed_migrations_target_code_locale():
 # building the exception first and raising it later is caught too.
 BARE_HTTPEXCEPTION_ALLOWLIST = {
     "app/modules/ai_competence_generation/router.py": 2,
-    "app/modules/auth/router.py": 2,
+    # The dev/E2E 404 must stay indistinguishable from a missing route, so
+    # it carries no error code; it lives in one place for every dev surface.
+    "app/core/dev_guard.py": 1,
+    "app/modules/auth/router.py": 1,
     "app/modules/auth/service.py": 2,
     "app/modules/competence/router.py": 2,
     "app/modules/demo/router.py": 1,
-    "app/modules/recruitment/manager_assessment_router.py": 1,
     "app/modules/recruitment/resume_analysis_service.py": 1,
-    "app/modules/recruitment/routers/e2e_seed.py": 11,
+    "app/modules/recruitment/routers/e2e_seed.py": 8,
 }
 
 # Accepted debt (HRP-477): dynamic f-string ValueErrors in pydantic

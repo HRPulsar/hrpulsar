@@ -77,12 +77,19 @@ async def lifespan(app: FastAPI):
             await ws_manager.stop_listener()
 
 
+def _docs_url() -> str | None:
+    """Swagger UI stays on dev and self-hosted installations; a SaaS
+    production answers 404 there while ``/api/openapi.json`` keeps serving
+    the API clients and the SDK generator."""
+    return "/api/docs" if settings.debug or settings.deployment_mode != "saas" else None
+
+
 app = FastAPI(
     title=settings.brand_name,
     description="Open source talent & competency management platform",
     version=settings.version,
     lifespan=lifespan,
-    docs_url="/api/docs",
+    docs_url=_docs_url(),
     openapi_url="/api/openapi.json",
     redoc_url=None,
 )
@@ -223,6 +230,7 @@ from app.modules.ai_competence_generation.router import (  # noqa: E402
     router as ai_compgen_router,
 )
 from app.modules.ai_settings.router import router as ai_settings_router  # noqa: E402
+from app.modules.ai_workforce.router import router as ai_workforce_router  # noqa: E402
 from app.modules.analytics.router import router as analytics_router  # noqa: E402
 from app.modules.assessment.router import router as assessment_router  # noqa: E402
 from app.modules.auth.router import router as auth_router  # noqa: E402
@@ -237,6 +245,10 @@ from app.modules.feedback.router import router as feedback_router  # noqa: E402
 from app.modules.grade_system.router import router as grade_system_router  # noqa: E402
 from app.modules.notification.router import router as notification_router  # noqa: E402
 from app.modules.position.router import router as position_router  # noqa: E402
+from app.modules.primitives.router import (  # noqa: E402
+    internal_router as primitives_internal_router,
+)
+from app.modules.primitives.router import router as primitives_router  # noqa: E402
 from app.modules.public_api.router import router as public_api_router  # noqa: E402
 from app.modules.recruitment.manager_assessment_router import (
     public_router as recruitment_public_assessment_router,  # noqa: E402
@@ -256,6 +268,7 @@ from app.modules.storage.router import router as storage_router  # noqa: E402
 from app.modules.talent_market.router import (
     router as talent_market_router,  # noqa: E402
 )
+from app.modules.work.router import router as work_router  # noqa: E402
 
 app.include_router(auth_router, prefix="/api")
 app.include_router(company_router, prefix="/api")
@@ -269,6 +282,10 @@ app.include_router(notification_router, prefix="/api")
 app.include_router(talent_market_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
 app.include_router(position_router, prefix="/api")
+app.include_router(primitives_router, prefix="/api")
+app.include_router(primitives_internal_router, prefix="/api")
+app.include_router(ai_workforce_router, prefix="/api")
+app.include_router(work_router, prefix="/api")
 app.include_router(specialization_router, prefix="/api")
 app.include_router(storage_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
@@ -336,7 +353,16 @@ register_core_extensions(app)
 
 
 # Filter internal/enterprise endpoints from public OpenAPI spec
-_HIDDEN_TAGS = {"platform-admin", "enterprise-billing", "billing", "tasks"}
+_HIDDEN_TAGS = {
+    "platform-admin",
+    "enterprise-billing",
+    "billing",
+    "tasks",
+    # HRP-750: competence -> primitive mapping and its internal acceptance.
+    "work-internal",
+    # Enterprise CMS (ee/blog) — only the landing consumes it.
+    "blog",
+}
 _HIDDEN_PATH_PREFIXES = ("/api/auth/dev/",)
 _original_openapi = app.openapi
 

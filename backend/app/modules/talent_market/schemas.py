@@ -113,8 +113,10 @@ class SearchRequest(BaseModel):
     status: str | None = None
     specialization_id: uuid.UUID | None = None
     division_id: uuid.UUID | None = None
-    skip: int = 0
-    limit: int = 50
+    skip: int = Field(0, ge=0)
+    # Bounded like every other list endpoint: the search is a POST body, so
+    # nothing else stops a caller asking for the whole market in one page.
+    limit: int = Field(50, ge=1, le=100)
 
 
 class SpecializationLink(BaseModel):

@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { KeyRound, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
+import { RequireRole } from "@/components/require-role";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 
 type Provider = {
@@ -115,7 +116,10 @@ export default function STTProvidersPage() {
     }
   }
 
+  // The whole provider registry is `require_role("admin")` on the API —
+  // reads included, so a recruiter saw an empty page and a 403 toast.
   return (
+    <RequireRole admin>
     <div className="space-y-5" data-testid="recruitment-stt-providers-page">
       <RecruitmentBreadcrumbs
         segments={[
@@ -268,5 +272,6 @@ export default function STTProvidersPage() {
         )}
       </section>
     </div>
+    </RequireRole>
   );
 }

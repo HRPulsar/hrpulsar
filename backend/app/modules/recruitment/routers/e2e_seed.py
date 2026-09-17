@@ -12,6 +12,7 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.dev_guard import require_dev_endpoint
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
@@ -45,11 +46,9 @@ async def _test_seed_parsed_files(
     """
     from sqlalchemy import select
 
-    from app.config import settings
     from app.modules.recruitment.models import CandidateFile
 
-    if not settings.e2e_mode:
-        raise HTTPException(status_code=404, detail="Not found")
+    require_dev_endpoint()
 
     raw_files = payload.get("files")
     if not isinstance(raw_files, list) or not raw_files:
@@ -129,11 +128,9 @@ async def _test_seed_verdict(
     """
     from sqlalchemy import select
 
-    from app.config import settings
     from app.modules.recruitment.models import CandidateVacancy
 
-    if not settings.e2e_mode:
-        raise HTTPException(status_code=404, detail="Not found")
+    require_dev_endpoint()
 
     try:
         cv_id = uuid.UUID(str(payload.get("candidate_vacancy_id")))
@@ -218,11 +215,9 @@ async def _test_get_assessment_invite_token(
     """
     from sqlalchemy import select
 
-    from app.config import settings
     from app.modules.recruitment.models import AssessmentInvite
 
-    if not settings.e2e_mode:
-        raise HTTPException(status_code=404, detail="Not found")
+    require_dev_endpoint()
 
     invite = (
         await db.execute(

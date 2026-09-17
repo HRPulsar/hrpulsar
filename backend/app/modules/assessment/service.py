@@ -1049,9 +1049,19 @@ async def _questionnaire_indicator_count(
     q = (
         select(func.count(func.distinct(Indicator.id)))
         .select_from(AssessmentCompetence)
+        .join(Assessment, Assessment.id == AssessmentCompetence.assessment_id)
         .join(
             Indicator,
-            Indicator.competence_id == AssessmentCompetence.competence_id,
+            and_(
+                Indicator.competence_id == AssessmentCompetence.competence_id,
+                # An attached competence may be an origin (shared) one, on
+                # which every tenant hangs its own indicators - count only
+                # the ones this assessment's tenant actually reads.
+                or_(
+                    Indicator.tenant_id == Assessment.tenant_id,
+                    Indicator.tenant_id.is_(None),
+                ),
+            ),
         )
         .outerjoin(target_level, target_level.id == AssessmentCompetence.skill_level_id)
         .outerjoin(ind_level, ind_level.id == Indicator.skill_level_id)
@@ -2790,7 +2800,10 @@ async def get_detailed_results(
 
     # Indicators for the assessed competences, with their skill levels.
     indicators_q = await db.execute(
-        select(Indicator).where(Indicator.competence_id.in_(competence_ids))
+        select(Indicator).where(
+            Indicator.competence_id.in_(competence_ids),
+            Indicator.visible_to(tenant_id),
+        )
     )
     indicators = list(indicators_q.scalars().all())
     indicators_by_competence: dict[uuid.UUID, list[Indicator]] = {}
@@ -3257,7 +3270,10 @@ async def _recompute_assessment_results(
     indicators_by_id: dict[uuid.UUID, Indicator] = {}
     if competence_ids:
         ind_q = await db.execute(
-            select(Indicator).where(Indicator.competence_id.in_(competence_ids))
+            select(Indicator).where(
+                Indicator.competence_id.in_(competence_ids),
+                Indicator.visible_to(assessment.tenant_id),
+            )
         )
         for ind in ind_q.scalars().all():
             indicators_by_id[ind.id] = ind
@@ -4471,6 +4487,7 @@ async def get_external_assessment(db: AsyncSession, token: str) -> dict:
         indicators_result = await db.execute(
             select(Indicator).where(
                 Indicator.competence_id == comp.id,
+                Indicator.visible_to(assessment.tenant_id),
                 Indicator.is_active == True,  # noqa: E712
             )
         )

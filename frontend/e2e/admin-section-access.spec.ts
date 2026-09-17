@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { provisionTenantMember, registerUser, setAuthTokens } from "./helpers";
+import { API_BASE, provisionTenantMember, registerUser, setAuthTokens } from "./helpers";
 import type { Page } from "@playwright/test";
 
 /**
@@ -157,6 +157,20 @@ test.describe("Admin section access", () => {
     await expectPermissionToast(page);
   });
 
+  // M22b: recruitment is not part of the Admin section, but it is gated the
+  // same way — the whole subtree sits behind RECRUITMENT_VIEWER_ROLES on the
+  // API and used to render the shell for anyone with a bookmark.
+  test("employee: /recruitment direct link redirects with an error toast", async ({
+    page,
+  }) => {
+    await setAuthTokens(page, employeeAccess, employeeRefresh);
+    await page.goto("/recruitment");
+
+    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
+    await expect(page.getByTestId("recruitment-onboarding")).toHaveCount(0);
+    await expectPermissionToast(page);
+  });
+
   test("admin: /settings/roles lists roles with holder counts (HRP-634)", async ({
     page,
   }) => {
@@ -192,5 +206,72 @@ test.describe("Admin section access", () => {
 
     await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
     await expectPermissionToast(page);
+  });
+});
+
+/**
+ * HRP-762, HRP-810: the Coverage surface opens for admin and HR, and for
+ * anyone who reads at least one process. An employee with none neither sees
+ * the sidebar link nor gets past a direct link; a manager gets the link once
+ * a process is opened to managers.
+ */
+test.describe("Coverage access", () => {
+  let employeeAccess: string;
+  let employeeRefresh: string;
+  let managerAccess: string;
+  let managerRefresh: string;
+
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    const admin = await registerUser(page);
+    const opts = { page, accessToken: admin.accessToken };
+    const employee = await provisionTenantMember(opts, {
+      roleCode: "employee",
+      firstName: "Coverage",
+      lastName: "Employee",
+    });
+    employeeAccess = employee.accessToken;
+    employeeRefresh = employee.refreshToken;
+    const manager = await provisionTenantMember(opts, {
+      roleCode: "manager",
+      firstName: "Coverage",
+      lastName: "Manager",
+    });
+    managerAccess = manager.accessToken;
+    managerRefresh = manager.refreshToken;
+    const headers = { Authorization: `Bearer ${admin.accessToken}` };
+    const created = await page.request.post(`${API_BASE}/work/containers`, {
+      headers,
+      data: { type: "process", title: `Access review ${Date.now()}` },
+    });
+    if (!created.ok()) throw new Error(`container failed: ${await created.text()}`);
+    const opened = await page.request.put(
+      `${API_BASE}/work/containers/${(await created.json()).id}/access`,
+      { headers, data: { visibility: "restricted", rules: [{ role_code: "manager" }] } },
+    );
+    if (!opened.ok()) throw new Error(`access failed: ${await opened.text()}`);
+    await page.close();
+  });
+
+  test("employee does not see the Coverage link and is bounced from /coverage", async ({
+    page,
+  }) => {
+    await setAuthTokens(page, employeeAccess, employeeRefresh);
+    await page.goto("/dashboard");
+    await expect(page.getByTestId("sidebar-nav")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("sidebar-link-coverage")).toHaveCount(0);
+
+    await page.goto("/coverage");
+    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
+    await expectPermissionToast(page);
+  });
+
+  test("manager reads a process opened to managers and opens the list", async ({ page }) => {
+    await setAuthTokens(page, managerAccess, managerRefresh);
+    await page.goto("/dashboard");
+    await expect(page.getByTestId("sidebar-link-coverage")).toBeVisible({ timeout: 15000 });
+    await page.getByTestId("sidebar-link-coverage").click();
+    await expect(page).toHaveURL(/\/coverage$/, { timeout: 10000 });
+    await expect(page.getByTestId("coverage-heading")).toBeVisible({ timeout: 10000 });
   });
 });

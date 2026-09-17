@@ -68,7 +68,12 @@ def host_is_operator_allowed(host: str | None) -> bool:
     return host is not None and host.lower() in _operator_allowed_hosts()
 
 
-def _ip_is_public(ip: _IPAddress) -> bool:
+def ip_is_public(ip: _IPAddress) -> bool:
+    """Public unicast, per the IANA special-purpose registries.
+
+    Shared with callers that do their own HTTP (the company-logo
+    fetch) so the private-range policy lives in one place.
+    """
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         # ::ffff:10.0.0.1 reaches the embedded IPv4 host — judge that.
         ip = ip.ipv4_mapped
@@ -120,7 +125,7 @@ async def _resolve_public_ips(host: str, *, error_code: str) -> list[_IPAddress]
     among public ones is exactly how a rebinding payload looks."""
     ips = await _resolve_ips(host, error_code=error_code)
     for ip in ips:
-        if not _ip_is_public(ip):
+        if not ip_is_public(ip):
             raise AppError(error_code, status.HTTP_400_BAD_REQUEST)
     return ips
 
@@ -179,15 +184,20 @@ class PinnedPublicIPTransport(httpx.AsyncHTTPTransport):
     unvalidated address.
     """
 
-    def __init__(self, *, error_code: str, **kwargs: Any) -> None:
+    def __init__(
+        self, *, error_code: str, require_https: bool = True, **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
         self._error_code = error_code
+        # Provider endpoints must be https; the company-logo fetch accepts
+        # plain http (a tenant pasting a logo URL off their own site).
+        self._require_https = require_https
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         host = request.url.host
         if not host:
             raise AppError(self._error_code, status.HTTP_400_BAD_REQUEST)
-        if request.url.scheme != "https":
+        if self._require_https and request.url.scheme != "https":
             # A row saved before the https requirement still reaches this
             # transport — reject it here too.
             raise AppError(

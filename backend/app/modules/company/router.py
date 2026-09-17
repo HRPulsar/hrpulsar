@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
+from app.core.upload_validation import assert_declared_size_within_limit
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
@@ -83,7 +84,11 @@ async def update_company_profile(
     return await service.update_company_profile(db, current_user.tenant_id, data)
 
 
-@router.post("/settings/company-profile/logo", response_model=CompanyProfileRead)
+@router.post(
+    "/settings/company-profile/logo",
+    response_model=CompanyProfileRead,
+    dependencies=[Depends(assert_declared_size_within_limit)],
+)
 async def upload_logo(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),

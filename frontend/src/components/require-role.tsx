@@ -13,12 +13,34 @@ interface RequireRoleProps {
   manage?: boolean;
   /** Require admin role */
   admin?: boolean;
-  /** HRP-732: require admin, manager or HR (the analytics page). */
-  analytics?: boolean;
+  /** HRP-732: require admin, manager or HR — the read-only management
+   *  surface /analytics. */
+  managementData?: boolean;
+  /** HRP-810: /auth/me opens Coverage. */
+  coverage?: boolean;
+  /** HRP-810: may create a process. */
+  coverageManage?: boolean;
+  /** HRP-622: the recruiting roles (usePermissions.canRecruit). */
+  recruit?: boolean;
 }
 
-export function RequireRole({ children, manage, admin, analytics }: RequireRoleProps) {
-  const { canManage, isAdmin, canViewAnalytics } = usePermissions();
+export function RequireRole({
+  children,
+  manage,
+  admin,
+  managementData,
+  coverage,
+  coverageManage,
+  recruit,
+}: RequireRoleProps) {
+  const {
+    canManage,
+    isAdmin,
+    canViewManagementData,
+    canViewCoverage,
+    canCreateCoverage,
+    canRecruit,
+  } = usePermissions();
   const { user, loading } = useAuth();
   const router = useRouter();
   const t = useTranslations("common");
@@ -27,13 +49,20 @@ export function RequireRole({ children, manage, admin, analytics }: RequireRoleP
   // still null — an aborted /auth/me leaves exactly that state — and reading
   // "no roles" as "not permitted" would bounce an entitled admin off the page.
   const undecided = loading || !user;
+  // First match wins: pass exactly one flag, or the page gets the loosest gate.
   const allowed = admin
     ? isAdmin
-    : analytics
-      ? canViewAnalytics
-      : manage
-        ? canManage
-        : true;
+    : managementData
+      ? canViewManagementData
+      : coverageManage
+        ? canCreateCoverage
+        : coverage
+          ? canViewCoverage
+          : recruit
+            ? canRecruit
+            : manage
+              ? canManage
+              : true;
 
   useEffect(() => {
     if (!undecided && !allowed) {

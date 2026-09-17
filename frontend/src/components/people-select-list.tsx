@@ -55,6 +55,7 @@ export function PeopleSelectList({
       {selectAll && (
         <div className="flex items-center gap-3 border-b p-2">
           <Checkbox
+            aria-label={selectAll.label}
             data-testid={selectAll.testId}
             checked={selectAll.checked}
             disabled={selectAll.disabled}
@@ -83,6 +84,9 @@ export function PeopleSelectList({
               }`}
             >
               <Checkbox
+                // The name sits in a sibling paragraph, so the box itself
+                // reads as "checkbox" to a screen reader without this.
+                aria-label={row.name}
                 checked={isSelected(row.id)}
                 disabled={row.disabled}
                 onCheckedChange={() => onToggle(row.id)}

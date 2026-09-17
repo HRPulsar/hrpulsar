@@ -52,10 +52,10 @@ jobs:
           [ -f ee/requirements.txt ] && pip install -r ee/requirements.txt || true
 
       - name: Lint (ruff)
-        run: cd backend && ruff check app/
+        run: cd backend && ruff check app/ ee/
 
       - name: Type check (mypy)
-        run: cd backend && mypy app/ --ignore-missing-imports
+        run: cd backend && mypy app/ ee/ --ignore-missing-imports
 
       - name: Run tests
         run: cd backend && pytest tests/ -v --tb=short
@@ -91,6 +91,25 @@ jobs:
       - name: Public-tree guards (pre-sync)
         run: ./scripts/sync_repos.sh check
 
+  # The status page is a standalone service (own image, own deps) and is
+  # excluded from the public sync, so this job only exists in the monorepo.
+  status:
+    if: github.repository == 'maximberg/hrpulsar'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -r status/api/requirements.txt pytest pytest-asyncio
+
+      - name: Run tests
+        run: pytest status/tests -v --tb=short
+
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -113,6 +132,20 @@ jobs:
 
       - name: Lint
         run: cd frontend && npm run lint
+
+      # TEST_IDS.md and the checker live in docs/ and scripts/, both excluded
+      # from the public sync — monorepo only.
+      - name: Setup Python
+        if: github.repository == 'maximberg/hrpulsar'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      # Fails on docs-stale / spec-dangling (something references an id the
+      # code no longer renders); docs-missing is printed but does not gate.
+      - name: TEST_IDS catalog drift
+        if: github.repository == 'maximberg/hrpulsar'
+        run: python3 scripts/check_test_ids.py
 
       - name: Unit tests
         run: cd frontend && npm test
@@ -194,6 +227,8 @@ jobs:
         run: cd backend && alembic upgrade heads
         env:
           DATABASE_URL: postgresql+asyncpg://hrpulsar:hrpulsar@localhost:5432/hrpulsar_test
+          JWT_SECRET: test-secret
+          E2E_MODE: "true"
 
       - name: Build frontend
         run: cd frontend && npm run build
@@ -237,8 +272,10 @@ jobs:
       - name: Wait for services
         run: |
           echo "Waiting for backend..."
-          # 90s window: celery beat heartbeats at 30s, allow a couple of cycles.
-          timeout 90 bash -c 'until curl -sf http://localhost:8100/health; do sleep 1; done'
+          # /health may return 503 (degraded) until celery beat lands its first
+          # heartbeat — drop curl --fail and just wait for the HTTP server to
+          # respond at all. Playwright tests run real assertions afterwards.
+          timeout 90 bash -c 'until curl -s -o /dev/null http://localhost:8100/health; do sleep 1; done'
           echo "Waiting for frontend..."
           timeout 60 bash -c 'until curl -sf http://localhost:3100; do sleep 1; done'
 

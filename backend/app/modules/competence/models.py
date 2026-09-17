@@ -1,6 +1,15 @@
 import uuid
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    or_,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -68,6 +77,12 @@ class Competence(BaseModel):
     """Individual competence within a group. tenant_id=NULL → origin."""
 
     __tablename__ = "competences"
+    __table_args__ = (
+        CheckConstraint(
+            "applicable_to IN ('human', 'agent', 'both')",
+            name="ck_competences_applicable_to",
+        ),
+    )
 
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -93,6 +108,11 @@ class Competence(BaseModel):
     )
     is_published: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
+    )
+    # HRP-749: who the competence describes — human | agent | both. Read-only
+    # for clients in the MVP; the human layer of coverage filters on it.
+    applicable_to: Mapped[str] = mapped_column(
+        String(10), default="human", server_default="human", nullable=False
     )
 
     group: Mapped["CompetenceGroup"] = relationship(
@@ -172,6 +192,14 @@ class Indicator(BaseModel):
         back_populates="indicators", lazy="raise_on_sql"
     )
     skill_level: Mapped["SkillLevel"] = relationship(lazy="selectin")
+
+    @classmethod
+    def visible_to(cls, tenant_id: uuid.UUID):
+        """The indicators a tenant reads: its own and the origin library's
+        (``tenant_id IS NULL``). An origin competence is shared, and every
+        tenant may hang its own indicators on it, so a reader that filters
+        by ``competence_id`` alone hands one tenant another tenant's text."""
+        return or_(cls.tenant_id == tenant_id, cls.tenant_id.is_(None))
 
 
 class Material(BaseModel):

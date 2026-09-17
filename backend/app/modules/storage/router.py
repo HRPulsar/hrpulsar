@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.upload_validation import assert_declared_size_within_limit
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
@@ -11,7 +12,11 @@ from app.modules.storage import service
 router = APIRouter(tags=["storage"])
 
 
-@router.post("/files/upload", status_code=201)
+@router.post(
+    "/files/upload",
+    status_code=201,
+    dependencies=[Depends(assert_declared_size_within_limit)],
+)
 async def upload_file(
     file: UploadFile = File(...),
     entity_type: str | None = Form(None),

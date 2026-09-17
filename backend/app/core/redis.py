@@ -38,8 +38,8 @@ async def bump_counter(key: str, ttl_seconds: int) -> int:
     """Count one hit against ``key`` in a window anchored at the first hit.
 
     Returns the running count. Deliberately not a decision: the throttles
-    that call this disagree on what a Redis outage means — signup and demo
-    fail closed, feedback and the demo upload quota fail open — so the
+    that call this disagree on what a Redis outage means — signup, demo
+    and feedback fail closed, the demo upload quota fails open — so the
     error propagates and each caller keeps the policy it already had
     (HRP-596). Same reason the cap itself stays with the caller.
 

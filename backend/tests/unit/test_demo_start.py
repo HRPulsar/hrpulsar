@@ -297,7 +297,7 @@ async def test_start_event_carries_client_hints(
 
     resp = await client.post(
         "/api/demo/start",
-        json={"timezone": "Europe/Moscow"},
+        json={"timezone": "Europe/Moscow", "visitor_id": "v-0123456789ab"},
         headers={
             "User-Agent": "Mozilla/5.0 (probe)",
             "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
@@ -309,6 +309,9 @@ async def test_start_event_carries_client_hints(
     assert seen[0]["user_agent"] == "Mozilla/5.0 (probe)"
     assert seen[0]["accept_language"] == "ru-RU,ru;q=0.9,en;q=0.8"
     assert seen[0]["browser_timezone"] == "Europe/Moscow"
+    # Lets the EE card count a returning visitor's sessions even when
+    # the address changed; absent on older marketing builds.
+    assert seen[0]["visitor_id"] == "v-0123456789ab"
 
 
 @pytest.mark.asyncio
@@ -330,6 +333,16 @@ async def test_start_rejects_malformed_timezone(
     way out of.
     """
     resp = await client.post("/api/demo/start", json={"timezone": value})
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["short", "*" * 65, "has space", "drop<script>"])
+async def test_start_rejects_malformed_visitor_id(
+    client: AsyncClient, admin_role, enable_demo, value
+):
+    """Same reasoning as the time zone: untrusted input, bounded shape."""
+    resp = await client.post("/api/demo/start", json={"visitor_id": value})
     assert resp.status_code == 422, resp.text
 
 

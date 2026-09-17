@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useIsSaas } from "@/hooks/use-is-saas";
 import { api } from "@/lib/api";
-import { API_BASE } from "@/lib/api-base";
 import type { CreditBalance } from "@/lib/types";
 
 interface CostAction {
@@ -95,8 +94,7 @@ export async function fetchCosts(): Promise<Record<string, number>> {
     }
     if (categories === null) {
       try {
-        const res = await fetch(`${API_BASE}/billing/costs`);
-        const base = res.ok ? ((await res.json()) as CostCategory[]) : null;
+        const base = await api.get<CostCategory[]>("/billing/costs");
         categories = Array.isArray(base) ? base : null;
       } catch {
         categories = null;
@@ -131,14 +129,9 @@ async function fetchCreditBalance(): Promise<CreditBalance | null> {
   if (balanceCache) return balanceCache;
   if (balanceFetchPromise) return balanceFetchPromise;
 
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
-
-  balanceFetchPromise = fetch(`${API_BASE}/billing/credits`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
-    .then((res) => (res.ok ? res.json() : null))
-    .then((data: CreditBalance | null) => {
+  balanceFetchPromise = api
+    .get<CreditBalance>("/billing/credits")
+    .then((data) => {
       balanceCache = data;
       return data;
     })
@@ -150,7 +143,16 @@ async function fetchCreditBalance(): Promise<CreditBalance | null> {
   return balanceFetchPromise;
 }
 
-async function fetchThreshold(): Promise<number> {
+/**
+ * Credit warning threshold for this workspace, 0 when billing is disabled
+ * (community build, `/billing/credits` 404s).
+ *
+ * The single owner of that number: `CreditCostBadge` used to keep a second
+ * cache of its own with a different invalidator, so changing the threshold
+ * in Billing settings left one of the two surfaces on the old value until a
+ * full reload (M22d).
+ */
+export async function fetchThreshold(): Promise<number> {
   const balance = await fetchCreditBalance();
   const t = balance?.credit_warning_threshold;
   // null → billing disabled (community build) → no confirmation.

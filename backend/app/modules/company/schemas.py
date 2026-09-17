@@ -23,6 +23,9 @@ class TenantRead(BaseModel):
     default_locale: str | None = None
     # HRP-623: whether colleagues see the grade on a directory card.
     directory_show_grades: bool = False
+    # W6: the hourly rate the Coverage ROI is priced at, and its currency.
+    hourly_rate: float | None = None
+    hourly_rate_currency: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -51,6 +54,10 @@ class CompanyProfileUpdate(BaseModel):
     default_locale: str | None = Field(default=None, max_length=10)
     # HRP-623: admin-only toggle for grades on directory cards.
     directory_show_grades: bool | None = None
+    # W6: the Coverage ROI rate. An explicit null clears it; the currency
+    # is free text like ``vacancies.salary_currency``.
+    hourly_rate: float | None = Field(default=None, ge=0, le=100_000)
+    hourly_rate_currency: str | None = Field(default=None, max_length=10)
 
 
 class CompanyProfileRead(TenantRead):

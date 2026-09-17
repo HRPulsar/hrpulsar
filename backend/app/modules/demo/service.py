@@ -302,6 +302,7 @@ async def create_demo_session(
     user_agent: str | None = None,
     accept_language: str | None = None,
     browser_timezone: str | None = None,
+    visitor_id: str | None = None,
     existing_token: str | None = None,
 ) -> dict[str, Any]:
     """Spin up a brand-new public-demo tenant + user + seed.
@@ -445,6 +446,11 @@ async def create_demo_session(
                 # route, not the clock, so "Europe/Moscow" behind a
                 # Paris exit node names the visitor's real country.
                 "browser_timezone": browser_timezone or "",
+                # Marketing-site visitor id, when that build sends one:
+                # the only hint that survives a change of address, so
+                # the EE card counts a returning visitor's sessions off
+                # it instead of guessing from address + browser.
+                "visitor_id": visitor_id or "",
             },
         )
     except Exception:  # noqa: BLE001

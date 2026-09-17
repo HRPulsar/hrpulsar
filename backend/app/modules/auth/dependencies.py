@@ -17,40 +17,57 @@ from app.modules.auth.models import User
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
+async def resolve_user_from_access_token(db: AsyncSession, token: str) -> User | None:
+    """The full access-token check, shared by every authenticated surface.
+
+    Returns ``None`` when the token is not a usable access token for a live
+    account: bad signature/shape, wrong ``type``, unknown or deactivated
+    user, or a ``ver`` claim minted before the user's current epoch (bumped
+    on password change/reset — review P1-12; absent claim → 0, matching
+    tokens predating that change). A blocking Employee status still raises,
+    because callers surface its specific reason.
+
+    The WebSocket handshake authenticates off the same helper, so a surface
+    added here cannot silently skip revocation (review B7).
+    """
+    try:
+        payload = decode_token(token)
+    except JWTError:
+        return None
+    user_id = payload.get("sub")
+    if user_id is None or payload.get("type") != "access":
+        return None
+    try:
+        uid = uuid.UUID(user_id)
+    except ValueError:
+        return None
+
+    result = await db.execute(
+        select(User).options(selectinload(User.roles)).where(User.id == uid)
+    )
+    user = result.scalar_one_or_none()
+    if user is None or not user.is_active:
+        return None
+    if payload.get("ver", 0) != user.token_version:
+        return None
+
+    from app.modules.auth.service import assert_employee_active
+
+    await assert_employee_active(db, user)
+    return user
+
+
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    credentials_exception = AppError(
-        "could_not_validate_credentials",
-        status.HTTP_401_UNAUTHORIZED,
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = decode_token(token)
-        user_id = payload.get("sub")
-        token_type = payload.get("type")
-        if user_id is None or token_type != "access":
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-
-    result = await db.execute(
-        select(User)
-        .options(selectinload(User.roles))
-        .where(User.id == uuid.UUID(user_id))
-    )
-    user = result.scalar_one_or_none()
-    if user is None or not user.is_active:
-        raise credentials_exception
-    # Reject tokens minted before the user's current epoch — bumped on
-    # password change/reset (review P1-12). Absent claim → 0, matching the
-    # default for users/tokens predating this change.
-    if payload.get("ver", 0) != user.token_version:
-        raise credentials_exception
-    from app.modules.auth.service import assert_employee_active
-
-    await assert_employee_active(db, user)
+    user = await resolve_user_from_access_token(db, token)
+    if user is None:
+        raise AppError(
+            "could_not_validate_credentials",
+            status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     # HRP-249 (D1): keep demo-tenant inactivity TTL fresh on every
     # authenticated request. Best-effort, debounced via Redis — non-demo

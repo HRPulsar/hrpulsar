@@ -25,9 +25,37 @@ their own stricter allowlists.
 
 from __future__ import annotations
 
-from fastapi import status
+from fastapi import Request, status
 
+from app.config import settings
 from app.core.errors import AppError
+
+# Multipart framing (boundaries, part headers, the other form fields) around
+# a file at the limit. Generous on purpose: this guard only has to stop the
+# bodies that are orders of magnitude too big.
+_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+def assert_declared_size_within_limit(request: Request) -> None:
+    """Reject an oversize upload from ``Content-Length`` alone.
+
+    Starlette spools a multipart part to a temp file while parsing, so by
+    the time ``UploadFile.size`` is readable the bytes have already been
+    written. Checking the declared length first keeps the obviously-too-big
+    body off the disk. A body with no ``Content-Length`` (chunked) falls
+    through to the per-file checks.
+    """
+    raw = request.headers.get("content-length")
+    if raw is None:
+        return
+    try:
+        declared = int(raw)
+    except ValueError:
+        return
+    limit = settings.max_upload_mb * 1024 * 1024 + _MULTIPART_OVERHEAD_BYTES
+    if declared > limit:
+        raise AppError("upload_file_too_large", 413, max_mb=settings.max_upload_mb)
+
 
 # Raster images — served inline, therefore the security-critical category.
 _IMAGE_MIME_TO_EXT: dict[str, str] = {

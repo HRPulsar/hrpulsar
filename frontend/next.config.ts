@@ -4,26 +4,6 @@ import createNextIntlPlugin from "next-intl/plugin";
 import * as fs from "fs";
 import * as path from "path";
 
-// Load monorepo-root .env for server-side env vars (blog CMS credentials, etc.).
-// Next.js only auto-loads .env files next to next.config; the project keeps
-// secrets in the repo-root .env. Existing process.env wins over file values.
-try {
-  const rootEnv = fs.readFileSync(path.resolve(process.cwd(), "../.env"), "utf-8");
-  for (const rawLine of rootEnv.split("\n")) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq < 0) continue;
-    const key = line.slice(0, eq).trim();
-    if (!key || key in process.env) continue;
-    let value = line.slice(eq + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    process.env[key] = value;
-  }
-} catch {}
-
 // App version: prefer env var (Docker build arg), fallback to version.py, then "dev"
 let APP_VERSION = process.env.APP_VERSION || "dev";
 if (APP_VERSION === "dev") {
@@ -42,6 +22,19 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_APP_VERSION: APP_VERSION,
   },
   output: "standalone",
+  async redirects() {
+    return [
+      // The recruitment index used to be a server component calling
+      // redirect(); rendered under the client-side RequireRole gate it
+      // tripped React's dev performance tracking ("negative time stamp").
+      // A config redirect never renders anything.
+      {
+        source: "/recruitment",
+        destination: "/recruitment/requisitions",
+        permanent: false,
+      },
+    ];
+  },
 };
 
 // i18n (F1): next-intl request config — inner wrapper, composed before
@@ -49,8 +42,13 @@ const nextConfig: NextConfig = {
 const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 const intlConfig = withNextIntl(nextConfig);
 
-// Wrap with Sentry only when DSN is configured
-const hasSentry = !!process.env.NEXT_PUBLIC_SENTRY_DSN;
+// Wrap with Sentry when the build can do something useful with it: a
+// build-time DSN, or upload credentials (M31 — the DSN now normally reaches
+// the browser at runtime via window.__ENV__, so the auth token is what tells
+// us this build should ship source maps).
+const hasSentry = !!(
+  process.env.NEXT_PUBLIC_SENTRY_DSN || process.env.SENTRY_AUTH_TOKEN
+);
 
 export default hasSentry
   ? withSentryConfig(intlConfig, {
@@ -58,6 +56,10 @@ export default hasSentry
       sourcemaps: {
         deleteSourcemapsAfterUpload: true,
       },
+      // Must match the `release` the SDKs report (sentry.*.config.ts,
+      // src/instrumentation-client.ts) or the uploaded maps are never
+      // applied to the events.
+      release: { name: `hrpulsar@${APP_VERSION}` },
       // Suppress Sentry CLI logs in dev
       silent: true,
     })

@@ -143,6 +143,8 @@ class EmployeeRead(BaseModel):
     # tile uses it for "joined {first_login_at}"; falls back to
     # ``hire_date`` when null (never logged in).
     user_first_login_at: datetime | None = None
+    # HRP-806: whether ``POST /employees/{id}/set-password-link`` would send.
+    set_password_link_available: bool = False
     division_name: str | None = None
     avatar_url: str | None = None
     alert: EmployeeAlert | None = None

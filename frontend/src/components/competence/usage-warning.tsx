@@ -26,7 +26,7 @@ const AREA_LABEL_KEYS: Array<{ key: keyof CompetenceUsage; labelKey: string }> =
 
 /** Translated usage areas. `t` is passed in so vitest can pin the key set
  *  without an intl provider. */
-export function listUsageAreas(
+function listUsageAreas(
   t: (key: string) => string,
   usage: CompetenceUsage | null,
 ): string[] {

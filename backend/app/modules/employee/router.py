@@ -1,7 +1,7 @@
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access_scope import (
@@ -12,12 +12,14 @@ from app.core.access_scope import (
 )
 from app.core.errors import AppError
 from app.database import get_db
+from app.modules.auth import service as auth_service
 from app.modules.auth.dependencies import (
     get_current_user,
     require_admin,
     require_role,
 )
 from app.modules.auth.models import User
+from app.modules.auth.router import invitations_limiter
 from app.modules.employee import service
 from app.modules.employee.issues import IssueCode
 from app.modules.employee.schemas import (
@@ -248,6 +250,21 @@ async def set_role(
     return await service.set_employee_role(
         db, current_user.tenant_id, employee_id, data.role_code, current_user
     )
+
+
+@router.post("/employees/{employee_id}/set-password-link", status_code=204)
+@invitations_limiter.limit("3/minute")
+async def resend_set_password_link(
+    request: Request,
+    employee_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin()),
+):
+    """HRP-806: email an employee who has not set a password a fresh link.
+
+    Same role and throttle as resending an invitation.
+    """
+    await auth_service.resend_set_password_link(db, current_user.tenant_id, employee_id)
 
 
 # --- Events ---

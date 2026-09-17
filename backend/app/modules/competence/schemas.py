@@ -86,6 +86,9 @@ class CompetenceRead(BaseModel):
     tenant_id: uuid.UUID | None
     is_active: bool
     is_published: bool
+    # HRP-749: read-only in the MVP (no client editor) — deliberately absent
+    # from the create/update schemas.
+    applicable_to: str
     created_at: datetime
     is_origin: bool = False
     is_used: bool = False

@@ -7,7 +7,6 @@ import { useLocale, useTranslations } from "next-intl";
 import { AlertTriangle, ArrowLeft, Download, Info, Loader2 } from "lucide-react";
 
 import { api } from "@/lib/api";
-import { API_BASE } from "@/lib/api-base";
 import { cn } from "@/lib/utils";
 import {
   candidateVacancyStatusLabel,
@@ -308,13 +307,9 @@ export default function AssessmentCanvasPage() {
   async function handleExport(format: "xlsx" | "csv") {
     setXlsxLoading(true);
     try {
-      const token = localStorage.getItem("access_token");
-      const res = await fetch(
-        `${API_BASE}/recruitment/vacancies/${id}/assessment-matrix/export.${format}?${exportQuery()}`,
-        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      const blob = await api.fetchBlob(
+        `/recruitment/vacancies/${id}/assessment-matrix/export.${format}?${exportQuery()}`,
       );
-      if (!res.ok) throw new Error(String(res.status));
-      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

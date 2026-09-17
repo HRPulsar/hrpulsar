@@ -627,9 +627,7 @@ export function MaterialsAIDialog({
                             rel="noreferrer"
                             className="text-primary underline"
                           >
-                            {/* eslint-disable react/jsx-no-literals -- accepted F2 debt (HRP-476) */}
-                            link
-                            {/* eslint-enable react/jsx-no-literals */}
+                            {t("fieldLink")}
                           </a>
                         )}
                       </div>

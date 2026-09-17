@@ -80,6 +80,12 @@ def email_provider_configured() -> bool:
 
 def send_email(to: str, subject: str, html_body: str) -> tuple[bool, str | None]:
     """Send an email via Resend or SMTP. Returns (success, message_id)."""
+    # Header-injection guard for every sender at once: ~40 template
+    # renderers, the DB-template path and the EE senders all reach a
+    # provider through here, and a CR/LF in an interpolated candidate or
+    # tenant name would otherwise split the Subject header (review §3).
+    # The three renderers that sanitize their own subject stay as they are.
+    subject = " ".join(subject.split())
     if settings.resend_api_key:
         return _send_via_resend(to, subject, html_body)
     if settings.smtp_host:
@@ -156,7 +162,8 @@ def _send_via_smtp(to: str, subject: str, html_body: str) -> tuple[bool, str | N
         msg["Message-ID"] = f"<{message_id}>"
         msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+        # A relay that never answers must not hang the caller for good.
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
             if settings.smtp_user:
                 server.starttls()
                 server.login(settings.smtp_user, settings.smtp_password)
@@ -228,6 +235,19 @@ def send_password_reset_email(to: str, token: str, *, locale: str = "en") -> boo
     from app.core.email_templates import render_password_reset_email
 
     subject, html = render_password_reset_email(token, locale=locale)
+    ok, _ = send_email(to, subject, html)
+    return ok
+
+
+def send_account_created_email(
+    to: str, name: str, token: str, expire_days: int, *, locale: str = "en"
+) -> bool:
+    """Send the set-password link for an account created by an import."""
+    from app.core.email_templates import render_account_created_email
+
+    subject, html = render_account_created_email(
+        name, token, expire_days, locale=locale
+    )
     ok, _ = send_email(to, subject, html)
     return ok
 

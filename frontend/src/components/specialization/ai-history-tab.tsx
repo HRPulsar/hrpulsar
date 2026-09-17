@@ -35,10 +35,6 @@ const STATUS_TONE: Record<SessionStatus, string> = {
   cancelled: BADGE_COLOR.neutral,
 };
 
-function formatDate(iso: string): string {
-  return formatDateTime(iso);
-}
-
 function summaryLine(
   item: SessionHistoryItem,
   t: (key: string, values?: Record<string, string | number>) => string,
@@ -165,7 +161,7 @@ export function AiHistoryTab({ specializationId }: Props) {
                 className="border-t"
               >
                 <td className="px-3 py-2 text-xs text-muted-foreground">
-                  {formatDate(item.created_at)}
+                  {formatDateTime(item.created_at)}
                 </td>
                 <td className="px-3 py-2">{item.user_full_name}</td>
                 <td

@@ -10,7 +10,7 @@ HRPulsar is an open source platform for talent and competency management. This p
 
 A central record for every person in the company: position, division, hire date, status, and avatar.
 
-- Two ways to add an employee: send an email invitation (the card is created when the person accepts) or create a card manually for an existing user
+- Three ways to add an employee: send an email invitation (the card is created when the person accepts), create a card manually for an existing user, or import a list from a file — each imported person is emailed a link to set their password
 - Status lifecycle: active, on leave, inactive, terminated. Inactive and terminated accounts lose access immediately, and the employee is notified by email
 - The profile header shows five summary tiles: Status, Tenure, Assessments, Goals progress, and Last assessment. Tile counts respect role visibility, so employees never see drafts hidden from them
 - Goals progress averages completion across the employee's open development plans; a hint next to the tile explains the formula
@@ -477,6 +477,73 @@ An internal job board for open positions and project opportunities.
 
 ---
 
+## Coverage
+
+Break a process or a project down into steps, see who covers each step - an AI agent type, a person on the team, or nobody yet - and hand the gaps to recruiting. Coverage is the first thing the screen opens on.
+
+### Breakdowns
+
+- Describe a process or a project in plain language; the AI drafts the ordered list of steps in two calls - one splits the description into steps, one tags every step with the capabilities it requires from a fixed catalog of seventeen
+- Every step carries who answers for it (nobody, reputational, formal, regulatory), whether it produces a draft or changes the outside world, an optional reversibility, and the model's estimate of hours per run and runs per year, which you correct in place
+- The first breakdown of a container applies itself: there is nothing to replace, so you land on the coverage with a number instead of on a button. A regeneration still asks, and shows the current and the proposed step lists side by side before you decide
+- Long generations show a progress strip with the phase and a running clock
+- Edit the draft in place: rename, reorder by drag-and-drop, add or delete steps, change any capability chip; accept the whole breakdown when it matches reality
+- Step attributes fold away behind a Details disclosure: who answers for the step, what it produces, and the hours estimate you can correct
+- Capability chips show the model's confidence and the fragment of your description it relied on; a doubtful chip is marked as a suggestion until you confirm or remove it
+- Reclassify a single step by telling the model what it really is ("this is a scripted call with the bank")
+
+### Coverage
+
+- Per step: the executor verdict - an agent type from the built-in packs (or an agent you registered), a person whose assessments or grade profile carry the capabilities, or a gap - and the automation mode (automatable, draft then review, review required, blocked by judgement or by physical work)
+- A person's coverage comes from completed assessments against the passing score of their grade, or from the competence matrix of their position; the matched person is shown with their position
+- The tab opens on two plaques: what share of this work moves to an agent, and what the work costs in hours a year and in your own money
+- Next to the share, how well an agent does the work: better than a person, as well as a person, a draft a person finishes, or a person's own job. A step is rated by its weakest capability, and the same rating sits on every step's row
+- The money comes from one hourly rate you set on the company profile; until you set it the plaques show hours only. What the agent itself costs is deliberately absent - the skill runs in your own tools, so we never see its usage, and the plaque says so
+- The hours freed and the hours that move to review are separate lines: reviewing a result still takes a person's time, and we do not guess how much
+- Three buckets - moves to an agent, moves to review, stays with people - as step lists, and as percentages of yearly hours on breakdowns of four or more steps; a step without an hours estimate is listed but not counted
+- A verdict is marked preliminary while the breakdown is not accepted or rests on an unconfirmed capability
+- Assign the person who does a step, and the person who checks and signs it, from your active employees. An assigned person outranks the match - an agent's included, which stays on the row as what could take the step - and closes the gap even without the capabilities, with a "No matching skills" badge naming what is missing
+- A step where an agent drafts or someone answers for the result asks "Who checks?" until an accountable person is named; assignments change neither the shares nor the money
+
+### To do
+
+Everything the breakdown leaves unclosed, in two sections.
+
+- **Nobody does this yet**: the steps no agent type and no person on the team covers, each labelled hire or agency. Pick them and open a hire need: a draft vacancy in Recruitment with the steps as its description and the closest competences pre-filled
+- A single gap can also be handed over straight from its Coverage row, choosing whether to look inside the company first, hire from outside, or give the work to an agency
+- Or assign a gap to someone on the team straight from the list: it leaves To do and is no longer offered for hiring
+- **An agent could, nobody has**: the steps an agent type covers where you have registered no agent and written no skill file. Generate the skill for one of them, or for all of them at once behind a confirmation, or register the agent you already run for that step
+- Hiring is refused for a step of the second kind on the server, not only in the checkboxes: a stale screen must not open a vacancy for work an agent is about to take
+
+### Access
+
+Not every process is for the whole company - payroll, severance or compensation work often is not.
+
+- Admins and HR see and edit every process. Besides them, a process is seen by its owner and by the people assigned to its steps
+- Each process is visible either to the whole company or only to the roles, positions and employees you name. A new process starts restricted, with its creator as the owner
+- The owner edits the process - steps, AI runs, acceptance and who sees it - but does not delete it or hand it to another owner; that stays with admins and HR, so a process never depends on one person staying with the company
+- An owner who has left is marked as such, and admins or HR name a new one - an archived process included
+- A colleague who only reads a process sees every verdict and who is assigned to a step, but not which colleague a match found or what an assignee lacks: both come from assessments. A manager sees them for the people in their own divisions, and everyone sees their own
+- Changes to the owner, the visibility and the rules are kept in the process's history
+- The Coverage menu entry appears for anyone who can see at least one process; a process you cannot see answers as if it did not exist
+
+### Agent Skills
+
+- For any step an agent can perform, generate a `SKILL.md` for it: the pack's skeleton filled with your company's competence indicators, the step's attributes and its acceptance point
+- Generation runs in the background with a progress strip and a running clock, so a closed tab never loses a file that was in fact written
+- Preview the file, download it, or register the agent you already use for that step
+
+---
+
+### Agent registry
+
+The registry behind the Coverage verdicts, as an API (`/api/ai-workforce/*`); a screen for it is on the roadmap.
+
+- Nine built-in agent packs name what an agent type can do in catalog capabilities; a pack can be switched off for the company
+- Register the agents the company actually runs - vendor, category, cost, contract renewal, data classification, security review, EU AI Act risk level - each on a pack, with capabilities added or removed for that one agent
+- Assign an agent to an employee with its allowed use cases, a supervision level and an accountable owner; an employee requests an assignment, an admin or HR approves, rejects or revokes it, and expiring assignments are listed
+- Describe multi-agent workflows step by step, and read every change in an audit feed filtered by actor, target and period
+
 ## AI Features
 
 ### Competence Generation
@@ -510,7 +577,7 @@ Per-workspace configuration that applies to every AI call.
 ### Authentication & Security
 
 - Email and password registration with email verification; self-hosted installs get a self-serve registration page that creates the workspace and admin account
-- JWT access tokens (30 minutes) with refresh tokens (7 days), password reset by email, and rate-limited verification resend without email enumeration
+- JWT access tokens (30 minutes) with refresh tokens (7 days), single-use password reset links by email (an address with accounts in several organizations gets one link that sets the password for all of them; sign-in then asks which organization to open), and rate-limited verification resend without email enumeration
 - Installations without an email provider still work: accounts verify automatically at registration
 - Invitation sign-ups skip verification, since the invitation itself proves ownership of the address
 
@@ -681,6 +748,7 @@ A first-login wizard for newly registered organizations.
 
 ## Data Import
 
-- Bulk employee import from Excel: email, name, position, hire date, work experience, education, courses
+- Bulk employee import from Excel or CSV (comma- or semicolon-separated, dates as YYYY-MM-DD or DD.MM.YYYY): email, name, position, hire date, work experience, education, courses
+- Every imported employee gets an email with a link to set their own password — no shared default password. The link works once, expires after 7 days and confirms the address; until the person sets a password, an admin can resend it from the employee card, which voids the previous link. On a self-hosted installation without an email provider, the link is written to the server log instead
 - Dictionary import: specializations, grades, skill levels
 - Drag-and-drop upload, validation with row-level errors, and background processing with progress tracking

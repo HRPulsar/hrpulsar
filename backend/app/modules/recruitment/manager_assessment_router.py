@@ -14,7 +14,6 @@ from fastapi import (
     APIRouter,
     Body,
     Depends,
-    HTTPException,
     Request,
     Response,
     status,
@@ -22,6 +21,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.client_ip import client_ip
+from app.core.dev_guard import require_dev_endpoint
 from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import require_role
@@ -35,6 +35,7 @@ from app.modules.recruitment import (
 from app.modules.recruitment.manager_assessment_schemas import (
     CompetenceScoreIn,
     ExtendInviteIn,
+    FinalNotesIn,
     IndicatorScoreIn,
     ManagerAssessmentInviteCreate,
     PublicEvaluatorNameUpdate,
@@ -43,7 +44,10 @@ from app.modules.recruitment.manager_assessment_schemas import (
     ScaleCreate,
     ScaleUpdate,
 )
-from app.modules.recruitment.routers.common import RECRUITMENT_VIEWER_ROLES
+from app.modules.recruitment.routers.common import (
+    RECRUITMENT_VIEWER_ROLES,
+    recruitment_public_limiter,
+)
 from app.modules.recruitment.scope import (
     assessment_scope,
     cv_scope,
@@ -312,7 +316,7 @@ async def set_indicator_score_endpoint(
 @router.post("/v1/assessments/{assessment_id}/submit")
 async def submit_assessment_endpoint(
     assessment_id: uuid.UUID,
-    payload: dict[str, Any] = Body(default_factory=dict),
+    payload: FinalNotesIn = Body(default_factory=FinalNotesIn),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "recruiter", "manager")),
     _scope: None = Depends(assessment_scope),
@@ -322,7 +326,7 @@ async def submit_assessment_endpoint(
         current_user.tenant_id,
         current_user.id,
         assessment_id,
-        final_notes=payload.get("final_notes"),
+        final_notes=payload.final_notes,
     )
 
 
@@ -429,6 +433,7 @@ def _security_headers(response: Response) -> None:
 
 
 @public_router.get("/v1/public/assessments/{token}")
+@recruitment_public_limiter.limit("60/minute")
 async def public_get_endpoint(
     token: str,
     request: Request,
@@ -440,6 +445,7 @@ async def public_get_endpoint(
 
 
 @public_router.get("/v1/public/assessments/{token}/resume-preview")
+@recruitment_public_limiter.limit("60/minute")
 async def public_resume_preview_endpoint(
     token: str,
     request: Request,
@@ -452,6 +458,7 @@ async def public_resume_preview_endpoint(
 
 
 @public_router.post("/v1/public/assessments/{token}/consent/accept")
+@recruitment_public_limiter.limit("20/minute")
 async def public_accept_endpoint(
     token: str,
     request: Request,
@@ -463,6 +470,7 @@ async def public_accept_endpoint(
 
 
 @public_router.post("/v1/public/assessments/{token}/consent/decline")
+@recruitment_public_limiter.limit("20/minute")
 async def public_decline_endpoint(
     token: str,
     request: Request,
@@ -474,6 +482,7 @@ async def public_decline_endpoint(
 
 
 @public_router.patch("/v1/public/assessments/{token}/name")
+@recruitment_public_limiter.limit("20/minute")
 async def public_update_name_endpoint(
     token: str,
     payload: PublicEvaluatorNameUpdate,
@@ -488,28 +497,29 @@ async def public_update_name_endpoint(
 
 
 @public_router.patch("/v1/public/assessments/{token}/notes")
+@recruitment_public_limiter.limit("60/minute")
 async def public_save_notes_endpoint(
     token: str,
     request: Request,
     response: Response,
-    payload: dict[str, Any] = Body(default_factory=dict),
+    payload: FinalNotesIn = Body(default_factory=FinalNotesIn),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     _security_headers(response)
-    notes = payload.get("final_notes")
-    if not isinstance(notes, str):
+    if payload.final_notes is None:
         raise AppError("final_notes_required", status.HTTP_400_BAD_REQUEST)
     return await public_service.public_save_final_notes(
-        db, token, notes, ip=_client_ip(request)
+        db, token, payload.final_notes, ip=_client_ip(request)
     )
 
 
 @public_router.post("/v1/public/assessments/{token}/submit")
+@recruitment_public_limiter.limit("20/minute")
 async def public_submit_endpoint(
     token: str,
     request: Request,
     response: Response,
-    payload: dict[str, Any] = Body(default_factory=dict),
+    payload: FinalNotesIn = Body(default_factory=FinalNotesIn),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     _security_headers(response)
@@ -517,11 +527,12 @@ async def public_submit_endpoint(
         db,
         token,
         ip=_client_ip(request),
-        final_notes=payload.get("final_notes"),
+        final_notes=payload.final_notes,
     )
 
 
 @public_router.patch("/v1/public/assessments/{token}/competence-scores/{competence_id}")
+@recruitment_public_limiter.limit("60/minute")
 async def public_set_competence_score_endpoint(
     token: str,
     competence_id: uuid.UUID,
@@ -542,6 +553,7 @@ async def public_set_competence_score_endpoint(
 
 
 @public_router.patch("/v1/public/assessments/{token}/indicator-scores/{indicator_id}")
+@recruitment_public_limiter.limit("60/minute")
 async def public_set_indicator_score_endpoint(
     token: str,
     indicator_id: uuid.UUID,
@@ -577,14 +589,9 @@ async def dev_get_manager_invite_token(
     """
     from sqlalchemy import select
 
-    from app.config import settings
     from app.modules.recruitment.models import AssessmentInvite
 
-    if not settings.e2e_mode:
-        # Deliberately a bare HTTPException, not AppError: the response must
-        # stay indistinguishable from a nonexistent route — an error code
-        # would fingerprint the hidden dev surface.
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    require_dev_endpoint()
     inv = (
         await db.execute(
             select(AssessmentInvite).where(AssessmentInvite.id == invite_id)

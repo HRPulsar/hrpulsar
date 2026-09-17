@@ -241,6 +241,59 @@ class TestReportListAndGet:
         )
         assert total == 0
 
+    async def test_delete_report_keeps_rows_when_s3_refuses(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """The File row is the only pointer to the exported object, which
+        carries candidate PII — dropping it on a failed S3 delete would
+        leave the export in the bucket forever (review §3)."""
+        from app.config import settings
+        from app.modules.storage.models import File
+
+        monkeypatch.setattr(settings, "s3_endpoint", "http://minio.test:9000")
+        vac = await _make_vacancy(db, tenant, user)
+        with patch(
+            "app.modules.recruitment.tasks.generate_report_task.delay"
+        ) as mock_delay:
+            mock_delay.return_value.id = "tid"
+            res = await service.enqueue_report(
+                db,
+                tenant.id,
+                user.id,
+                uuid.UUID(str(vac["id"])),
+                ReportGenerateRequest(),
+            )
+        export_id = uuid.UUID(str(res["export_id"]))
+        file_row = File(
+            tenant_id=tenant.id,
+            name="report.xlsx",
+            original_name="report.xlsx",
+            path=f"{tenant.id}/report/{uuid.uuid4()}.xlsx",
+            size=10,
+            mime_type="application/vnd.ms-excel",
+            uploaded_by=user.id,
+        )
+        db.add(file_row)
+        await db.flush()
+        export = await db.get(ConsolidatedReport, export_id)
+        export.file_id = file_row.id
+        await db.commit()
+
+        with (
+            patch("app.core.s3.delete_file", return_value=False),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await service.delete_report(db, tenant.id, export_id)
+        assert exc.value.status_code == 502
+        assert await db.get(ConsolidatedReport, export_id) is not None
+        assert await db.get(File, file_row.id) is not None
+
+        with patch("app.core.s3.delete_file", return_value=True) as deleted:
+            await service.delete_report(db, tenant.id, export_id)
+        assert deleted.call_args[0][0] == file_row.path
+        assert await db.get(ConsolidatedReport, export_id) is None
+        assert await db.get(File, file_row.id) is None
+
 
 # ---------------------------------------------------------------------------
 # XLSX renderer

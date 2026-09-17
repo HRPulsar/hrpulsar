@@ -463,7 +463,7 @@ async def _snapshot_group(
     )
     own_comps = list(comps_q.scalars().all())
     own_indicators = await _fetch_indicators_for_competences(
-        db, [c.id for c in own_comps]
+        db, tenant_id, [c.id for c in own_comps]
     )
     own_competences = [
         {
@@ -489,7 +489,7 @@ async def _snapshot_group(
 
 
 async def _fetch_indicators_for_competences(
-    db: AsyncSession, competence_ids: list[uuid.UUID]
+    db: AsyncSession, tenant_id: uuid.UUID, competence_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, list[dict[str, str]]]:
     """Fetch active indicators grouped by competence id.
 
@@ -505,6 +505,7 @@ async def _fetch_indicators_for_competences(
         .join(SkillLevel, SkillLevel.id == Indicator.skill_level_id)
         .where(
             Indicator.competence_id.in_(competence_ids),
+            Indicator.visible_to(tenant_id),
             Indicator.is_active.is_(True),
         )
     )
@@ -649,7 +650,7 @@ async def _fetch_group_descendants(
     # so augment-mode title matching can recognise indicators that already
     # exist anywhere below the target group.
     indicators_by_comp = await _fetch_indicators_for_competences(
-        db, [c.id for c in all_comps]
+        db, tenant_id, [c.id for c in all_comps]
     )
 
     def render(g: CompetenceGroup) -> dict[str, Any]:
@@ -737,8 +738,8 @@ async def _snapshot_competence(
     db: AsyncSession,
     comp: Competence,
     *,
+    tenant_id: uuid.UUID,
     specialization_id: uuid.UUID | None = None,
-    tenant_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Freeze the competence + (optional) matrix context for the LLM.
 
@@ -752,7 +753,9 @@ async def _snapshot_competence(
         select(Indicator, SkillLevel.title)
         .join(SkillLevel, SkillLevel.id == Indicator.skill_level_id)
         .where(
-            Indicator.competence_id == comp.id, Indicator.is_active.is_(True)
+            Indicator.competence_id == comp.id,
+            Indicator.visible_to(tenant_id),
+            Indicator.is_active.is_(True),
         )
     )
     snapshot: dict[str, Any] = {
@@ -1182,7 +1185,7 @@ async def create_session(
         if spec_context_id is not None:
             await _ensure_specialization_visible(db, tenant_id, spec_context_id)
         snapshot = await _snapshot_competence(
-            db, comp, specialization_id=spec_context_id, tenant_id=tenant_id
+            db, comp, tenant_id=tenant_id, specialization_id=spec_context_id
         )
 
     else:  # pragma: no cover — Pydantic validates the literal

@@ -17,9 +17,9 @@ import type {
 } from "@/lib/types";
 
 /** Employees strictly below this percent are "at risk". */
-export const AT_RISK_MAX_PERCENT = 50;
+const AT_RISK_MAX_PERCENT = 50;
 /** Employees strictly above this percent are "top performers". */
-export const TOP_PERFORMER_MIN_PERCENT = 75;
+const TOP_PERFORMER_MIN_PERCENT = 75;
 /** Avatars rendered inline on a highlight plate before collapsing to "+n". */
 export const MAX_INLINE_AVATARS = 5;
 
@@ -84,7 +84,7 @@ export function filterEmployees(
 }
 
 /** Highest match first, ties alphabetically — the sheet ordering. */
-export function sortByPercentDesc(
+function sortByPercentDesc(
   employees: GroupAnalyticsEmployee[],
 ): GroupAnalyticsEmployee[] {
   // Callers pass pre-filtered non-null lists today, but sink blanks explicitly

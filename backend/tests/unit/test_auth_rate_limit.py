@@ -46,6 +46,30 @@ class TestAuthRateLimit:
         )
         assert blocked.status_code == 429
 
+    async def test_verify_email_throttled_per_ip(self, client: AsyncClient, _limited):
+        """Token guessing on /auth/verify-email is throttled like login."""
+        allowed = _limit_count(settings.auth_rate_limit_login)
+        payload = {"token": "not-a-real-token"}
+        for _ in range(allowed):
+            resp = await client.post("/api/auth/verify-email", json=payload)
+            assert resp.status_code != 429
+        blocked = await client.post("/api/auth/verify-email", json=payload)
+        assert blocked.status_code == 429
+
+    async def test_accept_invite_throttled_per_ip(self, client: AsyncClient, _limited):
+        allowed = _limit_count(settings.auth_rate_limit_login)
+        payload = {
+            "token": "not-a-real-token",
+            "password": "Str0ngPassw0rd",
+            "first_name": "Ann",
+            "last_name": "Lee",
+        }
+        for _ in range(allowed):
+            resp = await client.post("/api/auth/accept-invite", json=payload)
+            assert resp.status_code != 429
+        blocked = await client.post("/api/auth/accept-invite", json=payload)
+        assert blocked.status_code == 429
+
     async def test_disabled_by_default_fixture(self, client: AsyncClient):
         # Without the _limited fixture the autouse disable keeps the endpoint
         # open no matter how many times we hit it.

@@ -82,7 +82,8 @@ describe("Canvas export (HRP-744)", () => {
   it("asks the API for both formats instead of building CSV in the browser", () => {
     expect(SOURCE).toMatch(/assessment-matrix\/export\.\$\{format\}/);
     // The second copy of the rendering rules is what shipped a CSV with
-    // no Total column; it must not come back.
-    expect(SOURCE).not.toMatch(/csvSafe|Blob\(/);
+    // no Total column; it must not come back. (`new Blob(` — the download
+    // itself goes through the api client's blob helper, M22c.)
+    expect(SOURCE).not.toMatch(/csvSafe|new Blob\(/);
   });
 });

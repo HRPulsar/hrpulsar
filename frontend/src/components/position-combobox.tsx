@@ -20,6 +20,9 @@ interface PositionComboboxProps {
   ) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Offer "create a new position" under the list (default). Off where the
+   *  caller only picks, e.g. an access rule on a process (HRP-810). */
+  allowCreate?: boolean;
   "data-testid"?: string;
 }
 
@@ -28,6 +31,7 @@ export function PositionCombobox({
   onValueChange,
   placeholder,
   disabled,
+  allowCreate = true,
   "data-testid": testId,
 }: PositionComboboxProps) {
   const t = useTranslations("company");
@@ -207,6 +211,7 @@ export function PositionCombobox({
             </Command.List>
 
             {/* Quick create */}
+            {allowCreate && (
             <div className="border-t p-2">
               {showCreate ? (
                 <div className="flex gap-1">
@@ -248,6 +253,7 @@ export function PositionCombobox({
                 </button>
               )}
             </div>
+            )}
           </Command>
         </Popover.Content>
       </Popover.Portal>

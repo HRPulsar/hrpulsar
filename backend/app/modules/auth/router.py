@@ -14,15 +14,17 @@ from fastapi import (
     status,
 )
 from jwt import PyJWTError as JWTError
-from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.client_ip import client_ip
+from app.core.dev_guard import dev_endpoints_enabled, require_dev_endpoint
 from app.core.errors import AppError
 from app.core.i18n import resolve_locale_from_request
+from app.core.rate_limit import make_limiter
 from app.core.security import decode_token
+from app.core.upload_validation import assert_declared_size_within_limit
 from app.database import get_db
 from app.modules.auth import service
 from app.modules.auth.dependencies import (
@@ -96,7 +98,7 @@ def _invitation_rate_key(request: Request) -> str:
 # key_style="endpoint": slowapi's default ("url") buckets by the full path,
 # so per-invitation URLs (/invitations/{id}/resend) would each get their own
 # bucket and a user could multiply the resend budget by creating invitations.
-invitations_limiter = Limiter(key_func=_invitation_rate_key, key_style="endpoint")
+invitations_limiter = make_limiter(_invitation_rate_key)
 
 
 def _auth_ip_key(request: Request) -> str:
@@ -112,16 +114,13 @@ def _auth_ip_key(request: Request) -> str:
 # Separate limiter for the auth abuse surface (login spray, mail-bomb via
 # forgot/resend, refresh/magic-link enumeration). Keyed by source IP; the
 # invitations limiter above stays keyed by user id.
-auth_limiter = Limiter(key_func=_auth_ip_key, key_style="endpoint")
+auth_limiter = make_limiter(_auth_ip_key)
 
 # E2E suites drive hundreds of UI logins from a single host IP, so the
 # per-IP abuse limiter would flake them with 429s. Same tier check as
 # _require_dev_endpoint: a stray E2E_MODE=true on a deployed environment
 # keeps the limiter armed.
-if settings.e2e_mode and (settings.sentry_environment or "").lower() not in {
-    "production",
-    "staging",
-}:
+if dev_endpoints_enabled():
     auth_limiter.enabled = False
 
 
@@ -131,14 +130,10 @@ def _require_dev_endpoint() -> None:
     404 unless ``E2E_MODE`` is on AND we are not on a deployed tier —
     belt-and-braces (review P3-48) so a misconfigured production carrying a
     stray ``E2E_MODE=true`` still cannot expose auto-register / token reveal /
-    origin-group seeding.
+    origin-group seeding. Shared with the recruitment seed routes via
+    ``app.core.dev_guard``.
     """
-    env = (settings.sentry_environment or "").lower()
-    if not settings.e2e_mode or env in {"production", "staging"}:
-        # Deliberately a bare HTTPException, not AppError: the response must
-        # stay indistinguishable from a nonexistent route — an error code
-        # would fingerprint the hidden dev surface.
-        raise HTTPException(status_code=404, detail="Not found")
+    require_dev_endpoint()
 
 
 router = APIRouter(tags=["auth"])
@@ -155,7 +150,10 @@ async def register(
 
 
 @router.post("/auth/verify-email", response_model=VerifyEmailResponse)
-async def verify_email(data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+@auth_limiter.limit(settings.auth_rate_limit_login)
+async def verify_email(
+    request: Request, data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)
+):
     return await service.verify_email(db, data.token)
 
 
@@ -257,7 +255,11 @@ async def update_me(
     return await service.update_profile(db, current_user.id, data)
 
 
-@router.post("/auth/avatar", response_model=UserRead)
+@router.post(
+    "/auth/avatar",
+    response_model=UserRead,
+    dependencies=[Depends(assert_declared_size_within_limit)],
+)
 async def upload_avatar(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
@@ -354,6 +356,27 @@ async def dev_get_invitation_token(
     if inv is None:
         raise AppError("invitation_not_found", 404)
     return {"token": inv.token}
+
+
+@router.get("/auth/dev/signup-verify-token")
+async def dev_get_signup_verify_token(
+    email: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-mint a pending sign-up's verify token. E2E-only.
+
+    The token is never stored — ``signup.service`` mints a fresh one for
+    every verification mail — so this hands the E2E suite exactly what the
+    inbox would have carried, without an inbox.
+    """
+    from app.core.security import create_signup_verify_token
+    from app.modules.signup import service as signup_service
+
+    _require_dev_endpoint()
+    row = await signup_service._find_by_email(db, email.strip())
+    if row is None or row.status != "pending_email_verify":
+        raise AppError("signup_request_not_found", 404)
+    return {"token": create_signup_verify_token(str(row.id))}
 
 
 @router.post("/auth/dev/seed-origin-group", status_code=201)
@@ -492,6 +515,9 @@ async def bulk_create_invitations(
     add its own catalog entries rather than expecting a localized string.
     """
     inviter_role_codes = [r.code for r in current_user.roles]
+    # Read once: the rollback below expires current_user, and reloading it
+    # lazily in an async session raises (HRP-833).
+    tenant_id, inviter_id = current_user.tenant_id, current_user.id
     created: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
     for inv_data in data.invitations:
@@ -499,8 +525,8 @@ async def bulk_create_invitations(
             created.append(
                 await service.create_invitation(
                     db,
-                    current_user.tenant_id,
-                    current_user.id,
+                    tenant_id,
+                    inviter_id,
                     inv_data,
                     inviter_role_codes=inviter_role_codes,
                 )
@@ -515,7 +541,7 @@ async def bulk_create_invitations(
             logger.exception(
                 "bulk invitation failed for %s (tenant %s)",
                 inv_data.email,
-                current_user.tenant_id,
+                tenant_id,
             )
             await db.rollback()
             failed.append(
@@ -606,7 +632,9 @@ async def get_invitation_preview(
 
 
 @router.post("/auth/accept-invite", response_model=VerifyEmailResponse)
+@auth_limiter.limit(settings.auth_rate_limit_login)
 async def accept_invitation(
+    request: Request,
     data: AcceptInvitationRequest,
     db: AsyncSession = Depends(get_db),
 ):

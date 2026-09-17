@@ -33,8 +33,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { API_BASE, ApiError } from "@/lib/api";
-import { getAccessToken } from "@/lib/auth";
+import { api, ApiError } from "@/lib/api";
 import {
   emptyCertificate,
   emptyEducation,
@@ -375,26 +374,16 @@ export function ParsedResumeEditor({
     value: Parameters<typeof updateParsedResumeSection<K>>[2],
   ): Promise<void> {
     const nextPayload = updateParsedResumeSection(parsed, section, value);
-    const token = getAccessToken();
-    const res = await fetch(`${API_BASE}/recruitment/candidates/${card.id}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(etag ? { "If-Match": etag } : {}),
-      },
-      body: JSON.stringify({ parsed_resume_jsonb: nextPayload }),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new ApiError(
-        res.status,
-        typeof body.detail === "string" ? body.detail : res.statusText,
-        body.detail,
-      );
-    }
-    const data = (await res.json()) as CandidateCanonical;
-    onSaved(data, res.headers.get("ETag"));
+    // sendWithMeta is the ETag-aware arm of the api client: same If-Match
+    // round-trip as the hand-rolled fetch, plus the central 401-refresh and
+    // ApiError shape the 412 handler below already expects.
+    const { data, headers } = await api.sendWithMeta<CandidateCanonical>(
+      `/recruitment/candidates/${card.id}`,
+      "PATCH",
+      { parsed_resume_jsonb: nextPayload },
+      etag ? { headers: { "If-Match": etag } } : undefined,
+    );
+    onSaved(data, headers.get("ETag"));
     toast.success(t("resumeEditorToastSectionUpdated"));
   }
 

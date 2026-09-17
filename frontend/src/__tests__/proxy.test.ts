@@ -209,6 +209,19 @@ describe("app domain (app.hrpulsar.com)", () => {
     expect(result.type).toBe("next");
   });
 
+  it("serves /magic-login without auth (approval link from the signup email)", () => {
+    const result = proxy(makeRequest("/magic-login?token=abc123", { host }));
+    expect(result.type).toBe("next");
+  });
+
+  it.each(["/magic-login", "/verify-email", "/reset-password"])(
+    "serves %s with its token even when authenticated",
+    (path) => {
+      const result = proxy(makeRequest(`${path}?token=abc123`, { host, hasToken: true }));
+      expect(result.type).toBe("next");
+    },
+  );
+
   it("serves /register during a demo session instead of bouncing into the sandbox", () => {
     const result = proxy(
       makeRequest("/register", { host, hasToken: true, demoSession: true }),

@@ -12,7 +12,10 @@
 import { test, expect } from "./fixtures";
 import { registerUser, setAuthTokens, loginViaUI } from "./helpers";
 
-const API_BASE = "http://localhost:8100/api";
+// Same default as every other spec, overridable: a worktree runs its
+// backend on its own port, and the hardcoded one made this file the only
+// spec that could not be run outside CI.
+const API_BASE = process.env.E2E_API_BASE ?? "http://localhost:8100/api";
 
 function isoToday(): string {
   return new Date().toISOString().slice(0, 10);
@@ -303,5 +306,46 @@ test.describe("Cold start — Manager assessment public link (HRP-186)", () => {
     await expect(
       page.locator('[data-testid^="assessment-round-invite-"]').first(),
     ).toBeVisible({ timeout: 15000 });
+  });
+});
+
+test.describe("Cold start — Coverage (HRP-762)", () => {
+  test("fresh tenant, no employees → process via UI → a step → non-empty agent verdict", async ({
+    page,
+  }) => {
+    const admin = await registerUser(page);
+    await setAuthTokens(page, admin.accessToken, admin.refreshToken);
+
+    await page.goto("/coverage");
+    await expect(page.getByTestId("coverage-empty")).toBeVisible({ timeout: 10000 });
+    await page.getByTestId("coverage-btn-create-process").click();
+    await page.getByTestId("coverage-input-title").fill(`Cold start close ${Date.now()}`);
+    await page
+      .getByTestId("coverage-textarea-description")
+      .fill("Every month Finance reconciles the bank accounts against the ledger.");
+    await page.getByTestId("coverage-btn-submit").click();
+    await expect(page).toHaveURL(/\/coverage\/[0-9a-f-]+$/, { timeout: 10000 });
+
+    await page.getByTestId("coverage-tab-steps").click();
+    await page.getByTestId("coverage-step-input-new").fill("Reconcile the bank accounts");
+    await page.getByTestId("coverage-step-btn-add").click();
+    const row = page.locator('li[data-testid^="coverage-step-row-"]').first();
+    await expect(row).toBeVisible({ timeout: 10000 });
+    await row.locator('[data-testid$="-btn-capabilities"]').click();
+    await page.getByTestId("coverage-capability-option-P2").click();
+    await page.getByTestId("coverage-btn-capabilities-save").click();
+    await expect(row.locator('[data-testid$="-capability-P2"]')).toBeVisible();
+
+    // Zero employees, zero registered agents: the built-in packs alone give
+    // a non-empty answer - a checking step is covered by an agent type.
+    await page.getByTestId("coverage-tab-coverage").click();
+    const verdict = page.locator('[data-testid^="coverage-verdict-"]').first();
+    await expect(verdict).toHaveAttribute("data-verdict", "agent", { timeout: 10000 });
+    // P2 alone is a strong code: the step lands in the "moves to an agent"
+    // bucket. One step is shorter than four, so the bucket stays a list and
+    // shows no percentage (decision 2026-08-31, kept by W6 §3.1).
+    await expect(page.getByTestId("coverage-summary-automatable")).toContainText(
+      "Reconcile the bank accounts",
+    );
   });
 });

@@ -99,7 +99,7 @@ export const ASSESSMENT_STATUS_KEYS: Record<AssessmentStatusCode, string> = {
 };
 
 /** i18n key for a known status code, or `null` for anything unexpected. */
-export function assessmentStatusKey(status: string): string | null {
+function assessmentStatusKey(status: string): string | null {
   return ASSESSMENT_STATUS_KEYS[status as AssessmentStatusCode] ?? null;
 }
 

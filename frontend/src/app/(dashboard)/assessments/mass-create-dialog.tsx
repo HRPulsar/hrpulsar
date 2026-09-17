@@ -240,7 +240,7 @@ export function MassCreateDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg" data-testid="assessments-modal-mass-create">
+      <DialogContent className="sm:max-w-lg" data-testid="assessments-modal-mass-create">
         <DialogHeader>
           <DialogTitle>
             {step === 1 && t("massStep1Title")}

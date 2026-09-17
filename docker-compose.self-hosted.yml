@@ -50,11 +50,20 @@ services:
       minio-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      # /health/ready checks DB + Redis only — the actual definition of
+      # "ready to serve traffic". Plain /health also checks the celery beat
+      # heartbeat and returns 503 while the worker is down, which would keep
+      # this container unhealthy and stop caddy (depends_on: service_healthy)
+      # from ever starting: no web UI because a background job stalled.
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health/ready"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     restart: unless-stopped
 
   frontend:
@@ -135,14 +144,25 @@ services:
       redis:
         condition: service_started
     healthcheck:
-      # CMD-SHELL so $HOSTNAME expands to the worker's default node name
-      test: ["CMD-SHELL", "celery -A app.core.celery_app:celery inspect ping -d celery@$$HOSTNAME --timeout 10"]
+      # The `status:celery:heartbeat` key, refreshed every 30s (TTL 90s) by
+      # the beat-scheduled `write_celery_heartbeat` task: it proves the
+      # beat -> broker -> worker path actually moves work. The old probe
+      # (`celery inspect ping -d celery@$HOSTNAME`) broke two ways — it
+      # never got a pong on a separate-host Redis while the worker was
+      # happily executing tasks, and a HOSTNAME= line in .env pointed it at
+      # a node name that does not exist (HRP-459, HRP-728).
+      test: ["CMD", "python", "-c", "import os, sys, redis; sys.exit(0 if redis.Redis.from_url(os.environ['REDIS_URL'], socket_connect_timeout=5, socket_timeout=5).exists('status:celery:heartbeat') else 1)"]
       interval: 30s
-      # 30s (not 15s): the celery CLI cold-imports the whole app — on small
-      # 2-vCPU hosts that alone can blow a 15s budget (HRP-459).
-      timeout: 30s
-      retries: 3
-      start_period: 30s
+      timeout: 10s
+      retries: 5
+      # Covers a cold boot plus the first beat tick.
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          # 1G, not the 512M default: the worker OOM-looped on a fleet host —
+          # importing the full app plus one busy task does not fit in 512M.
+          memory: 1G
     restart: unless-stopped
 
   celery-beat:
@@ -162,7 +182,19 @@ services:
       redis:
         condition: service_started
     healthcheck:
-      disable: true
+      # Same heartbeat probe as celery-worker (see there): the key is written
+      # by a beat-scheduled task, so a stalled beat — process alive, nothing
+      # scheduled — shows up here instead of silently stopping every
+      # background job.
+      test: ["CMD", "python", "-c", "import os, sys, redis; sys.exit(0 if redis.Redis.from_url(os.environ['REDIS_URL'], socket_connect_timeout=5, socket_timeout=5).exists('status:celery:heartbeat') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     restart: unless-stopped
 
   postgres:

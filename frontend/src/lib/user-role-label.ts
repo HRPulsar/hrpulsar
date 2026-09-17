@@ -19,7 +19,7 @@
  * Strongest first, and `employee` is excluded on purpose — see above.
  * Codes outside this list are ranked above `employee` but below these.
  */
-export const ROLE_PRECEDENCE = [
+const ROLE_PRECEDENCE = [
   "platform_admin",
   "admin",
   "hr",

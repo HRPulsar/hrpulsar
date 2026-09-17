@@ -399,3 +399,19 @@ async def test_execute_session_broadcasts_error(db, user, tenant):
     ]
     assert "running" in statuses
     assert "error" in statuses
+
+
+def test_ws_rejects_token_minted_before_the_current_epoch(ws_client, user, tenant):
+    """Review B7: the socket used to skip the ``ver`` check that every HTTP
+    request makes, so a token revoked by a password change kept streaming."""
+    from app.core.security import create_access_token
+
+    client, _ = ws_client
+    stale = create_access_token(
+        str(user.id), str(tenant.id), token_version=user.token_version + 1
+    )
+    with (
+        pytest.raises(WebSocketDisconnect),
+        client.websocket_connect(f"/api/ws?token={stale}"),
+    ):
+        pass

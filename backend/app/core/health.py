@@ -13,6 +13,17 @@ from app.database import async_session
 logger = logging.getLogger(__name__)
 
 
+def _probe_error(exc: Exception, prefix: str = "") -> dict:
+    """Probe failure with the exception *class* only.
+
+    ``/health`` answers unauthenticated: a DSN or endpoint error
+    stringifies the host — and for a DSN, the password — so the detail
+    goes to the log and the response carries the type name.
+    """
+    logger.warning("health probe failed", exc_info=exc)
+    return {"status": "error", "error": f"{prefix}{type(exc).__name__}"}
+
+
 async def _check_db() -> dict:
     """Check database connectivity."""
     start = time.perf_counter()
@@ -24,7 +35,7 @@ async def _check_db() -> dict:
             "latency_ms": round((time.perf_counter() - start) * 1000, 1),
         }
     except Exception as exc:  # noqa: BLE001 - health probe reports the failure
-        return {"status": "error", "error": str(exc)}
+        return _probe_error(exc)
 
 
 async def _check_redis() -> dict:
@@ -44,7 +55,7 @@ async def _check_redis() -> dict:
             "latency_ms": round((time.perf_counter() - start) * 1000, 1),
         }
     except Exception as exc:  # noqa: BLE001 - health probe reports the failure
-        return {"status": "error", "error": str(exc)}
+        return _probe_error(exc)
 
 
 async def _check_celery() -> dict:
@@ -72,7 +83,7 @@ async def _check_celery() -> dict:
         async with redis_client() as r:
             value = await r.get("status:celery:heartbeat")
     except Exception as exc:  # noqa: BLE001 - health probe reports the failure
-        return {"status": "error", "error": str(exc)}
+        return _probe_error(exc)
 
     if value is not None:
         return {
@@ -91,7 +102,7 @@ async def _check_celery() -> dict:
         if pong:
             return {"status": "ok", "mode": "control"}
     except Exception as exc:  # noqa: BLE001 - health probe reports the failure
-        return {"status": "error", "error": f"no heartbeat; ping failed: {exc}"}
+        return _probe_error(exc, prefix="no heartbeat; ping failed: ")
 
     return {"status": "error", "error": "no recent heartbeat"}
 
@@ -114,7 +125,7 @@ async def _check_s3() -> dict:
             "latency_ms": round((time.perf_counter() - start) * 1000, 1),
         }
     except Exception as exc:  # noqa: BLE001 - health probe reports the failure
-        return {"status": "error", "error": str(exc)}
+        return _probe_error(exc)
 
 
 async def health(request: Request) -> JSONResponse:

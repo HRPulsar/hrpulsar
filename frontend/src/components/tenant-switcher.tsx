@@ -23,6 +23,19 @@ function tenantInitials(name: string): string {
     .toUpperCase();
 }
 
+/** Accent-gradient square with the tenant's initials. */
+export function TenantInitials({ name, className }: { name: string; className: string }) {
+  return (
+    <span
+      aria-hidden
+      className={`flex shrink-0 items-center justify-center rounded font-bold text-white ${className}`}
+      style={{ background: "linear-gradient(135deg,var(--brand-accent),var(--brand-accent-deep))" }}
+    >
+      {tenantInitials(name)}
+    </span>
+  );
+}
+
 export function SidebarTenantSwitcher() {
   const { user, tenants, switchTenant } = useAuth();
   const [switching, setSwitching] = useState(false);
@@ -37,6 +50,11 @@ export function SidebarTenantSwitcher() {
   const isPlatformAdmin = user.is_platform_admin;
   const others = tenants.filter((t) => t.id !== user.tenant_id);
   const hasMenu = others.length > 0 || isPlatformAdmin;
+  // HRP-808: the sidebar header already shows this tenant (logo or
+  // initials + name), so the switcher drops its own mark — and with
+  // nothing to switch to it would be a plain repeat of the header.
+  const tenantInHeader = user.tenant_hide_platform_logo;
+  if (tenantInHeader && !hasMenu) return null;
 
   async function handleSwitch(tenantId: string) {
     setSwitching(true);
@@ -49,13 +67,9 @@ export function SidebarTenantSwitcher() {
 
   const trigger = (
     <span className="flex w-full items-center gap-2 rounded-md border border-sidebar-border bg-card px-2 py-1.5 text-left text-[12.5px]">
-      <span
-        aria-hidden
-        className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-[10px] font-bold text-white"
-        style={{ background: "linear-gradient(135deg,var(--brand-accent),var(--brand-accent-deep))" }}
-      >
-        {tenantInitials(current.name)}
-      </span>
+      {!tenantInHeader && (
+        <TenantInitials name={current.name} className="h-[22px] w-[22px] text-[10px]" />
+      )}
       <span className="min-w-0 flex-1 truncate font-medium">{current.name}</span>
       {hasMenu && (
         <svg

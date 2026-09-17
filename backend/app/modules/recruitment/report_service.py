@@ -285,19 +285,21 @@ async def delete_report(
         if file_row:
             file_path = file_row.path
 
+    if file_path:
+        # Object before rows: the File row is the only pointer to the key,
+        # so deleting it first would leave an exported consolidated report
+        # (candidate PII) in the bucket with nothing left to retry from.
+        # S3 delete is idempotent — an already-missing object answers OK.
+        from app.config import settings
+        from app.core.s3 import delete_file
+
+        if not delete_file(file_path) and settings.s3_endpoint:
+            raise AppError("storage_delete_failed", status.HTTP_502_BAD_GATEWAY)
+
     await db.delete(export)
     if file_row is not None:
         await db.delete(file_row)
     await db.commit()
-
-    if file_path:
-        # Best-effort S3 delete — a missing object must not fail the API.
-        try:
-            from app.core.s3 import delete_file
-
-            delete_file(file_path)
-        except Exception:  # noqa: BLE001 - best-effort S3 delete
-            pass
 
 
 # ---------------------------------------------------------------------------

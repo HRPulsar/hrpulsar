@@ -225,6 +225,24 @@ async def _assert_invite_round_open(db: AsyncSession, invite: AssessmentInvite) 
     await assert_round_open(db, invite.tenant_id, invite.round_id)
 
 
+async def _lock_invite(db: AsyncSession, invite: AssessmentInvite) -> None:
+    """Serialise the sheet's writers on the invite row.
+
+    Autosave (score → ``in_progress``) and submit each touch the invite and
+    the assessment, and the unit of work flushes them in whatever order
+    the two objects went dirty — two of those at once deadlocked in
+    Postgres. Every writer takes the invite lock first, so the second one
+    waits instead; ``populate_existing`` re-reads the row it waited for,
+    so ``_ensure_editable`` judges the status that won.
+    """
+    await db.execute(
+        select(AssessmentInvite)
+        .where(AssessmentInvite.id == invite.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+
+
 def _mark_in_progress(invite: AssessmentInvite) -> None:
     """HRP-358: the first saved score flips the invite to ``in_progress``.
 
@@ -721,6 +739,7 @@ async def public_accept_consent(
     db: AsyncSession, token: str, *, ip: str | None = None
 ) -> dict[str, Any]:
     invite = await resolve_invite_by_token(db, token, ip=ip)
+    await _lock_invite(db, invite)
     if invite.status == "pending":
         invite.status = "opened"
     if invite.opened_at is None:
@@ -747,6 +766,7 @@ async def public_decline(
     db: AsyncSession, token: str, *, ip: str | None = None
 ) -> dict[str, Any]:
     invite = await resolve_invite_by_token(db, token, ip=ip)
+    await _lock_invite(db, invite)
     if invite.status == "submitted":
         # A stale consent tab must not demote a completed evaluation whose
         # scores already feed the round aggregate (review [2]).
@@ -770,6 +790,7 @@ async def public_update_name(
     db: AsyncSession, token: str, name: str, *, ip: str | None = None
 ) -> dict[str, Any]:
     invite = await resolve_invite_by_token(db, token, ip=ip)
+    await _lock_invite(db, invite)
     _ensure_editable(invite)
     await _assert_invite_round_open(db, invite)
     invite.evaluator_name = name
@@ -857,6 +878,7 @@ async def public_submit(
     final_notes: str | None = None,
 ) -> dict[str, Any]:
     invite = await resolve_invite_by_token(db, token, ip=ip)
+    await _lock_invite(db, invite)
     _ensure_editable(invite)
     if invite.round_id is None:
         raise AppError("invite_has_no_round", status.HTTP_400_BAD_REQUEST)
@@ -911,6 +933,7 @@ async def public_save_final_notes(
     in-progress draft alive.
     """
     invite = await resolve_invite_by_token(db, token, ip=ip)
+    await _lock_invite(db, invite)
     _ensure_editable(invite)
     if invite.round_id is None:
         raise AppError("invite_has_no_round", status.HTTP_400_BAD_REQUEST)
@@ -944,6 +967,7 @@ async def public_set_competence_score(
     )
 
     invite = await resolve_invite_by_token(db, token, ip=ip)
+    await _lock_invite(db, invite)
     _ensure_editable(invite)
     if invite.round_id is None:
         raise AppError("invite_has_no_round", status.HTTP_400_BAD_REQUEST)
@@ -993,6 +1017,7 @@ async def public_set_indicator_score(
     )
 
     invite = await resolve_invite_by_token(db, token, ip=ip)
+    await _lock_invite(db, invite)
     _ensure_editable(invite)
     if invite.round_id is None:
         raise AppError("invite_has_no_round", status.HTTP_400_BAD_REQUEST)

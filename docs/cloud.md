@@ -27,11 +27,11 @@ Try HRPulsar Cloud before signing up — no account, no credit card.
 
 Pay only for what you use. Every organization starts with a free tier — no credit card required.
 
-- **Free tier** — 2,000 credits per month, automatically refilled. Unused credits never expire
+- **Free tier** — a free balance of 2,000 credits, topped back up to 2,000 on the 1st of each month. Your balance never goes down at refill; the free pool is capped at 2,000
 - **Credit-based pricing** — each action (creating employees, running assessments, AI generation) has a transparent credit cost
 - **Four credit packs** — Starter ($25 / 2,500 cr), Growth ($85 / 10,000 cr — most popular), Scale ($375 / 50,000 cr), Volume ($1,400 / 200,000 cr). Bigger packs unlock a better per-credit rate
-- **Auto top-up (coming soon)** — set a balance threshold, pick a pack, and we refill automatically. No subscription, no expiring credits, cancel any time
 - **Enterprise Annual contracts** — defined yearly budget at the steepest discount, with optional auto-renewal. Talk to sales
+- **Data import is priced per row** — importing employees or other records costs credits for every data row in the uploaded file, not once per file, so a 500-person import costs what 500 people cost. A file the platform cannot read, or an import type it does not know, is refused without charging anything
 - **Read operations are always free** — browsing, viewing, and searching cost nothing
 - **Spending visibility** — real-time credit balance, transaction history, and spending analytics
 - **Bonus credits** — additional credits granted by support for special cases
@@ -48,6 +48,7 @@ Need your own brand, region, or legal setup? HRPulsar runs as a fully isolated d
 
 - **Complete data isolation** — dedicated database, storage, and backups per deployment; data never leaves the chosen jurisdiction
 - **Your brand** — name, logo, colors, and email identity, no HRPulsar branding anywhere
+- **Branded workspaces for your clients** — give an individual organization its own logo and colors on a shared deployment
 - **Data residency compliance** — hosting and logs stay in-country; only anonymous health metrics reach central monitoring
 - **Localized billing** — local currency, local legal entity, invoice-based payments
 - **Same product, same updates** — every deployment receives releases from the same pipeline, flagship-first with automatic rollback
@@ -92,6 +93,10 @@ Treat specializations as first-class career profiles, not just dictionary entrie
 - **Position lifecycle and occupancy** — Active / On hold / Frozen / Closed status per role, with `Filled / Plan` drill-downs that show every employee on the line, flagged when their account, profile, assessments, or development plan need attention
 - **Per-context learning materials** — keep one canonical material library and decide per (material × specialization) what to hide or surface, so a Backend developer's PDP doesn't compete with a Designer's reading list
 - **Unassigned employees view** — an admin landing for HR to bulk-assign employees who came in without a position, no SQL or import dance required
+
+## Coverage Benchmarks
+
+Coverage - the breakdown of your processes into steps and the verdict on who covers each one - runs the same everywhere, self-hosted or cloud. What the cloud is set up to add later is the view across companies: how much of a comparable process others already hand to agents, and which skills work for them. Only capability codes are compared, never a company's text. This is a direction, not a commitment.
 
 ## Priority Support
 

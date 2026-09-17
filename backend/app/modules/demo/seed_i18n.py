@@ -113,6 +113,9 @@ TRANSLATABLE_KEYS = frozenset(
         "source_company",
         "institution",
         "degree",
+        # HRP-746 — the work container's goal line, display copy beside
+        # its title and description. No other fixture carries the key.
+        "goal",
     }
 )
 
@@ -289,6 +292,7 @@ def localized_structures() -> list[Any]:
         INTERVIEW_SHAPES,
     )
     from app.modules.demo.seed_data_talent_market import TALENT_CARDS
+    from app.modules.demo.seed_data_work import WORK_CONTAINERS
 
     return [
         VACANCIES,
@@ -315,6 +319,7 @@ def localized_structures() -> list[Any]:
         EXTRA_PARSED_RESUMES,
         INTERVIEW_SHAPES,
         TALENT_CARDS,
+        WORK_CONTAINERS,
     ]
 
 

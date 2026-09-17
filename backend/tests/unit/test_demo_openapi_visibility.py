@@ -62,3 +62,12 @@ def test_platform_admin_dashboard_endpoint_hidden(saas_schema):
     paths = saas_schema.get("paths", {})
     assert "/api/platform/dashboard" not in paths
     assert "/api/platform/tenants" not in paths
+
+
+def test_enterprise_blog_endpoints_hidden(saas_schema):
+    """Release-2.0 review M36: ee/blog is the enterprise CMS behind the
+    landing — the public spec must not advertise it."""
+    paths = saas_schema.get("paths", {})
+    assert not [p for p in paths if p.startswith("/api/blog")], (
+        "the 'blog' tag must be in _HIDDEN_TAGS"
+    )

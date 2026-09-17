@@ -1,20 +1,37 @@
 import asyncio
+import base64
+import binascii
 import contextlib
+import hashlib
+import hmac
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query, Request, WebSocket, WebSocketDisconnect
-from jwt import PyJWTError as JWTError
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import decode_token
+from app.config import settings
+from app.core.errors import AppError
 from app.core.websocket import manager
 from app.database import async_session, get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import (
+    get_current_user,
+    require_role,
+    resolve_user_from_access_token,
+)
 from app.modules.auth.models import User
 from app.modules.notification import service
 
@@ -117,24 +134,17 @@ _WS_HEARTBEAT_INTERVAL_SECONDS = 30
 
 
 async def _resolve_ws_user(db: AsyncSession, token: str) -> User | None:
-    """Decode JWT and load the active user. Returns None on any failure."""
+    """Authenticate the handshake exactly like an HTTP request would.
+
+    Shares ``resolve_user_from_access_token`` with ``get_current_user`` so
+    the socket honours token revocation (``ver``) and the Employee-status
+    block; the latter raises, which here is just another rejected
+    handshake (review B7).
+    """
     try:
-        payload = decode_token(token)
-    except JWTError:
+        return await resolve_user_from_access_token(db, token)
+    except HTTPException:
         return None
-    user_id = payload.get("sub")
-    token_type = payload.get("type")
-    if not user_id or token_type != "access":
-        return None
-    try:
-        uid = uuid.UUID(user_id)
-    except ValueError:
-        return None
-    result = await db.execute(select(User).where(User.id == uid))
-    user = result.scalar_one_or_none()
-    if user is None or not user.is_active:
-        return None
-    return user
 
 
 async def _ws_heartbeat(ws: WebSocket) -> None:
@@ -199,6 +209,60 @@ async def websocket_endpoint(
 # --- I3: Resend webhook for delivery status updates ---
 
 
+# Svix (Resend's webhook transport) rejects a signature this far from now,
+# so a captured-and-replayed callback cannot be resent later.
+_WEBHOOK_MAX_SKEW_SECONDS = 5 * 60
+
+
+def _verify_svix_signature(request: Request, body: bytes) -> None:
+    """Verify the Svix headers Resend signs its webhooks with.
+
+    ``svix-signature`` carries space-separated ``v1,<base64 hmac>`` entries
+    (a secret rotation ships two), each over
+    ``"{id}.{timestamp}.{body}"``. Raises 401 on anything short of a match,
+    including an unconfigured secret — accepting unsigned callbacks would
+    let anyone rewrite the tenant's email delivery log.
+    """
+    secret = settings.resend_webhook_secret
+    if not secret:
+        # Only Resend calls this endpoint. A site on SMTP (or with no
+        # provider) has nothing to configure — refuse quietly, the warning
+        # is for the operator who does send through Resend.
+        if settings.resend_api_key:
+            logger.warning(
+                "RESEND_WEBHOOK_SECRET is not configured — refusing the Resend "
+                "delivery webhook. Set it to the signing secret from the Resend "
+                "dashboard to re-enable delivery tracking."
+            )
+        raise AppError("webhook_signature_invalid", status.HTTP_401_UNAUTHORIZED)
+
+    svix_id = request.headers.get("svix-id")
+    svix_timestamp = request.headers.get("svix-timestamp")
+    svix_signature = request.headers.get("svix-signature")
+    if not (svix_id and svix_timestamp and svix_signature):
+        raise AppError("webhook_signature_invalid", status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        sent_at = int(svix_timestamp)
+    except ValueError:
+        raise AppError("webhook_signature_invalid", status.HTTP_401_UNAUTHORIZED)
+    if abs(time.time() - sent_at) > _WEBHOOK_MAX_SKEW_SECONDS:
+        raise AppError("webhook_signature_invalid", status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        key = base64.b64decode(secret.removeprefix("whsec_"), validate=True)
+    except binascii.Error:
+        raise AppError("webhook_signature_invalid", status.HTTP_401_UNAUTHORIZED)
+
+    signed = f"{svix_id}.{svix_timestamp}.".encode() + body
+    expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+    for entry in svix_signature.split():
+        version, _, value = entry.partition(",")
+        if version == "v1" and hmac.compare_digest(value, expected):
+            return
+    raise AppError("webhook_signature_invalid", status.HTTP_401_UNAUTHORIZED)
+
+
 @router.post("/webhooks/email", include_in_schema=False)
 async def resend_webhook(
     request: Request,
@@ -207,12 +271,14 @@ async def resend_webhook(
     """Handle Resend webhook events for email delivery tracking.
 
     Resend sends events: email.sent, email.delivered, email.bounced,
-    email.complained, email.delivery_delayed.
-    No auth — Resend signs webhooks but we accept all for simplicity.
+    email.complained, email.delivery_delayed. Every call must carry a valid
+    Svix signature over the raw body.
     """
+    body = await request.body()
+    _verify_svix_signature(request, body)
     try:
-        payload = await request.json()
-    except Exception:  # noqa: BLE001 - malformed webhook payload rejected
+        payload = json.loads(body)
+    except ValueError:  # malformed webhook payload rejected
         return {"ok": False}
 
     event_type = payload.get("type", "")

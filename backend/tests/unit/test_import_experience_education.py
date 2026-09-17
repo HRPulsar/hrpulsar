@@ -2,7 +2,7 @@
 
 With async import (I3), start_import() queues a Celery task and returns immediately.
 These tests verify that the job is created correctly and the Celery task is queued.
-The actual row processing logic is tested via test_celery_import_task.py.
+The actual row processing logic is tested via test_import_set_password_link.py.
 """
 
 import base64
@@ -53,6 +53,9 @@ class _FakeUpload:
 
     async def read(self) -> bytes:
         return self._data
+
+    async def seek(self, offset: int) -> None:
+        """The billing wrapper rewinds the upload after counting its rows."""
 
 
 class TestImportWorkExperience:

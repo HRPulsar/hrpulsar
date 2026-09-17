@@ -14,6 +14,8 @@
  * on top of the preset's accent (point tweak per site).
  */
 
+import { SAFE_CSS_COLOR } from "@/lib/brand";
+
 export interface ThemePreset {
   light: Record<string, string>;
   dark: Record<string, string>;
@@ -306,4 +308,67 @@ export function resolveThemePreset(
   // hasOwn: env values like "constructor" must not resolve members
   // inherited from Object.prototype — that crashes the root layout.
   return Object.hasOwn(BRAND_THEMES, name) ? BRAND_THEMES[name] : undefined;
+}
+
+// Token names we ever emit: standard custom-property syntax only.
+const SAFE_TOKEN_NAME = /^--[a-z0-9-]+$/;
+
+// --radius is a length, not a color — validated separately.
+const SAFE_CSS_LENGTH = /^\d+(\.\d+)?(px|rem)$/;
+
+/** Hover/deep shades for a custom accent are derived with color-mix; the
+ * stock #0052CC/#003C99 shades stay hardcoded in globals.css. */
+function accentVars(accent: string): Record<string, string> {
+  return {
+    "--brand-accent": accent,
+    "--brand-accent-hover": `color-mix(in oklab, ${accent} 85%, black)`,
+    "--brand-accent-deep": `color-mix(in oklab, ${accent} 60%, black)`,
+    "--accent": accent,
+    "--ring": accent,
+    "--sidebar-primary": accent,
+    "--sidebar-ring": accent,
+    "--chart-1": accent,
+  };
+}
+
+function serializeVars(vars: Record<string, string>): string {
+  let out = "";
+  for (const [name, value] of Object.entries(vars)) {
+    if (!SAFE_TOKEN_NAME.test(name)) continue;
+    const valid =
+      name === "--radius"
+        ? SAFE_CSS_LENGTH.test(value)
+        : SAFE_CSS_COLOR.test(value);
+    if (valid) out += `${name}: ${value};`;
+  }
+  return out;
+}
+
+/**
+ * CSS variable overrides for a preset and/or an accent, or null when there
+ * is nothing to override. Used by the server BrandStyle (site env) and the
+ * client TenantBrandStyle (HRP-808, tenant settings on top of the site).
+ *
+ * Light tokens go under `:root:root` (specificity 0,2,0 — outranks the stock
+ * `:root`), dark tokens under `.dark:root:root` (0,3,0 — outranks both
+ * `.dark` and the light block; next-themes puts `.dark` on <html>). The
+ * accent is merged INTO both maps so it wins in dark mode too — a tenant
+ * accent over a site preset would otherwise lose to the site's dark block.
+ * The tenant block repeats the same selectors later in the document, so it
+ * wins by order.
+ */
+export function buildBrandCss(
+  preset: ThemePreset | undefined,
+  rawAccent: string | undefined,
+): string | null {
+  const accent =
+    rawAccent && SAFE_CSS_COLOR.test(rawAccent) ? rawAccent : undefined;
+  if (!preset && !accent) return null;
+  const overlay = accent ? accentVars(accent) : {};
+  const light = { ...preset?.light, ...overlay };
+  const dark = { ...preset?.dark, ...overlay };
+  return (
+    `:root:root {${serializeVars(light)}}` +
+    `.dark:root:root {${serializeVars(dark)}}`
+  );
 }

@@ -122,12 +122,25 @@ class UserRead(BaseModel):
     # with its grade columns. Inferring that from the rows on the current
     # page guesses wrong on any page whose rows happen to have no pair.
     tenant_directory_show_grades: bool = False
+    # HRP-808: tenant branding set by the platform admin — the sidebar swaps
+    # the site logo for ``tenant_logo_url`` and TenantBrandStyle layers the
+    # theme preset / accent over the site's env branding.
+    tenant_name: str | None = None
+    tenant_hide_platform_logo: bool = False
+    tenant_hide_app_version: bool = False
+    tenant_logo_url: str | None = None
+    tenant_brand_theme: str | None = None
+    tenant_brand_accent_color: str | None = None
     # HRP-710: the question that switch is one input to — "may this caller
     # read a position's grade and specialization" — answered by
     # ``access_scope.can_see_position_grades`` so the SPA does not keep its
     # own copy of the role set. The switch above stays: it is a public
     # property of the tenant and other surfaces read it.
     can_view_job_profile: bool = False
+    # HRP-810: the sections this caller opens and how far - ``coverage`` is
+    # ``manage`` for the roles that run it and ``view`` for anyone who reads
+    # at least one process. HRP-820 fills in the other sections.
+    sections: dict[str, Literal["view", "manage"]] = {}
 
     model_config = {"from_attributes": True}
 

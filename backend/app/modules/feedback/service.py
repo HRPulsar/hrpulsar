@@ -33,9 +33,10 @@ async def _enforce_rate_limit(user_id: uuid.UUID) -> None:
 
     The endpoint fans straight out to the operators' chat, and public
     demo sandboxes hand any visitor a valid token — without a cap five
-    demo tokens buy unlimited 2000-char pings. Fails open: Redis is
-    optional in community builds and feedback is a convenience channel,
-    so a flaky throttle store must not refuse the submission itself.
+    demo tokens buy unlimited 2000-char pings. Fails closed, like signup
+    and demo start (HRP-596): with the store down the cap is unknowable,
+    and an unthrottled path into the operators' chat is worse than a
+    convenience channel that is briefly unavailable.
     """
     limit = settings.feedback_rate_limit_per_user_per_hour
     if limit <= 0:
@@ -47,11 +48,14 @@ async def _enforce_rate_limit(user_id: uuid.UUID) -> None:
             raise AppError("feedback_rate_limited", status.HTTP_429_TOO_MANY_REQUESTS)
     except HTTPException:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         logger.warning(
-            "feedback rate-limit unavailable — accepting without a cap",
+            "feedback rate-limit unavailable — refusing the submission",
             exc_info=True,
         )
+        raise AppError(
+            "feedback_rate_limited", status.HTTP_429_TOO_MANY_REQUESTS
+        ) from e
 
 
 async def submit_feedback(

@@ -17,6 +17,14 @@ os.environ["INVITE_MAIL_CAP_PER_RECIPIENT_PER_HOUR"] = "0"
 # Same story for the per-user feedback cap (HRP-586): real Redis outlives
 # a run, so fixture users would pile up 429s across runs.
 os.environ["FEEDBACK_RATE_LIMIT_PER_USER_PER_HOUR"] = "0"
+# HRP-816: a real provider in the operator's .env would let any test that
+# reaches send_email unmocked deliver real mail. Tests that need a provider
+# patch settings; test_no_email_provider_in_tests guards this block.
+os.environ["RESEND_API_KEY"] = ""
+os.environ["SMTP_HOST"] = ""
+# The repo .env ships the placeholder JWT_SECRET, which Settings now refuses
+# outside DEBUG/E2E — pin the same value CI uses so the suite still boots.
+os.environ.setdefault("JWT_SECRET", "test-secret")
 
 import pytest
 import pytest_asyncio
@@ -33,6 +41,7 @@ from app.config import settings
 # session factory themselves. A ValueError here means the import-time
 # registration in app.main changed — update this block alongside it.
 from app.core import events as _events
+from app.core.celery_app import celery as _celery
 from app.core.event_notifications import (
     on_employee_event as _on_employee_event,
 )
@@ -49,6 +58,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 _events._handlers.get("employee.event_created", []).remove(_on_employee_event)
 for _event, _handler in _RECRUITMENT_HANDLERS.items():
     _events._handlers.get(_event, []).remove(_handler)
+
+# HRP-779: tasks the suite enqueues (enqueue_task or a bare .delay()) used to
+# land in the dev Redis from .env, where the next worker started for a manual
+# smoke sent their emails, Slack posts and LLM calls for real. An in-memory
+# broker keeps them in this process; nothing ever runs them. Not eager mode:
+# that would run every task inside the tests, against the dev database.
+# test_no_real_celery_broker_in_tests guards this block.
+_celery.conf.broker_url = "memory://"
+_celery.conf.result_backend = "cache+memory://"
 
 # Use a separate test database to avoid clobbering alembic_version in dev DB.
 # ``make_url`` keeps query parameters (``?sslmode=require``) that string
@@ -209,6 +227,23 @@ def _disable_auth_rate_limit():
     auth_limiter.reset()
     yield
     auth_limiter.enabled = previous
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _disable_shared_ip_rate_limits():
+    """Same story for the two throttles keyed by the shared ``testclient``
+    peer / API key. Since M15 these count in real Redis, which outlives a
+    run — a suite re-run inside the same minute would inherit the previous
+    run's counters. The dedicated coverage lives in
+    ``test_public_assessment_limits.py``, which re-enables and resets the
+    recruitment limiter explicitly.
+    """
+    from app.modules.public_api.router import limiter as public_api_limiter
+    from app.modules.recruitment.routers.common import recruitment_public_limiter
+
+    for limiter in (public_api_limiter, recruitment_public_limiter):
+        limiter.enabled = False
+    yield
 
 
 @pytest_asyncio.fixture

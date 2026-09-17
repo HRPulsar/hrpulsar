@@ -1,6 +1,6 @@
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import status
 from sqlalchemy import select
@@ -9,6 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError
 from app.core.security import hash_password, verify_password
 from app.modules.public_api.models import APIKey
+
+# ``last_used_at`` is a "when was this key last seen" indicator, not an
+# access log: refreshing it on every call put an UPDATE + COMMIT on the
+# hot path of an API that is meant to be hammered. Coarsened to the window
+# below, so a busy key writes once per window instead of once per request.
+LAST_USED_RESOLUTION = timedelta(minutes=5)
 
 # --- API Key Management ---
 
@@ -85,8 +91,11 @@ async def authenticate_api_key(db: AsyncSession, raw_key: str) -> APIKey | None:
     )
     for key in result.scalars().all():
         if verify_password(raw_key, key.key_hash):
-            key.last_used_at = datetime.now(timezone.utc)
-            await db.commit()
+            now = datetime.now(timezone.utc)
+            last = key.last_used_at
+            if last is None or now - last >= LAST_USED_RESOLUTION:
+                key.last_used_at = now
+                await db.commit()
             return key
     return None
 

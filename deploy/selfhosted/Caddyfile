@@ -7,6 +7,16 @@
 
 	@backend path /api/* /health
 	handle @backend {
+		# Cap the body at the edge: an unbounded POST is read into a
+		# uvicorn worker until the box runs out of memory. 110MB clears
+		# the largest legitimate request (a 100MB bulk-resume batch,
+		# RECRUITMENT_MAX_BULK_TOTAL_MB) plus multipart overhead.
+		request_body {
+			max_size 110MB
+		}
+		# Caddy adds X-Forwarded-For here by default; the backend honours
+		# it only from a trusted peer, so per-IP rate limits see the real
+		# client (see TRUSTED_PROXIES in .env.example).
 		reverse_proxy backend:8000
 	}
 

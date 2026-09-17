@@ -195,6 +195,35 @@ class TestIndicators:
         assert ind.title == "Writes clean code"
         assert ind.competence_id == comp.id
 
+    async def test_create_indicator_on_another_tenants_competence_is_404(
+        self, db: AsyncSession, tenant
+    ):
+        """Review B5: ``create_indicator`` looked the competence up by id
+        alone, so any admin could hang an indicator off another tenant's
+        competence (and read it back through the shared-library surfaces)."""
+        from app.modules.company.models import Tenant
+
+        other = Tenant(
+            name=f"Other {uuid.uuid4().hex[:6]}", slug=f"other-{uuid.uuid4().hex[:8]}"
+        )
+        db.add(other)
+        await db.commit()
+
+        sl = await _ensure_skill_level(db)
+        group = await service.create_group(
+            db, other.id, CompetenceGroupCreate(title="Theirs")
+        )
+        theirs = await service.create_competence(
+            db, other.id, CompetenceCreate(title="Theirs", group_id=group.id)
+        )
+
+        data = IndicatorCreate(
+            title="Peeks", weight=1, sort_index=0, skill_level_id=sl.id
+        )
+        with pytest.raises(HTTPException) as exc:
+            await service.create_indicator(db, tenant.id, theirs.id, data)
+        assert exc.value.status_code == 404
+
 
 # --- Helper to create a skill level ---
 

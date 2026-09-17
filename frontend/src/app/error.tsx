@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
 import { ServerErrorScreen } from "@/components/system-screens";
 
 export default function Error({
@@ -12,6 +13,9 @@ export default function Error({
 }) {
   useEffect(() => {
     console.error("[app/error.tsx]", error);
+    // M31: the boundary is the last stop for a render error — without this
+    // it never reaches Sentry.
+    Sentry.captureException(error);
   }, [error]);
 
   return (

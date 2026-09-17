@@ -1,7 +1,9 @@
+import asyncio
 import base64
+import csv
 import uuid
-from datetime import date, datetime
-from io import BytesIO
+from io import BytesIO, StringIO
+from weakref import WeakKeyDictionary
 
 from fastapi import UploadFile, status
 from openpyxl import load_workbook
@@ -9,14 +11,71 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
-from app.core.security import hash_password
-from app.modules.auth.models import User
-from app.modules.auth.roles import ensure_baseline_employee_role
 from app.modules.data_import.models import ImportJob
-from app.modules.dictionary.models import DictionaryItem
-from app.modules.employee.models import Course, Education, Employee, WorkExperience
 
 VALID_IMPORT_TYPES = {"employees", "dictionaries"}
+
+
+def read_rows(file_name: str, data: bytes) -> list[tuple[int, tuple]]:
+    """``(line number, cells)`` for each data row of an uploaded CSV or XLSX.
+
+    Blank rows are skipped but keep counting, so an error names the line the
+    admin sees in the file. The first non-blank row is the header.
+
+    HRP-806: the import page hands out a CSV template, which openpyxl cannot
+    open. A German Excel saves plain CSV in Windows-1252 with semicolons, so
+    UTF-8 falls back to cp1252 and the delimiter is whichever of ``;`` and
+    ``,`` the header uses more. Empty CSV cells read as ``None``, the way
+    openpyxl reports empty XLSX cells.
+    """
+    try:
+        if file_name.lower().endswith(".csv"):
+            try:
+                text = data.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = data.decode("cp1252")
+            header = next((line for line in text.splitlines() if line.strip()), "")
+            delimiter = ";" if header.count(";") > header.count(",") else ","
+            raw_rows = [
+                tuple(cell.strip() or None for cell in row)
+                for row in csv.reader(StringIO(text), delimiter=delimiter)
+            ]
+        else:
+            sheet = load_workbook(BytesIO(data), read_only=True).active
+            raw_rows = list(sheet.iter_rows(values_only=True))
+    # The upload is untrusted: whatever openpyxl or csv fails with (a
+    # chartsheet as the active sheet, broken sheet XML, a bad zip) means the
+    # file cannot be read, never a 500.
+    except Exception:  # noqa: BLE001
+        raise AppError("import_file_unreadable", status.HTTP_400_BAD_REQUEST)
+    numbered = [
+        (line, row)
+        for line, row in enumerate(raw_rows, start=1)
+        if any(cell is not None for cell in row)
+    ]
+    return numbered[1:]
+
+
+_upload_rows: WeakKeyDictionary[UploadFile, list[tuple[int, tuple]]] = (
+    WeakKeyDictionary()
+)
+
+
+async def read_upload(file: UploadFile) -> tuple[bytes, list[tuple[int, tuple]]]:
+    """The upload's bytes and :func:`read_rows`, parsed off the event loop.
+
+    Billing counts the rows before ``start_import`` runs with the same
+    upload, so the parse is kept for the upload's lifetime and a large XLSX
+    is read once per request. The upload is left rewound.
+    """
+    await file.seek(0)
+    data = await file.read()
+    await file.seek(0)
+    if file not in _upload_rows:
+        _upload_rows[file] = await asyncio.to_thread(
+            read_rows, file.filename or "unnamed", data
+        )
+    return data, _upload_rows[file]
 
 
 async def start_import(
@@ -33,15 +92,13 @@ async def start_import(
             valid=", ".join(VALID_IMPORT_TYPES),
         )
 
-    data = await file.read()
-    wb = load_workbook(BytesIO(data), read_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(min_row=2, values_only=True))  # skip header
+    data, rows = await read_upload(file)
+    file_name = file.filename or "unnamed"
 
     job = ImportJob(
         tenant_id=tenant_id,
         import_type=import_type,
-        file_name=file.filename or "unnamed",
+        file_name=file_name,
         total_rows=len(rows),
         initiated_by=user_id,
     )
@@ -68,215 +125,6 @@ async def start_import(
     )
 
     return _job_to_dict(job)
-
-
-def _parse_date(value) -> date | None:
-    """Parse a date from Excel cell value (date object or string)."""
-    if value is None:
-        return None
-    if isinstance(value, date):
-        return value
-    if isinstance(value, datetime):
-        return value.date()
-    try:
-        return datetime.strptime(str(value).strip(), "%Y-%m-%d").date()
-    except (ValueError, TypeError):
-        return None
-
-
-async def _import_employees(
-    db: AsyncSession, tenant_id: uuid.UUID, rows: list
-) -> tuple[int, int, dict]:
-    """Import employees from Excel rows.
-
-    Required columns (0-4): email, first_name, last_name, position, hire_date
-    Optional GF1 columns (5-8): work_exp_title, work_exp_role, work_exp_start, work_exp_end
-    Optional GF2 columns (9-13): edu_institution, edu_degree, edu_field, edu_start, edu_end
-    Optional GF2 columns (14-16): course_title, course_provider, course_completed_date
-    """
-    processed = 0
-    error_count = 0
-    errors: dict[str, list] = {"rows": []}
-
-    for i, row in enumerate(rows, start=2):
-        try:
-            if len(row) < 5 or not row[0]:
-                errors["rows"].append({"row": i, "error": "Missing required fields"})
-                error_count += 1
-                continue
-
-            email, first_name, last_name, position, hire_date = (
-                row[0],
-                row[1],
-                row[2],
-                row[3],
-                row[4],
-            )
-
-            # Create user if not exists
-            existing = await db.execute(
-                select(User).where(
-                    User.email == str(email), User.tenant_id == tenant_id
-                )
-            )
-            user = existing.scalar_one_or_none()
-            if not user:
-                user = User(
-                    email=str(email),
-                    password_hash=hash_password("changeme123"),
-                    first_name=str(first_name),
-                    last_name=str(last_name),
-                    tenant_id=tenant_id,
-                )
-                db.add(user)
-                await db.flush()
-                # HRP-619: an imported account with no role at all renders
-                # a blank role everywhere and confuses every role gate.
-                await ensure_baseline_employee_role(db, user.id)
-
-            # Create employee if not exists
-            existing_emp = await db.execute(
-                select(Employee).where(
-                    Employee.user_id == user.id, Employee.tenant_id == tenant_id
-                )
-            )
-            emp = existing_emp.scalar_one_or_none()
-            if not emp:
-                # Get or create Position from text
-                position_title = str(position) if position else "Employee"
-                position_id = None
-                if position:
-                    from app.modules.position.models import Position
-
-                    pos_result = await db.execute(
-                        select(Position).where(
-                            Position.tenant_id == tenant_id,
-                            Position.title == position_title,
-                        )
-                    )
-                    pos = pos_result.scalar_one_or_none()
-                    if not pos:
-                        pos = Position(
-                            tenant_id=tenant_id,
-                            title=position_title,
-                            source="manual",
-                        )
-                        db.add(pos)
-                        await db.flush()
-                    position_id = pos.id
-
-                emp = Employee(
-                    user_id=user.id,
-                    tenant_id=tenant_id,
-                    position_id=position_id,
-                    position_title=position_title,
-                    hire_date=hire_date,
-                )
-                db.add(emp)
-                await db.flush()
-
-            # GF1: Work experience (columns 5-8)
-            work_title = row[5] if len(row) > 5 and row[5] else None
-            if work_title:
-                work_role = str(row[6]) if len(row) > 6 and row[6] else None
-                work_start = _parse_date(row[7] if len(row) > 7 else None)
-                work_end = _parse_date(row[8] if len(row) > 8 else None)
-                if work_start:
-                    db.add(
-                        WorkExperience(
-                            employee_id=emp.id,
-                            tenant_id=tenant_id,
-                            title=str(work_title),
-                            role=work_role,
-                            start_date=work_start,
-                            end_date=work_end,
-                        )
-                    )
-
-            # GF2: Education (columns 9-13)
-            edu_institution = row[9] if len(row) > 9 and row[9] else None
-            if edu_institution:
-                edu_degree = str(row[10]) if len(row) > 10 and row[10] else "Bachelor"
-                edu_field = str(row[11]) if len(row) > 11 and row[11] else ""
-                edu_start = _parse_date(row[12] if len(row) > 12 else None)
-                edu_end = _parse_date(row[13] if len(row) > 13 else None)
-                if edu_start:
-                    db.add(
-                        Education(
-                            employee_id=emp.id,
-                            tenant_id=tenant_id,
-                            institution=str(edu_institution),
-                            degree=edu_degree,
-                            field_of_study=edu_field,
-                            start_date=edu_start,
-                            end_date=edu_end,
-                        )
-                    )
-
-            # GF2: Courses (columns 14-16)
-            course_title = row[14] if len(row) > 14 and row[14] else None
-            if course_title:
-                course_provider = str(row[15]) if len(row) > 15 and row[15] else None
-                course_date = _parse_date(row[16] if len(row) > 16 else None)
-                db.add(
-                    Course(
-                        employee_id=emp.id,
-                        tenant_id=tenant_id,
-                        title=str(course_title),
-                        provider=course_provider,
-                        completed_date=course_date,
-                    )
-                )
-
-            processed += 1
-        except Exception as e:  # noqa: BLE001 - per-row import isolation, recorded
-            errors["rows"].append({"row": i, "error": str(e)})
-            error_count += 1
-
-    return processed, error_count, errors
-
-
-async def _import_dictionaries(
-    db: AsyncSession, tenant_id: uuid.UUID, rows: list
-) -> tuple[int, int, dict]:
-    """Import dictionaries from Excel rows: [type, title, description]"""
-    processed = 0
-    error_count = 0
-    errors: dict[str, list] = {"rows": []}
-
-    for i, row in enumerate(rows, start=2):
-        try:
-            if len(row) < 2 or not row[0] or not row[1]:
-                errors["rows"].append({"row": i, "error": "Missing type or title"})
-                error_count += 1
-                continue
-
-            item_type, title = str(row[0]), str(row[1])
-            description = str(row[2]) if len(row) > 2 and row[2] else None
-
-            # Check if exists
-            existing = await db.execute(
-                select(DictionaryItem).where(
-                    DictionaryItem.type == item_type,
-                    DictionaryItem.title == title,
-                    DictionaryItem.tenant_id == tenant_id,
-                )
-            )
-            if not existing.scalar_one_or_none():
-                db.add(
-                    DictionaryItem(
-                        type=item_type,
-                        title=title,
-                        description=description,
-                        tenant_id=tenant_id,
-                    )
-                )
-            processed += 1
-        except Exception as e:  # noqa: BLE001 - per-row import isolation, recorded
-            errors["rows"].append({"row": i, "error": str(e)})
-            error_count += 1
-
-    return processed, error_count, errors
 
 
 async def get_job(db: AsyncSession, tenant_id: uuid.UUID, job_id: uuid.UUID) -> dict:

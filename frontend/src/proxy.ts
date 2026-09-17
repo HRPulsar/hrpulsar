@@ -34,6 +34,22 @@ const AUTH_PATHS = [
   "/reset-password",
   "/verify-email",
   "/accept-invite",
+  // Approval magic link from the moderated-signup email (M22a): without it
+  // an unauthenticated visitor is bounced to /login?next=/magic-login?token=…
+  // and the link never gets consumed.
+  "/magic-login",
+];
+
+// Auth pages that carry their own one-shot token in the URL. A browser that
+// is already signed in (has_token) must still reach them: the token may be
+// for another account (magic link), or for a step the current session has
+// not completed (email verification, password reset from a mail client on
+// the same machine). Bouncing them to /dashboard swallows the link.
+const TOKEN_AUTH_PATHS = [
+  "/accept-invite",
+  "/magic-login",
+  "/verify-email",
+  "/reset-password",
 ];
 
 function isMarketingPath(pathname: string): boolean {
@@ -273,12 +289,16 @@ export function proxy(request: NextRequest) {
 
   // Auth paths
   if (isAuthPath(pathname)) {
-    // /accept-invite carries its own invitation token — always serve the form.
+    // TOKEN_AUTH_PATHS carry their own token — always serve the form.
     // A demo sandbox session must not hijack the auth pages either: its
     // handoff sets has_token so the sandbox itself renders, but "Create
     // account" / "Sign in" from the landing must still reach the real forms
     // (2026-07-23 bug: register bounced into the demo session).
-    if (hasToken && !demoSession && !pathname.startsWith("/accept-invite")) {
+    if (
+      hasToken &&
+      !demoSession &&
+      !TOKEN_AUTH_PATHS.some((p) => pathname.startsWith(p))
+    ) {
       return safeRedirect(new URL("/dashboard", request.url));
     }
     return withLocaleCookie(request, NextResponse.next());

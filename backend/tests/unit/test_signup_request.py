@@ -511,3 +511,70 @@ async def test_no_reminder_within_age_gate(
     assert resp.status_code == 200
     assert resp.json()["already_verified"] is True
     assert _reminder_events(capture_events) == []
+
+
+# ---------------------------------------------------------------------------
+# E2E helper: re-mint the verify token without an inbox
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def dev_endpoints_on(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "e2e_mode", True)
+    monkeypatch.setattr(settings, "sentry_environment", "development")
+
+
+async def test_dev_signup_verify_token_returns_a_usable_token(
+    client: AsyncClient, db, dev_endpoints_on
+):
+    """The Playwright moderation funnel has no inbox — it asks for the
+    token this endpoint re-mints (frontend/e2e/signup-moderation.spec.ts)."""
+    row = SignupRequest(
+        email=f"dev-token-{uuid.uuid4().hex[:8]}@example.com",
+        first_name="Dev",
+        status="pending_email_verify",
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+
+    resp = await client.get(
+        "/api/auth/dev/signup-verify-token", params={"email": row.email.upper()}
+    )
+    assert resp.status_code == 200, resp.text
+    token = resp.json()["token"]
+
+    verified = await client.post("/api/signup-request/verify", json={"token": token})
+    assert verified.status_code == 200
+    assert verified.json()["status"] == "pending_moderation"
+
+
+async def test_dev_signup_verify_token_404_without_a_pending_request(
+    client: AsyncClient, dev_endpoints_on
+):
+    resp = await client.get(
+        "/api/auth/dev/signup-verify-token", params={"email": "nobody@example.com"}
+    )
+    assert resp.status_code == 404
+    assert resp.json()["code"] == "signup_request_not_found"
+
+
+async def test_dev_signup_verify_token_404_when_dev_endpoints_are_off(
+    client: AsyncClient, db, monkeypatch
+):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "e2e_mode", False)
+    row = SignupRequest(
+        email=f"dev-token-off-{uuid.uuid4().hex[:8]}@example.com",
+        status="pending_email_verify",
+    )
+    db.add(row)
+    await db.commit()
+
+    resp = await client.get(
+        "/api/auth/dev/signup-verify-token", params={"email": row.email}
+    )
+    assert resp.status_code == 404

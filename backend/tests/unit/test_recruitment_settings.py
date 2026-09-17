@@ -89,6 +89,24 @@ class TestScaleConfigs:
             await db.commit()
         await db.rollback()
 
+    async def test_activate_scale_with_lower_id_than_active_one(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # Same-table UPDATEs flush in primary-key order: the activated row
+        # must not be written before the previous active one is switched off.
+        a = await settings_service.create_scale(
+            db, tenant.id, ScaleConfigCreate(name="a", min_value=0, max_value=5)
+        )
+        b = await settings_service.create_scale(
+            db, tenant.id, ScaleConfigCreate(name="b", min_value=0, max_value=5)
+        )
+        low, high = sorted([a.id, b.id])
+        activate = ScaleConfigUpdate(is_active=True)
+        await settings_service.update_scale(db, tenant.id, high, activate)
+        await settings_service.update_scale(db, tenant.id, low, activate)
+        active = await settings_service.get_active_scale(db, tenant.id)
+        assert active is not None and active.id == low
+
     async def test_update_and_delete(self, db: AsyncSession, tenant) -> None:
         scale = await settings_service.create_scale(
             db,

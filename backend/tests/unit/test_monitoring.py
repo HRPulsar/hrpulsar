@@ -309,18 +309,24 @@ class TestHealthChecks:
 
     @pytest.mark.asyncio
     async def test_check_db_failure(self):
+        """/health is unauthenticated: the probe names the exception class,
+        never the driver message (a DSN error carries host and password)."""
         from app.core.health import _check_db
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(
-            side_effect=ConnectionError("Connection refused")
+            side_effect=ConnectionError(
+                "could not connect to postgres://hrp:s3cret@db.internal:5432"
+            )
         )
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with patch("app.core.health.async_session", return_value=mock_session):
             result = await _check_db()
         assert result["status"] == "error"
-        assert "Connection refused" in result["error"]
+        assert result["error"] == "ConnectionError"
+        assert "s3cret" not in str(result)
+        assert "db.internal" not in str(result)
 
     @pytest.mark.asyncio
     async def test_check_redis_success(self):
@@ -341,10 +347,12 @@ class TestHealthChecks:
 
         with patch(
             "redis.asyncio.from_url",
-            side_effect=ConnectionError("Redis down"),
+            side_effect=ConnectionError("Redis down at redis://:pw@cache.internal"),
         ):
             result = await _check_redis()
         assert result["status"] == "error"
+        assert result["error"] == "ConnectionError"
+        assert "cache.internal" not in str(result)
 
     @pytest.mark.asyncio
     async def test_check_s3_skipped(self):

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/lib/api";
-import { API_BASE } from "@/lib/api-base";
+import { toast } from "sonner";
 // HRP-512: salary benchmarks are money — the currency comes from the
 // site profile (NEXT_PUBLIC_BILLING_CURRENCY), never a hardcoded "$".
 import { formatMoney, getBillingCurrency } from "@/lib/currency";
@@ -250,25 +250,25 @@ export default function AnalyticsPage() {
   }, []);
 
   async function exportAssessments() {
-    const token = localStorage.getItem("access_token");
-    const res = await fetch(`${API_BASE}/analytics/export/assessments`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "assessments.xlsx";
-    a.click();
-    URL.revokeObjectURL(url);
+    // Through the api client, not raw fetch: an expired token gets refreshed
+    // and a 402/403 raises instead of the button silently doing nothing.
+    try {
+      const blob = await api.postBlob("/analytics/export/assessments");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "assessments.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error(t("exportFailed"));
+    }
   }
 
   if (loading) return <div className="py-12 text-center text-muted-foreground">{tc("loading")}</div>;
 
   return (
-    <RequireRole analytics>
+    <RequireRole managementData>
     <div className="space-y-6">
       <div>
         <div className="flex items-center gap-2">

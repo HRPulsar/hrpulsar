@@ -1142,7 +1142,7 @@ export default function ExamDetailPage() {
 
       {/* Add question dialog */}
       <Dialog open={qOpen} onOpenChange={setQOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{t("addQuestion")}</DialogTitle>
           </DialogHeader>
@@ -1477,7 +1477,7 @@ export default function ExamDetailPage() {
         open={qEditId !== null}
         onOpenChange={(o) => { if (!o) closeQuestionEditor(); }}
       >
-        <DialogContent className="max-w-lg" data-testid="exam-question-edit-modal">
+        <DialogContent className="sm:max-w-lg" data-testid="exam-question-edit-modal">
           <DialogHeader>
             <DialogTitle>{t("editQuestion")}</DialogTitle>
           </DialogHeader>

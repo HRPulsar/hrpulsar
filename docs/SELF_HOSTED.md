@@ -27,10 +27,17 @@ cp .env.example .env
 Edit `.env` and set at minimum:
 
 ```env
-JWT_SECRET=your-random-secret-string-here
+JWT_SECRET=paste-the-output-of-openssl-rand-hex-32
 POSTGRES_PASSWORD=a-strong-database-password
 FRONTEND_URL=https://hr.yourcompany.com   # public URL of your instance
 ```
+
+The backend refuses to start with an empty `JWT_SECRET` or the old
+`change-me-to-a-random-string` placeholder. It also seeds `ENCRYPTION_KEY`,
+the key protecting per-workspace AI provider keys (BYOK) at rest — if you
+may want to rotate `JWT_SECRET` later, pin `ENCRYPTION_KEY` now
+(`openssl rand -base64 32`); rotating without it leaves those stored keys
+unreadable.
 
 `FRONTEND_URL` is what links in outgoing emails (verification, password
 reset, invitations) point at — without it they fall back to
@@ -109,8 +116,11 @@ the hosted-product entry surface.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `JWT_SECRET` | Yes | `change-me-to-a-random-string` | Secret key for JWT tokens |
+| `JWT_SECRET` | Yes | — | Secret signing every access/refresh token — generate with `openssl rand -hex 32`. The backend refuses to start while it is empty or left at the old `change-me-to-a-random-string` placeholder |
+| `ENCRYPTION_KEY` | No | Derived from `JWT_SECRET` | AES-GCM key encrypting per-workspace AI provider keys (BYOK) at rest; urlsafe-base64 decoding to at least 32 bytes (`openssl rand -base64 32`). Left unset it is derived from `JWT_SECRET`, so rotating `JWT_SECRET` without pinning this value first makes every stored BYOK key unreadable. Required explicitly when `DEPLOYMENT_MODE=saas` |
 | `POSTGRES_PASSWORD` | Yes | `hrpulsar` | PostgreSQL password |
+| `DEPLOYMENT_MODE` | No | `onprem` | `onprem` or `saas`. Keep `onprem` for a self-hosted install — it enables the self-serve registration form and the sign-in redirect at the root URL. Must be set on **both** the backend and the frontend process when you run them outside the bundled compose file |
+| `CORS_ORIGINS` | No | `http://localhost:3100,http://localhost:3300` | Comma-separated origins allowed to call the API. Set it to your public URL(s) on any deployed install — the default only covers local development |
 | `DATABASE_URL` | No | Auto-configured | PostgreSQL connection string |
 | `REDIS_URL` | No | Auto-configured | Redis connection string |
 | `ANTHROPIC_API_KEY` | No | — | Claude API key (for AI features) |
@@ -119,16 +129,22 @@ the hosted-product entry surface.
 | `YANDEX_API_KEY` | No | — | Yandex Foundation Models API key (for AI features) |
 | `YANDEX_FOLDER_ID` | No | — | Yandex Cloud folder id, required with `YANDEX_API_KEY` |
 | `LLM_PROVIDER` | No | `claude` | LLM provider (`claude`, `openai`, `gemini`, `yandex`) |
+| `ASSEMBLYAI_API_KEY` | No | — | AssemblyAI key for interview transcription (recruiting module) |
+| `DEEPGRAM_API_KEY` | No | — | Deepgram key for interview transcription |
+| `YANDEX_SPEECHKIT_API_KEY` | No | — | Yandex SpeechKit key for interview transcription; falls back to the `YANDEX_API_KEY` service account and uses `YANDEX_FOLDER_ID` |
+| `TRANSCRIPTION_PROVIDER_DEFAULT` | No | `whisper` | Transcription provider tried first (`whisper`, `deepgram`, `assemblyai`, `yandex_speechkit`). Every key configured above joins the fallback chain |
 | `SMTP_HOST` | No | — | SMTP server for email notifications |
 | `SMTP_PORT` | No | `587` | SMTP port |
 | `SMTP_USER` | No | — | SMTP username |
 | `SMTP_PASSWORD` | No | — | SMTP password |
 | `FRONTEND_URL` | No | First `CORS_ORIGINS` entry | Public URL of your instance, used to build links in emails |
+| `TRUSTED_PROXIES` | No | Private ranges | Comma-separated CIDRs/IPs of the reverse proxies in front of the app. `X-Forwarded-For` is honoured only from these peers, and the per-IP rate limits (login, password reset, sign-up) key on the client address it carries. The default covers the bundled Caddy; set it when the app is reached through a proxy on a **public** address (Cloudflare, an external load balancer) and list that proxy's ranges — otherwise every request keys on the proxy's own IP and one user hitting a limit throttles everyone |
 | `S3_ENDPOINT` | No | — | S3/MinIO endpoint for file storage |
 | `S3_ACCESS_KEY` | No | — | S3 access key |
 | `S3_SECRET_KEY` | No | — | S3 secret key |
 | `S3_BUCKET` | No | `hrpulsar` | S3 bucket name |
 | `S3_PUBLIC_ENDPOINT` | No | `FRONTEND_URL` | Public base URL for file links when `S3_ENDPOINT` is internal-only (bundled MinIO). Set it only when storage is served from another origin than the app. File URLs are signed path-style (`<endpoint>/<S3_BUCKET>/<key>`), so give the bare storage host — if your provider serves buckets as subdomains, do **not** paste `https://<bucket>.<host>` here or every download fails with `NoSuchKey` |
+| `MAX_UPLOAD_MB` | No | `10` | Hard size cap on a single generic upload (`POST /files/upload`, avatars). Domain-specific ceilings (resume, interview attachment) stay stricter |
 | `BRAND_NAME` | No | `HRPulsar` | Installation name in outgoing emails and the API title |
 | `BRAND_LOGO_URL` | No | Stock logo | Absolute URL of the email-header logo |
 | `BRAND_ACCENT_COLOR` | No | `#0066FF` | Accent color for email buttons and links |
@@ -146,6 +162,11 @@ the hosted-product entry surface.
 | `DEFAULT_LOCALE` | No | `en` | Fallback interface locale; must be listed in `AVAILABLE_LOCALES` |
 | `NEXT_PUBLIC_AVAILABLE_LOCALES` | No | `en` | Frontend counterpart of `AVAILABLE_LOCALES` — keep both in sync |
 | `NEXT_PUBLIC_DEFAULT_LOCALE` | No | `en` | Frontend counterpart of `DEFAULT_LOCALE` — keep both in sync |
+| `SENTRY_DSN` | No | — | Backend error-tracking DSN. Empty disables Sentry entirely |
+| `SENTRY_ENVIRONMENT` | No | `development` | Environment name reported with every backend event |
+| `SENTRY_TRACES_SAMPLE_RATE` | No | `0.1` | Share of backend transactions sampled for performance tracing, `0`–`1` |
+| `NEXT_PUBLIC_SENTRY_DSN` | No | — | Web UI error-tracking DSN. Read at runtime, so changing it needs a container restart, not a rebuild (frontend) |
+| `NEXT_PUBLIC_SENTRY_ENVIRONMENT` | No | — | Environment name reported with every web UI event (frontend) |
 
 ## Branding
 
@@ -249,7 +270,13 @@ plans in — which is independent of the interface language.
 
 ## Upgrading
 
-Back up the database first (see below), then:
+**Back up first — every time, and without exception before a major
+version.** Migrations run forward only: there is no downgrade path, so once
+a release has rewritten the schema the only way back to the previous
+version is restoring the backup you took before the upgrade.
+
+Run `./scripts/backup_db.sh ./backups` (see [Backup & Restore](#backup--restore)),
+check that it printed a dump size, then:
 
 ```bash
 cd hrpulsar
@@ -288,18 +315,49 @@ crontab -e
 # Add: 0 3 * * * cd /path/to/hrpulsar && ./scripts/backup_db.sh ./backups
 ```
 
+Each run writes two files: `hrpulsar_<timestamp>.sql.gz` (the database) and
+`minio_<timestamp>.tar.gz` (the file-storage volume — resumes, interview
+recordings, generated reports). The database dump alone restores an
+instance where every attachment 404s, so keep the pair together.
+
 If your `.env` has `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` /
-`S3_BUCKET` set, every dump is also uploaded there under the `backups/`
+`S3_BUCKET` set, both files are also uploaded there under the `backups/`
 prefix (override with `BACKUP_S3_PREFIX`) — a backup that lives on the
-same disk as the database is not a backup. With `SLACK_BOT_TOKEN` and
-`BACKUP_SLACK_CHANNEL` set, a failed backup posts to that channel
-instead of failing silently.
+same disk as the database is not a backup. Point those at a provider other
+than the bundled MinIO; copying the file storage into itself is not an
+off-site copy. With `SLACK_BOT_TOKEN` and `BACKUP_SLACK_CHANNEL` set, a
+failed backup posts to that channel instead of failing silently.
 
 ### Restore
 
+Restore both halves from the same timestamp. Stop the app containers first
+so nothing writes while the data is being replaced:
+
+```bash
+docker compose -f docker-compose.self-hosted.yml stop backend celery-worker celery-beat frontend
+```
+
+Database — `ON_ERROR_STOP=on` is what makes a failed restore stop instead
+of running to the end and leaving a half-old, half-new schema behind:
+
 ```bash
 gunzip -c backups/hrpulsar_YYYYMMDD_HHMMSS.sql.gz | \
-  docker compose -f docker-compose.self-hosted.yml exec -T postgres psql -U hrpulsar hrpulsar
+  docker compose -f docker-compose.self-hosted.yml exec -T postgres \
+    psql --set ON_ERROR_STOP=on -U hrpulsar hrpulsar
+```
+
+File storage — the archive holds the MinIO `data` directory, so it unpacks
+at the container root:
+
+```bash
+gunzip -c backups/minio_YYYYMMDD_HHMMSS.tar.gz | \
+  docker cp - "$(docker compose -f docker-compose.self-hosted.yml ps -q minio)":/
+```
+
+Then start the stack again:
+
+```bash
+docker compose -f docker-compose.self-hosted.yml up -d
 ```
 
 ## Troubleshooting

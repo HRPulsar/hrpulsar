@@ -54,6 +54,12 @@ const PUBLIC_ENV_KEYS = [
   // Per-site billing currency/locale (HRP-451) — read by lib/currency.ts.
   "NEXT_PUBLIC_BILLING_CURRENCY",
   "NEXT_PUBLIC_BILLING_LOCALE",
+  // Frontend Sentry (M31) — read by src/instrumentation-client.ts. The DSN
+  // is not a secret (it only accepts events) and the CI-built image freezes
+  // NEXT_PUBLIC_* at build time, so it has to travel this way to be
+  // configurable per deployment.
+  "NEXT_PUBLIC_SENTRY_DSN",
+  "NEXT_PUBLIC_SENTRY_ENVIRONMENT",
 ] as const;
 
 type PublicEnvKey = (typeof PUBLIC_ENV_KEYS)[number];

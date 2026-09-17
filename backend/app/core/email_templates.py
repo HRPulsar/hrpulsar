@@ -248,6 +248,33 @@ def render_password_reset_email(token: str, *, locale: str = "en") -> tuple[str,
     return subject, _render(subject, content, locale=locale)
 
 
+def render_account_created_email(
+    name: str, token: str, expire_days: int, *, locale: str = "en"
+) -> tuple[str, str]:
+    """HRP-806: an account created on the recipient's behalf (employee import)."""
+    set_password_url = f"{frontend_url()}/reset-password?token={token}"
+    subject = translate(
+        "email.account_created.subject", locale, brand_name=settings.brand_name
+    )
+    button = _button(
+        set_password_url, translate("email.account_created.button", locale)
+    )
+    content = (
+        _heading(translate("email.account_created.heading", locale, name=escape(name)))
+        + _paragraph(
+            translate(
+                "email.account_created.intro", locale, brand_name=_brand_name_html()
+            )
+        )
+        + _paragraph(translate("email.account_created.body", locale))
+        + f'<div style="margin: 24px 0;">{button}</div>'
+        + _muted(
+            translate("email.account_created.note", locale, expire_days=expire_days)
+        )
+    )
+    return subject, _render(subject, content, locale=locale)
+
+
 # ---------------------------------------------------------------------------
 # Moderated signup (M-wave)
 # ---------------------------------------------------------------------------

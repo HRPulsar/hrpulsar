@@ -50,6 +50,8 @@ interface CompanyProfile {
   logo_url: string | null;
   // HRP-623: show the grade on the directory card colleagues can open.
   directory_show_grades: boolean;
+  hourly_rate: number | null;
+  hourly_rate_currency: string | null;
 }
 
 export default function CompanyProfilePage() {
@@ -70,6 +72,8 @@ export default function CompanyProfilePage() {
     website: "",
     description: "",
     directory_show_grades: false,
+    hourly_rate: "",
+    hourly_rate_currency: "",
   });
 
   const load = useCallback(async () => {
@@ -82,6 +86,8 @@ export default function CompanyProfilePage() {
         website: data.website ?? "",
         description: data.description ?? "",
         directory_show_grades: data.directory_show_grades,
+        hourly_rate: data.hourly_rate === null ? "" : String(data.hourly_rate),
+        hourly_rate_currency: data.hourly_rate_currency ?? "",
       });
     } catch (err) {
       toast.error(
@@ -105,6 +111,12 @@ export default function CompanyProfilePage() {
         website: form.website.trim() || null,
         description: form.description.trim() || null,
         directory_show_grades: form.directory_show_grades,
+        // W6: an empty field clears the rate, so the Coverage ROI falls
+        // back to hours only rather than keeping a stale number.
+        hourly_rate: Number.isFinite(Number.parseFloat(form.hourly_rate))
+          ? Number.parseFloat(form.hourly_rate)
+          : null,
+        hourly_rate_currency: form.hourly_rate_currency.trim().toUpperCase() || null,
       };
       const data = await api.put<CompanyProfile>(
         "/settings/company-profile",
@@ -419,6 +431,38 @@ export default function CompanyProfilePage() {
                   {t("directoryShowGradesHint")}
                 </p>
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="company-profile-hourly-rate">{t("hourlyRate")}</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="company-profile-hourly-rate"
+                  type="number"
+                  min={0}
+                  max={100000}
+                  step="any"
+                  inputMode="decimal"
+                  className="max-w-40"
+                  value={form.hourly_rate}
+                  disabled={readOnly}
+                  onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })}
+                  data-testid="company-profile-input-hourly-rate"
+                />
+                <Input
+                  aria-label={t("hourlyRateCurrency")}
+                  placeholder={t("hourlyRateCurrency")}
+                  className="max-w-28"
+                  maxLength={10}
+                  value={form.hourly_rate_currency}
+                  disabled={readOnly}
+                  onChange={(e) =>
+                    setForm({ ...form, hourly_rate_currency: e.target.value })
+                  }
+                  data-testid="company-profile-input-hourly-rate-currency"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">{t("hourlyRateHint")}</p>
             </div>
 
             <div className="space-y-2">

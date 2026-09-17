@@ -2,13 +2,13 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
 from pydantic import BaseModel, Field
-from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.errors import AppError
+from app.core.rate_limit import make_limiter
 from app.database import get_db
 from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
@@ -33,7 +33,7 @@ def _get_api_key_for_rate_limit(request: Request) -> str:
     return request.headers.get("X-API-Key", get_remote_address(request))
 
 
-limiter = Limiter(key_func=_get_api_key_for_rate_limit, key_style="endpoint")
+limiter = make_limiter(_get_api_key_for_rate_limit)
 
 router = APIRouter(tags=["public-api"])
 

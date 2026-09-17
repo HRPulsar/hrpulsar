@@ -1307,3 +1307,12 @@ class TestAutoCoverFromAnalysis:
         )
         manual = next(q for q in refreshed.questions if q.id == qid)
         assert manual.covered_method == "manual"
+
+
+async def test_generated_question_without_rationale_is_accepted():
+    # The model occasionally drops ``rationale`` on one question; the
+    # column is nullable, so that must not sink the whole set.
+    payload = _gen_questions(8).model_dump()
+    del payload["questions"][7]["rationale"]
+    parsed = GeneratedQuestionSet.model_validate(payload)
+    assert parsed.questions[7].rationale is None

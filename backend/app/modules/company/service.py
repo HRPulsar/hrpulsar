@@ -14,7 +14,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 
-from app.core.errors import AppError
+from app.core.errors import AppError, exception_summary
+from app.core.url_guard import PinnedPublicIPTransport, ip_is_public
 from app.modules.auth.models import Invitation, Role, User, user_roles
 from app.modules.auth.roles import ensure_baseline_employee_role
 from app.modules.company.models import (
@@ -642,6 +643,11 @@ async def get_company_profile(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
         "logo_url": logo_url,
         "default_locale": tenant.default_locale,
         "directory_show_grades": tenant.directory_show_grades,
+        # W6: the Coverage ROI rate. Omitting it here answered null on a
+        # tenant that had set one, and the next save of any other field
+        # sent that null back and wiped it.
+        "hourly_rate": tenant.hourly_rate,
+        "hourly_rate_currency": tenant.hourly_rate_currency,
         "created_at": tenant.created_at,
         "activity_fields": fields,
     }
@@ -758,14 +764,7 @@ async def _assert_safe_url(url: str) -> tuple[str, str]:
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
+        if not ip_is_public(ip):
             raise AppError("logo_url_not_public_host", status.HTTP_400_BAD_REQUEST)
     return parsed.scheme, parsed.hostname
 
@@ -782,20 +781,39 @@ async def upload_logo_from_url(
     ``follow_redirects=True`` would let an attacker bounce admins from
     ``evil.example`` to ``169.254.169.254`` via a 3xx Location header
     (HRP-53 review fix).
+
+    The per-hop check resolves the host, but httpx would resolve it a
+    second time when it opens the socket — a DNS record flipped between
+    the two answers is a rebinding bypass. ``PinnedPublicIPTransport``
+    closes that window: it re-validates and connects to the validated IP
+    itself, so the checked address is the one actually dialled.
     """
     current = url.strip()
     response: httpx.Response | None = None
 
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+    async with httpx.AsyncClient(
+        timeout=15.0,
+        follow_redirects=False,
+        transport=PinnedPublicIPTransport(
+            error_code="logo_url_not_public_host", require_https=False
+        ),
+    ) as client:
         for _ in range(MAX_LOGO_REDIRECTS + 1):
             await _assert_safe_url(current)
             try:
                 response = await client.get(current)
             except httpx.HTTPError as exc:
+                # The transport/provider text can name internal hosts and
+                # ports — log it, hand the admin the exception class only.
+                logger.warning(
+                    "logo download failed for %s: %s",
+                    urlparse(current).hostname,
+                    exception_summary(exc),
+                )
                 raise AppError(
                     "logo_url_download_failed",
                     status.HTTP_400_BAD_REQUEST,
-                    error=str(exc),
+                    error=type(exc).__name__,
                 ) from exc
             if response.is_redirect:
                 location = response.headers.get("location")

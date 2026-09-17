@@ -144,3 +144,33 @@ class TestBucketQualifiedPublicEndpoint:
                 frontend_url="https://app.example.com",
             )
         assert "NoSuchKey" not in caplog.text
+
+
+class TestDefaultJwtSecret:
+    """Review B6: the placeholder secret used to be refused only when
+    ``SENTRY_ENVIRONMENT`` named a deployed tier, so a self-hosted install
+    (which leaves that variable empty) came up signing every token — and
+    deriving ENCRYPTION_KEY — from the value published in the repo.
+    """
+
+    DEFAULT = Settings._DEFAULT_JWT_SECRET
+
+    def test_default_secret_is_refused(self):
+        with pytest.raises(ValueError, match="JWT_SECRET"):
+            _settings(jwt_secret=self.DEFAULT, debug=False, e2e_mode=False)
+
+    def test_empty_secret_is_refused(self):
+        with pytest.raises(ValueError, match="JWT_SECRET"):
+            _settings(jwt_secret="", debug=False, e2e_mode=False)
+
+    def test_e2e_mode_stays_permissive(self):
+        s = _settings(jwt_secret=self.DEFAULT, debug=False, e2e_mode=True)
+        assert s.jwt_secret == self.DEFAULT
+
+    def test_debug_stays_permissive(self):
+        s = _settings(jwt_secret=self.DEFAULT, debug=True, e2e_mode=False)
+        assert s.jwt_secret == self.DEFAULT
+
+    def test_real_secret_is_accepted(self):
+        s = _settings(jwt_secret="a" * 64, debug=False, e2e_mode=False)
+        assert s.jwt_secret == "a" * 64

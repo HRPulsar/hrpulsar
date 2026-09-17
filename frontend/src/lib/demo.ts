@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { setClientCookie } from "./cookies";
 
 // HRP-389: the demo *start* flow (startDemoSession / completeDemoSession)
 // lives in the marketing app — marketing/src/lib/demo.ts is the executed
@@ -45,12 +46,12 @@ export function persistDemoSession(accessToken: string): void {
   // re-clicking "Try the demo" lands back in the same sandbox instead
   // of minting a fresh credit grant.
   localStorage.setItem(DEMO_RESUME_TOKEN_KEY, accessToken);
-  document.cookie = "has_token=1; path=/; SameSite=Lax";
+  setClientCookie("has_token", "1");
   // Marks the session as a demo sandbox for the proxy middleware: with it
   // set, /register and /login keep serving the real forms instead of
   // bouncing to /dashboard (i.e. into the sandbox). Cleared by a real
   // login/logout in lib/auth.ts.
-  document.cookie = "demo_session=1; path=/; SameSite=Lax";
+  setClientCookie("demo_session", "1");
 }
 
 /** Capture a demo visitor's email as a moderated signup request. */
@@ -83,7 +84,7 @@ export async function switchDemoPersona(persona: DemoPersona): Promise<void> {
   });
   localStorage.setItem("access_token", res.access_token);
   localStorage.removeItem("refresh_token");
-  document.cookie = "has_token=1; path=/; SameSite=Lax";
-  document.cookie = "demo_session=1; path=/; SameSite=Lax";
+  setClientCookie("has_token", "1");
+  setClientCookie("demo_session", "1");
   window.location.assign("/dashboard");
 }

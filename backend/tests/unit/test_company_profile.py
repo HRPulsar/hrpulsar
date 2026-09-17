@@ -125,3 +125,27 @@ class TestCompanyProfile:
         with pytest.raises(HTTPException) as exc:
             await service.add_activity_field(db, tenant.id, item.id)
         assert exc.value.status_code == 400
+
+
+async def test_hourly_rate_round_trips(db, tenant, auth_client):
+    """W6: the Coverage ROI rate. It used not to come back out of the
+    profile, so the next save of any other field sent null and wiped it."""
+    res = await auth_client.put(
+        "/api/settings/company-profile",
+        json={"hourly_rate": 50, "hourly_rate_currency": "eur"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["hourly_rate"] == 50
+    assert (await auth_client.get("/api/settings/company-profile")).json()[
+        "hourly_rate"
+    ] == 50
+    # Saving something else keeps it.
+    res = await auth_client.put(
+        "/api/settings/company-profile", json={"website": "https://example.com"}
+    )
+    assert res.json()["hourly_rate"] == 50
+    # An explicit null clears it.
+    res = await auth_client.put(
+        "/api/settings/company-profile", json={"hourly_rate": None}
+    )
+    assert res.json()["hourly_rate"] is None

@@ -30,6 +30,7 @@ const SEGMENT_KEYS: Record<string, string> = {
   development: "development",
   exams: "exams",
   competences: "competences",
+  coverage: "coverage",
   dictionaries: "dictionaries",
   "talent-market": "talentMarket",
   analytics: "analytics",

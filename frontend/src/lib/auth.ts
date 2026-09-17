@@ -1,5 +1,6 @@
 import { api } from "./api";
 import { clearLocaleCookie } from "@/i18n/config";
+import { setClientCookie } from "./cookies";
 import type {
   TokenResponse,
   TenantInfo,
@@ -28,7 +29,7 @@ function saveTokens(tokens: TokenResponse) {
   localStorage.setItem("access_token", tokens.access_token);
   localStorage.setItem("refresh_token", tokens.refresh_token);
   // Set cookie so proxy middleware knows user is authenticated
-  document.cookie = "has_token=1; path=/; SameSite=Lax";
+  setClientCookie("has_token", "1");
   // A real sign-in supersedes any demo sandbox — drop the marker so auth
   // pages regain their signed-in → /dashboard redirect (see proxy.ts).
   document.cookie =

@@ -2405,6 +2405,9 @@ async def _clear_default(
         if except_id is not None and scale.id == except_id:
             continue
         scale.is_default = False
+    # Flush now: the unit of work orders same-table UPDATEs by primary key, so
+    # the caller's new default could hit the one-default index first.
+    await db.flush()
 
 
 async def _scale_in_use(

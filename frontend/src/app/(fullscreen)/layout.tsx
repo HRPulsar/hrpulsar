@@ -3,6 +3,7 @@
 import { AuthProvider } from "@/context/auth-context";
 import { PlatformAdminRedirect } from "@/components/platform-admin-redirect";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { TenantBrandStyle } from "@/components/tenant-brand-style";
 
 /**
  * HRP-510 — authenticated shell without the app chrome.
@@ -23,6 +24,7 @@ export default function FullscreenLayout({
 }) {
   return (
     <AuthProvider>
+      <TenantBrandStyle />
       <PlatformAdminRedirect>
         <TooltipProvider>
           <div className="flex h-screen flex-col overflow-hidden bg-background">

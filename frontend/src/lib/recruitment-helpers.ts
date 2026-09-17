@@ -205,7 +205,7 @@ type SectionValue<K extends ParsedResumeSectionKey> = K extends "summary"
             : never;
 
 /** Trim a string field and collapse empty values to ``null`` for the PATCH. */
-export function cleanStringField(value: string | null | undefined): string | null {
+function cleanStringField(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;

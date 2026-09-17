@@ -72,10 +72,11 @@ class TestJWT:
 
     def test_reset_token_roundtrip(self):
         uid = str(uuid.uuid4())
-        token = create_reset_token(uid)
+        token = create_reset_token(uid, 3)
         payload = decode_token(token)
         assert payload["type"] == "reset"
         assert payload["sub"] == uid
+        assert payload["ver"] == 3
 
     def test_email_verification_token_roundtrip(self):
         uid = str(uuid.uuid4())
@@ -423,7 +424,7 @@ class TestPasswordReset:
         assert "400" in str(exc.value.status_code)
 
     async def test_reset_password_nonexistent_user(self, db: AsyncSession):
-        fake_token = create_reset_token(str(uuid.uuid4()))
+        fake_token = create_reset_token(str(uuid.uuid4()), 0)
         with pytest.raises(Exception) as exc:
             await service.reset_password(db, fake_token, "newpass123")
         assert "400" in str(exc.value.status_code)
@@ -640,6 +641,139 @@ class TestMultiTenantLogin:
         with pytest.raises(HTTPException) as exc:
             await service.login(db, email, "wrongpassword")
         assert exc.value.status_code == 401
+
+
+class TestMultiTenantPasswordReset:
+    """HRP-815: an address with an account in two tenants used to 500."""
+
+    async def _two_accounts(self, db, tenant, admin_role, *, verified=True):
+        email = f"reset-{uuid.uuid4().hex[:6]}@example.com"
+        tenant2 = Tenant(name="Second Corp", slug=f"second-{uuid.uuid4().hex[:6]}")
+        db.add(tenant2)
+        await db.commit()
+        first = await _make_user_in_tenant(
+            db, email, "old-first1", tenant, admin_role, verified=verified
+        )
+        second = await _make_user_in_tenant(
+            db, email, "old-second1", tenant2, admin_role, verified=verified
+        )
+        return email, first, second
+
+    async def test_one_link_sets_the_password_on_every_account(
+        self, db: AsyncSession, tenant, admin_role
+    ):
+        email, first, second = await self._two_accounts(
+            db, tenant, admin_role, verified=False
+        )
+
+        issued = await service.request_password_reset(db, email)
+        assert issued is not None
+        await service.reset_password(db, issued[0], "brandnew123")
+
+        for account in (first, second):
+            await db.refresh(account)
+            assert verify_password("brandnew123", account.password_hash)
+            assert account.email_verified_at is not None
+        resp = await service.login(db, email, "brandnew123")
+        assert resp["requires_tenant_selection"] is True
+        # Still single use.
+        with pytest.raises(HTTPException) as exc:
+            await service.reset_password(db, issued[0], "another123")
+        assert exc.value.status_code == 400
+
+    async def test_an_account_that_got_a_newer_link_drops_out(
+        self, db: AsyncSession, tenant, admin_role
+    ):
+        """Another tenant's admin re-sending a set-password link bumps one
+        account; the link still resets the address's other accounts."""
+        email, first, second = await self._two_accounts(
+            db, tenant, admin_role, verified=False
+        )
+        issued = await service.request_password_reset(db, email)
+        first.token_version += 1
+        await db.commit()
+
+        await service.reset_password(db, issued[0], "brandnew123")
+
+        await db.refresh(first)
+        await db.refresh(second)
+        assert verify_password("old-first1", first.password_hash)
+        assert verify_password("brandnew123", second.password_hash)
+        with pytest.raises(HTTPException) as exc:
+            await service.reset_password(db, issued[0], "another123")
+        assert exc.value.status_code == 400
+
+    async def test_set_password_link_stays_on_its_own_account(
+        self, db: AsyncSession, tenant, admin_role
+    ):
+        _, first, second = await self._two_accounts(db, tenant, admin_role)
+
+        token = create_reset_token(str(second.id), second.token_version)
+        await service.reset_password(db, token, "brandnew123")
+
+        await db.refresh(first)
+        await db.refresh(second)
+        assert verify_password("old-first1", first.password_hash)
+        assert verify_password("brandnew123", second.password_hash)
+
+    async def test_endpoint_answers_as_for_an_unknown_address(
+        self, client, db: AsyncSession, tenant, admin_role
+    ):
+        email, _, _ = await self._two_accounts(db, tenant, admin_role)
+
+        known = await client.post("/api/auth/forgot-password", json={"email": email})
+        unknown = await client.post(
+            "/api/auth/forgot-password", json={"email": "nobody@example.com"}
+        )
+
+        assert known.status_code == unknown.status_code == 200
+        assert known.json() == unknown.json()
+
+    async def test_demo_accounts_get_no_signed_out_mail(
+        self, db: AsyncSession, tenant, admin_role, monkeypatch
+    ):
+        """A demo import creates every row but mails five; these endpoints
+        must not mail the rest."""
+        email, first, second = await self._two_accounts(
+            db, tenant, admin_role, verified=False
+        )
+        demo = await db.get(Tenant, second.tenant_id)
+        demo.is_demo = True
+        await db.commit()
+        sent = []
+        monkeypatch.setattr(
+            service,
+            "_send_verification_or_log",
+            lambda to, user_id, **kw: sent.append(user_id),
+        )
+
+        await service.resend_verification(db, email)
+        issued = await service.request_password_reset(db, email)
+        await service.reset_password(db, issued[0], "brandnew123")
+
+        assert sent == [str(first.id)]
+        await db.refresh(second)
+        assert verify_password("old-second1", second.password_hash)
+        demo_only = f"demo-{uuid.uuid4().hex[:6]}@example.com"
+        await _make_user_in_tenant(db, demo_only, "pw-demo123", demo, admin_role)
+        assert await service.request_password_reset(db, demo_only) is None
+
+    async def test_resend_verification_does_not_fail(
+        self, db: AsyncSession, tenant, admin_role, monkeypatch
+    ):
+        email, first, _ = await self._two_accounts(
+            db, tenant, admin_role, verified=False
+        )
+        sent = []
+        monkeypatch.setattr(
+            service,
+            "_send_verification_or_log",
+            lambda to, user_id, **kw: sent.append(user_id),
+        )
+
+        await service.resend_verification(db, email)
+
+        assert sent == [str(first.id)]
 
 
 class TestSelectTenant:

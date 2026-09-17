@@ -33,6 +33,19 @@ class DemoStartRequest(BaseModel):
         description="IANA time zone reported by the visitor's browser. "
         "Optional — the session is provisioned either way.",
     )
+    # Opaque id the marketing site mints on the first "Try the demo"
+    # click and keeps in its own localStorage. It exists so a returning
+    # visitor's sessions can be counted as theirs even when the address
+    # changed (mobile network, VPN); the server never stores or shows
+    # it, only a digest of it. Spoofable by design — nothing is
+    # authorised off this value, it only groups Slack cards.
+    visitor_id: str | None = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]{8,64}$",
+        description="Opaque visitor id minted by the client. Optional — "
+        "without it repeat sessions are grouped by address + browser.",
+    )
 
 
 class DemoStartResponse(BaseModel):

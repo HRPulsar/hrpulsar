@@ -235,6 +235,7 @@ async def get_competence_tree(
             tenant_id=c.tenant_id,
             is_active=c.is_active,
             is_published=c.is_published,
+            applicable_to=c.applicable_to,
             created_at=c.created_at,
             is_origin=(c.tenant_id is None),
             is_used=(c.id in used_ids),
@@ -749,6 +750,7 @@ async def get_competence_detail(
         "tenant_id": comp.tenant_id,
         "is_active": comp.is_active,
         "is_published": comp.is_published,
+        "applicable_to": comp.applicable_to,
         "is_used": usage.is_used,
         "usage": {
             "matrix": usage.matrix,
@@ -1155,7 +1157,7 @@ async def create_indicator(
     actor_id: uuid.UUID | None = None,
 ) -> Indicator:
     comp = await db.get(Competence, competence_id)
-    if not comp:
+    if comp is None or (comp.tenant_id is not None and comp.tenant_id != tenant_id):
         raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
 
     ind = Indicator(

@@ -73,6 +73,15 @@ celery.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # ``task_acks_late`` + Redis means an unacked task is redelivered once
+    # the broker's visibility timeout elapses (default 1h). Transcription
+    # with its fallback chain runs longer than that, so the old default
+    # re-ran finished work and billed the tenant twice. Ceiling the task
+    # below the window instead: soft limit raises SoftTimeLimitExceeded,
+    # hard limit kills the worker process, both well inside 2h.
+    broker_transport_options={"visibility_timeout": 7200},
+    task_soft_time_limit=6600,
+    task_time_limit=6900,
     # Beat schedule for periodic tasks
     beat_schedule={
         "send-assessment-reminders": {
@@ -124,6 +133,13 @@ celery.conf.update(
             "task": "ai_competence_generation.reap_stuck_sessions",
             "schedule": 300.0,  # every 5 minutes
         },
+        "reap-stuck-work-decomposition-sessions": {
+            # HRP-755: same safety net for the AI decomposition worker — a
+            # row stuck in `running` holds the container's one-active-run
+            # slot. Threshold inside the task is 30 min.
+            "task": "work.reap_stuck_sessions",
+            "schedule": 300.0,  # every 5 minutes
+        },
     },
 )
 
@@ -164,8 +180,10 @@ celery.autodiscover_tasks(
         "app.modules.data_import",
         "app.modules.demo",
         "app.modules.employee",
+        "app.modules.primitives",
         "app.modules.recruitment",
         "app.modules.talent_market",
+        "app.modules.work",
     ]
 )
 

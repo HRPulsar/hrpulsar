@@ -210,10 +210,10 @@ def _extract_text_from_s3(resume, settings) -> str:
 
 
 def _extract_pdf_text(data: bytes) -> str:
-    """Extract text from PDF bytes using PyPDF2."""
+    """Extract text from PDF bytes using pypdf."""
     import io
 
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(data))
     pages = []

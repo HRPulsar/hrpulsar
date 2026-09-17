@@ -99,3 +99,64 @@ async def test_redirect_to_loopback_blocked(monkeypatch: pytest.MonkeyPatch) -> 
         )
     assert exc.value.status_code == 400
     assert "public" in exc.value.detail.lower()
+
+
+async def test_download_error_text_is_not_echoed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """M5: the transport's message can name internal hosts/ports — the admin
+    gets the exception class, the detail goes to the log."""
+    import socket as real_socket
+
+    import httpx
+    from app.modules.company import service as company_service
+
+    def fake_getaddrinfo(host: str, _port: object, *_a: object, **_kw: object) -> list:
+        return [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(real_socket, "getaddrinfo", fake_getaddrinfo)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection to logos.internal:9999 refused")
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    class _PatchedClient(original_client):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(company_service.httpx, "AsyncClient", _PatchedClient)
+
+    with pytest.raises(HTTPException) as exc:
+        await service.upload_logo_from_url(
+            None, None, None, "https://logos.example.com/x.png"  # type: ignore[arg-type]
+        )
+    assert exc.value.status_code == 400
+    detail = str(exc.value.detail)
+    assert "logos.internal" not in detail
+    assert "9999" not in detail
+    assert "ConnectError" in detail
+
+
+async def test_download_pins_the_validated_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """M18: the host is resolved twice (pre-flight + socket), so the socket
+    must be opened by the pinning transport, not by a second bare lookup."""
+    import httpx
+    from app.core.url_guard import PinnedPublicIPTransport
+    from app.modules.company import service as company_service
+
+    seen: list[object] = []
+    original_client = httpx.AsyncClient
+
+    class _Recorder(original_client):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            seen.append(kwargs.get("transport"))
+            raise RuntimeError("stop before any request")
+
+    monkeypatch.setattr(company_service.httpx, "AsyncClient", _Recorder)
+
+    with pytest.raises(RuntimeError):
+        await service.upload_logo_from_url(
+            None, None, None, "https://logos.example.com/x.png"  # type: ignore[arg-type]
+        )
+    assert isinstance(seen[0], PinnedPublicIPTransport)

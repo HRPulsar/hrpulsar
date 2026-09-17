@@ -12,6 +12,7 @@ import { AIGenerationBanner } from "@/components/ai-generation-banner";
 import { DemoBanner } from "@/components/dashboard/demo-banner";
 import { DemoFeedbackPopup } from "@/components/dashboard/demo-feedback-popup";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { TenantBrandStyle } from "@/components/tenant-brand-style";
 import { WebSocketProvider } from "@/lib/ws";
 import { useInAppNotifications } from "@/hooks/use-in-app-notifications";
 
@@ -40,6 +41,7 @@ export default function DashboardLayout({
 }) {
   return (
     <AuthProvider>
+      <TenantBrandStyle />
       <PlatformAdminRedirect>
         <WebSocketProvider>
           <TooltipProvider>

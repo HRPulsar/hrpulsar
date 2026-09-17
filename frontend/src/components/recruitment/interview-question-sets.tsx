@@ -1636,43 +1636,17 @@ function ExportDialog({
     if (!setId) return;
     setBusy(true);
     try {
-      const blob = await api
-        .post<Blob>(`/v1/question-sets/${setId}/export-pdf`, {
-          format,
-          include_indicators: includeIndicators,
-          include_follow_ups: includeFollowUps,
-          include_rationale: includeRationale,
-          include_resume_anchor: includeResumeAnchor,
-          sort,
-        })
-        .catch(async () => {
-          // Some api.post wrappers don't handle binary; fall back to fetch.
-          const token =
-            typeof window !== "undefined"
-              ? localStorage.getItem("access_token")
-              : null;
-          const res = await fetch(
-            `${process.env.NEXT_PUBLIC_API_URL || "/api"}/v1/question-sets/${setId}/export-pdf`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(token ? { Authorization: `Bearer ${token}` } : {}),
-              },
-              body: JSON.stringify({
-                format,
-                include_indicators: includeIndicators,
-                include_follow_ups: includeFollowUps,
-                include_rationale: includeRationale,
-                include_resume_anchor: includeResumeAnchor,
-                sort,
-              }),
-            },
-          );
-          if (!res.ok) throw new Error("Export failed");
-          return res.blob();
-        });
-      const url = URL.createObjectURL(blob as Blob);
+      // postBlob is the binary arm of the api client — same auth,
+      // 401-refresh and 402 handling as every other call.
+      const blob = await api.postBlob(`/v1/question-sets/${setId}/export-pdf`, {
+        format,
+        include_indicators: includeIndicators,
+        include_follow_ups: includeFollowUps,
+        include_rationale: includeRationale,
+        include_resume_anchor: includeResumeAnchor,
+        sort,
+      });
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `${setName.replace(/\W+/g, "-")}.pdf`;

@@ -20,6 +20,7 @@ import { specializationsApi, type SpecializationDetail } from "@/lib/api/special
 import { api } from "@/lib/api";
 import type { Position } from "@/lib/types";
 import { gradeTitleLabel } from "@/lib/reference-labels";
+import { RequireRole } from "@/components/require-role";
 
 export default function SpecializationAIGeneratePage() {
   const t = useTranslations("company");
@@ -200,7 +201,11 @@ export default function SpecializationAIGeneratePage() {
     }
   }
 
+  // Every /competence-generation endpoint this page drives is
+  // `require_role("admin")`; the specialization pages that link here hide
+  // the entry point, a direct link used to render the form and 403 (M22b).
   return (
+    <RequireRole admin>
     <div className="space-y-6" data-testid="specialization-ai-generate">
       <div>
         {positionParam ? (
@@ -353,5 +358,6 @@ export default function SpecializationAIGeneratePage() {
         />
       )}
     </div>
+    </RequireRole>
   );
 }

@@ -8,13 +8,6 @@
  * pre-i18n rendering.
  */
 
-export const EMPLOYEE_STATUS_CODES = [
-  "active",
-  "inactive",
-  "on_leave",
-  "terminated",
-] as const;
-
 const STATUS_KEYS: Record<string, string> = {
   active: "statusActive",
   inactive: "statusInactive",

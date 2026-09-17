@@ -34,6 +34,30 @@ class TestAPIKeyService:
         assert authenticated is not None
         assert authenticated.tenant_id == tenant.id
 
+    async def test_authenticate_coalesces_last_used_writes(
+        self, db: AsyncSession, tenant, user
+    ):
+        """``last_used_at`` is an indicator, not an access log: a busy key
+        must not pay an UPDATE + COMMIT on every request (review §3)."""
+        result = await service.create_api_key(db, tenant.id, user.id, "Busy Key")
+        raw_key = result["key"]
+
+        first = await service.authenticate_api_key(db, raw_key)
+        assert first is not None
+        stamped = first.last_used_at
+        assert stamped is not None
+
+        again = await service.authenticate_api_key(db, raw_key)
+        assert again is not None
+        assert again.last_used_at == stamped
+
+        # Once the key falls out of the resolution window it is refreshed.
+        first.last_used_at = stamped - service.LAST_USED_RESOLUTION
+        await db.commit()
+        refreshed = await service.authenticate_api_key(db, raw_key)
+        assert refreshed is not None
+        assert refreshed.last_used_at > stamped - service.LAST_USED_RESOLUTION
+
     async def test_authenticate_invalid(self, db: AsyncSession):
         result = await service.authenticate_api_key(db, "hrp_invalid_key")
         assert result is None

@@ -884,5 +884,17 @@ class TestDocxExtraction:
         doc.save(buf)
         assert "Plain paragraph resume" in _extract_docx_text(buf.getvalue())
 
+    async def test_pdf_text_extracts(self):
+        # B3: the extractor ran on the retired PyPDF2, which is no longer
+        # installed — every PDF resume died on the import.
+        from app.modules.recruitment.tasks.parsing import _extract_pdf_text
+        from reportlab.pdfgen.canvas import Canvas
+
+        buf = BytesIO()
+        pdf = Canvas(buf)
+        pdf.drawString(72, 720, "Senior Backend Engineer")
+        pdf.save()
+        assert "Senior Backend Engineer" in _extract_pdf_text(buf.getvalue())
+
 
 pytestmark = pytest.mark.asyncio

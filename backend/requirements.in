@@ -29,8 +29,6 @@ slowapi
 prometheus-client
 sentry-sdk[fastapi]
 pyyaml
-python-docx
-PyPDF2
 mutagen
 # Used directly by app.modules.employee.duration.relativedelta math.
 # Currently pulled in transitively via botocore — declare it explicitly

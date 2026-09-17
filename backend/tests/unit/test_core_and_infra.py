@@ -20,6 +20,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # ---------------------------------------------------------------------------
 
 
+def test_no_email_provider_in_tests():
+    """HRP-816: conftest blanks the provider, so no test mails real people."""
+    from app.core.email import email_provider_configured
+
+    assert not email_provider_configured()
+
+
+def test_no_real_celery_broker_in_tests():
+    """HRP-779: conftest keeps enqueued tasks in memory, so no worker ever
+    picks up what the suite queues."""
+    from app.core.celery_app import celery
+    from celery.backends.redis import RedisBackend
+
+    with celery.connection_for_write() as conn:
+        assert conn.transport.driver_type == "memory"
+    # A Redis result backend subscribes to Redis on every apply_async.
+    assert not isinstance(celery.backend, RedisBackend)
+
+
 class TestSendEmail:
     def test_send_email_smtp_not_configured(self):
         from app.core.email import send_email

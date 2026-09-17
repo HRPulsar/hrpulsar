@@ -68,10 +68,26 @@ class TestChangePasswordRevokesTokens:
 
     async def test_reset_password_bumps_version(self, db: AsyncSession, user):
         before = user.token_version
-        token = create_reset_token(str(user.id))
+        token = create_reset_token(str(user.id), user.token_version)
         await service.reset_password(db, token, "brandnew789")
         await db.refresh(user)
         assert user.token_version == before + 1
+
+    async def test_reset_token_is_single_use(self, db: AsyncSession, user):
+        """HRP-806: a set-password link lives for days, so a used one must die."""
+        token = create_reset_token(str(user.id), user.token_version)
+        await service.reset_password(db, token, "brandnew789")
+        with pytest.raises(Exception) as exc:
+            await service.reset_password(db, token, "hijacked789")
+        assert exc.value.status_code == 400
+
+    async def test_reset_token_from_older_version_rejected(
+        self, db: AsyncSession, user
+    ):
+        stale = create_reset_token(str(user.id), user.token_version - 1)
+        with pytest.raises(Exception) as exc:
+            await service.reset_password(db, stale, "brandnew789")
+        assert exc.value.status_code == 400
 
     async def test_new_token_after_change_still_valid(
         self, db: AsyncSession, user

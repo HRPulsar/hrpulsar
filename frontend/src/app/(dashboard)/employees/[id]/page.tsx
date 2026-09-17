@@ -110,7 +110,7 @@ import {
 import { createAssessmentHref, createPdpHref } from "@/lib/employee-actions";
 import { ISSUE_TONE } from "@/lib/employee-issues";
 import { toast } from "sonner";
-import { ArrowLeft, DollarSign, ExternalLink, Info, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, DollarSign, ExternalLink, Info, Mail, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 
 const statusColors: Record<string, string> = {
@@ -174,7 +174,7 @@ export default function EmployeeDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { user: currentUser } = useAuth();
-  const { canManage, canAssignRoles } = usePermissions();
+  const { canManage, canAssignRoles, canInvite } = usePermissions();
   const [employee, setEmployee] = useState<Employee | null>(null);
   // HRP-66: employee role keeps write access to the Education tab on their
   // own profile but loses every other write button (Edit profile, Add
@@ -378,6 +378,21 @@ export default function EmployeeDetailPage() {
       toast.error(err instanceof Error ? err.message : t("roleChangeFailed"));
     } finally {
       setSavingRole(false);
+    }
+  }
+
+  // HRP-806: an imported employee who never set a password gets a new link.
+  async function resendSetPasswordLink() {
+    if (!employee) return;
+    try {
+      await api.post(`/employees/${employee.id}/set-password-link`);
+      toast.success(
+        t("setPasswordLinkSent", { email: employee.user_email ?? "" }),
+      );
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : t("setPasswordLinkFailed"),
+      );
     }
   }
 
@@ -1188,6 +1203,18 @@ export default function EmployeeDetailPage() {
                     <Plus className="mr-2 h-4 w-4" />
                     {t("addEvent")}
                   </DropdownMenuItem>
+                  {/* HRP-806: a demo never resends — the backend refuses. */}
+                  {canInvite &&
+                    employee.set_password_link_available &&
+                    !currentUser?.tenant_is_demo && (
+                      <DropdownMenuItem
+                        data-testid="employee-action-resend-set-password-link"
+                        onClick={resendSetPasswordLink}
+                      >
+                        <Mail className="mr-2 h-4 w-4" />
+                        {t("resendSetPasswordLink")}
+                      </DropdownMenuItem>
+                    )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>

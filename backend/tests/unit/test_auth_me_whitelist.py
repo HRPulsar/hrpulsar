@@ -122,6 +122,69 @@ async def _set_show_grades(db: AsyncSession, tenant, value: bool) -> None:
     await db.commit()
 
 
+class TestAuthMeTenantBranding:
+    """HRP-808: /auth/me carries the tenant branding the sidebar and
+    TenantBrandStyle render from."""
+
+    async def test_defaults_inherit_the_site(self, client: AsyncClient, user):
+        body = await _me(client, user)
+        assert body["tenant_hide_platform_logo"] is False
+        assert body["tenant_hide_app_version"] is False
+        assert body["tenant_logo_url"] is None
+        assert body["tenant_brand_theme"] is None
+        assert body["tenant_brand_accent_color"] is None
+
+    async def test_branding_fields(
+        self, client: AsyncClient, db: AsyncSession, tenant, user
+    ):
+        tenant.hide_platform_logo = True
+        tenant.hide_app_version = True
+        tenant.brand_theme = "teal"
+        tenant.brand_accent_color = "#112233"
+        await db.commit()
+        body = await _me(client, user)
+        # The sidebar names the tenant from here: /auth/tenants lists verified
+        # accounts only.
+        assert body["tenant_name"] == tenant.name
+        assert body["tenant_hide_platform_logo"] is True
+        assert body["tenant_hide_app_version"] is True
+        # No uploaded logo: the sidebar falls back to initials + name.
+        assert body["tenant_logo_url"] is None
+        assert body["tenant_brand_theme"] == "teal"
+        assert body["tenant_brand_accent_color"] == "#112233"
+
+    async def test_logo_url_only_when_platform_logo_hidden(
+        self, client: AsyncClient, db: AsyncSession, tenant, user, monkeypatch
+    ):
+        from app.modules.auth import service as auth_service
+        from app.modules.storage.models import File
+
+        monkeypatch.setattr(
+            auth_service, "get_presigned_url", lambda path: f"https://files/{path}"
+        )
+        f = File(
+            tenant_id=tenant.id,
+            name="logo.png",
+            original_name="logo.png",
+            path=f"{tenant.id}/logo.png",
+            size=10,
+            mime_type="image/png",
+            uploaded_by=user.id,
+        )
+        db.add(f)
+        await db.commit()
+        tenant.logo_file_id = f.id
+        await db.commit()
+
+        body = await _me(client, user)
+        assert body["tenant_logo_url"] is None
+
+        tenant.hide_platform_logo = True
+        await db.commit()
+        body = await _me(client, user)
+        assert body["tenant_logo_url"] == f"https://files/{tenant.id}/logo.png"
+
+
 class TestAuthMeJobProfileAnswer:
     """HRP-710: /auth/me answers ``can_view_job_profile`` itself.
 

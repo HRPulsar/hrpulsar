@@ -30,10 +30,6 @@ export function startActionForScope(scope: SessionScope): string {
   return START_ACTION_BY_SCOPE[scope];
 }
 
-export function refineActionForScope(scope: SessionScope): string {
-  return REFINE_ACTION_BY_SCOPE[scope];
-}
-
 /** Minimal shape needed to price a re-run — the session read model satisfies it. */
 export interface PricedSession {
   scope: SessionScope;

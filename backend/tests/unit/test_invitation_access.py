@@ -397,6 +397,48 @@ class TestBulkInvitationReportsPerItemFailures:
             "role_code_not_found",
         ]
 
+    async def test_unexpected_error_on_one_address_keeps_the_batch_going(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        user,
+        tenant,
+        admin_role,
+        employee_role,
+        access_token,
+        monkeypatch,
+    ):
+        """HRP-833: the rollback after an unexpected error expired the
+        signed-in user, and reading its tenant for the next address
+        answered the whole batch with a 500."""
+        broken = f"broken-{uuid.uuid4().hex[:6]}@test.com"
+        fresh = f"fresh-{uuid.uuid4().hex[:6]}@test.com"
+        create_invitation = service.create_invitation
+
+        async def fail_on_broken(db, tenant_id, inviter_id, data, **kwargs):
+            if data.email == broken:
+                raise RuntimeError("database went away")
+            return await create_invitation(db, tenant_id, inviter_id, data, **kwargs)
+
+        monkeypatch.setattr(service, "create_invitation", fail_on_broken)
+        client.headers["Authorization"] = f"Bearer {access_token}"
+        resp = await client.post(
+            "/api/invitations/bulk",
+            json={
+                "invitations": [
+                    {"email": broken, "name": "Broken", "role_code": "employee"},
+                    {"email": fresh, "name": "Fresh", "role_code": "employee"},
+                ]
+            },
+        )
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert [inv["email"] for inv in body["created"]] == [fresh]
+        assert body["failed"] == [
+            {"email": broken, "error_code": "invitation_create_failed"}
+        ]
+
 
 class TestRequireAdminUsesRbacSeam:
     async def test_admin_equivalent_codes_widen_access(

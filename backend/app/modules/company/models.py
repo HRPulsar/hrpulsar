@@ -1,10 +1,12 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -89,6 +91,24 @@ class Tenant(BaseModel):
     directory_show_grades: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+
+    # W6 (decision 2026-09-11): the one hourly rate the Coverage ROI is
+    # priced at. No GEO benchmark behind it - the company types its own.
+    # Currency as on ``vacancies.salary_currency`` (ISO code, free text).
+    hourly_rate: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    hourly_rate_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    # HRP-808: per-tenant branding on top of the site's env branding, set by
+    # the platform admin only. ``brand_theme`` names a preset from the
+    # frontend's lib/brand-themes.ts; NULL theme/accent inherit the site.
+    hide_platform_logo: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    hide_app_version: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    brand_theme: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    brand_accent_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
 
     divisions: Mapped[list["Division"]] = relationship(back_populates="tenant")
     activity_fields: Mapped[list["CompanyActivityField"]] = relationship(

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AuthLogo } from "@/components/auth-logo";
 import { magicLogin } from "@/lib/signup";
+import { setClientCookie } from "@/lib/cookies";
 
 export default function MagicLoginPage() {
   return (
@@ -35,7 +36,7 @@ function MagicLoginContent() {
         const resp = await magicLogin(linkToken);
         localStorage.setItem("access_token", resp.access_token);
         localStorage.setItem("refresh_token", resp.refresh_token);
-        document.cookie = "has_token=1; path=/; SameSite=Lax";
+        setClientCookie("has_token", "1");
         router.push("/dashboard");
       } catch (err) {
         setError(err instanceof Error ? err.message : t("signInFailed"));

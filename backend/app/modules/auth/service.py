@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import logging
 import secrets
@@ -15,6 +16,8 @@ from sqlalchemy.orm import selectinload
 from app.core import rbac_hooks
 from app.core.access_scope import can_see_position_grades
 from app.core.email import (
+    email_provider_configured,
+    send_account_created_email,
     send_invitation_email,
     send_invitation_reminder_email,
     send_verification_email,
@@ -26,6 +29,7 @@ from app.core.security import (
     create_access_token,
     create_email_verification_token,
     create_refresh_token,
+    create_reset_token,
     hash_password,
     verify_password,
 )
@@ -42,7 +46,11 @@ from app.modules.auth.schemas import (
     UserUpdate,
 )
 from app.modules.company.models import Division, Tenant
-from app.modules.demo.utils import demo_persona_for_email
+from app.modules.demo.utils import (
+    demo_persona_for_email,
+    is_demo_cast_email,
+    is_demo_tenant,
+)
 from app.modules.position.models import Position
 from app.modules.storage.models import File
 
@@ -122,12 +130,10 @@ def _user_to_dict(user: User, avatar_url: str | None = None) -> dict[str, Any]:
     }
 
 
-async def _resolve_avatar_url(
-    db: AsyncSession, avatar_file_id: uuid.UUID | None
-) -> str | None:
-    if not avatar_file_id:
+async def _resolve_file_url(db: AsyncSession, file_id: uuid.UUID | None) -> str | None:
+    if not file_id:
         return None
-    f = await db.get(File, avatar_file_id)
+    f = await db.get(File, file_id)
     if not f:
         return None
     return get_presigned_url(f.path)
@@ -136,11 +142,10 @@ async def _resolve_avatar_url(
 # --- Auth ---
 
 
-def _log_verification_link(email: str, token: str) -> None:
-    """Self-hosted rescue hatch (HRP-390): when the verification email
-    cannot be delivered, print the link to the backend log so the operator
-    can finish the signup by hand. Never fires in SaaS — verification JWTs
-    must not land in multi-tenant logs."""
+def _log_link_for_operator(title: str, message: str, path: str) -> None:
+    """Self-hosted rescue hatch (HRP-390): print a link an email could not
+    carry to the backend log, so the operator can hand it over. Never fires
+    in SaaS — these tokens must not land in multi-tenant logs."""
     from app.config import settings
 
     if settings.deployment_mode != "onprem":
@@ -148,14 +153,25 @@ def _log_verification_link(email: str, token: str) -> None:
     from app.core.email_templates import frontend_url
 
     logger.warning(
-        "\n================= EMAIL VERIFICATION LINK =================\n"
-        "Verification email to %s could not be delivered.\n"
-        "Open this link to verify the account:\n"
-        "%s/verify-email?token=%s\n"
+        "\n================= %s =================\n"
+        "%s\n"
+        "%s%s\n"
         "===========================================================",
-        email,
+        title,
+        message,
         frontend_url(),
-        token,
+        path,
+    )
+
+
+def _log_verification_link(email: str, token: str) -> None:
+    """When the verification email cannot be delivered, the operator can
+    finish the signup by hand with the logged link."""
+    _log_link_for_operator(
+        "EMAIL VERIFICATION LINK",
+        f"Verification email to {email} could not be delivered.\n"
+        "Open this link to verify the account:",
+        f"/verify-email?token={token}",
     )
 
 
@@ -204,7 +220,7 @@ async def register(
     """
     # Check email uniqueness (global, since tenant doesn't exist yet)
     existing = await db.execute(select(User).where(User.email == data.email))
-    if existing.scalar_one_or_none():
+    if existing.scalars().first():
         raise AppError("email_already_registered", status.HTTP_409_CONFLICT)
 
     # Create tenant
@@ -358,6 +374,7 @@ async def dev_auto_register(
         select(User).options(selectinload(User.roles)).where(User.id == user.id)
     )
     user = result.scalar_one()
+    await _stamp_first_login(db, user)
 
     tokens = _make_tokens(user)
     return {"user": _user_to_dict(user), **tokens, "token_type": "bearer"}
@@ -390,6 +407,7 @@ async def verify_email(db: AsyncSession, token: str) -> dict[str, Any]:
 
     if user.email_verified_at:
         # Already verified — just return tokens
+        await _stamp_first_login(db, user)
         tokens = _make_tokens(user)
         return {"user": _user_to_dict(user), **tokens, "token_type": "bearer"}
 
@@ -401,9 +419,16 @@ async def verify_email(db: AsyncSession, token: str) -> dict[str, Any]:
         select(User).options(selectinload(User.roles)).where(User.id == user.id)
     )
     user = result.scalar_one()
+    await _stamp_first_login(db, user)
 
     tokens = _make_tokens(user)
     return {"user": _user_to_dict(user), **tokens, "token_type": "bearer"}
+
+
+# A demo sandbox mails only the few people its visitor added (HRP-806,
+# HRP-813). Signed-out mail keyed on an address alone skips its accounts, or
+# the visitor could mail every address they imported, one request at a time.
+_OUTSIDE_DEMO = User.tenant_id.not_in(select(Tenant.id).where(Tenant.is_demo))
 
 
 async def resend_verification(
@@ -418,10 +443,18 @@ async def resend_verification(
     signed-out visitor who switched the language of the form must get the
     email in that language, not in whatever their browser advertises.
     """
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+    # HRP-815: the address may hold accounts in several tenants.
+    user = (
+        await db.scalars(
+            select(User)
+            .where(
+                User.email == email, User.email_verified_at.is_(None), _OUTSIDE_DEMO
+            )
+            .order_by(User.created_at)
+        )
+    ).first()
 
-    if user and not user.email_verified_at:
+    if user:
         # The account exists here, so the full chain is available. The
         # tenant lookup stays inside the guard: an unknown email must not
         # cost an extra query (timing differential = enumeration oracle).
@@ -563,7 +596,9 @@ async def _stamp_first_login(db: AsyncSession, user: User) -> None:
 
     Called from every successful login path (single-tenant `login`,
     multi-tenant `select_tenant`, and the impersonation entry point
-    below). Idempotent — once set, the timestamp never moves.
+    below) and, since HRP-806, from every other path that hands out a
+    session (`verify_email`, `accept_invitation`, `dev_auto_register`).
+    Idempotent — once set, the timestamp never moves.
     """
     if user.first_login_at is not None:
         return
@@ -709,7 +744,7 @@ async def get_me(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
     user = result.scalar_one_or_none()
     if not user:
         raise AppError("user_not_found", status.HTTP_404_NOT_FOUND)
-    avatar_url = await _resolve_avatar_url(db, user.avatar_file_id)
+    avatar_url = await _resolve_file_url(db, user.avatar_file_id)
     payload = _user_to_dict(user, avatar_url)
 
     # HRP-710: the answer, not the inputs to it. The SPA used to re-derive
@@ -721,6 +756,13 @@ async def get_me(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
     # tenant row still answers for the roles that carry the pair.
     payload["can_view_job_profile"] = await can_see_position_grades(db, user)
 
+    # HRP-810: imported here - auth sits under every module and must not
+    # pull the work module in at import time.
+    from app.modules.work import access as work_access
+
+    coverage_level = await work_access.section_level(db, user)
+    payload["sections"] = {"coverage": coverage_level} if coverage_level else {}
+
     # Demo-session metadata so the SPA can render <DemoBanner/> without
     # a second /tenant lookup. Cheap: tenant id is on the user already.
     tenant = await db.get(Tenant, user.tenant_id)
@@ -729,6 +771,20 @@ async def get_me(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
         payload["tenant_expires_at"] = getattr(tenant, "expires_at", None)
         payload["tenant_default_locale"] = tenant.default_locale
         payload["tenant_directory_show_grades"] = bool(tenant.directory_show_grades)
+        # HRP-808: branding the platform admin set for this tenant. The logo
+        # is only signed when the sidebar will actually show it; the name
+        # stands in without a logo (/auth/tenants lists verified accounts
+        # only, so it may lack the current tenant).
+        payload["tenant_name"] = tenant.name
+        payload["tenant_hide_platform_logo"] = tenant.hide_platform_logo
+        payload["tenant_hide_app_version"] = tenant.hide_app_version
+        payload["tenant_logo_url"] = (
+            await _resolve_file_url(db, tenant.logo_file_id)
+            if tenant.hide_platform_logo
+            else None
+        )
+        payload["tenant_brand_theme"] = tenant.brand_theme
+        payload["tenant_brand_accent_color"] = tenant.brand_accent_color
         if payload["tenant_is_demo"]:
             # HRP-676: the "View as" switcher reads the active persona from
             # here. It used to re-derive it from the email domain in the SPA,
@@ -773,7 +829,7 @@ async def update_profile(
         select(User).options(selectinload(User.roles)).where(User.id == user.id)
     )
     user = result.scalar_one()
-    avatar_url = await _resolve_avatar_url(db, user.avatar_file_id)
+    avatar_url = await _resolve_file_url(db, user.avatar_file_id)
     return _user_to_dict(user, avatar_url)
 
 
@@ -869,22 +925,36 @@ async def request_password_reset(
 
     ``request_locale`` (HRP-513) is the requester's resolved interface
     locale, used only when the account itself states no preference.
+
+    HRP-815: an address can hold an account in several tenants. The inbox
+    is the same for all of them, so one link sets the password on every
+    one, and login then asks which tenant to open. The link pins each
+    account to its version, so it works once per account.
     """
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
-    if not user:
+    users = (
+        await db.scalars(
+            select(User)
+            .where(User.email == email, _OUTSIDE_DEMO)
+            .order_by(User.created_at)
+        )
+    ).all()
+    if not users:
         return None  # Don't reveal if email exists
+    user = users[0]
 
     # Use a short-lived JWT as reset token (15 min)
-    from app.core.security import create_reset_token
-
     tenant = await db.get(Tenant, user.tenant_id)
     locale = resolve_locale(
         user_language=user.language,
         tenant_default=tenant.default_locale if tenant else None,
         accept_language=request_locale,
     )
-    return create_reset_token(str(user.id)), locale
+    token = create_reset_token(
+        str(user.id),
+        user.token_version,
+        accounts={str(u.id): u.token_version for u in users},
+    )
+    return token, locale
 
 
 async def reset_password(db: AsyncSession, token: str, new_password: str) -> None:
@@ -896,17 +966,151 @@ async def reset_password(db: AsyncSession, token: str, new_password: str) -> Non
         payload = decode_token(token)
         if payload.get("type") != "reset":
             raise AppError("invalid_reset_token", status.HTTP_400_BAD_REQUEST)
-        user_id = payload.get("sub")
+        # HRP-815: forgot-password pins every account of the address; a
+        # set-password link from an import, only its own.
+        versions = payload.get("accounts") or {payload.get("sub"): payload.get("ver")}
     except JWTError:
         raise AppError("invalid_or_expired_reset_token", status.HTTP_400_BAD_REQUEST)
 
-    user = await db.get(User, uuid.UUID(user_id))
-    if not user:
+    # Locked, in id order: two requests racing with the same token would both
+    # pass the version check below and both set a password.
+    found = (
+        await db.execute(
+            select(User)
+            .where(User.id.in_([uuid.UUID(user_id) for user_id in versions]))
+            .order_by(User.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().all()
+    if not found:
         raise AppError("invalid_reset_token", status.HTTP_400_BAD_REQUEST)
+    # An account whose version moved on already used the link, or got a newer
+    # one (HRP-806) — say another tenant's admin re-sent its set-password
+    # link. It drops out; the address's other accounts still reset.
+    accounts = [a for a in found if versions[str(a.id)] == a.token_version]
+    if not accounts:
+        raise AppError("invalid_or_expired_reset_token", status.HTTP_400_BAD_REQUEST)
+    password_hash = hash_password(new_password)
+    for account in accounts:
+        account.password_hash = password_hash
+        # The link arrived in this inbox, which proves the address — an
+        # imported account is created unverified and could not sign in
+        # otherwise.
+        if account.email_verified_at is None:
+            account.email_verified_at = datetime.now(timezone.utc)
+        # Revoke every previously-issued access/refresh token (review P1-12).
+        account.token_version += 1
+    await db.commit()
 
-    user.password_hash = hash_password(new_password)
-    # Revoke every previously-issued access/refresh token (review P1-12).
-    user.token_version += 1
+
+# --- Set-password link (HRP-806) ---
+
+SET_PASSWORD_LINK_EXPIRE_DAYS = 7
+
+
+def can_send_set_password_link(user: User, employee_status: str) -> bool:
+    """An account created on someone's behalf and still unverified.
+
+    The marker is an unverified email, not ``first_login_at``: that column
+    was never backfilled (HRP-246), so long-standing users read as "never
+    signed in", and resending bumps ``token_version`` — it would log them
+    out. Import creates accounts unverified; the link verifies them.
+
+    Never a blocked employee (they could not sign in anyway) and never the
+    demo cast: a demo sandbox emails only people its visitor added.
+    """
+    return (
+        user.is_active
+        and user.email_verified_at is None
+        and employee_status not in BLOCKED_EMPLOYEE_STATUSES
+        and not is_demo_cast_email(user.email)
+    )
+
+
+def send_set_password_link(
+    user_id: uuid.UUID, email: str, first_name: str, token_version: int, locale: str
+) -> bool:
+    """Email a link to set the account's password; ``False`` if it did not go out.
+
+    Takes plain values so the import task can send after its session is
+    gone. The link is a reset token pinned to ``token_version``: setting the
+    password voids it, and so does a newer link once the caller bumps the
+    version.
+    """
+    token = create_reset_token(
+        str(user_id),
+        token_version,
+        ttl=timedelta(days=SET_PASSWORD_LINK_EXPIRE_DAYS),
+    )
+    if not email_provider_configured():
+        # Only when no email could ever go out: a provider that failed is
+        # retried from the card, and its link may be superseded.
+        _log_link_for_operator(
+            "SET PASSWORD LINK",
+            f"No email provider is configured, so {email} got no email.\n"
+            "Open this link to set the password:",
+            f"/reset-password?token={token}",
+        )
+        return False
+    return send_account_created_email(
+        email, first_name, token, SET_PASSWORD_LINK_EXPIRE_DAYS, locale=locale
+    )
+
+
+async def resend_set_password_link(
+    db: AsyncSession, tenant_id: uuid.UUID, employee_id: uuid.UUID
+) -> None:
+    from app.modules.employee.models import Employee
+
+    emp = await db.get(Employee, employee_id)
+    if not emp or emp.tenant_id != tenant_id:
+        raise AppError("employee_not_found", status.HTTP_404_NOT_FOUND)
+    # Locked like reset_password: a resend racing the person setting their
+    # password must not mail out a link pinned to the version that wins.
+    user = (
+        await db.execute(
+            select(User)
+            .where(User.id == emp.user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    # A demo emails its visitor's first few imports once and never again:
+    # every new sandbox is a new admin, so no per-user throttle holds.
+    if (
+        user is None
+        or not can_send_set_password_link(user, emp.status)
+        or await is_demo_tenant(db, tenant_id)
+    ):
+        raise AppError("set_password_link_unavailable", status.HTTP_409_CONFLICT)
+
+    locale = await _tenant_locale(db, tenant_id)
+    if not email_provider_configured():
+        # Nothing can be sent; a self-hosted operator gets the current link
+        # in the log instead, and it keeps working.
+        send_set_password_link(
+            user.id, user.email, user.first_name, user.token_version, locale
+        )
+        raise AppError(
+            "set_password_link_email_not_configured", status.HTTP_409_CONFLICT
+        )
+
+    user.token_version += 1  # voids the link sent before
+    # Off the event loop. The row lock is held through the send, bounded by
+    # the provider's timeout: only this account's own reset waits on it.
+    if not await asyncio.to_thread(
+        send_set_password_link,
+        user.id,
+        user.email,
+        user.first_name,
+        user.token_version,
+        locale,
+    ):
+        await db.rollback()  # a failed delivery keeps the previous link valid
+        raise AppError(
+            "set_password_link_not_sent", status.HTTP_503_SERVICE_UNAVAILABLE
+        )
     await db.commit()
 
 
@@ -1044,6 +1248,21 @@ async def _validate_invitation_scope(
             raise AppError("position_not_found", status.HTTP_400_BAD_REQUEST)
 
 
+# HRP-813: a demo sandbox invites only this many people per session. The
+# visitor is anonymous and picks the addresses, and every new sandbox is a new
+# admin, so no per-user throttle holds. Mirrored in the invitations page hint
+# (demo-email-limit-parity.test.ts).
+DEMO_INVITATION_LIMIT = 5
+
+
+async def _refuse_demo_invitation_resend(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> None:
+    """A demo invitation is emailed once: resending would mail it past the limit."""
+    if await is_demo_tenant(db, tenant_id):
+        raise AppError("demo_invitation_resend_unavailable", status.HTTP_409_CONFLICT)
+
+
 async def _load_invitation(db: AsyncSession, invitation_id: uuid.UUID) -> Invitation:
     result = await db.execute(
         select(Invitation)
@@ -1142,6 +1361,30 @@ async def create_invitation(
 
     await _validate_invitation_scope(db, tenant_id, data.division_id, data.position_id)
 
+    if await is_demo_tenant(db, tenant_id):
+        # Held until this invitation commits, so parallel requests and a bulk
+        # batch count each other's rows. Revoked invitations still count.
+        await db.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtext(f"demo-invitations:{tenant_id}")
+                )
+            )
+        )
+        invited = (
+            await db.execute(
+                select(func.count(Invitation.id)).where(
+                    Invitation.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one()
+        if invited >= DEMO_INVITATION_LIMIT:
+            raise AppError(
+                "demo_invitation_limit_reached",
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                limit=DEMO_INVITATION_LIMIT,
+            )
+
     token = secrets.token_urlsafe(32)
     inv = Invitation(
         email=data.email,
@@ -1164,8 +1407,8 @@ async def create_invitation(
     # Send invitation email (best-effort, don't fail the request).
     # HRP-301: demo tenants are allowed to dispatch invitations so a
     # prospective HR admin can walk through the full onboarding loop
-    # during their evaluation. Bounded by the demo session TTL and the
-    # concurrent-session cap; not a free email blast surface.
+    # during their evaluation. Bounded by DEMO_INVITATION_LIMIT per session
+    # (HRP-813, checked above); not a free email blast surface.
     with contextlib.suppress(Exception):
         send_invitation_email(
             data.email,
@@ -1237,6 +1480,7 @@ async def resend_invitation(
         raise AppError(
             "only_pending_invitations_can_be_resent", status.HTTP_400_BAD_REQUEST
         )
+    await _refuse_demo_invitation_resend(db, tenant_id)
 
     # Extend expiry
     inv.expires_at = datetime.now(timezone.utc) + timedelta(days=INVITATION_EXPIRE_DAYS)
@@ -1331,6 +1575,8 @@ async def update_invitation_email(
         raise AppError(
             "only_pending_invitations_can_be_edited", status.HTTP_409_CONFLICT
         )
+    # Sends the invitation again, to whichever address the visitor types.
+    await _refuse_demo_invitation_resend(db, tenant_id)
 
     new_email = data.email
     old_email = inv.email
@@ -1500,6 +1746,9 @@ async def accept_invitation(
         select(User).options(selectinload(User.roles)).where(User.id == user.id)
     )
     user = user_result.scalar_one()
+    # HRP-806: accepting hands out a session, so it is the first sign-in —
+    # left unstamped, the card offered this user a set-password link.
+    await _stamp_first_login(db, user)
 
     tokens = _make_tokens(user)
     return {

@@ -50,6 +50,10 @@ test.describe("Invitations — INV2 (inline edit + email change)", () => {
     await expect(
       page.getByTestId(`invitations-row-${invitationId}-btn-edit-email`),
     ).toBeVisible();
+    // Hidden only in a demo sandbox (HRP-813, invitations.spec.ts).
+    await expect(
+      page.getByTestId(`invitations-row-${invitationId}-btn-resend`),
+    ).toBeVisible();
   });
 
   test("admin: change invitation email through the modal", async ({ page }) => {

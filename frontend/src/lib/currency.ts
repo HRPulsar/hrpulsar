@@ -52,7 +52,7 @@ export function getBillingCurrency(): string {
   return normalizeCurrency(readEnv("NEXT_PUBLIC_BILLING_CURRENCY"));
 }
 
-export function getBillingLocale(): string {
+function getBillingLocale(): string {
   return readEnv("NEXT_PUBLIC_BILLING_LOCALE") || DEFAULT_LOCALE;
 }
 

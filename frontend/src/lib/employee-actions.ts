@@ -8,8 +8,8 @@
 // to one of these flows (HRP-665's talent-market card) links to the same
 // builders instead of inventing a third contract.
 
-export const EMPLOYEE_CREATE_PARAM = "create";
-export const EMPLOYEE_ID_PARAM = "employee_id";
+const EMPLOYEE_CREATE_PARAM = "create";
+const EMPLOYEE_ID_PARAM = "employee_id";
 
 function createHref(path: string, employeeId: string): string {
   const params = new URLSearchParams({

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from slowapi import Limiter
 from slowapi.util import get_remote_address
+
+from app.core.rate_limit import make_limiter
 
 
 def resolve_page_params(
@@ -34,7 +35,7 @@ def resolve_page_params(
 # key_style="endpoint" is load-bearing: slowapi's default ("url") buckets by
 # the FULL request path, so every distinct {token} value would get its own
 # fresh bucket and token grinding would never be throttled (review [26]).
-recruitment_public_limiter = Limiter(key_func=get_remote_address, key_style="endpoint")
+recruitment_public_limiter = make_limiter(get_remote_address)
 
 
 # Who deals with hiring at all. Reading recruitment is not a company-wide

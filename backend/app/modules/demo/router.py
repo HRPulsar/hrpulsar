@@ -75,6 +75,7 @@ async def start_demo_session(
         user_agent=request.headers.get("user-agent"),
         accept_language=request.headers.get("accept-language"),
         browser_timezone=payload.timezone,
+        visitor_id=payload.visitor_id,
         existing_token=_bearer_token(authorization),
     )
 

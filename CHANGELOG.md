@@ -6,9 +6,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-16
+
+### Added
+- Coverage: break a process or a project down into steps with an AI draft and edit the result in place (HRP-754, HRP-755, HRP-756, HRP-757, HRP-775, HRP-802)
+- Coverage: per-step verdict - an agent type, a person on the team, or a gap - with the automation mode, three buckets and weighted shares once hours per run and runs per year are set (HRP-758, HRP-760, HRP-762)
+- Coverage: the tab opens on two plaques - what share of the work moves to an agent and how well an agent does it, and what the work costs in hours a year and in money once an hourly rate is set on the company profile (HRP-795, HRP-796, HRP-797)
+- Coverage: a To do tab collects what the breakdown leaves unclosed - the steps nobody covers yet, ready to hand to hiring, and the steps an agent type could take where no agent is registered and no skill file is written (HRP-800)
+- Coverage: the first breakdown applies itself, a regeneration shows the current and the proposed steps side by side before you decide, and a long run shows its phase with a running clock (HRP-798)
+- Coverage: capability chips carry the model's confidence and the fragment of the description behind them; doubtful chips are suggestions until confirmed, and a step can be reclassified by a comment (HRP-775, HRP-776, HRP-777)
+- Coverage: gaps open a hire need - a draft vacancy in Recruitment with the steps as its description - for the checked steps or for a single step from its row (HRP-759, HRP-801)
+- Coverage: assign the person who does a step and the person who checks it; an assignment closes the gap even without matching skills (HRP-809)
+- Coverage: process visibility for the whole company or for chosen roles, positions and employees, edit rights for the owner, and an access history (HRP-810)
+- Coverage: a SKILL.md for any step an agent can perform, built from the agent pack's skeleton and the company's competence indicators, generated in the background with preview and download (HRP-760, HRP-761, HRP-799)
+- Capability catalog of seventeen primitives, AI mapping of competences to capabilities, and an AI workforce registry API for agents, packs, assignments and workflows (HRP-748, HRP-749, HRP-750, HRP-751, HRP-752, HRP-753)
+- Imported employees receive an email with a link to set their password, and an admin can resend it from the employee card until they set a password (HRP-806)
+
+### Fixed
+- Employee import works again and accepts the CSV template from the import page, including semicolon-separated files with DD.MM.YYYY dates saved by Excel (HRP-806)
+- Imported accounts no longer share a default password (HRP-806)
+- Password reset links work only once (HRP-806)
+- Forgot password works for an email address with accounts in several organizations: one link sets the password for all of them (HRP-815)
+- Imported employees whose set-password email could not be sent are counted on the import job (HRP-806)
+- Bulk invitation requests keep processing the batch when one address fails unexpectedly, instead of answering with an error (HRP-833)
+- An answer scale can be made the default again, and a recruitment scale configuration can be activated, without the save failing (HRP-811)
+- Interview question generation no longer fails when the model returns a question without an explanation
+- Dialogs keep the width they were designed for instead of collapsing to a narrow default (HRP-746)
+- Re-applying a Coverage draft asks for confirmation before it discards generated skills or edited steps
+- Long AI jobs are no longer started again after a broker timeout
+- Upgrading to this release no longer fails on duplicate agent names, and it keeps duplicate pending AI assignments instead of deleting them
+- Coverage: an empty breakdown cannot be accepted, and a step is handed over to hiring only once (HRP-746)
+- Coverage: reordering steps keeps edits made in the meantime, switching between breakdowns no longer shows the previous one, and the hours fields refuse out-of-range values before saving (HRP-746)
+- Coverage: generating several skills at once reports how many failed, and a ready skill with no content is not regenerated automatically (HRP-746)
+- Coverage: the access dialog names a person by email when their card has no name, searches the owner and rule pickers separately, and offers only active employees as owners (HRP-810)
+- File uploads answer with an error when the storage refuses the object instead of recording a file without a URL, and a file record stays when the storage refuses to delete the object (HRP-746)
+
+### Security
+- Competence indicators are scoped to the workspace that created them
+- WebSocket connections are refused for tokens revoked by a password change or by offboarding
+- The email delivery webhook verifies the provider's signature
+- Uploads are rejected by size before they are read, and the file category in the storage key is validated
+- Login and the other rate limits are enforced across all application instances
+- External evaluator pages are rate-limited and their free-text fields are bounded
+- Test-only seed endpoints stay disabled on deployed tiers
+- Downloading a company logo by URL pins the address it resolved to
+- `/health` no longer echoes connection details
+- The self-hosted stack refuses to start with the default JWT secret
+- Email verification and invitation acceptance are rate-limited
+- Email subjects are sanitized for every sender
+- Browser cookies carry the Secure flag on HTTPS
+- Feedback rate limiting fails closed when Redis is unavailable
+- Swagger UI is served only on self-hosted and debug installations; the OpenAPI schema stays available
+
+### Changed
+- Public API keys record their last use at most once every five minutes (HRP-746)
+
 ## [1.23.4] - 2026-09-14
 
+_No community-edition changes in this release._
+
 ## [1.23.3] - 2026-09-13
+
+_No community-edition changes in this release._
 
 ## [1.23.2] - 2026-09-11
 
@@ -235,6 +294,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.19.2] - 2026-08-18
 
+_No community-edition changes in this release._
+
 ## [1.19.1] - 2026-08-18
 
 ### Fixed
@@ -258,7 +319,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.18.2] - 2026-08-14
 
+_No community-edition changes in this release._
+
 ## [1.18.1] - 2026-08-14
+
+_No community-edition changes in this release._
 
 ## [1.18.0] - 2026-08-13
 
@@ -303,6 +368,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vacancy candidates table: the DIVERGENCE column now counts manager scores from assessment rounds and AI scores from resume-only analyses, compares them on the same scale, explains itself in a hover tooltip and opens Canvas filtered to the divergent cells (HRP-507)
 
 ## [1.17.1] - 2026-08-10
+
+_No community-edition changes in this release._
 
 ## [1.17.0] - 2026-08-09
 
@@ -579,6 +646,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.13.15] - 2026-07-06
 
+_No community-edition changes in this release._
+
 ## [1.13.14] - 2026-07-06
 
 ### Fixed
@@ -671,6 +740,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.13.8] - 2026-06-20
 
+_No community-edition changes in this release._
+
 ## [1.13.7] - 2026-06-20
 
 ### Changed
@@ -699,6 +770,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Blog: anonymous visitors no longer hit Atlassian login on inline post images or their wrapping links — the rewrite now handles absolute Confluence URLs and `<a href>` in addition to relative `<img src>`
 
 ## [1.13.3] - 2026-06-20
+
+_No community-edition changes in this release._
 
 ## [1.13.2] - 2026-06-19
 
@@ -795,6 +868,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recruitment: candidate card now mounts the Assessments section (rounds, manual scoring, invite external evaluator) so manager scoring is reachable from the UI (HRP-186)
 
 ## [1.12.1] - 2026-06-09
+
+_No community-edition changes in this release._
 
 ## [1.12.0] - 2026-06-09
 
@@ -1425,6 +1500,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.4.2] - 2026-04-28
 
+_No community-edition changes in this release._
+
 ## [1.4.1] - 2026-04-28
 
 ### Added
@@ -1511,6 +1588,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.7] - 2026-04-23
 
+_No community-edition changes in this release._
+
 ## [1.2.6] - 2026-04-23
 
 ### Added
@@ -1542,6 +1621,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Missing `resend` package in compiled requirements.txt
 
 ## [1.2.3] - 2026-04-22
+
+_No community-edition changes in this release._
 
 ## [1.2.2] - 2026-04-22
 

@@ -23,6 +23,7 @@ import logging
 import secrets
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -104,6 +105,10 @@ from app.modules.demo.seed_data_recruitment_extras import (
     INTERVIEW_SHAPES,
 )
 from app.modules.demo.seed_data_talent_market import TALENT_CARDS
+from app.modules.demo.seed_data_work import (
+    COMPETENCE_PRIMITIVES,
+    WORK_CONTAINERS,
+)
 from app.modules.demo.seed_i18n import localize, seed_locale, translate
 from app.modules.dictionary.models import DictionaryItem
 from app.modules.employee.models import Employee, WorkExperience
@@ -121,12 +126,23 @@ from app.modules.notification.models import (
     NotificationTemplate,
 )
 from app.modules.position.models import Position
+from app.modules.primitives.catalog_data import CATALOG_VERSION
+from app.modules.primitives.mapping_service import apply_mapping
+from app.modules.primitives.models import (
+    CompetenceMappingState,
+    Primitive,
+)
 from app.modules.talent_market.models import (
     TalentCandidate,
     TalentCard,
     TalentCardCompetence,
     TalentCardRequirement,
     TalentCardSpecialization,
+)
+from app.modules.work.models import (
+    WorkContainer,
+    WorkStep,
+    WorkStepPrimitive,
 )
 
 # Stable, ASCII-only keys for the two completed-interview candidates,
@@ -2054,6 +2070,135 @@ async def _seed_misc(
     return (dict_count, notification_count)
 
 
+async def _seed_work(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    ctx: CompanyContext,
+    *,
+    owner_user_id: uuid.UUID,
+    now: datetime,
+) -> tuple[int, int]:
+    """Competence → primitive mapping + the work containers Coverage reads.
+
+    Returns ``(mapped_competence_count, container_count)``.
+
+    Idempotent on both halves: the mapping is upserted per competence, the
+    containers are matched by ``(tenant_id, title)``. The mapping goes in
+    first — a container is useless to the human layer without it.
+    """
+    primitives = {
+        p.code: p
+        for p in (
+            (await db.execute(select(Primitive).where(Primitive.retired_in.is_(None))))
+            .scalars()
+            .all()
+        )
+    }
+    # An empty catalog means migration ``v2prim01`` has not run on this
+    # database. Nothing to link to, so the work fixtures are skipped whole
+    # rather than half-seeded.
+    if not primitives:
+        logger.warning("demo seed: primitive catalog is empty, skipping work fixtures")
+        return (0, 0)
+
+    mapped = 0
+    for competence_key, codes in COMPETENCE_PRIMITIVES.items():
+        competence = ctx.competences.get(competence_key)
+        if competence is None:
+            continue
+        existing = (
+            await db.execute(
+                select(CompetenceMappingState).where(
+                    CompetenceMappingState.competence_id == competence.id
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            continue
+        # Through the service, so the seed cannot drift from the invariant
+        # it keeps (``tenant_id`` on both tables mirrors the competence).
+        # ``reviewed``, not ``ai_suggested``: the demo tenant must look
+        # like a company that has confirmed its mapping, and coverage
+        # leaves a confirmed mapping alone instead of scheduling an LLM
+        # run the moment a visitor opens the page.
+        await apply_mapping(
+            db,
+            competence,
+            [code for code in codes if code in primitives],
+            status="reviewed",
+            reviewed_by_id=owner_user_id,
+            commit=False,
+        )
+        mapped += 1
+    await db.flush()
+
+    container_count = 0
+    for spec in localize(WORK_CONTAINERS):
+        existing_id = (
+            await db.execute(
+                select(WorkContainer.id).where(
+                    WorkContainer.tenant_id == tenant_id,
+                    WorkContainer.title == spec["title"],
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_id is not None:
+            continue
+        accepted = spec["status"] == "active"
+        container = WorkContainer(
+            tenant_id=tenant_id,
+            type=spec["type"],
+            title=spec["title"],
+            description=spec["description"],
+            goal=spec["goal"],
+            status=spec["status"],
+            owner_id=owner_user_id,
+            created_by_id=owner_user_id,
+            source=spec["source"],
+            catalog_version=CATALOG_VERSION,
+            gap_default_label=spec["gap_default_label"],
+            # HRP-810: the demo shows Coverage to every persona.
+            visibility="company",
+        )
+        db.add(container)
+        await db.flush()
+        # 1-based, like every other writer of WorkStep.position: the UI
+        # prints the position verbatim.
+        for position, step_spec in enumerate(spec["steps"], start=1):
+            step = WorkStep(
+                tenant_id=tenant_id,
+                container_id=container.id,
+                position=position,
+                title=step_spec["title"],
+                description=step_spec["description"],
+                responsibility=step_spec["responsibility"],
+                hours_per_run=Decimal(str(step_spec["hours_per_run"])),
+                runs_per_year=step_spec["runs_per_year"],
+                output_type=step_spec["output_type"],
+                state="accepted" if accepted else "system_suggested",
+            )
+            db.add(step)
+            await db.flush()
+            db.add_all(
+                WorkStepPrimitive(
+                    tenant_id=tenant_id,
+                    step_id=step.id,
+                    primitive_id=primitives[code].id,
+                    source="system_suggested",
+                    # The company confirmed the model's codes when it
+                    # accepted the breakdown; a draft one is still the
+                    # model's word alone.
+                    confirmed_at=now if accepted else None,
+                )
+                for code in step_spec["primitives"]
+                if code in primitives
+            )
+        container_count += 1
+    await db.flush()
+
+    return (mapped, container_count)
+
+
 async def _already_seeded(db: AsyncSession, tenant_id: uuid.UUID) -> bool:
     found = (
         await db.execute(
@@ -2799,7 +2944,7 @@ async def clone_seed_into_demo_tenant(
     -------
     dict
         ``{"vacancies": int, "candidates": int, "interviews": int,
-        "skipped": bool}``.
+        "work_containers": int, "skipped": bool}``.
     """
     if require_demo_tenant:
         is_demo = (
@@ -2833,6 +2978,8 @@ async def clone_seed_into_demo_tenant(
             "talent_cards": 0,
             "extra_dictionary_items": 0,
             "notifications": 0,
+            "mapped_competences": 0,
+            "work_containers": 0,
             "skipped": True,
         }
 
@@ -3036,6 +3183,18 @@ async def clone_seed_into_demo_tenant(
         now=now,
     )
 
+    # HRP-746 / W6: the competence → primitive mapping and the work
+    # containers Coverage is about. Last, because the mapping needs the
+    # competences of S2 and the containers say nothing without the
+    # people of S3 behind them.
+    mapped_count, work_container_count = await _seed_work(
+        db,
+        tenant_id,
+        company_ctx,
+        owner_user_id=owner_user_id,
+        now=now,
+    )
+
     return {
         "vacancies": len(vacancy_objs) + extra_vac_count,
         "candidates": len(candidates()) + extra_cand_count,
@@ -3050,5 +3209,7 @@ async def clone_seed_into_demo_tenant(
         "talent_cards": talent_card_count,
         "extra_dictionary_items": dict_count,
         "notifications": notification_count,
+        "mapped_competences": mapped_count,
+        "work_containers": work_container_count,
         "skipped": False,
     }

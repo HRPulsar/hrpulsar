@@ -18,7 +18,7 @@ export const PDP_FLAGS = ["overdue", "stuck_review"] as const;
 export type PdpFlag = (typeof PDP_FLAGS)[number];
 
 // Mirrors DEV_LOOP_STUCK_REVIEW_DAYS in backend/app/modules/employee/issues.py.
-export const STUCK_REVIEW_DAYS = 14;
+const STUCK_REVIEW_DAYS = 14;
 
 const STUCK_STATUSES = ["review", "returned"];
 
@@ -101,7 +101,7 @@ function _anchorTime(pdp: PDP): number {
   return Number.isFinite(t) ? t : 0;
 }
 
-export function comparePdpForList(a: PDP, b: PDP): number {
+function comparePdpForList(a: PDP, b: PDP): number {
   const bucketDiff = _pdpBucketRank(a.status) - _pdpBucketRank(b.status);
   if (bucketDiff !== 0) return bucketDiff;
   return _anchorTime(b) - _anchorTime(a);

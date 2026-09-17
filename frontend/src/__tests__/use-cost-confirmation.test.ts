@@ -200,3 +200,55 @@ describe("cost cache freshness (HRP-509 review #3)", () => {
     );
   });
 });
+
+// M22d: the credit warning threshold has exactly one cache. The badge used
+// to keep a second one with its own invalidator (which nothing called), so
+// changing the threshold in Billing settings left one surface on the old
+// value until a full reload.
+describe("credit warning threshold cache (M22d)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubGlobal("window", {} as unknown as Window);
+    vi.stubGlobal("localStorage", { getItem: () => "token" });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("fetches /billing/credits once and re-reads it after invalidation", async () => {
+    let threshold = 10;
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      url,
+      json: async () => ({ credit_warning_threshold: threshold }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("../hooks/use-cost-confirmation");
+    expect(await mod.fetchThreshold()).toBe(10);
+    expect(await mod.fetchThreshold()).toBe(10);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain("/billing/credits");
+
+    threshold = 25;
+    mod.invalidateCreditBalanceCache();
+    expect(await mod.fetchThreshold()).toBe(25);
+  });
+
+  it("reports 0 (billing disabled) when /billing/credits is not mounted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        json: async () => ({ detail: "Not Found" }),
+      })),
+    );
+
+    const mod = await import("../hooks/use-cost-confirmation");
+    expect(await mod.fetchThreshold()).toBe(0);
+  });
+});

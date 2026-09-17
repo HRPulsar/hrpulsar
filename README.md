@@ -12,6 +12,8 @@ Manage competencies, run 360° assessments, build development plans, and track e
 - **Grade System** — Career ladders linking specializations, grades, and required competencies
 - **Exams & Knowledge Tests** — Mass and individual exams with multiple question types and auto-scoring
 - **Talent Market** — Internal marketplace for vacancies, projects, and talent matching
+- **Coverage** — Break a process or a project into steps and see who covers each one: an AI agent type, a person on the team, or a gap you hand to hiring
+- **Recruitment** — Vacancies, candidate pipelines with AI resume parsing, interview rounds with transcription and analysis, and evaluation sheets for external evaluators
 - **AI-Powered** — LLM-based competency generation, indicator suggestions, and semantic search
 - **Analytics & Reports** — Assessment statistics, competency matrices, and Excel exports
 - **Multi-tenant** — Isolated data per organization with system-wide reference data

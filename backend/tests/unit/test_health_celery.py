@@ -148,4 +148,7 @@ async def test_check_celery_reports_offline_when_ping_raises(monkeypatch):
     result = await health._check_celery()
     assert result["status"] == "error"
     assert "ping failed" in result["error"]
-    assert "broker down" in result["error"]
+    # /health is unauthenticated: the class name only, never the broker
+    # message (a broker URL error stringifies host and password).
+    assert result["error"].endswith("RuntimeError")
+    assert "broker down" not in result["error"]

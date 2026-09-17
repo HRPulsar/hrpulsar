@@ -12,7 +12,7 @@ import { useEENavItems } from "@/lib/ee-hooks";
 import { getBrandName, getLogoUrl, getSidebarLogoHeight } from "@/lib/brand";
 import { resolveRoleLabel } from "@/lib/user-role-label";
 import { AppVersion } from "@/components/app-version";
-import { SidebarTenantSwitcher } from "@/components/tenant-switcher";
+import { SidebarTenantSwitcher, TenantInitials } from "@/components/tenant-switcher";
 
 const emptySubscribe = () => () => {};
 
@@ -29,12 +29,15 @@ interface NavItem {
   requireAdmin?: boolean;
   /** HRP-622: recruitment-viewer roles (see usePermissions.canRecruit). */
   requireRecruit?: boolean;
-  /** HRP-732: admin / manager / HR (see usePermissions.canViewAnalytics). */
-  requireAnalytics?: boolean;
+  /** HRP-732, HRP-756: admin / manager / HR — the read-only management
+   *  surfaces (see usePermissions.canViewManagementData). */
+  requireManagementData?: boolean;
   /** HRP-765: the employee role, or the roles that manage the surface —
    *  the talent market is read by the people on its cards and written by
    *  admin / manager, and belongs in neither gate alone. */
   requireEmployeeOrManage?: boolean;
+  /** HRP-810: /auth/me opens Coverage (see usePermissions.canViewCoverage). */
+  requireCoverage?: boolean;
 }
 
 interface NavSection {
@@ -130,6 +133,18 @@ const navigation: NavItem[] = [
     ),
   },
   {
+    id: "coverage",
+    labelKey: "coverage",
+    href: "/coverage",
+    // HRP-810: open to whoever reads at least one process.
+    requireCoverage: true,
+    icon: (
+      <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 12h.007v.008H3.75V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm-.375 5.25h.007v.008H3.75v-.008Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+      </svg>
+    ),
+  },
+  {
     id: "recruitment",
     labelKey: "recruitment",
     href: "/recruitment",
@@ -146,7 +161,7 @@ const navigation: NavItem[] = [
     id: "analytics",
     labelKey: "analytics",
     href: "/analytics",
-    requireAnalytics: true,
+    requireManagementData: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
@@ -218,7 +233,7 @@ const navigation: NavItem[] = [
 const sections: NavSection[] = [
   { labelKey: "sectionWorkspace", items: ["dashboard", "employees", "company"] },
   { labelKey: "sectionTalent", items: ["assessments", "development", "exams", "competences"] },
-  { labelKey: "sectionDiscover", items: ["talent-market", "recruitment", "analytics"] },
+  { labelKey: "sectionDiscover", items: ["coverage", "talent-market", "recruitment", "analytics"] },
   { labelKey: "sectionAdmin", items: ["dictionaries", "import", "invitations", "roles", "ai-settings", "billing"] },
 ];
 
@@ -228,10 +243,20 @@ export function Sidebar() {
   const locale = useLocale();
   const tPlatform = useTranslations("platform");
   const { resolvedTheme } = useTheme();
-  const { canManage, canRecruit, isAdmin, isEmployee, canViewAnalytics } =
-    usePermissions();
+  const {
+    canManage,
+    canRecruit,
+    isAdmin,
+    isEmployee,
+    canViewManagementData,
+    canViewCoverage,
+  } = usePermissions();
   const { user } = useAuth();
   const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
+  // HRP-808: the platform admin may put the tenant's own brand in place of
+  // the site logo; without an uploaded logo the tenant initials + name stand
+  // in. The name comes from /auth/me: `tenants` lists verified accounts only.
+  const tenantName = user?.tenant_name ?? "";
 
   const logoSrc = getLogoUrl(mounted && resolvedTheme === "dark" ? "dark" : "light");
   // White-label logos vary in aspect ratio — an env override replaces the
@@ -271,16 +296,34 @@ export function Sidebar() {
     <aside className="flex h-full w-[232px] flex-col border-r border-sidebar-border bg-sidebar">
       <Link
         href="/dashboard"
-        className="flex h-14 items-center justify-between border-b border-sidebar-border px-4"
+        className="flex h-14 items-center justify-between gap-2 border-b border-sidebar-border px-4"
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={logoSrc}
-          alt={getBrandName()}
-          className={logoHeight ? undefined : "h-7"}
-          style={logoHeight ? { height: logoHeight } : undefined}
-        />
-        <AppVersion className="rounded border border-sidebar-border px-1.5 py-px font-mono text-[10px] text-muted-foreground" />
+        {!user?.tenant_hide_platform_logo ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={logoSrc}
+            alt={getBrandName()}
+            className={logoHeight ? undefined : "h-7"}
+            style={logoHeight ? { height: logoHeight } : undefined}
+            data-testid="sidebar-logo-platform"
+          />
+        ) : user.tenant_logo_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={user.tenant_logo_url}
+            alt={tenantName}
+            className="h-7 min-w-0 max-w-full object-contain object-left"
+            data-testid="sidebar-logo-tenant"
+          />
+        ) : (
+          <span className="flex min-w-0 items-center gap-2" data-testid="sidebar-tenant-mark">
+            <TenantInitials name={tenantName} className="h-7 w-7 text-[11px]" />
+            <span className="truncate text-sm font-semibold">{tenantName}</span>
+          </span>
+        )}
+        {!user?.tenant_hide_app_version && (
+          <AppVersion className="shrink-0 rounded border border-sidebar-border px-1.5 py-px font-mono text-[10px] text-muted-foreground" />
+        )}
       </Link>
 
       <div className="px-3 pt-2 pb-1">
@@ -299,7 +342,8 @@ export function Sidebar() {
               if (item.requireAdmin && !isAdmin) return false;
               if (item.requireManage && !canManage) return false;
               if (item.requireRecruit && !canRecruit) return false;
-              if (item.requireAnalytics && !canViewAnalytics) return false;
+              if (item.requireManagementData && !canViewManagementData) return false;
+              if (item.requireCoverage && !canViewCoverage) return false;
               if (item.requireEmployeeOrManage && !isEmployee && !canManage)
                 return false;
               return true;

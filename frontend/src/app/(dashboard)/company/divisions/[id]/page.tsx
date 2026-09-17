@@ -41,10 +41,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  EmployeeList,
-  type EmployeeListItem,
-} from "@/components/employees/EmployeeListRow";
+import { EmployeeList } from "@/components/employees/EmployeeListRow";
 import { AddEmployeeDialog } from "@/components/employees/AddEmployeeDialog";
 import type { Position } from "@/lib/types";
 import {
@@ -794,7 +791,7 @@ export default function DivisionDetailPage() {
                wherever a list of employees appears. */
             <div className="overflow-x-auto rounded-lg border">
               <EmployeeList
-                employees={filteredEmployees as unknown as EmployeeListItem[]}
+                employees={filteredEmployees}
                 testIdPrefix="division-detail-employees-row"
                 hrColumns={canViewHrData}
               />
