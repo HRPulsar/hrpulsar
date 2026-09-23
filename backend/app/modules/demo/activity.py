@@ -67,7 +67,10 @@ def _session_factory():
 
 
 async def touch_demo_tenant_activity(
-    db: AsyncSession, tenant_id: uuid.UUID | None
+    db: AsyncSession,
+    tenant_id: uuid.UUID | None,
+    *,
+    background: bool = False,
 ) -> None:
     """Bump ``tenants.last_active_at`` for demo tenants (debounced).
 
@@ -82,8 +85,17 @@ async def touch_demo_tenant_activity(
       silently dropped (HRP-276 / H1).
     * a failure here never aborts the transaction the route handler is
       about to use — the dedicated session has nothing else in flight.
+
+    ``background`` marks a request the frontend issued from a hidden tab
+    (its 30 s polls keep running when the visitor is off in another tab).
+    Those are not the visitor doing something, and counting them kept a
+    forgotten tab reading as engaged forever: the EE watcher samples this
+    column for "active" minutes and calls a session idle only after it
+    stops moving, so a polled tab could never go idle. Skipped before the
+    debounce on purpose — a hidden-tab poll must not consume the 60 s
+    window a real request would otherwise write in.
     """
-    if tenant_id is None:
+    if tenant_id is None or background:
         return
 
     debounce_key = f"demo:active:{tenant_id}"

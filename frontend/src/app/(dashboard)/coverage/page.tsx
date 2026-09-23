@@ -39,6 +39,18 @@ const TYPE_FILTERS: Array<{ value: ContainerType | "all"; key: string }> = [
   { value: "initiative", key: "filterProjects" },
 ];
 
+/** HRP-862: the share of the estimated hours an agent of the company already
+ * does, as the coverage last computed it - the list computes nothing. Null
+ * until the coverage was opened once, or while no step carries an estimate. */
+function automatedShare(c: WorkContainer): number | null {
+  return c.coverage_summary?.automated_share ?? null;
+}
+
+function automatedPercent(c: WorkContainer): string {
+  const share = automatedShare(c);
+  return share === null ? "—" : `${Math.round(share)}%`;
+}
+
 export default function CoveragePage() {
   const t = useTranslations("coverage");
   const tc = useTranslations("common");
@@ -83,6 +95,10 @@ export default function CoveragePage() {
           </Link>
         )}
       </div>
+
+      {/* HRP-859: the difference between the two types is explained where the
+          list is read, not only on the create form nobody reopens. */}
+      <p className="max-w-3xl text-sm text-muted-foreground">{t("typeExplainer")}</p>
 
       <div className="flex gap-1" role="group" aria-label={t("filterLabel")}>
         {TYPE_FILTERS.map((f) => (
@@ -135,6 +151,7 @@ export default function CoveragePage() {
               <TableHead>{t("colTitle")}</TableHead>
               <TableHead>{t("colType")}</TableHead>
               <TableHead>{t("colStatus")}</TableHead>
+              <TableHead>{t("colAutomated")}</TableHead>
               <TableHead>{t("colUpdated")}</TableHead>
             </TableRow>
           </TableHeader>
@@ -149,6 +166,13 @@ export default function CoveragePage() {
                 <TableCell>{t(`type_${c.type}`)}</TableCell>
                 <TableCell>
                   <Badge className={STATUS_COLOR[c.status]}>{t(`status_${c.status}`)}</Badge>
+                </TableCell>
+                <TableCell
+                  className="tabular-nums"
+                  data-testid={`coverage-row-${c.id}-automated`}
+                  data-share={automatedShare(c) ?? ""}
+                >
+                  {automatedPercent(c)}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {formatDate(c.updated_at)}

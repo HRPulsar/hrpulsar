@@ -3,9 +3,12 @@
 // HRP-759 / W6 (§5.10): the To do tab of a work container — everything
 // unclosed, in two sections. "Nobody does this" keeps the hire / agency
 // label and the handoff of a selection to Recruitment as one draft
-// vacancy; "an agent could, nobody has" is the work that is coverable on
-// paper but where the company has registered no agent and written no
-// skill file. The link back to a vacancy comes from work_hire_needs,
+// vacancy; "work for an agent" is the work an agent type covers where
+// something is still missing: `gap_kind` keeps a step here while no agent
+// is registered OR its skill file is not ready, so a step whose agent the
+// company already registered stays until the instruction is written
+// (HRP-859: the skill file is what makes a client's own agent do the step
+// the way this breakdown describes it). The link back to a vacancy comes from work_hire_needs,
 // never from the vacancy itself. A gap can also be closed by naming the
 // person who does it (HRP-809), skills or not.
 
@@ -348,8 +351,8 @@ export function GapsTab({
         <section className="space-y-4" data-testid="coverage-todo-not-automated">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="max-w-2xl">
-              <h2 className="font-medium">{t("todoNotAutomatedTitle")}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">{t("todoNotAutomatedHint")}</p>
+              <h2 className="font-medium">{t("todoAgentTitle")}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">{t("todoAgentHint")}</p>
             </div>
             {canEdit && pendingSkills.length > 0 && (
               <Button

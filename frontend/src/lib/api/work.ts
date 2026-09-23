@@ -73,6 +73,9 @@ export interface WorkContainer {
   gap_default_label: "hire" | "agency";
   visibility: Visibility;
   my_access: AccessLevel | null;
+  /** HRP-862: the figures of the last computed coverage, for the list; null
+   * until the coverage was opened once. A stored cache - read it defensively. */
+  coverage_summary: CoverageListSummary | null;
   created_at: string;
   updated_at: string;
 }
@@ -96,6 +99,14 @@ export interface WorkStep {
   /** HRP-809: who does the step and who checks and signs it. */
   executor_employee_id: string | null;
   accountable_employee_id: string | null;
+  /** HRP-861: percent of a reviewed step's hours that stays with the
+   * checker; null is the default share. */
+  review_human_share: number | null;
+  /** HRP-863: the company's override of the computed mode and agent pack. */
+  manual_mode: AutomationMode | null;
+  manual_pack_code: string | null;
+  /** HRP-868: the step's own hourly rate; null falls back to the tenant's. */
+  hourly_rate: number | null;
   primitive_codes: string[];
   capabilities: StepCapability[];
   created_at: string;
@@ -137,6 +148,10 @@ export type StepPatch = Partial<
     | "notes"
     | "executor_employee_id"
     | "accountable_employee_id"
+    | "review_human_share"
+    | "manual_mode"
+    | "manual_pack_code"
+    | "hourly_rate"
   >
 >;
 
@@ -192,6 +207,18 @@ export interface CoveragePerson {
   position: string | null;
 }
 
+/** HRP-871: one competence of the matched person behind the step's
+ * capabilities - confirmed by an assessment (`percent` reached the passing
+ * score) or only expected by the grade matrix of their position. */
+export interface CoverageGround {
+  competence_id: string;
+  title: string;
+  state: "assessed" | "expected";
+  percent: number | null;
+  /** The step's capabilities this competence covers. */
+  codes: string[];
+}
+
 export interface CoverageStep {
   step_id: string;
   position: number;
@@ -201,12 +228,16 @@ export interface CoverageStep {
   required_codes: string[];
   in_scope: boolean;
   mode: AutomationMode | null;
+  /** HRP-863: `mode` is the company's override, not the computed one. */
+  mode_manual?: boolean;
   /** Null for a step out of scope, which has no cognitive capability. */
   quality: Quality | null;
   verdict: Verdict;
   agent: {
     pack_id: string | null;
     pack_code: string | null;
+    /** HRP-863: the company named this pack on the step. */
+    pack_manual?: boolean;
     agent_id: string | null;
     agent_name: string | null;
   } | null;
@@ -216,6 +247,10 @@ export interface CoverageStep {
     /** The step's capabilities the person does not hold; only an assigned
      * executor can have any. */
     missing_codes: string[];
+    /** HRP-871: what the match stands on and the passing score it was held
+     * against; none for an assigned executor. */
+    passing_score?: number | null;
+    grounds?: CoverageGround[];
   } | null;
   human_backup: boolean;
   /** HRP-809: who checks and signs the step. */
@@ -231,9 +266,16 @@ export interface CoverageStep {
   skill_status: SkillStatus;
   /** HRP-776: not accepted yet, or resting on an unconfirmed low-confidence code. */
   tentative: boolean;
+  /** HRP-861: percent of the step's hours its checker keeps - the step's own
+   * or the default; null outside the review bucket. */
+  review_human_share: number | null;
 }
 
 export type SkillStatus = "none" | "generating" | "ready" | "failed";
+
+// The modes in which an agent produces the work (coverage.CANDIDATE_MODES):
+// the "moves to an agent" and the "moves to review" buckets.
+export const CANDIDATE_MODES: AutomationMode[] = ["automatable", "draft_then_review", "review_required"];
 
 export interface StepSkill {
   id: string;
@@ -254,6 +296,37 @@ export interface CoverageHours {
   to_review: number;
   stays: number;
   unestimated: number;
+  /** HRP-861: `to_review` is the bucket before an agent drafts the work, this
+   * is what its checkers keep after; `freed` = `moves` + the difference. */
+  to_review_after: number;
+  freed: number;
+  /** HRP-862: hours of the steps an agent the tenant registered does today -
+   * part of `total`, not a bucket of its own. */
+  automated: number;
+}
+
+/** HRP-862: what the list page shows of a coverage - hours and shares only,
+ * the same for every reader. `automated_share` is a percent of `hours.total`,
+ * null whenever `shares` is - the list says no more than the process page.
+ * Named apart from the `CoverageSummary` component, which renders neither. */
+export interface CoverageListSummary {
+  hours: CoverageHours;
+  shares: { moves: number; to_review: number; stays: number } | null;
+  automated_share: number | null;
+}
+
+/** HRP-868: the yearly money of the estimated steps - the same set as
+ * `CoverageHours`, in the tenant's currency, summed by the backend over the
+ * steps, each at its own rate or the tenant's. Never rebuilt here from hours
+ * times a rate. `unpriced` counts the estimated steps with neither rate. */
+export interface CoverageMoney {
+  total: number;
+  moves: number;
+  to_review: number;
+  to_review_after: number;
+  stays: number;
+  freed: number;
+  unpriced: number;
 }
 
 /** How many in-scope steps sit at each quality (§5.3). */
@@ -272,6 +345,11 @@ export interface Coverage {
   /** The tenant's own hourly rate for the ROI in money; null until set. */
   hourly_rate: number | null;
   hourly_rate_currency: string | null;
+  /** HRP-868: null while no estimated step has a rate - hours only, then. */
+  money: CoverageMoney | null;
+  /** HRP-861: the share a reviewed step falls back to - the backend's
+   * constant, never restated here. */
+  review_human_share_default: number;
   steps: CoverageStep[];
 }
 
@@ -292,11 +370,20 @@ export interface Gap {
   agent: {
     pack_id: string | null;
     pack_code: string | null;
+    /** HRP-863: the company named this pack on the step. */
+    pack_manual?: boolean;
     agent_id: string | null;
     agent_name: string | null;
   } | null;
   skill_status: SkillStatus;
   hire_need: { id: string; vacancy_id: string | null; label: GapLabel } | null;
+}
+
+/** HRP-863: an agent pack visible to the tenant, as `GET /ai-workforce/packs`
+ * returns it - what a step's agent can be set to by hand. */
+export interface AgentPack {
+  id: string;
+  code: string;
 }
 
 export interface HireNeed {
@@ -393,10 +480,14 @@ export const workApi = {
   generateSkill: (stepId: string) => api.post<StepSkill>(`/work/steps/${stepId}/skill`),
   getSkill: (stepId: string) => api.get<StepSkill>(`/work/steps/${stepId}/skill`),
   downloadSkill: (stepId: string) => api.fetchBlob(`/work/steps/${stepId}/skill/download`),
+  // HRP-866: every ready SKILL.md of the steps an agent takes plus a README, one zip.
+  downloadAgentBundle: (containerId: string) =>
+    api.fetchBlob(`/work/containers/${containerId}/agent-bundle`),
   // O8-b: "I already use this" registers an agent of the matched pack in
   // the (otherwise headless) AI workforce registry.
   registerAgent: (body: { name: string; pack_id: string }) =>
     api.post<{ id: string }>("/ai-workforce/agents", body),
+  listPacks: () => api.get<AgentPack[]>("/ai-workforce/packs"),
 
   startDecomposition: (containerId: string) =>
     api.post<DecompositionSession>("/work/decomposition/sessions", {

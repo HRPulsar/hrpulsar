@@ -61,7 +61,7 @@ async def test_start_returns_201_with_tokens_and_redirect(
     assert body["token_type"] == "bearer"
     assert body["access_token"]
     assert uuid.UUID(body["tenant_id"])
-    assert body["redirect_url"] == "/dashboard"
+    assert body["redirect_url"] == "/coverage"
 
     # HRP-276 / M7: no refresh token + no refresh cookie for demo.
     assert "refresh_token" not in body
@@ -576,4 +576,4 @@ async def test_start_survives_skipped_seed(
     resp = await client.post("/api/demo/start", json={})
     assert resp.status_code == 201
     body = resp.json()
-    assert body["redirect_url"] == "/dashboard"
+    assert body["redirect_url"] == "/coverage"

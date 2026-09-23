@@ -38,7 +38,10 @@ def enable_demo(monkeypatch, skill_levels):
     monkeypatch.setattr(settings, "demo_enabled", True)
     monkeypatch.setattr(settings, "demo_turnstile_secret", "")
     monkeypatch.setattr(settings, "demo_rate_limit_per_ip_per_hour", 0)
-    monkeypatch.setattr(settings, "demo_max_concurrent_sessions", 50)
+    # 500 like every sibling demo file: the test DB is dropped once per
+    # session, so live sandboxes pile up — a full run reaches this file with
+    # ~47 of them, and a cap of 50 turns the next new demo test into a 503.
+    monkeypatch.setattr(settings, "demo_max_concurrent_sessions", 500)
     monkeypatch.setattr(settings, "demo_initial_credits", 0)
 
 
@@ -156,6 +159,33 @@ async def test_full_lifecycle_start_activity_purge_cascade(
     assert refreshed.last_active_at > backdated, (
         "Authenticated request should have bumped last_active_at via "
         "touch_demo_tenant_activity (the get_current_user hook from D1)."
+    )
+
+    # 2b. ── …but a poll from a hidden tab does not ──────────────────
+    # The dashboard keeps polling from a tab the visitor left behind,
+    # and counting those made a forgotten tab look engaged forever.
+    # Also the one place that proves FastAPI injects the ``Request``
+    # into get_current_user off its annotation alone.
+    await db.execute(
+        update(Tenant)
+        .where(Tenant.id == tenant_id)
+        .values(last_active_at=backdated)
+    )
+    await db.commit()
+
+    hidden_resp = await client.get(
+        "/api/auth/me",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "X-Tab-Hidden": "1",
+        },
+    )
+    assert hidden_resp.status_code == 200, hidden_resp.text
+
+    await db.refresh(refreshed, attribute_names=["last_active_at"])
+    assert refreshed.last_active_at == backdated, (
+        "A background poll from a hidden tab must not count as the "
+        "visitor being active."
     )
 
     # 3. ── Backdate ``expires_at`` so the next purge will pick it up ─

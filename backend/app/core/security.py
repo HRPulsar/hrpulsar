@@ -50,7 +50,9 @@ def create_access_token(
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def create_demo_access_token(user_id: str, tenant_id: str) -> str:
+def create_demo_access_token(
+    user_id: str, tenant_id: str, token_version: int = 0
+) -> str:
     """Issue a long-lived access token for a demo session.
 
     TTL is pinned to ``settings.demo_session_ttl_seconds`` — the same
@@ -66,6 +68,9 @@ def create_demo_access_token(user_id: str, tenant_id: str) -> str:
         "sub": user_id,
         "tenant_id": tenant_id,
         "type": "access",
+        # Same epoch as regular tokens: a demo logout bumps it (HRP-897),
+        # and a sandbox that outlives the logout must mint working tokens.
+        "ver": token_version,
         "exp": expire,
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)

@@ -20,7 +20,7 @@ from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
-from app.modules.work import access, coverage, service
+from app.modules.work import access, bundle, coverage, service
 from app.modules.work.models import WorkContainer
 from app.modules.work.schemas import (
     ApplyResult,
@@ -304,7 +304,13 @@ async def get_coverage(
         user_id=actor.user_id,
         schedule_mapping=actor.manage,
     )
+    # Before the summary write: a failed write rolls back, and that expires
+    # ``current_user`` - reading its roles afterwards would lazy-load in an
+    # async session.
     visible = await get_visible_employee_ids(db, current_user)
+    # HRP-862: the list shows these figures without computing anything. Before
+    # the redaction on purpose - the summary carries no people to redact.
+    await coverage.remember_summary(db, actor.tenant_id, container_id, result)
     return (
         result if visible is None else coverage.redact_people(result, visible=visible)
     )
@@ -449,6 +455,25 @@ async def download_step_skill(
         content=skill.content,
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="SKILL.md"'},
+    )
+
+
+@router.get("/containers/{container_id}/agent-bundle")
+async def download_agent_bundle(
+    container_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: access.Actor = Depends(access.read_container),
+):
+    """HRP-866: every ready ``SKILL.md`` of the steps an agent takes plus a
+    README naming the agent types and the order of actions, as one zip.
+    Whoever reads the container downloads a single skill, so they download
+    the set; a read - nothing is generated and nothing is billed."""
+    return Response(
+        content=await bundle.build(db, actor.tenant_id, container_id),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{bundle.ARCHIVE_NAME}"'
+        },
     )
 
 

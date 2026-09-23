@@ -1,7 +1,7 @@
 import uuid
 from collections.abc import Callable
 
-from fastapi import Depends, status
+from fastapi import Depends, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWTError as JWTError
 from sqlalchemy import select
@@ -58,6 +58,12 @@ async def resolve_user_from_access_token(db: AsyncSession, token: str) -> User |
 
 
 async def get_current_user(
+    # Deliberately the raw Request rather than a ``Header(...)`` param
+    # for X-Tab-Hidden: a declared header on a dependency this widely
+    # shared documents itself on all ~550 authenticated endpoints in the
+    # public OpenAPI, and this is a frontend-internal hint, not API
+    # surface. Request is invisible to the schema.
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
@@ -72,9 +78,15 @@ async def get_current_user(
     # HRP-249 (D1): keep demo-tenant inactivity TTL fresh on every
     # authenticated request. Best-effort, debounced via Redis — non-demo
     # tenants pay one cheap GET and a no-op SQL UPDATE at most.
+    # X-Tab-Hidden is the frontend saying "this one is a background poll,
+    # nobody is looking" — see ``touch_demo_tenant_activity``.
     from app.modules.demo.activity import touch_demo_tenant_activity
 
-    await touch_demo_tenant_activity(db, user.tenant_id)
+    await touch_demo_tenant_activity(
+        db,
+        user.tenant_id,
+        background=request.headers.get("x-tab-hidden") == "1",
+    )
     return user
 
 

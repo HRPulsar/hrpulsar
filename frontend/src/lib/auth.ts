@@ -151,6 +151,13 @@ export async function resendVerification(email: string): Promise<void> {
 }
 
 export function logout() {
+  // HRP-897: signing out of a demo sandbox ends it server-side (tokens
+  // revoked, slot freed). Fire-and-forget — the bearer is read before
+  // clearTokens() runs and keepalive carries the POST across the redirect;
+  // a lost call only means the sandbox waits for its TTL instead.
+  if (document.cookie.includes("demo_session=1")) {
+    api.post("/demo/end", undefined, { keepalive: true }).catch(() => {});
+  }
   clearTokens();
   window.location.href = "/login";
 }

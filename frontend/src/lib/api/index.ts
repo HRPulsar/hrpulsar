@@ -111,6 +111,23 @@ function formatApiError(detail: unknown): string {
   return String(detail);
 }
 
+/** Header marking a request that left a hidden tab.
+ *
+ * Several screens poll on a timer (the notification bell every 30 s on
+ * every dashboard page, the generation/interview pollers), and a timer
+ * keeps firing while the visitor is off in another tab. The backend
+ * treats an authenticated request as "the visitor is here" — that is
+ * what the demo activity sampler and the idle detector read — so a
+ * forgotten tab reported hours of engagement and never went idle.
+ * Cheap enough to send on every call: the visibility read is a property
+ * lookup, and the backend ignores the header outside demo tenants.
+ */
+export function hiddenTabHeaders(): Record<string, string> {
+  return typeof document !== "undefined" && document.visibilityState === "hidden"
+    ? { "X-Tab-Hidden": "1" }
+    : {};
+}
+
 async function tryRefreshToken(): Promise<boolean> {
   const refreshToken = localStorage.getItem("refresh_token");
   if (!refreshToken) return false;
@@ -160,6 +177,7 @@ async function request<T>(
     // HRP-513: state the interface locale so error bodies come back
     // localized even when the NEXT_LOCALE cookie cannot cross origins.
     ...localeRequestHeaders(),
+    ...hiddenTabHeaders(),
     ...((options.headers as Record<string, string>) || {}),
   };
 
@@ -225,6 +243,7 @@ async function requestWithMeta<T>(
     // HRP-513: state the interface locale so error bodies come back
     // localized even when the NEXT_LOCALE cookie cannot cross origins.
     ...localeRequestHeaders(),
+    ...hiddenTabHeaders(),
     ...((options.headers as Record<string, string>) || {}),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -384,6 +403,7 @@ async function requestBlob(
     typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
   const headers: Record<string, string> = {
     ...localeRequestHeaders(),
+    ...hiddenTabHeaders(),
     ...((options.headers as Record<string, string>) || {}),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;

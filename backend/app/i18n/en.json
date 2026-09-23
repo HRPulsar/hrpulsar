@@ -513,6 +513,7 @@
     "demo_capture_requires_demo_session": "Only demo sessions can capture access.",
     "demo_data_already_seeded": "Demo data is already seeded for this tenant",
     "demo_disabled": "Public sandbox is currently disabled.",
+    "demo_end_requires_demo_session": "Only a live demo session can be ended",
     "demo_persona_not_available": "This demo persona is not available in the sandbox",
     "demo_rate_limited": "Too many demo attempts from this address; please try again later.",
     "demo_sandbox_capacity_reached": "Sandbox capacity reached; please try again in a few minutes.",
@@ -722,6 +723,7 @@
     "work_step_reclassify_failed": "Reclassification failed: {error}",
     "work_step_capability_not_found": "The step has no capability {capability}",
     "work_step_employee_invalid": "Choose an active employee of your company",
+    "work_step_pack_invalid": "Choose an agent type available to your company",
     "material_in_use": "The material is referenced by a PDP",
     "material_not_found": "Material not found",
     "material_not_in_competence": "Material does not belong to this competence",
@@ -1052,5 +1054,26 @@
       "rejected": "Rejected",
       "withdrew": "Withdrew"
     }
+  },
+  "work_bundle": {
+    "title": "Agent setup guide: {title}",
+    "intro": "Agent types this work needs: {count}. They are listed by the hours a year they take over, largest first - start from the top.",
+    "pack_note": "An agent type is a kind of capability, not a product: any agent you already run that can do this work fits.",
+    "agent_registered": "Agent: {name} (registered)",
+    "agent_missing": "Agent: not registered yet",
+    "hours": "Hours a year: about {hours}",
+    "hours_unknown": "Hours a year: not estimated yet",
+    "steps": "Steps:",
+    "step_ready": "{position}. {title} ({mode}) - `{path}`",
+    "step_missing": "{position}. {title} ({mode}) - no skill file yet",
+    "mode_moves": "moves to an agent",
+    "mode_to_review": "moves to review",
+    "todo_heading": "What to do",
+    "todo_order": "Go through the agent types from the top: the first one takes over the most hours.",
+    "todo_install": "For each type, take the agent you already run or set one up, and copy every skill folder listed under it from `skills/` into that agent's skills directory.",
+    "todo_register": "Register the agent on the step's row of the Coverage tab, so the coverage counts the step as automated.",
+    "todo_review": "On every step that moves to review, name the person who checks the result before it is used.",
+    "todo_missing": "For the steps without a skill file, generate the skill on the Coverage tab and download this archive again.",
+    "footer": "The platform does not run the skills: the files work in your own agent tools."
   }
 }

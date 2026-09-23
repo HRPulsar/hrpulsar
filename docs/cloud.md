@@ -30,7 +30,7 @@ Pay only for what you use. Every organization starts with a free tier — no cre
 - **Free tier** — a free balance of 2,000 credits, topped back up to 2,000 on the 1st of each month. Your balance never goes down at refill; the free pool is capped at 2,000
 - **Credit-based pricing** — each action (creating employees, running assessments, AI generation) has a transparent credit cost
 - **Four credit packs** — Starter ($25 / 2,500 cr), Growth ($85 / 10,000 cr — most popular), Scale ($375 / 50,000 cr), Volume ($1,400 / 200,000 cr). Bigger packs unlock a better per-credit rate
-- **Enterprise Annual contracts** — defined yearly budget at the steepest discount, with optional auto-renewal. Talk to sales
+- **Enterprise Annual contracts** — a yearly budget agreed with us at the steepest discount and provisioned as credits by hand; the product has no contract of its own yet. Talk to sales
 - **Data import is priced per row** — importing employees or other records costs credits for every data row in the uploaded file, not once per file, so a 500-person import costs what 500 people cost. A file the platform cannot read, or an import type it does not know, is refused without charging anything
 - **Read operations are always free** — browsing, viewing, and searching cost nothing
 - **Spending visibility** — real-time credit balance, transaction history, and spending analytics

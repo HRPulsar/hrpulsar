@@ -32,6 +32,21 @@ OutputType = Literal["draft", "external_change"]
 HoursPerRun = Annotated[float, Field(ge=HOURS_PER_RUN_MIN, le=HOURS_PER_RUN_MAX)]
 RunsPerYear = Annotated[int, Field(ge=1, le=RUNS_PER_YEAR_MAX)]
 StepState = Literal["system_suggested", "tenant_edited", "accepted"]
+# What coverage derives for a step; on the step itself only as the
+# company's override (HRP-863).
+AutomationMode = Literal[
+    "automatable",
+    "draft_then_review",
+    "review_required",
+    "blocked_judgment",
+    "blocked_physical",
+]
+# HRP-861: percent of a reviewed step's hours that stays with the checker.
+ReviewHumanShare = Annotated[int, Field(ge=0, le=100)]
+# HRP-868: the step's own rate, in the tenant's currency. The floor is a
+# cent, not a hair above zero: the column is Numeric(10, 2), so anything
+# smaller would be stored as 0.00 and price the step at nothing.
+StepHourlyRate = Annotated[float, Field(ge=0.01, le=99_999_999)]
 Visibility = Literal["company", "restricted"]
 AccessLevel = Literal["manage", "edit", "read"]
 RuleRoleCode = Literal["manager", "recruiter", "hiring_manager", "employee"]
@@ -98,6 +113,11 @@ class ContainerRead(BaseModel):
     # HRP-810: what the caller may do with it - filled by the router, which
     # knows the caller; the service returns rows.
     my_access: AccessLevel | None = None
+    # HRP-862: ``coverage.summary_of`` as last computed - ``hours``, ``shares``
+    # and ``automated_share``; null until the coverage was opened once. Left
+    # untyped on purpose: it is a stored cache, and a row written by an older
+    # release must read as "not known" rather than fail the whole list.
+    coverage_summary: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -188,6 +208,12 @@ class StepUpdate(BaseModel):
     # HRP-809: an active employee of the tenant; ``null`` clears it.
     executor_employee_id: uuid.UUID | None = None
     accountable_employee_id: uuid.UUID | None = None
+    # ``null`` clears each: the default share (HRP-861), the computed mode
+    # and pack (HRP-863), the tenant's rate (HRP-868).
+    review_human_share: ReviewHumanShare | None = None
+    manual_mode: AutomationMode | None = None
+    manual_pack_code: str | None = Field(default=None, max_length=50)
+    hourly_rate: StepHourlyRate | None = None
 
 
 class StepCapability(BaseModel):
@@ -218,6 +244,10 @@ class StepRead(BaseModel):
     notes: str | None
     executor_employee_id: uuid.UUID | None
     accountable_employee_id: uuid.UUID | None
+    review_human_share: int | None
+    manual_mode: AutomationMode | None
+    manual_pack_code: str | None
+    hourly_rate: float | None
     primitive_codes: list[str]
     capabilities: list[StepCapability]
     created_at: datetime
@@ -346,13 +376,6 @@ class ApplyResult(BaseModel):
 # --- Coverage (HRP-758) ------------------------------------------------------
 
 Verdict = Literal["agent", "human", "gap", "out_of_scope"]
-AutomationMode = Literal[
-    "automatable",
-    "draft_then_review",
-    "review_required",
-    "blocked_judgment",
-    "blocked_physical",
-]
 # ``assigned`` (HRP-809): named on the step by the company, whatever the
 # match says.
 HumanLabel = Literal["assessed", "expected", "assigned"]
@@ -370,8 +393,25 @@ class GapHireNeed(BaseModel):
 class CoverageAgent(BaseModel):
     pack_id: uuid.UUID | None
     pack_code: str | None
+    # HRP-863: the company named this pack on the step; ``pack_code`` is the
+    # effective one either way.
+    pack_manual: bool = False
     agent_id: uuid.UUID | None
     agent_name: str | None
+
+
+class CoverageGround(BaseModel):
+    """HRP-871: one competence of the matched person behind the step's
+    capabilities - confirmed by the latest completed assessment (``percent``
+    reached the person's passing score) or only expected by the grade matrix
+    of their position (no score yet)."""
+
+    competence_id: uuid.UUID
+    title: str
+    state: Literal["assessed", "expected"]
+    percent: int | None
+    # The step's capabilities this competence covers.
+    codes: list[str]
 
 
 class CoverageHuman(BaseModel):
@@ -384,6 +424,11 @@ class CoverageHuman(BaseModel):
     # The step's cognitive codes the person does not hold; only an assigned
     # executor can have any.
     missing_codes: list[str]
+    # HRP-871: what the match stands on, and the passing score the scores
+    # were held against (the person's grade specialization, or the default).
+    # Empty for an assigned executor: the company named them, nothing matched.
+    passing_score: int | None = None
+    grounds: list[CoverageGround] = []
 
 
 class CoveragePerson(BaseModel):
@@ -404,6 +449,8 @@ class CoverageStep(BaseModel):
     required_codes: list[str]
     in_scope: bool
     mode: AutomationMode | None
+    # HRP-863: ``mode`` is the company's override, not the computed one.
+    mode_manual: bool = False
     # None for a step out of scope, which has no cognitive capability.
     quality: Quality | None
     verdict: Verdict
@@ -424,6 +471,9 @@ class CoverageStep(BaseModel):
     # HRP-776: the verdict is preliminary while the step is not accepted or
     # rests on a code the model was unsure of and nobody confirmed.
     tentative: bool
+    # HRP-861: percent of the step's hours its checker keeps - the step's own
+    # or the default; null outside the review bucket.
+    review_human_share: int | None
 
 
 class CoverageShares(BaseModel):
@@ -442,6 +492,29 @@ class CoverageHours(BaseModel):
     to_review: float
     stays: float
     unestimated: int
+    # HRP-861: ``to_review`` is the bucket before an agent drafts the work;
+    # this is what its checkers keep after. ``freed`` is ``moves`` plus the
+    # difference between the two.
+    to_review_after: float
+    freed: float
+    # HRP-862: the hours of the steps an agent the tenant registered does
+    # today - part of ``total``, not a bucket of its own.
+    automated: float
+
+
+class CoverageMoney(BaseModel):
+    """HRP-868: the yearly money of the estimated steps, the same set as
+    ``CoverageHours`` and in the tenant's currency - a sum over the steps,
+    each at its own rate or the tenant's. ``unpriced`` counts the estimated
+    steps with neither: they are in no figure here."""
+
+    total: float
+    moves: float
+    to_review: float
+    to_review_after: float
+    stays: float
+    freed: float
+    unpriced: int
 
 
 class CoverageQuality(BaseModel):
@@ -467,6 +540,10 @@ class CoverageRead(BaseModel):
     # set, and then the screen shows hours only (§5.2).
     hourly_rate: float | None
     hourly_rate_currency: str | None
+    # HRP-868: null while no estimated step has a rate - hours only, then.
+    money: CoverageMoney | None
+    # HRP-861: the share a reviewed step falls back to, for the editor's hint.
+    review_human_share_default: int
     steps: list[CoverageStep]
 
 

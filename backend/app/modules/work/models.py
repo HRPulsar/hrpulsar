@@ -22,6 +22,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
@@ -31,6 +32,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -51,6 +53,15 @@ GAP_LABELS = ("hire", "agency")
 RESPONSIBILITIES = ("none", "reputational", "formal", "regulatory")
 REVERSIBILITIES = ("reversible", "costly", "irreversible")
 OUTPUT_TYPES = ("draft", "external_change")
+# What coverage derives for a step from its accountability and the verdicts
+# of its capabilities; stored only as the company's override (HRP-863).
+AUTOMATION_MODES = (
+    "automatable",
+    "draft_then_review",
+    "review_required",
+    "blocked_judgment",
+    "blocked_physical",
+)
 # W6 (decision 2026-09-11): a step's yearly hours are ``hours_per_run x
 # runs_per_year`` - the model's estimate, corrected by the company. The
 # bounds are shared by the CHECKs, the wire schemas and the worker.
@@ -160,6 +171,12 @@ class WorkContainer(BaseModel, TenantMixin):
     visibility: Mapped[str] = mapped_column(
         String(20), nullable=False, default="restricted", server_default="restricted"
     )
+    # HRP-862: the figures the list page shows, written whenever coverage is
+    # computed, so the list never runs coverage per container. Null until
+    # the first computation.
+    coverage_summary: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
 
 
 class WorkStep(BaseModel, TenantMixin):
@@ -189,6 +206,15 @@ class WorkStep(BaseModel, TenantMixin):
         CheckConstraint(_in("state", STEP_STATES), name="ck_work_steps_state"),
         CheckConstraint(
             _in("gap_label", GAP_LABELS, nullable=True), name="ck_work_steps_gap_label"
+        ),
+        CheckConstraint(
+            "review_human_share IS NULL OR "
+            "(review_human_share >= 0 AND review_human_share <= 100)",
+            name="ck_work_steps_review_human_share",
+        ),
+        CheckConstraint(
+            _in("manual_mode", AUTOMATION_MODES, nullable=True),
+            name="ck_work_steps_manual_mode",
         ),
         Index("ix_work_steps_container_position", "container_id", "position"),
     )
@@ -237,6 +263,16 @@ class WorkStep(BaseModel, TenantMixin):
         nullable=True,
         index=True,
     )
+    # HRP-861: percent of a reviewed step's hours that stays with the person
+    # who checks the agent's work; null means the default share.
+    review_human_share: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    # HRP-863: the company's word on the mode and on the agent pack (a pack
+    # code, built-in or the tenant's own); each outranks the computed value.
+    manual_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    manual_pack_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # HRP-868: the step's own hourly rate in the tenant's currency; null
+    # falls back to the tenant's rate.
+    hourly_rate: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
 
 
 class WorkStepPrimitive(BaseModel, TenantMixin):

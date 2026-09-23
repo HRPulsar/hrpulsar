@@ -372,6 +372,7 @@ class TestAgentLayer:
         assert row["agent"] == {
             "pack_id": agent["pack_id"],
             "pack_code": "compliance_check",
+            "pack_manual": False,
             "agent_id": agent["id"],
             "agent_name": "Harvey",
         }
@@ -456,6 +457,17 @@ class TestHumanLayer:
             "position": None,
             "label": "assessed",
             "missing_codes": [],
+            # HRP-871: what the match stands on (test_coverage_match_grounds).
+            "passing_score": 75,
+            "grounds": [
+                {
+                    "competence_id": comp.id,
+                    "title": comp.title,
+                    "state": "assessed",
+                    "percent": 90,
+                    "codes": ["P1"],
+                }
+            ],
         }
 
     async def test_assessed_beats_expected_beats_gap(self, db, tenant, user, seeded):
@@ -814,6 +826,11 @@ class TestGapsAndWeights:
             "to_review": 0.0,
             "stays": 100.0,
             "unestimated": 3,
+            # HRP-861: nothing in review, nothing moves - nothing is freed.
+            "to_review_after": 0.0,
+            "freed": 0.0,
+            # HRP-862: no agent of the tenant's own does any of it yet.
+            "automated": 0.0,
         }
         await service.update_step(
             db, tenant.id, moves["id"], StepUpdate(hours_per_run=8, runs_per_year=50)

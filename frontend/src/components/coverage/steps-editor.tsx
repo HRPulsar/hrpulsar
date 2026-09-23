@@ -88,6 +88,19 @@ const STATE_COLOR: Record<StepState, string> = {
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 type StepsUpdater = (prev: WorkStep[]) => WorkStep[];
 
+// HRP-865: what a classification is read from. `reclassify_step` sends the
+// model the title and the description only, and its answer REPLACES the
+// responsibility and the output type - an edit of those selects leaves
+// nothing stale, and a hint after it would offer to overwrite the choice.
+const CLASSIFIED_FROM: ReadonlyArray<keyof StepPatch> = ["title", "description"];
+
+// Steps whose text was saved after their last classification. Module-level
+// because the page's tabs unmount the editor: a hint that vanished on a trip
+// to the Coverage tab would read as "recalculated". The server keeps no such
+// marker - `tenant_edited` is also what a reclassification sets, and
+// `updated_at` moves on hours and assignees - so this lives until a reload.
+const staleSteps = new Set<string>();
+
 /** The reorder response carries the whole list, and writing it back drops
  * the answer of a PATCH that landed while the reorder was in flight. Take
  * the order and the positions from the server, every other field from the
@@ -312,6 +325,12 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reclassifyOpen, setReclassifyOpen] = useState(false);
+  const [stale, setStale] = useState(() => staleSteps.has(step.id));
+  function markStale(next: boolean) {
+    if (next) staleSteps.add(step.id);
+    else staleSteps.delete(step.id);
+    setStale(next);
+  }
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -322,6 +341,8 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
   async function patch(body: StepPatch): Promise<boolean> {
     try {
       onChange(await workApi.updateStep(step.id, body));
+      // Only a saved edit counts: a refused PATCH changed nothing.
+      if (CLASSIFIED_FROM.some((field) => field in body)) markStale(true);
       return true;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("saveFailed"));
@@ -363,6 +384,7 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
   async function remove() {
     try {
       await workApi.deleteStep(step.id);
+      staleSteps.delete(step.id);
       onDeleted();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("saveFailed"));
@@ -395,7 +417,7 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
         {canEdit && (
           <button
             type="button"
-            className="mt-2 cursor-grab text-muted-foreground"
+            className="mt-7 cursor-grab text-muted-foreground"
             aria-label={t("dragStepAria")}
             data-testid={`${testId}-handle`}
             {...attributes}
@@ -404,45 +426,60 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
             <GripVertical className="size-4" />
           </button>
         )}
-        <span className="mt-2 w-6 shrink-0 text-sm tabular-nums text-muted-foreground">
+        {/* HRP-865: an editable row opens with a field label, so the handle,
+            the number and the delete button drop to the input's line. */}
+        <span
+          className={`${canEdit ? "mt-7" : "mt-2"} w-6 shrink-0 text-sm tabular-nums text-muted-foreground`}
+        >
           {index + 1}
         </span>
-        <div className="flex-1 space-y-2">
-          <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className={`flex gap-2 ${canEdit ? "flex-wrap items-end" : "items-center"}`}>
             {canEdit ? (
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                onBlur={() => {
-                  const next = title.trim();
-                  if (next && next !== step.title) void patch({ title: next });
-                  else setTitle(step.title);
-                }}
-                maxLength={300}
-                aria-label={t("attrTitle")}
-                className="font-medium"
-                data-testid={`${testId}-title`}
-              />
+              // The same label pattern as the fields under "Details". The
+              // minimum width sends the state badge to its own line on a phone
+              // instead of squeezing the label into two.
+              <label className="flex min-w-40 flex-1 flex-col gap-1 text-xs text-muted-foreground">
+                <span>{t("attrTitle")}</span>
+                <Input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  onBlur={() => {
+                    const next = title.trim();
+                    if (next && next !== step.title) void patch({ title: next });
+                    else setTitle(step.title);
+                  }}
+                  maxLength={300}
+                  className="font-medium text-foreground"
+                  data-testid={`${testId}-title`}
+                />
+              </label>
             ) : (
               <p className="font-medium" data-testid={`${testId}-title`}>{step.title}</p>
             )}
-            <Badge className={STATE_COLOR[step.state]} data-testid={`${testId}-state`}>
+            <Badge
+              className={`${STATE_COLOR[step.state]} ${canEdit ? "mb-1.5" : ""}`}
+              data-testid={`${testId}-state`}
+            >
               {t(`state_${step.state}`)}
             </Badge>
           </div>
           {canEdit ? (
-            <Textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              onBlur={() => {
-                const next = description.trim() || null;
-                if (next !== (step.description ?? null)) void patch({ description: next });
-              }}
-              rows={2}
-              placeholder={t("stepDescriptionPlaceholder")}
-              aria-label={t("attrDescription")}
-              data-testid={`${testId}-description`}
-            />
+            <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <span>{t("attrDescription")}</span>
+              <Textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                onBlur={() => {
+                  const next = description.trim() || null;
+                  if (next !== (step.description ?? null)) void patch({ description: next });
+                }}
+                rows={2}
+                placeholder={t("stepDescriptionPlaceholder")}
+                className="text-foreground"
+                data-testid={`${testId}-description`}
+              />
+            </label>
           ) : (
             step.description && <p className="text-sm text-muted-foreground">{step.description}</p>
           )}
@@ -532,11 +569,32 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
               </Button>
             )}
           </div>
+          {/* HRP-865: last in the row, so its appearing moves nothing the
+              user is about to click inside this step. */}
+          {canEdit && stale && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-300"
+              data-testid={`${testId}-stale-hint`}
+            >
+              <span className="min-w-0">{t("staleClassificationHint")}</span>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => setReclassifyOpen(true)}
+                data-testid={`${testId}-stale-hint-btn`}
+              >
+                <Sparkles />
+                {t("reclassify")}
+              </Button>
+            </div>
+          )}
         </div>
         {canEdit && (
           <Button
             size="icon"
             variant="ghost"
+            className="mt-5"
             aria-label={t("deleteStep")}
             onClick={() => setConfirmDelete(true)}
             data-testid={`${testId}-btn-delete`}
@@ -573,6 +631,7 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
           onClose={() => setReclassifyOpen(false)}
           onSaved={(updated) => {
             onChange(updated);
+            markStale(false);
             setReclassifyOpen(false);
             toast.success(t("reclassifiedToast"));
           }}
@@ -816,12 +875,17 @@ function ReclassifyDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
-      <DialogContent data-testid="coverage-modal-reclassify">
-        <form onSubmit={submit} className="space-y-4">
+      <DialogContent className="sm:max-w-md" data-testid="coverage-modal-reclassify">
+        {/* HRP-867: the form is a grid item of the dialog, and a grid item is
+            never narrower than its content. The footer's two no-wrap buttons
+            (a long label plus the enterprise price) were that content - they
+            stretched the form past the dialog. `min-w-0` lets it shrink; the
+            footer and the button wrap instead. */}
+        <form onSubmit={submit} className="min-w-0 space-y-4">
           <DialogHeader>
             <DialogTitle>{t("reclassifyTitle")}</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">{t("reclassifyText")}</p>
+          <p className="break-words text-sm text-muted-foreground">{t("reclassifyText")}</p>
           <Textarea
             value={comment}
             onChange={(e) => setComment(e.target.value)}
@@ -832,13 +896,14 @@ function ReclassifyDialog({
             disabled={saving}
             data-testid="coverage-reclassify-input"
           />
-          <DialogFooter>
+          <DialogFooter className="sm:flex-wrap">
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
               {t("cancel")}
             </Button>
             <Button
               type="submit"
               disabled={saving || !comment.trim()}
+              className="h-auto min-h-8 max-w-full flex-wrap whitespace-normal py-1"
               data-testid="coverage-btn-reclassify-submit"
             >
               <Sparkles className="size-4" />

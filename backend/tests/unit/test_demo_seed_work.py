@@ -163,6 +163,29 @@ async def test_seed_creates_the_containers_and_the_mapping(
 
 
 @pytest.mark.asyncio
+async def test_the_seed_stores_the_summary_the_list_reads(
+    db: AsyncSession, tenant, user
+):
+    """HRP-862: the list column reads ``coverage_summary``; a seeded
+    process nobody has opened yet would otherwise show a dash where the
+    demo means to show the figures."""
+    await _seed(db, tenant, user)
+
+    containers = (
+        (
+            await db.execute(
+                select(WorkContainer).where(WorkContainer.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for container in containers:
+        summary = container.coverage_summary
+        assert summary is not None, container.title
+        assert summary["hours"]["total"] > 0, container.title
+
+
 async def test_mapping_matches_the_fixture_per_competence(
     db: AsyncSession, tenant, user
 ):
@@ -223,15 +246,104 @@ async def test_coverage_answers_with_agents_people_and_gaps(
     assert "agent" in verdicts, "no step falls to an agent type"
     assert "human" in verdicts, "no step falls to a named person"
     assert "gap" in verdicts, "no step is left open"
-    # The boundary step of the onboarding process (B4, the buddy
-    # correcting mistakes in the moment) carries no cognitive code and is
-    # therefore out of the arithmetic entirely.
+    # The boundary step of the customer-requests process (B4, showing the
+    # customer the fix hands on) carries no cognitive code and is therefore
+    # out of the arithmetic entirely.
     assert "out_of_scope" in verdicts
     assert named_people, "the human layer named nobody — the mapping is dead"
-    # ``hire`` from the regulatory judgement in the incident process,
+    # ``hire`` from the legal judgement in the customer-requests process,
     # ``agency`` from the one-off initiative via the §5.1 suggestion.
     assert gap_labels == {"hire", "agency"}
     assert shares_seen, "no container produced percentage shares"
+
+
+# HRP-870: the demo has to show the benefit. Both processes must put at
+# least this share of their yearly hours into "moves to an agent".
+MIN_MOVES_SHARE = 30
+PROCESS_KEYS = ("customer_requests", "management_reporting")
+
+
+@pytest.mark.asyncio
+async def test_both_processes_move_a_third_of_their_hours_to_an_agent(
+    db: AsyncSession, tenant, user
+):
+    """Counted by ``coverage.compute`` on the seeded tenant - the number a
+    demo visitor reads off the screen - not re-derived from the fixture."""
+    await _seed(db, tenant, user)
+    title_of = {spec["key"]: spec["title"] for spec in WORK_CONTAINERS}
+    assert set(PROCESS_KEYS) < set(title_of), "the agreed pair is gone"
+
+    for key in PROCESS_KEYS:
+        container = (
+            await db.execute(
+                select(WorkContainer).where(
+                    WorkContainer.tenant_id == tenant.id,
+                    WorkContainer.title == title_of[key],
+                )
+            )
+        ).scalar_one()
+        report = await coverage_service.compute(
+            db, tenant.id, container.id, user_id=user.id
+        )
+        assert report["shares"] is not None, key
+        assert report["shares"]["moves"] >= MIN_MOVES_SHARE, (
+            key,
+            report["shares"],
+        )
+        # The same number from the hours the shares are made of: the share
+        # must be of the whole estimated work, not of a flattering subset.
+        hours = report["hours"]
+        assert hours["unestimated"] == 0, key
+        assert hours["moves"] * 100 / hours["total"] >= MIN_MOVES_SHARE, key
+        # Not a process an agent does alone either: part of it is reviewed
+        # and part of it stays with people.
+        assert report["shares"]["to_review"] > 0, key
+        assert report["shares"]["stays"] > 0, key
+
+
+@pytest.mark.asyncio
+async def test_the_demo_keeps_one_boundary_step_and_one_hire_gap(
+    db: AsyncSession, tenant, user
+):
+    """What the module docstring promises: exactly one step out of scope,
+    exactly one ``hire`` gap, and the ``agency`` gap still in the ISO
+    project - each verdict shown once, where a visitor can find it."""
+    await _seed(db, tenant, user)
+    containers = (
+        (
+            await db.execute(
+                select(WorkContainer).where(WorkContainer.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out_of_scope: list[str] = []
+    gaps: dict[str, list[str]] = {"hire": [], "agency": []}
+    for container in containers:
+        report = await coverage_service.compute(
+            db, tenant.id, container.id, user_id=user.id
+        )
+        for row in report["steps"]:
+            if row["verdict"] == "out_of_scope":
+                out_of_scope.append(container.title)
+            if row["verdict"] == "gap":
+                gaps[row["gap_label"]].append(container.title)
+
+    title_of = {spec["key"]: spec["title"] for spec in WORK_CONTAINERS}
+    assert out_of_scope == [title_of["customer_requests"]]
+    assert gaps["hire"] == [title_of["customer_requests"]]
+    assert gaps["agency"] == [title_of["iso27001"]]
+
+
+def test_the_iso_project_keeps_its_steps_under_the_new_title():
+    """HRP-870 renamed the project; its steps are the same."""
+    iso = next(spec for spec in WORK_CONTAINERS if spec["key"] == "iso27001")
+    assert iso["title"] == "Getting ISO 27001 certified"
+    assert iso["type"] == "initiative" and iso["status"] == "draft"
+    assert len(iso["steps"]) == 12
+    assert iso["steps"][0]["title"].startswith("Map the scope")
+    assert iso["steps"][-1]["title"] == "Set up the surveillance cycle"
 
 
 @pytest.mark.asyncio

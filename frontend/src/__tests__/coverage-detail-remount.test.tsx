@@ -47,6 +47,7 @@ const CONTAINER: WorkContainer = {
   catalog_version: "v1.1",
   gap_default_label: "hire",
   my_access: "read",
+  coverage_summary: null,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };

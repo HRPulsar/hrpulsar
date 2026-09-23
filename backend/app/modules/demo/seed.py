@@ -139,6 +139,7 @@ from app.modules.talent_market.models import (
     TalentCardRequirement,
     TalentCardSpecialization,
 )
+from app.modules.work import coverage
 from app.modules.work.models import (
     WorkContainer,
     WorkStep,
@@ -2193,6 +2194,23 @@ async def _seed_work(
                 for code in step_spec["primitives"]
                 if code in primitives
             )
+        # HRP-862: the list column reads the summary stored on the
+        # container, and nobody has opened a freshly seeded process yet -
+        # without this the demo opens on a dash where the figures belong.
+        # In the seed's own transaction, so it is one write, not a commit.
+        await db.flush()
+        container.coverage_summary = coverage.summary_of(
+            await coverage.compute(
+                db,
+                tenant_id,
+                container.id,
+                user_id=owner_user_id,
+                schedule_mapping=False,
+                # The summary follows the modes and the agents: the tenant's
+                # people are not queried once per seeded container.
+                people=False,
+            )
+        )
         container_count += 1
     await db.flush()
 

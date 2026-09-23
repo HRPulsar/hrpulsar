@@ -16,6 +16,8 @@ from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.conftest import bare_request
+
 
 async def _set_status(db: AsyncSession, emp: Employee, new_status: str) -> None:
     emp.status = new_status
@@ -30,13 +32,13 @@ class TestAuthGuardEmployeeStatus:
         from app.core.security import decode_token
 
         decode_token(access_token)
-        loaded = await get_current_user(token=access_token, db=db)
+        loaded = await get_current_user(bare_request(), token=access_token, db=db)
         assert loaded.id == user.id
 
     async def test_admin_without_employee_card_passes(
         self, db: AsyncSession, user, access_token
     ):
-        loaded = await get_current_user(token=access_token, db=db)
+        loaded = await get_current_user(bare_request(), token=access_token, db=db)
         assert loaded.id == user.id
 
     @pytest.mark.parametrize("blocked_status", ["terminated", "inactive"])
@@ -51,7 +53,7 @@ class TestAuthGuardEmployeeStatus:
         await _set_status(db, employee, blocked_status)
 
         with pytest.raises(HTTPException) as excinfo:
-            await get_current_user(token=access_token, db=db)
+            await get_current_user(bare_request(), token=access_token, db=db)
         assert excinfo.value.status_code == 401
         assert excinfo.value.detail["error_code"] == "employee_status_blocked"
         assert excinfo.value.detail["status"] == blocked_status
@@ -60,7 +62,7 @@ class TestAuthGuardEmployeeStatus:
         self, db: AsyncSession, user, employee, access_token
     ):
         await _set_status(db, employee, "on_leave")
-        loaded = await get_current_user(token=access_token, db=db)
+        loaded = await get_current_user(bare_request(), token=access_token, db=db)
         assert loaded.id == user.id
 
 

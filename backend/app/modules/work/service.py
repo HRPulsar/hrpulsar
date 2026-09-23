@@ -78,7 +78,18 @@ CODE_ECHO_MAX = 10
 ASSIGNEE_FIELDS = frozenset({"executor_employee_id", "accountable_employee_id"})
 # Fields a PATCH may change without touching the step's content.
 NON_CONTENT_FIELDS = (
-    frozenset({"gap_label", "hours_per_run", "runs_per_year"}) | ASSIGNEE_FIELDS
+    frozenset(
+        {
+            "gap_label",
+            "hours_per_run",
+            "runs_per_year",
+            "review_human_share",
+            "manual_mode",
+            "manual_pack_code",
+            "hourly_rate",
+        }
+    )
+    | ASSIGNEE_FIELDS
 )
 
 STEP_FIELDS = (
@@ -93,6 +104,10 @@ STEP_FIELDS = (
     "notes",
     "executor_employee_id",
     "accountable_employee_id",
+    "review_human_share",
+    "manual_mode",
+    "manual_pack_code",
+    "hourly_rate",
 )
 
 
@@ -869,6 +884,16 @@ async def update_step(
     for key in ASSIGNEE_FIELDS & changes.keys():
         if changes[key] is not None:
             await _ensure_active_employee(db, tenant_id, changes[key])
+    if changes.get("manual_pack_code") is not None:
+        # HRP-863: a built-in pack or the tenant's own, active - the same
+        # list coverage matches against. One answer for a stranger's pack
+        # and a missing one.
+        from app.modules.ai_workforce import service as agents_service
+        from app.modules.work import coverage
+
+        packs = await agents_service.list_packs(db, tenant_id)
+        if coverage.manual_pack(changes["manual_pack_code"], packs) is None:
+            raise AppError("work_step_pack_invalid", 422)
     if changes:
         for key, value in changes.items():
             setattr(step, key, value)
@@ -1630,13 +1655,14 @@ async def start_step_skill(
         .scalars()
         .all()
     )
-    mode = coverage.automation_mode(
-        primitives, responsibility=step.responsibility, output_type=step.output_type
-    )
+    mode = coverage.effective_mode(step, primitives)
     if mode is None or mode.startswith("blocked_"):
         raise AppError("work_skill_not_applicable", 422, mode=mode or "no capability")
     packs = await agents_service.list_packs(db, tenant_id)
-    pack = skills.pack_for_step({p.code for p in primitives}, packs)
+    # HRP-863: the skill is written for the pack the coverage row shows.
+    pack = coverage.manual_pack(step.manual_pack_code, packs) or skills.pack_for_step(
+        {p.code for p in primitives}, packs
+    )
     if pack is None:
         fallback = skills.fallback_pack_code(primitives)
         pack = next((p for p in packs if p["code"] == fallback), None)

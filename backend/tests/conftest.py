@@ -328,6 +328,28 @@ async def user(db: AsyncSession, tenant, admin_role):
     return result.scalar_one()
 
 
+def bare_request(headers: dict[str, str] | None = None):
+    """Minimal ASGI ``Request`` for dependencies called outside a route.
+
+    ``get_current_user`` takes the Request to read X-Tab-Hidden (see the
+    note on its signature); tests that call the dependency directly
+    rather than through the app need something to hand it.
+    """
+    from starlette.requests import Request
+
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [
+                (name.lower().encode(), value.encode())
+                for name, value in (headers or {}).items()
+            ],
+        }
+    )
+
+
 @pytest_asyncio.fixture
 def access_token(user, tenant) -> str:
     return create_access_token(str(user.id), str(tenant.id))

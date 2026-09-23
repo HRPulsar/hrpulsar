@@ -208,12 +208,16 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     # X-Locale (HRP-513): the caller's effective interface locale, so error
     # bodies are localized when the NEXT_LOCALE cookie cannot cross origins.
+    # X-Tab-Hidden: set by the frontend when the request leaves a hidden
+    # tab, so a background poll is not mistaken for the visitor doing
+    # something (demo activity sampling).
     allow_headers=[
         "Authorization",
         "Content-Type",
         "If-Match",
         "X-API-Key",
         "X-Locale",
+        "X-Tab-Hidden",
     ],
     # HRP-177: ETag is not on the CORS-safelisted response-header list, so
     # cross-origin browsers can't read it via fetch unless we expose it

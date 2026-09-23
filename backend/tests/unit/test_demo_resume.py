@@ -56,7 +56,7 @@ async def test_resume_returns_same_tenant(
     assert body["resumed"] is True
     assert body["tenant_id"] == tenant_id
     assert body["credits_granted"] == 0
-    assert body["redirect_url"] == "/dashboard"
+    assert body["redirect_url"] == "/coverage"
 
 
 @pytest.mark.asyncio

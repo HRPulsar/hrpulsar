@@ -96,10 +96,14 @@ function PercentBadge({
 
 /**
  * HRP-660: a score under the bar has to read as a gap, not just as a warmer
- * colour. Deliberately the same word and tone the `competence_gap` badge
- * uses on the card header and in the employee list — one problem, one name.
+ * colour. Same tone as the `competence_gap` badge on the card header and in
+ * the employee list — one problem, one colour.
  * HRP-731: PercentBadge now shares the same bar, so the colour and this
  * badge can never disagree — green means "not a gap".
+ * HRP-906: the badge got its own key so a locale can name the competence
+ * side of the problem separately from the employee side — a growth zone on
+ * the competence against missing skills on the card. en and de keep one
+ * name for both; only the enterprise-only locale splits them.
  */
 export function CompetenceGapBadge({ row }: { row: EmployeeCompetenceRow }) {
   const t = useTranslations("employees");
@@ -110,7 +114,7 @@ export function CompetenceGapBadge({ row }: { row: EmployeeCompetenceRow }) {
       className={`shrink-0 text-xs ${ISSUE_TONE.competence_gap}`}
       data-testid={`employee-competence-gap-${row.competence_id}`}
     >
-      {t("issue_competence_gap")}
+      {t("competenceGapBadge")}
     </Badge>
   );
 }

@@ -513,6 +513,7 @@
     "demo_capture_requires_demo_session": "Nur Demo-Sitzungen können den Zugang sichern.",
     "demo_data_already_seeded": "Demo-Daten sind für diesen Tenant bereits angelegt",
     "demo_disabled": "Die öffentliche Sandbox ist derzeit deaktiviert.",
+    "demo_end_requires_demo_session": "Nur eine aktive Demo-Sitzung kann beendet werden",
     "demo_persona_not_available": "Diese Demo-Persona ist in der Sandbox nicht verfügbar",
     "demo_rate_limited": "Zu viele Demo-Versuche von dieser Adresse; bitte versuchen Sie es später erneut.",
     "demo_sandbox_capacity_reached": "Sandbox-Kapazität erreicht; bitte versuchen Sie es in einigen Minuten erneut.",
@@ -722,6 +723,7 @@
     "work_step_reclassify_failed": "Neuklassifizierung fehlgeschlagen: {error}",
     "work_step_capability_not_found": "Der Schritt hat keine Fähigkeit {capability}",
     "work_step_employee_invalid": "Wählen Sie eine aktive Person aus Ihrem Unternehmen",
+    "work_step_pack_invalid": "Wählen Sie einen für Ihr Unternehmen verfügbaren Agententyp",
     "material_in_use": "Das Material wird von einem PDP verwendet",
     "material_not_found": "Material nicht gefunden",
     "material_not_in_competence": "Das Material gehört nicht zu dieser Kompetenz",
@@ -1052,5 +1054,26 @@
       "rejected": "Abgelehnt",
       "withdrew": "Zurückgezogen"
     }
+  },
+  "work_bundle": {
+    "title": "Leitfaden zur Agenten-Einrichtung: {title}",
+    "intro": "Agententypen, die diese Arbeit braucht: {count}. Sie sind nach den Stunden pro Jahr geordnet, die sie übernehmen, die meisten zuerst - beginnen Sie oben.",
+    "pack_note": "Ein Agententyp ist eine Art von Fähigkeit, kein Produkt: Jeder Agent, den Sie bereits einsetzen und der diese Arbeit kann, passt.",
+    "agent_registered": "Agent: {name} (registriert)",
+    "agent_missing": "Agent: noch nicht registriert",
+    "hours": "Stunden pro Jahr: etwa {hours}",
+    "hours_unknown": "Stunden pro Jahr: noch nicht geschätzt",
+    "steps": "Schritte:",
+    "step_ready": "{position}. {title} ({mode}) - `{path}`",
+    "step_missing": "{position}. {title} ({mode}) - noch keine Skill-Datei",
+    "mode_moves": "geht an einen Agenten",
+    "mode_to_review": "geht in die Prüfung",
+    "todo_heading": "Was zu tun ist",
+    "todo_order": "Gehen Sie die Agententypen von oben durch: Der erste übernimmt die meisten Stunden.",
+    "todo_install": "Nehmen Sie für jeden Typ den Agenten, den Sie bereits einsetzen, oder richten Sie einen ein, und kopieren Sie jeden darunter aufgeführten Skill-Ordner aus `skills/` in das Skills-Verzeichnis dieses Agenten.",
+    "todo_register": "Registrieren Sie den Agenten in der Zeile des Schritts auf dem Reiter Abdeckung, damit die Abdeckung den Schritt als automatisiert zählt.",
+    "todo_review": "Benennen Sie bei jedem Schritt, der in die Prüfung geht, die Person, die das Ergebnis prüft, bevor es verwendet wird.",
+    "todo_missing": "Erzeugen Sie für die Schritte ohne Skill-Datei den Skill auf dem Reiter Abdeckung und laden Sie dieses Archiv erneut herunter.",
+    "footer": "Die Plattform führt die Skills nicht aus: Die Dateien arbeiten in Ihren eigenen Agenten-Werkzeugen."
   }
 }

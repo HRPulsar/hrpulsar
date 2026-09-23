@@ -42,9 +42,10 @@ export function persistDemoSession(accessToken: string): void {
   if (typeof window === "undefined") return;
   localStorage.setItem("access_token", accessToken);
   localStorage.removeItem("refresh_token");
-  // Resume hint survives a logout (which only clears the auth keys) so
-  // re-clicking "Try the demo" lands back in the same sandbox instead
-  // of minting a fresh credit grant.
+  // Resume hint: re-clicking "Try the demo" lands back in the same
+  // sandbox instead of minting a fresh credit grant. After an explicit
+  // logout the sandbox's tokens are revoked (HRP-897) and the stale hint
+  // simply fails the resume check, so /demo/start provisions a new one.
   localStorage.setItem(DEMO_RESUME_TOKEN_KEY, accessToken);
   setClientCookie("has_token", "1");
   // Marks the session as a demo sandbox for the proxy middleware: with it

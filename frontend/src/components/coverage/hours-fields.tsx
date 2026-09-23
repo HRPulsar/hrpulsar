@@ -50,6 +50,39 @@ export function hoursOutOfRange(draft: HoursDraft): boolean {
   );
 }
 
+/** HRP-861: the percent of a reviewed step's hours its checker keeps.
+ * Empty is "not set" - the backend's default share; anything else is sent
+ * as typed, so a fraction is refused here rather than silently truncated. */
+export function parseShare(draft: string): number | null {
+  return optionalNumber(draft);
+}
+
+function optionalNumber(draft: string): number | null {
+  return draft.trim() === "" ? null : Number(draft);
+}
+
+export function shareOutOfRange(draft: string): boolean {
+  const share = parseShare(draft);
+  return share !== null && (!Number.isInteger(share) || share < 0 || share > 100);
+}
+
+/** HRP-868: a step's own hourly rate, in the tenant's currency. Empty is
+ * "not set" - the tenant's rate. The bounds mirror `StepHourlyRate`: the
+ * floor is a cent, not a hair above zero - the column keeps two decimals,
+ * and anything smaller is stored as 0.00 and prices the step at nothing. */
+export const STEP_RATE_MIN = 0.01;
+export const STEP_RATE_MAX = 99_999_999;
+
+export function parseRate(draft: string): number | null {
+  return optionalNumber(draft);
+}
+
+export function rateOutOfRange(draft: string): boolean {
+  const rate = parseRate(draft);
+  // Written as "not inside" so that NaN is out of range too.
+  return rate !== null && !(rate >= STEP_RATE_MIN && rate <= STEP_RATE_MAX);
+}
+
 export function HoursFields({
   value,
   disabled = false,
@@ -94,13 +127,14 @@ export function HoursFields({
   );
 }
 
-function NumberField({
+export function NumberField({
   label,
   value,
   min,
   max,
   step,
   disabled,
+  placeholder,
   testId,
   onChange,
   onBlur,
@@ -111,6 +145,8 @@ function NumberField({
   max: number;
   step: number | "any";
   disabled: boolean;
+  /** What an empty field falls back to. */
+  placeholder?: string;
   testId: string;
   onChange: (raw: string) => void;
   onBlur?: () => void;
@@ -126,6 +162,7 @@ function NumberField({
         step={step}
         value={value}
         disabled={disabled}
+        placeholder={placeholder}
         className="h-8 w-full text-sm"
         data-testid={testId}
         onChange={(e) => onChange(e.target.value)}

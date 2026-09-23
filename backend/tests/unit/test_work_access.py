@@ -182,6 +182,7 @@ EXPECTED_GUARDS = {
     "generate_step_skill": "edit_step",
     "get_step_skill": "read_step",
     "download_step_skill": "read_step",
+    "download_agent_bundle": "read_container",
     "create_session": "current_actor",
     "latest_session": "read_container",
     "get_session": "read_session",

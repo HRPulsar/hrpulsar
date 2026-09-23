@@ -59,16 +59,16 @@ test.describe("Coverage — manual breakdown", () => {
     await expect(page.locator('[data-testid^="coverage-tentative-"]').first()).toBeVisible();
     await expect(page.locator('[data-testid^="coverage-agent-"]').first()).toBeVisible();
 
-    // W6 (§5.3, §5.4): the headline plaque counts the quality of the step -
-    // P1 is strong, P2 better than a person, and a step is only as good as
-    // its weakest capability. One step is shorter than four, so the plaque
-    // shows the count rather than a percentage.
+    // W6 (§5.3, §5.4): one step is shorter than four, so the headline plaque
+    // shows the count rather than a percentage. HRP-860: the plaque no longer
+    // counts quality by steps - the quality sits on the step's own row. P1 is
+    // strong, P2 better than a person, and a step is only as good as its
+    // weakest capability.
     await expect(page.getByTestId("coverage-headline")).toBeVisible();
-    await expect(page.getByTestId("coverage-quality-strong")).toHaveAttribute(
-      "data-count",
-      "1",
+    await expect(page.locator('[data-testid^="coverage-quality-"]').first()).toHaveAttribute(
+      "data-quality",
+      "strong",
     );
-    await expect(page.getByTestId("coverage-quality-no")).toHaveAttribute("data-count", "0");
 
     // W6 (§5.1): hours instead of the ordinal scales, and the ROI plaque
     // adds them up as soon as one step carries an estimate.
@@ -85,7 +85,8 @@ test.describe("Coverage — manual breakdown", () => {
       "100",
       { timeout: 10000 },
     );
-    await expect(page.getByTestId("coverage-roi-moves")).toHaveAttribute("data-hours", "100");
+    // HRP-861: an automatable step is freed whole - nothing is left to review.
+    await expect(page.getByTestId("coverage-roi-freed")).toHaveAttribute("data-hours", "100");
     // No rate set: hours only, with a link to where the rate lives (§5.2).
     await expect(page.getByTestId("coverage-roi-rate")).toBeVisible();
 

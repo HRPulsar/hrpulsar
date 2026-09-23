@@ -51,6 +51,7 @@ const STEP: CoverageStep = {
   hire_need: null,
   skill_status: "none",
   tentative: false,
+  review_human_share: null,
 };
 
 const COVERAGE: Coverage = {
@@ -59,10 +60,21 @@ const COVERAGE: Coverage = {
   mapping_pending: false,
   candidate_step_ids: [],
   shares: null,
-  hours: { total: 0, moves: 0, to_review: 0, stays: 0, unestimated: 0 },
+  hours: {
+    total: 0,
+    moves: 0,
+    to_review: 0,
+    stays: 0,
+    unestimated: 0,
+    to_review_after: 0,
+    freed: 0,
+    automated: 0,
+  },
   quality: { no: 0, draft: 0, strong: 1, better_than_human: 0 },
   hourly_rate: null,
   hourly_rate_currency: null,
+  money: null,
+  review_human_share_default: 50,
   steps: [STEP],
 };
 

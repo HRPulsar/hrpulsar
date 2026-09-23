@@ -7,20 +7,31 @@ about. Three containers fix that — two processes and one initiative —
 picked so the Coverage tab shows every verdict the arithmetic can produce
 (``coverage.py`` §5.2) against the company the rest of the seed builds:
 
-* ``onboarding`` — People & Talent. Coordination-heavy, so the "this
-  moves to an agent" bucket is not a theoretical one, and it carries the
-  seed's only boundary step (B4, the buddy correcting mistakes as they
-  happen): out of scope by design, and the largest single block of hours
-  in the process. That contrast is the point of the boundary codes.
-* ``incident`` — Platform. Investigation, a rollback call, a customer
-  notification to an agreed script, and one regulatory judgement nobody
-  in the company is currently assessed for — the seed's ``hire`` gap.
-  Per-step ``runs_per_year`` differs on purpose: every incident is
-  triaged, only the serious ones get a postmortem.
+* ``customer_requests`` — Go-to-Market. Intake, classification, routing
+  and the knowledge-base lookup are strong codes on work nobody signs for,
+  so they move to an agent whole; the reply is drafted and sent under
+  review; the angry call and the refund stay with people. It carries the
+  seed's only boundary step (B4, showing the customer the fix hands on):
+  out of scope by design. And one legal judgement nobody in the company is
+  currently assessed for — the seed's ``hire`` gap. Per-step
+  ``runs_per_year`` differs on purpose: every request is classified, one
+  in five reaches an engineer, a handful a year are about personal data.
+* ``management_reporting`` — a monthly cycle (``runs_per_year=12``).
+  Collecting, reconciling and checking the numbers is half of the hours,
+  and all of it moves to an agent; the commentary is drafted under review; the
+  call on what the month means stays with the head of the function.
 * ``iso27001`` — an initiative, not a process: it runs once
   (``runs_per_year=1``) and its unclosed step falls to ``agency`` through
   the §5.1 suggestion rather than a hand-set label. A certification
   project is what a company of this size actually outsources.
+
+Both processes are picked so that "moves to an agent" is at least 30 % of
+their yearly hours (HRP-870): the demo has to show the benefit. The pair
+they replaced - onboarding a hire, responding to a production incident -
+was mostly review and judgement, under 15 % of its hours moving to an
+agent, so a visitor opened Coverage on a number that argued against it.
+``test_demo_seed_work`` pins the share with the arithmetic of
+``coverage.compute``, not by eye.
 
 ``COMPETENCE_PRIMITIVES`` is the other half. The human layer of coverage
 reads ``competence_primitives``, which is written by an LLM mapping run;
@@ -81,8 +92,13 @@ COMPETENCE_PRIMITIVES: dict[str, list[str]] = {
     # Business.
     "c-customer-discovery": ["P1", "P7"],
     "c-okrs": ["P6", "P10"],
-    "c-sales-discovery": ["P1", "P7"],
-    "c-product-knowledge": ["P12"],
+    # Qualifying an opportunity by published criteria is rule-based
+    # classification; it is also what sorting an inbound queue is, and the
+    # sales floor is who does that here today (HRP-870).
+    "c-sales-discovery": ["P1", "P3", "P7"],
+    # Knowing the product is checking a customer's case against how the
+    # product really behaves, not only reciting it.
+    "c-product-knowledge": ["P2", "P12"],
     "c-objection-handling": ["P7"],
 }
 
@@ -100,309 +116,345 @@ COMPETENCE_PRIMITIVES: dict[str, list[str]] = {
 
 WORK_CONTAINERS: list[dict] = [
     {
-        "key": "onboarding",
+        "key": "customer_requests",
         "type": "process",
         "status": "active",
         "source": "ai",
         "gap_default_label": "hire",
-        "title": "Onboarding a new hire",
+        "title": "Handling inbound customer requests",
         "description": (
-            "Every new hire starts on a Monday. People Ops takes the signed "
-            "offer and the personal data into the HR record, opens the "
-            "accounts and the access the role needs, books the first week "
-            "with the team, picks a buddy, briefs the hire on the security "
-            "and data-handling rules, the manager agrees the 30/60/90 "
-            "expectations, the buddy shows the day-to-day tools hands on, "
-            "People Ops chases whatever is still missing, and after three "
-            "months the manager runs the probation review and the outcome "
-            "becomes a development plan."
+            "Requests reach us by email, by chat and through the form in the "
+            "product. Each one is taken into a single record, classified and "
+            "given a priority by the published rules, routed to the team that "
+            "owns the product area, and answered from the knowledge base and "
+            "the past requests where an answer exists. A reply is drafted in "
+            "our tone, sent, and confirmed with the customer. What the "
+            "knowledge base cannot answer goes to the engineer on duty; a "
+            "customer who is stuck is shown the fix hands on, an angry one "
+            "gets a call, a refund or a contract exception gets a decision, "
+            "and a request about personal data gets a legal one. Closed "
+            "requests are tagged with their cause, and the questions that "
+            "keep coming back become knowledge-base articles."
         ),
         "goal": (
-            "A new hire productive by the end of the first month, with no "
-            "step of the process resting on somebody remembering it."
+            "Every request answered within the agreed time, and the team's "
+            "hours spent on the customers who need a person rather than on "
+            "sorting the queue."
         ),
         "steps": [
             {
-                "title": "Take the signed offer and the hire's data into the HR record",
+                "title": "Take the request into one record, whatever channel it came by",
                 "description": (
-                    "Contract, personal data, tax and bank details out of the "
-                    "signed documents and into the employee record."
+                    "Who is asking, which account, which product area and "
+                    "what they actually want, out of the free text of an "
+                    "email, a chat or the form."
                 ),
                 "primitives": ["P1"],
-                "responsibility": "regulatory",
-                "output_type": "external_change",
-                "hours_per_run": 0.5,
-                "runs_per_year": 24,
-            },
-            {
-                "title": "Open the accounts and the access the role needs",
-                "description": (
-                    "The access list of the role, ticket by ticket, with the "
-                    "manager's approval where the system asks for one."
-                ),
-                "primitives": ["P11"],
-                "responsibility": "formal",
-                "output_type": "external_change",
-                "hours_per_run": 1,
-                "runs_per_year": 24,
-            },
-            {
-                "title": "Book the first week with the team",
-                "description": (
-                    "Intro calls with the team, the manager, the People "
-                    "Partner and the neighbouring divisions, around the "
-                    "calendars that already exist."
-                ),
-                "primitives": ["P11"],
                 "responsibility": "none",
                 "output_type": "draft",
-                "hours_per_run": 0.5,
-                "runs_per_year": 24,
+                "hours_per_run": 0.1,
+                "runs_per_year": 2400,
             },
             {
-                "title": "Pick the buddy for the first month",
+                "title": "Classify the request and set its priority",
                 "description": (
-                    "Who has the time, the patience and the overlap with what "
-                    "the hire will be doing — a judgement about people, made "
-                    "with the division head."
-                ),
-                "primitives": ["P6"],
-                "responsibility": "none",
-                "output_type": "draft",
-                "hours_per_run": 0.25,
-                "runs_per_year": 24,
-            },
-            {
-                "title": "Brief the hire on the security and data-handling rules",
-                "description": (
-                    "The standard briefing, question by question, with the "
-                    "acknowledgement recorded."
-                ),
-                "primitives": ["P12"],
-                "responsibility": "regulatory",
-                "output_type": "draft",
-                "hours_per_run": 1,
-                "runs_per_year": 24,
-            },
-            {
-                "title": "Agree the 30/60/90 expectations with the manager",
-                "description": (
-                    "What the team, the manager and the People Partner each "
-                    "expect by each checkpoint, argued down to one list."
-                ),
-                "primitives": ["P8"],
-                "responsibility": "none",
-                "output_type": "draft",
-                "hours_per_run": 1,
-                "runs_per_year": 24,
-            },
-            {
-                "title": "Show the day-to-day tools hands on",
-                "description": (
-                    "The buddy sits with the hire through the first real "
-                    "tasks and corrects the mistakes as they happen, before "
-                    "the wrong habit sets in."
-                ),
-                "primitives": ["B4"],
-                "responsibility": "none",
-                "output_type": "draft",
-                "hours_per_run": 4,
-                "runs_per_year": 24,
-            },
-            {
-                "title": "Chase what is still missing at the end of week one",
-                "description": (
-                    "Equipment, access, signatures, the training that was not "
-                    "completed — down the checklist until it is empty."
-                ),
-                "primitives": ["P11"],
-                "responsibility": "none",
-                "output_type": "draft",
-                "hours_per_run": 0.5,
-                "runs_per_year": 24,
-            },
-            {
-                "title": "Run the probation review against the 30/60/90",
-                "description": (
-                    "Read the evidence of three months and decide whether the "
-                    "hire has passed probation."
-                ),
-                "primitives": ["P1", "P6"],
-                "responsibility": "formal",
-                "output_type": "external_change",
-                "hours_per_run": 1.5,
-                "runs_per_year": 24,
-            },
-            {
-                "title": "Turn the outcome into a development plan",
-                "description": (
-                    "The review written up as goals, materials and dates the "
-                    "hire and the manager both sign off."
-                ),
-                "primitives": ["P5"],
-                "responsibility": "none",
-                "output_type": "draft",
-                "hours_per_run": 1,
-                "runs_per_year": 24,
-            },
-        ],
-    },
-    {
-        "key": "incident",
-        "type": "process",
-        "status": "active",
-        "source": "ai",
-        "gap_default_label": "hire",
-        "title": "Production incident response",
-        "description": (
-            "An alert fires, or a customer reports that something is broken. "
-            "The on-call engineer confirms the alert against the runbook, "
-            "sets a severity and pages the right rota, opens the incident "
-            "channel and keeps the timeline, works out what changed and why, "
-            "decides between a rollback and a fix forward, applies it, keeps "
-            "the status page and the affected customers informed to the "
-            "agreed wording, confirms the system is healthy again, decides "
-            "whether the incident is reportable, and for the serious ones "
-            "writes the postmortem, walks the team through it and files the "
-            "action items."
-        ),
-        "goal": (
-            "Customer-visible downtime down, and the on-call engineer "
-            "spending the night on the cause rather than on the paperwork "
-            "around it."
-        ),
-        "steps": [
-            {
-                "title": "Confirm the alert against the runbook and the dashboards",
-                "description": (
-                    "Is this real, and is it the failure the runbook "
-                    "describes or a different one."
-                ),
-                "primitives": ["P2"],
-                "responsibility": "none",
-                "output_type": "draft",
-                "hours_per_run": 0.25,
-                "runs_per_year": 60,
-            },
-            {
-                "title": "Set the severity and page the right rota",
-                "description": (
-                    "Severity by the published criteria, then the rota the "
-                    "severity and the affected service point at."
+                    "Type and priority by the published rules: what is "
+                    "broken, for how many people, and on which plan."
                 ),
                 "primitives": ["P3"],
                 "responsibility": "none",
-                "output_type": "external_change",
-                "hours_per_run": 0.1,
-                "runs_per_year": 60,
+                "output_type": "draft",
+                "hours_per_run": 0.05,
+                "runs_per_year": 2400,
             },
             {
-                "title": "Open the incident channel and keep the timeline",
+                "title": "Route the request to the team that owns the product area",
                 "description": (
-                    "Channel, roles, the running log of what was done and "
-                    "when, so the postmortem has something to read."
+                    "The queue the type and the product area point at, by "
+                    "the routing table rather than by who happens to be online."
                 ),
-                "primitives": ["P11"],
+                "primitives": ["P3"],
                 "responsibility": "none",
                 "output_type": "draft",
-                "hours_per_run": 0.5,
-                "runs_per_year": 60,
+                "hours_per_run": 0.05,
+                "runs_per_year": 2400,
             },
             {
-                "title": "Work out what changed and why",
+                "title": "Search the knowledge base and the past requests for an answer",
                 "description": (
-                    "Logs, deploys, metrics and the customer's report, until "
-                    "there is a hypothesis that explains all four."
+                    "The article or the closed request that matches, checked "
+                    "against this customer's version and setup before it is "
+                    "trusted."
                 ),
-                "primitives": ["P4"],
+                "primitives": ["P1", "P2"],
                 "responsibility": "none",
                 "output_type": "draft",
-                "hours_per_run": 2,
-                "runs_per_year": 60,
+                "hours_per_run": 0.15,
+                "runs_per_year": 2400,
             },
             {
-                "title": "Decide between a rollback and a fix forward",
+                "title": "Draft the reply in our tone",
                 "description": (
-                    "What each option costs, what it risks, and how long the "
-                    "customer stays broken either way."
+                    "The answer written for this customer: what happened, "
+                    "what to do, and what we are doing about it."
                 ),
-                "primitives": ["P6"],
-                "responsibility": "formal",
-                "output_type": "external_change",
-                "hours_per_run": 0.5,
-                "runs_per_year": 60,
+                "primitives": ["P5"],
+                "responsibility": "reputational",
+                "output_type": "draft",
+                "hours_per_run": 0.2,
+                "runs_per_year": 2400,
             },
             {
-                "title": "Apply the fix or the rollback",
-                "description": "The change itself, through the usual review and deploy.",
-                "primitives": ["P9"],
-                "responsibility": "formal",
-                "output_type": "external_change",
-                "hours_per_run": 1.5,
-                "runs_per_year": 60,
-            },
-            {
-                "title": "Keep the status page and the affected customers informed",
+                "title": "Send the reply and confirm that it solved the problem",
                 "description": (
-                    "The agreed wording, at the agreed intervals, to the "
-                    "customers the incident actually touched."
+                    "The reply out, the follow-up at the agreed interval, and "
+                    "the customer's yes or no recorded on the request."
                 ),
                 "primitives": ["P12"],
                 "responsibility": "reputational",
                 "output_type": "external_change",
-                "hours_per_run": 0.75,
-                "runs_per_year": 60,
+                "hours_per_run": 0.1,
+                "runs_per_year": 2400,
             },
             {
-                "title": "Confirm the system is healthy against the exit criteria",
+                "title": "Work out with the engineer on duty what is actually broken",
                 "description": (
-                    "Every metric the severity's exit criteria name, back "
-                    "inside its band and staying there."
+                    "For what the knowledge base cannot answer: the "
+                    "customer's report, the logs and the recent releases, "
+                    "until there is a cause rather than a symptom."
                 ),
-                "primitives": ["P2"],
+                "primitives": ["P4"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 0.75,
+                "runs_per_year": 480,
+            },
+            {
+                "title": "Show the customer the fix hands on",
+                "description": (
+                    "A screen-share with the customer's admin doing the "
+                    "setup themselves, corrected as they go, so the same "
+                    "request does not come back next week."
+                ),
+                "primitives": ["B4"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 0.5,
+                "runs_per_year": 240,
+            },
+            {
+                "title": "Call the customer who is angry",
+                "description": (
+                    "A conversation with no script: what went wrong for "
+                    "them, what they need to hear, and what we can promise."
+                ),
+                "primitives": ["P7"],
+                "responsibility": "reputational",
+                "output_type": "external_change",
+                "hours_per_run": 0.5,
+                "runs_per_year": 240,
+            },
+            {
+                "title": "Decide on a refund, a credit or a contract exception",
+                "description": (
+                    "What the customer is worth, what the precedent costs, "
+                    "and what the contract actually says."
+                ),
+                "primitives": ["P6"],
                 "responsibility": "formal",
                 "output_type": "external_change",
                 "hours_per_run": 0.5,
-                "runs_per_year": 60,
+                "runs_per_year": 120,
             },
             {
-                "title": "Decide whether the incident is reportable",
+                "title": "Decide whether a request is about personal data and what the law requires",
                 "description": (
-                    "Personal data, the contractual thresholds and the "
-                    "notification deadlines, against what actually happened."
+                    "Access, deletion and correction requests against the "
+                    "regulation and its deadlines, and the call on what we "
+                    "must hand over or erase."
                 ),
                 "primitives": ["P2", "P6"],
                 "responsibility": "regulatory",
                 "output_type": "external_change",
                 "hours_per_run": 1,
-                "runs_per_year": 12,
+                "runs_per_year": 24,
             },
             {
-                "title": "Write the postmortem",
+                "title": "Close the request and tag what caused it",
                 "description": (
-                    "Timeline, cause, contributing factors and what made the "
-                    "incident last as long as it did."
+                    "Cause, product area and whether the knowledge base had "
+                    "the answer, by the closing checklist."
                 ),
-                "primitives": ["P4", "P5"],
+                "primitives": ["P3"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 0.05,
+                "runs_per_year": 2400,
+            },
+            {
+                "title": "Turn the questions that keep coming back into knowledge-base articles",
+                "description": (
+                    "Once a month: the most repeated causes written up as "
+                    "articles a customer can follow without us."
+                ),
+                "primitives": ["P5"],
                 "responsibility": "none",
                 "output_type": "draft",
                 "hours_per_run": 3,
                 "runs_per_year": 12,
             },
+        ],
+    },
+    {
+        "key": "management_reporting",
+        "type": "process",
+        "status": "active",
+        "source": "ai",
+        "gap_default_label": "hire",
+        "title": "Monthly management reporting",
+        "description": (
+            "In the first week of every month the leadership gets one pack "
+            "about the month before. The numbers are pulled out of billing, "
+            "the CRM, the product analytics and the HR system, reconciled "
+            "between the systems, and the owners are chased for what is "
+            "missing or does not add up. The pack is assembled to the "
+            "standing template and checked against last month's and against "
+            "the metric definitions; the deviations from the plan are "
+            "explained, the commentary is drafted, the head of the function "
+            "reviews it and decides what it means for the quarter, the pack "
+            "goes out to the agreed list, the leadership team walks through "
+            "it, and the actions are filed."
+        ),
+        "goal": (
+            "The pack on the table by the fifth working day, with the people "
+            "who own the numbers spending their time on what the numbers "
+            "mean rather than on collecting them."
+        ),
+        "steps": [
             {
-                "title": "Walk the team through the postmortem and agree the actions",
+                "title": "Pull the month's numbers out of the systems",
                 "description": (
-                    "Everyone's reading of the same incident, argued down to "
-                    "the few actions worth doing."
+                    "Revenue and churn from billing, the pipeline from the "
+                    "CRM, usage from the product analytics, headcount and "
+                    "hiring from the HR system."
+                ),
+                "primitives": ["P1"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 6,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Reconcile the numbers between the systems",
+                "description": (
+                    "Billing against the CRM against the bank: every figure "
+                    "that appears in two places, and the list of the ones "
+                    "that disagree."
+                ),
+                "primitives": ["P2"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 5,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Chase the owners for what is missing or does not add up",
+                "description": (
+                    "Down the list of open figures, owner by owner, until "
+                    "each one is confirmed or corrected."
+                ),
+                "primitives": ["P11"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 2,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Assemble the pack to the standing template",
+                "description": (
+                    "Tables, charts and the one-page summary, in the layout "
+                    "the leadership already knows how to read."
+                ),
+                "primitives": ["P9"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 4,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Check the pack against last month's and the metric definitions",
+                "description": (
+                    "Every metric computed the way its definition says, and "
+                    "every jump from last month either real or a mistake."
+                ),
+                "primitives": ["P2"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 2,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Find what explains the deviations from the plan",
+                "description": (
+                    "The deals, the releases, the hires and the outages "
+                    "behind each number that moved, until the story holds."
+                ),
+                "primitives": ["P4"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 4,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Draft the commentary for the leadership",
+                "description": (
+                    "A page of plain language: what moved, why, and what to "
+                    "watch next month."
+                ),
+                "primitives": ["P5"],
+                "responsibility": "reputational",
+                "output_type": "draft",
+                "hours_per_run": 3,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Review the pack and decide what it means for the quarter",
+                "description": (
+                    "The head of the function reads the pack before anyone "
+                    "else does and makes the call on the forecast."
+                ),
+                "primitives": ["P6"],
+                "responsibility": "formal",
+                "output_type": "draft",
+                "hours_per_run": 2,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Send the pack to the leadership and the board list",
+                "description": (
+                    "The agreed recipients, the agreed day, and the "
+                    "acknowledgement that it arrived."
+                ),
+                "primitives": ["P11"],
+                "responsibility": "formal",
+                "output_type": "external_change",
+                "hours_per_run": 0.5,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Walk the leadership team through the pack and agree the actions",
+                "description": (
+                    "Everyone's reading of the same numbers, argued down to "
+                    "the few actions worth taking."
                 ),
                 "primitives": ["P8"],
                 "responsibility": "none",
                 "output_type": "draft",
-                "hours_per_run": 1,
+                "hours_per_run": 1.5,
                 "runs_per_year": 12,
             },
             {
-                "title": "File the action items with owners and due dates",
+                "title": "File the agreed actions with owners and due dates",
                 "description": (
                     "Into the tracker, with an owner and a date, and chased "
                     "until they close."
@@ -427,7 +479,7 @@ WORK_CONTAINERS: list[dict] = [
         # suggestion says the same thing for every step here, but the
         # default has to be right for the ones that carry accountability.
         "gap_default_label": "agency",
-        "title": "ISO 27001 certification",
+        "title": "Getting ISO 27001 certified",
         "description": (
             "Enterprise deals keep stalling on the security questionnaire, "
             "so we are getting certified. We map the scope and the data "

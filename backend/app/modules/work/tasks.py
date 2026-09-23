@@ -595,11 +595,7 @@ async def _execute_skill_body(
         # its responsibility may have been edited while the task queued,
         # and the tenant must not pay for a skill the service would now
         # refuse to start.
-        mode = coverage.automation_mode(
-            primitives,
-            responsibility=step.responsibility,
-            output_type=step.output_type,
-        )
+        mode = coverage.effective_mode(step, primitives)
         if mode is None or mode.startswith("blocked_"):
             return await _fail_skill(
                 db,

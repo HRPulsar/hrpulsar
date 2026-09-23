@@ -673,6 +673,34 @@ async def test_touch_updates_last_active_for_demo_tenant(
 
 
 @pytest.mark.asyncio
+async def test_touch_skips_a_hidden_tab_poll(db: AsyncSession, monkeypatch):
+    """A background poll is not the visitor being active.
+
+    The dashboard polls on a timer (notification bell, generation
+    pollers) and the timer keeps firing from a tab nobody is looking at.
+    Counting those kept a forgotten tab reading as engaged and stopped
+    the EE watcher from ever calling the session idle.
+    """
+    from app.modules.demo import activity
+
+    monkeypatch.setattr(activity, "_redis_client", lambda: None)
+    _patch_activity_factory_to_test_engine(monkeypatch)
+
+    baseline = datetime.now(timezone.utc) - timedelta(minutes=30)
+    tenant = await _make_tenant(
+        db,
+        is_demo=True,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        last_active_at=baseline,
+    )
+
+    await activity.touch_demo_tenant_activity(db, tenant.id, background=True)
+
+    await db.refresh(tenant)
+    assert tenant.last_active_at == baseline
+
+
+@pytest.mark.asyncio
 async def test_touch_no_op_on_non_demo_tenant(
     db: AsyncSession, monkeypatch
 ):

@@ -26,6 +26,9 @@ def _settings(**overrides):
         "s3_endpoint": "",
         "s3_public_endpoint": "",
         "frontend_url": "",
+        # A port-offset worktree appends its own origin in .env, and the
+        # FRONTEND_URL warning only fires on the stock value.
+        "cors_origins": Settings.model_fields["cors_origins"].default,
         "sentry_environment": "",
         "brand_name": "HRPulsar",
         "email_from": STOCK_EMAIL_FROM,

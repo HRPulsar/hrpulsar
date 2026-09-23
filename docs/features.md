@@ -491,19 +491,25 @@ Break a process or a project down into steps, see who covers each step - an AI a
 - Step attributes fold away behind a Details disclosure: who answers for the step, what it produces, and the hours estimate you can correct
 - Capability chips show the model's confidence and the fragment of your description it relied on; a doubtful chip is marked as a suggestion until you confirm or remove it
 - Reclassify a single step by telling the model what it really is ("this is a scripted call with the bank")
+- Every field of a step is labelled, and rewording a step says what it did not do: the capabilities still describe the old text until you reclassify the step, and the hint offers exactly that
 
 ### Coverage
 
 - Per step: the executor verdict - an agent type from the built-in packs (or an agent you registered), a person whose assessments or grade profile carry the capabilities, or a gap - and the automation mode (automatable, draft then review, review required, blocked by judgement or by physical work)
 - A person's coverage comes from completed assessments against the passing score of their grade, or from the competence matrix of their position; the matched person is shown with their position
 - The tab opens on two plaques: what share of this work moves to an agent, and what the work costs in hours a year and in your own money
-- Next to the share, how well an agent does the work: better than a person, as well as a person, a draft a person finishes, or a person's own job. A step is rated by its weakest capability, and the same rating sits on every step's row
-- The money comes from one hourly rate you set on the company profile; until you set it the plaques show hours only. What the agent itself costs is deliberately absent - the skill runs in your own tools, so we never see its usage, and the plaque says so
-- The hours freed and the hours that move to review are separate lines: reviewing a result still takes a person's time, and we do not guess how much
+- Under the share, one bar splits the yearly hours three ways - moves to an agent, moves to review, stays with people - and its legend repeats the same colours and the same percentages, so every number on the plaque has one denominator
+- How well an agent does the work - better than a person, as well as a person, a draft a person finishes, or a person's own job - is rated per step by its weakest capability and sits on the step's row
+- The money comes from the hourly rate you set on the company profile, and any step can name its own rate in the hours editor - an empty field means the company's, which the field shows as a hint. The money of a process is the sum over its steps, each at its own rate, always in the company's currency; until a rate exists the plaques show hours only. What the agent itself costs is deliberately absent - the skill runs in your own tools, so we never see its usage, and the plaque says so
+- Reviewing an agent's work still takes a person's time, so the hours that move to review read before and after (124 h → ≈ 62 h): by default half of a reviewed step's hours stay with the person who checks it, and the hours editor takes your own percent per step - clear it to go back to the default. The hours freed are the agent's bucket plus what review gives back
+- Potential is not progress, so the plaque also says what is already done: "Agents already do 60 of 156 h/year of this work" counts the steps an agent you registered performs today - "I already use this" on a step moves its hours there. A step whose mode keeps it with a person is never counted there, so what is automated and what stays with people never add up to more than the process has. The list of processes and projects shows the same as a percent per row, taken from the last time the coverage was opened, so the list stays instant
 - Three buckets - moves to an agent, moves to review, stays with people - as step lists, and as percentages of yearly hours on breakdowns of four or more steps; a step without an hours estimate is listed but not counted
 - A verdict is marked preliminary while the breakdown is not accepted or rests on an unconfirmed capability
 - Assign the person who does a step, and the person who checks and signs it, from your active employees. An assigned person outranks the match - an agent's included, which stays on the row as what could take the step - and closes the gap even without the capabilities, with a "No matching skills" badge naming what is missing
 - A step where an agent drafts or someone answers for the result asks "Who checks?" until an accountable person is named; assignments change neither the shares nor the money
+- Overrule the computed result on any step in scope, right on its row: pick another automation mode, or name the agent type that does the step - also where no single agent type covered it. The manual value is what the buckets, the shares, the money, the To do tab and the SKILL.md follow; the row marks it "Set manually", and "Return to computed" brings the calculated value back. An assigned person still outranks the agent, and an agent type that is later removed is simply ignored. While a mode is set by hand and no agent type is named yet, the row keeps quiet about it - no "Nobody covers this" verdict, no quality light on an agent nobody picked
+- Rows are navigable: the names of the executor, the accountable person and the backup open the employee card (a colleague outside your HR scope opens as the directory card), a step title in any of the three buckets scrolls to that step's row, and an agent type opens a short description of what an agent of that type does
+- The "assessed" and "expected" labels of a matched person open the match details: which of the person's competences cover the step's capabilities, the score of the latest completed assessment of each, and the passing score of their grade specialization it was held against. A match that is only expected by the grade matrix of the position says so and shows no score. The details follow the same rule as the name itself: only readers whose HR scope includes the person receive them
 
 ### To do
 
@@ -512,7 +518,7 @@ Everything the breakdown leaves unclosed, in two sections.
 - **Nobody does this yet**: the steps no agent type and no person on the team covers, each labelled hire or agency. Pick them and open a hire need: a draft vacancy in Recruitment with the steps as its description and the closest competences pre-filled
 - A single gap can also be handed over straight from its Coverage row, choosing whether to look inside the company first, hire from outside, or give the work to an agency
 - Or assign a gap to someone on the team straight from the list: it leaves To do and is no longer offered for hiring
-- **An agent could, nobody has**: the steps an agent type covers where you have registered no agent and written no skill file. Generate the skill for one of them, or for all of them at once behind a confirmation, or register the agent you already run for that step
+- **Work for an agent**: the steps an agent type covers where something is still missing - a registered agent, the skill file, or both. Generate the skill for one of them, or for all of them at once behind a confirmation, or register the agent you already run for that step. A step whose agent you registered stays here until its skill is written: the skill is what makes that agent do the step the way the breakdown describes it, so the instruction is worth having even for work an agent already handles
 - Hiring is refused for a step of the second kind on the server, not only in the checkboxes: a stale screen must not open a vacancy for work an agent is about to take
 
 ### Access
@@ -532,6 +538,8 @@ Not every process is for the whole company - payroll, severance or compensation 
 - For any step an agent can perform, generate a `SKILL.md` for it: the pack's skeleton filled with your company's competence indicators, the step's attributes and its acceptance point
 - Generation runs in the background with a progress strip and a running clock, so a closed tab never loses a file that was in fact written
 - Preview the file, download it, or register the agent you already use for that step
+- An agent setup guide on the Coverage tab answers what the per-step verdicts do not: how many agent types this work needs, which steps stand behind each, how many hours a year it takes over, whether you have registered an agent of that type and how many of its skill files are ready - largest hours first, so you start where it pays most
+- Download everything at once: a zip of the ready `SKILL.md` files, one folder per skill, with a `README.md` that names the agent types, the steps behind each and the order of actions. The README is assembled from the same coverage the screen shows, without a model call, in your content language; the download is free and never starts a generation
 
 ---
 

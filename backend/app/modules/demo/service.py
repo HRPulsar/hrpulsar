@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, get_args
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -39,8 +39,11 @@ from app.modules.demo.utils import DEMO_ADMIN_EMAIL_DOMAIN
 
 logger = logging.getLogger(__name__)
 
-# Where a fresh (or resumed) demo session lands.
-DEMO_REDIRECT_URL = "/dashboard"
+# Where a fresh (or resumed) demo session lands: the Coverage list, the
+# screen the 2.0 landing sells. The generic dashboard is one click away.
+# ponytail: one fixed target; per-CTA intent routing is designed in
+# docs/plans/DEMO_ENTRY_INTENT.md and lands when the landing sends one.
+DEMO_REDIRECT_URL = "/coverage"
 
 # The employee persona for the demo "View as" switcher: Will Gapp
 # (NAME_POOL idx 38, renamed per locale by ``localized_name_pool``) — the
@@ -276,12 +279,17 @@ async def _try_resume_demo_session(
     user = await db.get(User, user_uuid)
     if user is None or user.tenant_id != tenant.id:
         return None
+    # A demo logout revokes the sandbox's tokens (HRP-897). The resume hint
+    # lives on another origin and outlives it — without this check it would
+    # trade a revoked token for a fresh one in a sandbox kept for signup.
+    if payload.get("ver", 0) != user.token_version:
+        return None
 
     tenant.last_active_at = now
     await db.commit()
     await db.refresh(tenant)
 
-    access = create_demo_access_token(str(user.id), str(tenant.id))
+    access = create_demo_access_token(str(user.id), str(tenant.id), user.token_version)
     logger.info("demo: resumed session tenant=%s user=%s", tenant.id, user.id)
 
     return {
@@ -403,7 +411,7 @@ async def create_demo_session(
     # before the tenant does. A 7-day refresh would let a closed-tab
     # browser hold a usable credential after the tenant + its data are
     # gone. The SPA does not call /api/auth/refresh for demo sessions.
-    access = create_demo_access_token(str(user.id), str(tenant.id))
+    access = create_demo_access_token(str(user.id), str(tenant.id), user.token_version)
 
     logger.info(
         "demo: created session tenant=%s user=%s credits=%s",
@@ -521,10 +529,57 @@ async def switch_demo_view(
     tenant.last_active_at = now
     await db.commit()
 
-    access = create_demo_access_token(str(user.id), str(tenant_id))
+    access = create_demo_access_token(str(user.id), str(tenant_id), user.token_version)
     return {
         "access_token": access,
         "tenant_id": tenant_id,
         "expires_at": tenant.expires_at,
         "persona": persona,
     }
+
+
+async def end_demo_session(db: AsyncSession, *, tenant_id: uuid.UUID) -> None:
+    """The visitor ends their own sandbox (explicit logout, HRP-897).
+
+    Hands the tenant to ``purge_expired_demo_tenants`` by pulling
+    ``expires_at`` to now — the demo slot frees up on the next purge tick
+    instead of after the full TTL — and bumps ``token_version`` so every
+    demo-scoped token (both personas) dies immediately rather than with the
+    purge. A pending "keep my demo data" signup keeps its sandbox: the
+    visitor asked us to hold on to that data, and logging out right after
+    the form is the natural thing to do.
+    """
+    from app.modules.signup.models import SignupRequest
+
+    tenant = await db.get(Tenant, tenant_id)
+    if tenant is None or not tenant.is_demo:
+        raise AppError("demo_end_requires_demo_session", status.HTTP_403_FORBIDDEN)
+
+    now = datetime.now(timezone.utc)
+    keep = await db.scalar(
+        select(SignupRequest.id)
+        .where(
+            SignupRequest.demo_tenant_id_snapshot == tenant_id,
+            SignupRequest.keep_demo_data.is_(True),
+            SignupRequest.status.in_(("pending_email_verify", "pending_moderation")),
+        )
+        .limit(1)
+    )
+    if keep is None and (tenant.expires_at is None or tenant.expires_at > now):
+        tenant.expires_at = now
+    await db.execute(
+        update(User)
+        .where(User.tenant_id == tenant_id)
+        .values(token_version=User.token_version + 1)
+    )
+    await db.commit()
+    logger.info("demo: session ended by visitor tenant=%s", tenant_id)
+
+    # Best-effort, same as ``demo.session_started``: the EE watcher turns
+    # this into the "Closed" card; a lost event degrades to "Expired".
+    try:
+        from app.core.events import publish
+
+        await publish("demo.session_ended", {"tenant_id": str(tenant_id)})
+    except Exception:  # noqa: BLE001
+        logger.exception("demo: failed to publish demo.session_ended event")

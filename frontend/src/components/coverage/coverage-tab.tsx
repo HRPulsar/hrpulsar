@@ -9,9 +9,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Bot, ExternalLink, FileText, Scale, ShieldCheck, User, UserRound } from "lucide-react";
+import { Bot, ChevronDown, ExternalLink, FileText, Scale, ShieldCheck, User, UserRound } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,27 +23,46 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Hint } from "@/components/ui/hint";
 import { LoadErrorState } from "@/components/load-error-state";
+import { AgentGuide, skillLabel } from "@/components/coverage/agent-guide";
 import { type AssigneeField, AssignPersonDialog } from "@/components/coverage/assign-person-dialog";
 import { MODE_COLOR, useCapabilityLabel } from "@/components/coverage/gaps-tab";
-import { CoverageSummary, QUALITY_BADGE } from "@/components/coverage/coverage-summary";
+import {
+  CoverageSummary,
+  QUALITY_BADGE,
+  RATE_SETTINGS_HREF,
+} from "@/components/coverage/coverage-summary";
 import { HireFromStepDialog } from "@/components/coverage/hire-from-step-dialog";
+import { MatchGroundsDrawer } from "@/components/coverage/match-grounds-drawer";
 import {
   HOURS_PER_RUN_MIN,
   HoursFields,
   type HoursDraft,
+  NumberField,
+  STEP_RATE_MAX,
+  STEP_RATE_MIN,
   draftOf,
   hoursOutOfRange,
   parseHours,
+  parseRate,
+  parseShare,
+  rateOutOfRange,
+  shareOutOfRange,
 } from "@/components/coverage/hours-fields";
 import { RegisterAgentInline } from "@/components/coverage/register-agent-inline";
+import { PackChip, PersonLink, StepJump, around, stepRowId } from "@/components/coverage/row-links";
 import { SkillDialog } from "@/components/coverage/skill-dialog";
+import { StepOverrideMenu } from "@/components/coverage/step-override-menu";
 import { BADGE_COLOR, BADGE_OUTLINE } from "@/lib/badge-tones";
 import { EECreditCostBadge } from "@/lib/ee-hooks";
 import {
+  type AgentPack,
+  CANDIDATE_MODES,
   type Coverage,
   type CoverageStep,
   type Primitive,
+  type StepPatch,
   SKILL_ACTION,
   type AutomationMode,
   type Verdict,
@@ -56,8 +75,8 @@ import {
 const MAPPING_POLL_MS = 10_000;
 const MAPPING_POLL_LIMIT = 30;
 
-// The modes in which an agent produces the work (coverage.CANDIDATE_MODES).
-const CANDIDATE_MODES: AutomationMode[] = ["automatable", "draft_then_review", "review_required"];
+// HRP-863: what a step's mode can be set to by hand (models.AUTOMATION_MODES).
+const AUTOMATION_MODES: AutomationMode[] = [...CANDIDATE_MODES, "blocked_judgment", "blocked_physical"];
 
 const VERDICT_COLOR: Record<Verdict, string> = {
   agent: BADGE_COLOR.green,
@@ -98,6 +117,8 @@ export function CoverageTab({
   const [skillStep, setSkillStep] = useState<CoverageStep | null>(null);
   const [hireStep, setHireStep] = useState<CoverageStep | null>(null);
   const [assign, setAssign] = useState<{ row: CoverageStep; field: AssigneeField } | null>(null);
+  // HRP-871: the matched person whose grounds are open.
+  const [groundsOf, setGroundsOf] = useState<NonNullable<CoverageStep["human"]> | null>(null);
   const packLabel = useCallback(
     (code: string | null) => {
       if (!code) return "";
@@ -109,6 +130,17 @@ export function CoverageTab({
     [tRef],
   );
   const capabilityLabel = useCapabilityLabel(primitives);
+  // HRP-863: fetched on the first open of a pack menu, not with the tab.
+  const [packs, setPacks] = useState<AgentPack[] | null>(null);
+  const loadPacks = useCallback(() => {
+    // Nothing is cached on a failure: the list stays null, so the next open
+    // of a menu asks again instead of showing "Loading..." for good.
+    if (packs === null)
+      void workApi
+        .listPacks()
+        .then(setPacks)
+        .catch(() => toast.error(tc("loadFailed")));
+  }, [packs, tc]);
 
   const load = useCallback(async () => {
     try {
@@ -119,6 +151,21 @@ export function CoverageTab({
       setFailed(true);
     }
   }, [containerId]);
+
+  // HRP-863: the company's override of a step's mode or pack. Like an
+  // assignment: the steps tab gets the saved step, the summary is re-read.
+  const override = useCallback(
+    async (stepId: string, patch: StepPatch) => {
+      try {
+        const step = await workApi.updateStep(stepId, patch);
+        onStepsChanged((prev) => prev.map((s) => (s.id === step.id ? step : s)));
+        await load();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : t("saveFailed"));
+      }
+    },
+    [load, onStepsChanged, t],
+  );
 
   useEffect(() => {
     // The state writes happen after the await, not in the effect body;
@@ -177,6 +224,10 @@ export function CoverageTab({
   }
 
   const candidates = coverage.candidate_step_ids.length;
+  // HRP-868: the hours editor lists every step in scope, not only the
+  // candidates - hours, a review share and a rate belong to a step whoever
+  // ends up doing it. A boundary step is outside the arithmetic and stays out.
+  const inScopeIds = new Set(coverage.steps.filter((s) => s.in_scope).map((s) => s.step_id));
   const unestimated = coverage.steps.filter(
     (s) => coverage.candidate_step_ids.includes(s.step_id) && s.hours_per_year === null,
   ).length;
@@ -208,6 +259,7 @@ export function CoverageTab({
         <SummaryCard
           testId="coverage-summary-draft"
           title={t("summaryToReview")}
+          hint={t("summaryToReviewHint")}
           share={shares?.to_review ?? null}
           rows={buckets.to_review}
           t={t}
@@ -231,13 +283,23 @@ export function CoverageTab({
                 ? t("weightNotePending", { count: unestimated })
                 : t("weightNoteShort")}
         </p>
-        {canEdit && candidates > 0 && (
+        {canEdit && inScopeIds.size > 0 && (
           <Button variant="outline" onClick={() => setWizardOpen(true)} data-testid="coverage-btn-weights">
             <Scale className="size-4" />
             {t("setWeights")}
           </Button>
         )}
       </div>
+
+      <AgentGuide
+        containerId={containerId}
+        steps={coverage.steps}
+        canEdit={canEdit}
+        canRegisterAgent={canRegisterAgent}
+        packLabel={packLabel}
+        onSkill={setSkillStep}
+        onChanged={load}
+      />
 
       <ol className="space-y-3" data-testid="coverage-match-list">
         {coverage.steps.map((row) => (
@@ -255,13 +317,18 @@ export function CoverageTab({
             onHire={() => setHireStep(row)}
             onAssign={(field) => setAssign({ row, field })}
             onChanged={load}
+            packs={packs}
+            onLoadPacks={loadPacks}
+            onOverride={(patch) => void override(row.step_id, patch)}
+            onGrounds={() => setGroundsOf(row.human)}
           />
         ))}
       </ol>
 
       {wizardOpen && (
         <HoursEditor
-          steps={steps.filter((s) => coverage.candidate_step_ids.includes(s.id))}
+          steps={steps.filter((s) => inScopeIds.has(s.id))}
+          coverage={coverage}
           t={t}
           onClose={() => setWizardOpen(false)}
           onSaved={(updated, keepOpen) => {
@@ -286,6 +353,10 @@ export function CoverageTab({
             void load();
           }}
         />
+      )}
+
+      {groundsOf && (
+        <MatchGroundsDrawer human={groundsOf} capabilityLabel={capabilityLabel} onClose={() => setGroundsOf(null)} />
       )}
 
       {hireStep && (
@@ -316,19 +387,25 @@ export function CoverageTab({
 function SummaryCard({
   testId,
   title,
+  hint,
   share,
   rows,
   t,
 }: {
   testId: string;
   title: string;
+  /** What the bucket means, when the label alone does not say it. */
+  hint?: string;
   share: number | null;
   rows: CoverageStep[];
   t: Translate;
 }) {
   return (
     <div className="rounded-lg border p-4" data-testid={testId} data-share={share ?? ""}>
-      <p className="text-sm text-muted-foreground">{title}</p>
+      <p className="flex items-center gap-1 text-sm text-muted-foreground">
+        {title}
+        {hint && <Hint text={hint} />}
+      </p>
       <p className="mt-1 text-2xl font-semibold tabular-nums">
         {share === null ? t("summaryCount", { count: rows.length }) : `${Math.round(share)}%`}
       </p>
@@ -336,7 +413,9 @@ function SummaryCard({
         <ul className="mt-2 space-y-0.5 text-sm">
           {rows.map((r) => (
             <li key={r.step_id} className="truncate">
-              {r.position}. {r.title}
+              <StepJump stepId={r.step_id} testId={`${testId}-step-${r.step_id}`}>
+                {r.position}. {r.title}
+              </StepJump>
             </li>
           ))}
         </ul>
@@ -358,6 +437,10 @@ function MatchRow({
   onHire,
   onAssign,
   onChanged,
+  packs,
+  onLoadPacks,
+  onOverride,
+  onGrounds,
 }: {
   row: CoverageStep;
   /** The backend's list of candidate steps: the ones a skill applies to. */
@@ -372,23 +455,44 @@ function MatchRow({
   onHire: () => void;
   onAssign: (field: AssigneeField) => void;
   onChanged: () => void;
+  /** HRP-863: the packs a step can be set to; null until first asked for. */
+  packs: AgentPack[] | null;
+  onLoadPacks: () => void;
+  onOverride: (patch: StepPatch) => void;
+  /** HRP-871: open what the human match stands on. */
+  onGrounds: () => void;
 }) {
+  const tc = useTranslations("common");
   const testId = `coverage-match-row-${row.step_id}`;
-  const canHaveSkill = candidate;
+  // HRP-863: a step out of scope is in no bucket - nothing to override.
+  // The agent type is only offered in a mode where an agent produces the
+  // work: coverage ignores a pack named on a blocked step, so offering it
+  // there would save a value nothing reads.
+  const canOverride = canEdit && row.in_scope;
   // HRP-809: a person the company named outranks the match.
   const assigned = row.human?.label === "assigned" ? row.human : null;
-
-  const skillLabel =
-    row.skill_status === "ready"
-      ? t("openSkill")
-      : row.skill_status === "failed"
-        ? t("retrySkill")
-        : row.skill_status === "generating"
-          ? t("generatingSkill")
-          : t("getSkill");
+  // HRP-863 (decision 2026-09-21): the company put the step in a bucket by
+  // hand and has not named the agent yet. Until it does, the row keeps quiet:
+  // no "nobody covers this" verdict against its word, and no quality light on
+  // an agent nobody picked. Only where an agent can be named - in a candidate
+  // mode, with no person assigned - or the row would stay silent for good
+  // while To do lists the step.
+  const awaitingAgent =
+    Boolean(row.mode_manual) &&
+    !!row.mode &&
+    CANDIDATE_MODES.includes(row.mode) &&
+    !assigned &&
+    !row.agent?.agent_id &&
+    !row.agent?.pack_manual;
+  const canHaveSkill = candidate;
 
   return (
-    <li data-testid={testId} className="rounded-lg border bg-background p-3">
+    <li
+      data-testid={testId}
+      id={stepRowId(row.step_id)}
+      tabIndex={-1}
+      className="rounded-lg border bg-background p-3 focus:outline-none focus:ring-2 focus:ring-ring"
+    >
       <div className="flex items-start gap-2">
         <span className="mt-0.5 w-6 shrink-0 text-sm tabular-nums text-muted-foreground">
           {row.position}
@@ -396,19 +500,43 @@ function MatchRow({
         <div className="flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <p className="font-medium">{row.title}</p>
-            <Badge
-              className={VERDICT_COLOR[row.verdict]}
-              data-testid={`coverage-verdict-${row.step_id}`}
-              data-verdict={row.verdict}
-            >
-              {t(`verdict_${row.verdict}`)}
-            </Badge>
-            {row.mode && (
+            {!awaitingAgent && (
+              <Badge
+                className={VERDICT_COLOR[row.verdict]}
+                data-testid={`coverage-verdict-${row.step_id}`}
+                data-verdict={row.verdict}
+              >
+                {t(`verdict_${row.verdict}`)}
+              </Badge>
+            )}
+            {row.mode && !canOverride && (
               <Badge className={MODE_COLOR[row.mode]} data-testid={`coverage-mode-${row.step_id}`}>
                 {t(`mode_${row.mode}`)}
               </Badge>
             )}
-            {row.quality && (
+            {row.mode && canOverride && (
+              <StepOverrideMenu
+                testId={`coverage-btn-change-mode-${row.step_id}`}
+                trigger={<button type="button" className="inline-flex" title={t("changeMode")} />}
+                options={AUTOMATION_MODES.map((mode) => ({ value: mode, label: t(`mode_${mode}`) }))}
+                value={row.mode}
+                manual={row.mode_manual ?? false}
+                resetLabel={t("manualReset")}
+                emptyLabel={tc("loading")}
+                onPick={(mode) => onOverride({ manual_mode: mode as AutomationMode | null })}
+              >
+                <Badge className={MODE_COLOR[row.mode]} data-testid={`coverage-mode-${row.step_id}`}>
+                  {t(`mode_${row.mode}`)}
+                  <ChevronDown className="size-3" />
+                </Badge>
+              </StepOverrideMenu>
+            )}
+            {row.mode_manual && (
+              <Badge variant="outline" data-testid={`coverage-manual-mode-${row.step_id}`}>
+                {t("manualChip")}
+              </Badge>
+            )}
+            {row.quality && !awaitingAgent && (
               <Badge
                 className={QUALITY_BADGE[row.quality]}
                 data-testid={`coverage-quality-${row.step_id}`}
@@ -433,14 +561,26 @@ function MatchRow({
             {row.agent && !assigned && (
               <span className="inline-flex items-center gap-1" data-testid={`coverage-agent-${row.step_id}`}>
                 <Bot className="size-4" />
-                {packLabel(row.agent.pack_code)}
+                <PackChip
+                  code={row.agent.pack_code}
+                  label={packLabel(row.agent.pack_code)}
+                  testId={`coverage-pack-chip-${row.step_id}`}
+                />
                 {row.agent.agent_name && ` ${t("agentVia", { name: row.agent.agent_name })}`}
+                {row.agent.pack_manual && (
+                  <Badge variant="outline" data-testid={`coverage-manual-pack-${row.step_id}`}>
+                    {t("manualChip")}
+                  </Badge>
+                )}
               </span>
             )}
             {assigned && (
               <span className="inline-flex flex-wrap items-center gap-1" data-testid={`coverage-executor-${row.step_id}`}>
                 <UserRound className="size-4" />
-                {assigned.name}
+                {around(
+                  (name) => t("executorPerson", { name }),
+                  <PersonLink person={assigned} testId={`coverage-link-executor-${row.step_id}`} />,
+                )}
                 {assigned.position && (
                   <span className="text-xs">{t("humanPosition", { position: assigned.position })}</span>
                 )}
@@ -461,19 +601,49 @@ function MatchRow({
             {assigned && row.agent && (
               <span className="inline-flex items-center gap-1 text-xs" data-testid={`coverage-agent-${row.step_id}`}>
                 <Bot className="size-3.5" />
-                {t("agentCouldTake", { pack: packLabel(row.agent.pack_code) })}
+                {around(
+                  (pack) => t("agentCouldTake", { pack }),
+                  <PackChip
+                    code={row.agent.pack_code}
+                    label={packLabel(row.agent.pack_code)}
+                    testId={`coverage-pack-chip-${row.step_id}`}
+                  />,
+                )}
+                {row.agent.pack_manual && (
+                  <Badge variant="outline" data-testid={`coverage-manual-pack-${row.step_id}`}>
+                    {t("manualChip")}
+                  </Badge>
+                )}
               </span>
             )}
             {row.human && !assigned && (
               <span className="inline-flex items-center gap-1" data-testid={`coverage-human-${row.step_id}`}>
                 <UserRound className="size-4" />
-                {row.human_backup ? t("backupPerson", { name: row.human.name }) : row.human.name}
+                {around(
+                  (name) => (row.human_backup ? t("backupPerson", { name }) : name),
+                  <PersonLink person={row.human} testId={`coverage-link-human-${row.step_id}`} />,
+                )}
+                {row.human_backup && <Hint text={t("backupPersonHint")} />}
                 {row.human.position && (
                   <span className="text-xs" data-testid={`coverage-human-position-${row.step_id}`}>
                     {t("humanPosition", { position: row.human.position })}
                   </span>
                 )}
-                <Badge variant="outline">{t(`humanLabel_${row.human.label}`)}</Badge>
+                {row.human.grounds?.length ? (
+                  <button
+                    type="button"
+                    className="inline-flex rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    title={t("groundsOpenHint")}
+                    onClick={onGrounds}
+                    data-testid={`coverage-btn-grounds-${row.step_id}`}
+                  >
+                    <Badge variant="outline" className="underline decoration-dotted underline-offset-4">
+                      {t(`humanLabel_${row.human.label}`)}
+                    </Badge>
+                  </button>
+                ) : (
+                  <Badge variant="outline">{t(`humanLabel_${row.human.label}`)}</Badge>
+                )}
               </span>
             )}
             {!row.agent && row.mode && CANDIDATE_MODES.includes(row.mode) && (
@@ -518,6 +688,21 @@ function MatchRow({
                   : t("outOfScopeAccountability")}
               </span>
             )}
+            {canOverride && row.mode && CANDIDATE_MODES.includes(row.mode) && (
+              <StepOverrideMenu
+                testId={`coverage-btn-change-pack-${row.step_id}`}
+                trigger={<Button size="sm" variant="link" className="h-auto p-0" />}
+                options={packs && packs.map((pack) => ({ value: pack.code, label: packLabel(pack.code) }))}
+                value={row.agent?.pack_code ?? null}
+                manual={row.agent?.pack_manual ?? false}
+                resetLabel={t("manualReset")}
+                emptyLabel={tc("loading")}
+                onOpen={onLoadPacks}
+                onPick={(code) => onOverride({ manual_pack_code: code })}
+              >
+                {row.agent ? t("changeAgent") : t("setAgent")}
+              </StepOverrideMenu>
+            )}
             {canEdit && (
               <Button
                 size="sm"
@@ -553,7 +738,7 @@ function MatchRow({
               data-testid={`coverage-btn-get-skill-${row.step_id}`}
             >
               <FileText className="size-4" />
-              {skillLabel}
+              {skillLabel(t, row.skill_status)}
               {row.skill_status !== "ready" && canEdit && <EECreditCostBadge action={SKILL_ACTION} />}
             </Button>
             {/* The person is redacted for a reader who may not see people;
@@ -596,7 +781,10 @@ function AccountableLine({
       {row.accountable && (
         <span className="inline-flex items-center gap-1" data-testid={`coverage-accountable-${row.step_id}`}>
           <ShieldCheck className="size-4" />
-          {t("accountablePerson", { name: row.accountable.name })}
+          {around(
+            (name) => t("accountablePerson", { name }),
+            <PersonLink person={row.accountable} testId={`coverage-link-accountable-${row.step_id}`} />,
+          )}
           {row.accountable.position && (
             <span className="text-xs">{t("humanPosition", { position: row.accountable.position })}</span>
           )}
@@ -622,7 +810,7 @@ function AccountableLine({
             title={t("whoChecksHint")}
             data-testid={`coverage-needs-accountable-${row.step_id}`}
           >
-            {t("whoChecks")}
+            {t("needsAccountableBadge")}
           </Badge>
         )
       )}
@@ -632,11 +820,15 @@ function AccountableLine({
 
 function HoursEditor({
   steps,
+  coverage,
   t,
   onClose,
   onSaved,
 }: {
   steps: WorkStep[];
+  /** HRP-861: which steps sit in the review bucket, and the share each one
+   * effectively has - the step's own or the backend's default. */
+  coverage: Coverage;
   t: Translate;
   onClose: () => void;
   onSaved: (updated: Map<string, WorkStep>, keepOpen?: boolean) => void;
@@ -645,10 +837,51 @@ function HoursEditor({
     Object.fromEntries(steps.map((s) => [s.id, draftOf(s)])),
   );
   const [saving, setSaving] = useState(false);
-  // A step that joins the candidate list while the dialog is open has no
-  // draft yet: fall back to its own estimate, never to an empty one, or
-  // saving would PATCH null over it.
+  // A step that comes into scope while the dialog is open has no draft yet:
+  // fall back to its own estimate, never to an empty one, or saving would
+  // PATCH null over it.
   const valueOf = (step: WorkStep) => values[step.id] ?? draftOf(step);
+
+  // HRP-861: null for a step outside the review bucket - no share input.
+  const effectiveShare = useMemo(
+    () => new Map(coverage.steps.map((r) => [r.step_id, r.review_human_share])),
+    [coverage],
+  );
+  const [shares, setShares] = useState<Record<string, string>>({});
+  const shareOf = (step: WorkStep) =>
+    shares[step.id] ?? String(effectiveShare.get(step.id) ?? "");
+  const reviewed = steps.filter((s) => effectiveShare.get(s.id) != null);
+
+  // HRP-868: a step's own hourly rate; empty falls back to the company's,
+  // which the placeholder shows. The currency is always the company's, so
+  // without a company rate there is nothing to price a new step rate in -
+  // but a rate a step already carries stays editable, or it could never be
+  // taken off again.
+  const locale = useLocale();
+  const [rates, setRates] = useState<Record<string, string>>({});
+  const rateOf = (step: WorkStep) =>
+    rates[step.id] ?? (step.hourly_rate === null ? "" : String(step.hourly_rate));
+  const companyRate = coverage.hourly_rate;
+  const rateLocked = (step: WorkStep) => companyRate === null && step.hourly_rate === null;
+
+  function patchOf(step: WorkStep): StepPatch {
+    const patch: StepPatch = {};
+    const next = parseHours(valueOf(step));
+    if (next.hours_per_run !== step.hours_per_run) patch.hours_per_run = next.hours_per_run;
+    if (next.runs_per_year !== step.runs_per_year) patch.runs_per_year = next.runs_per_year;
+    const effective = effectiveShare.get(step.id);
+    if (effective != null) {
+      const share = parseShare(shareOf(step));
+      // The prefilled default left as it was is not a choice: the step
+      // keeps following the default instead of pinning today's number.
+      if (share !== effective && share !== step.review_human_share) {
+        patch.review_human_share = share;
+      }
+    }
+    const rate = parseRate(rateOf(step));
+    if (rate !== step.hourly_rate) patch.hourly_rate = rate;
+    return patch;
+  }
 
   async function save() {
     // Out of range is answered by the backend with a 422 per row: say it
@@ -663,13 +896,26 @@ function HoursEditor({
       );
       return;
     }
+    if (reviewed.some((s) => shareOutOfRange(shareOf(s)))) {
+      toast.error(t("reviewShareRangeError"));
+      return;
+    }
+    if (steps.some((s) => rateOutOfRange(rateOf(s)))) {
+      toast.error(
+        t("stepRateRangeError", {
+          min: STEP_RATE_MIN.toLocaleString(locale),
+          max: STEP_RATE_MAX.toLocaleString(locale),
+        }),
+      );
+      return;
+    }
     setSaving(true);
     const updated = new Map<string, WorkStep>();
     try {
       for (const step of steps) {
-        const next = parseHours(valueOf(step));
-        if (next.hours_per_run === step.hours_per_run && next.runs_per_year === step.runs_per_year) continue;
-        updated.set(step.id, await workApi.updateStep(step.id, next));
+        const patch = patchOf(step);
+        if (Object.keys(patch).length === 0) continue;
+        updated.set(step.id, await workApi.updateStep(step.id, patch));
       }
       onSaved(updated);
     } catch (err) {
@@ -685,8 +931,34 @@ function HoursEditor({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-2xl" data-testid="coverage-weights-wizard">
         <DialogHeader>
-          <DialogTitle>{t("weightsTitle")}</DialogTitle>
-          <DialogDescription>{t("weightsText")}</DialogDescription>
+          <DialogTitle>{t("hoursEditorTitle")}</DialogTitle>
+          <DialogDescription>{t("weightsIntro")}</DialogDescription>
+          {reviewed.length > 0 && (
+            <p className="text-sm text-muted-foreground" data-testid="coverage-weights-review-share-hint">
+              {t("weightsReviewShareNote", { share: coverage.review_human_share_default })}
+            </p>
+          )}
+          {/* In words, not only as a grey placeholder: an empty field showing
+              "50" and a typed "50" are hard to tell apart at a glance. */}
+          {companyRate !== null && (
+            <p className="text-sm text-muted-foreground" data-testid="coverage-weights-rate-hint">
+              {t("weightsRateNote", {
+                rate: companyRate.toLocaleString(locale),
+                currency: coverage.hourly_rate_currency ?? "",
+              })}
+            </p>
+          )}
+          {companyRate === null && (
+            <p className="text-sm text-muted-foreground" data-testid="coverage-weights-rate-locked">
+              {t("weightsRateLocked")}{" "}
+              <Link
+                href={RATE_SETTINGS_HREF}
+                className="text-primary underline-offset-4 hover:underline"
+              >
+                {t("weightsRateLockedLink")}
+              </Link>
+            </p>
+          )}
         </DialogHeader>
         <ol className="max-h-[60vh] space-y-3 overflow-auto">
           {steps.map((step) => (
@@ -704,6 +976,30 @@ function HoursEditor({
                   testId={`coverage-weights-step-${step.id}`}
                   labels={{ hours: t("attrHoursPerRun"), runs: t("attrRunsPerYear") }}
                   onChange={(next) => setValues((prev) => ({ ...prev, [step.id]: next }))}
+                />
+                {effectiveShare.get(step.id) != null && (
+                  <NumberField
+                    label={t("attrReviewShare")}
+                    value={shareOf(step)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    disabled={false}
+                    placeholder={String(coverage.review_human_share_default)}
+                    testId={`coverage-weights-step-${step.id}-input-review-share`}
+                    onChange={(raw) => setShares((prev) => ({ ...prev, [step.id]: raw }))}
+                  />
+                )}
+                <NumberField
+                  label={t("attrStepRate", { currency: coverage.hourly_rate_currency ?? "none" })}
+                  value={rateOf(step)}
+                  min={STEP_RATE_MIN}
+                  max={STEP_RATE_MAX}
+                  step="any"
+                  disabled={rateLocked(step)}
+                  placeholder={companyRate === null ? undefined : String(companyRate)}
+                  testId={`coverage-weights-step-${step.id}-input-rate`}
+                  onChange={(raw) => setRates((prev) => ({ ...prev, [step.id]: raw }))}
                 />
               </div>
             </li>

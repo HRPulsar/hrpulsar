@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-23
+
+### Added
+- Coverage: an agent setup guide groups the steps an agent takes by agent type - hours a year, whether the agent is registered, how many skill files are ready - and downloads every ready SKILL.md with a README as one zip (HRP-866)
+- Coverage: the hours an agent you registered already does - "60 of 156 h/year already automated" on the process and a percent per row in the list of processes and projects (HRP-862)
+- Coverage: a step can carry its own hourly rate, set in the hours editor; the company rate stays the default and the money of a process is summed step by step (HRP-868)
+- Coverage: set a step's automation mode and agent type by hand right on its row; the manual value drives the buckets, shares, money and To do, is marked "Set manually", and can be returned to the computed one (HRP-863)
+- Coverage: people on a step row link to their employee cards, step titles in the summary buckets jump to the step's row, and an agent type opens a description of what it does (HRP-864)
+- Coverage: the "assessed" and "expected" labels of a matched person open the match details - the competences behind the step's capabilities, their assessment scores and the passing score (HRP-871)
+
+### Changed
+- Coverage: the step editor labels the title and the description, and after you reword a step it says the capabilities were not recalculated and offers to reclassify it (HRP-865)
+- Coverage: hours that move to review show before and after - half of a reviewed step's hours stay with its checker by default, adjustable per step in the hours editor - and the hours freed now include what review gives back (HRP-861)
+- Coverage: the summary shows one bar of yearly hours - to an agent, to review, with people - with a legend in the same colours and percentages; the step-count quality row left the summary and quality stays on each step (HRP-860)
+- Coverage: the step rows, the summary, the To do sections and the hours editor say in plain words what each figure means, and the To do section for steps an agent type covers is now "Ready for an agent" (HRP-859)
+
+### Fixed
+- Coverage: the reclassify-step dialog fits its width on narrow screens and in longer languages, with no horizontal scroll (HRP-867)
+
 ## [2.0.0] - 2026-09-16
 
 ### Added

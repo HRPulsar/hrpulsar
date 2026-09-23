@@ -19,6 +19,8 @@ from app.modules.auth.schemas import ChangePasswordRequest
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.conftest import bare_request
+
 
 async def _access_for(user) -> str:
     return create_access_token(str(user.id), str(user.tenant_id), user.token_version)
@@ -30,7 +32,7 @@ class TestChangePasswordRevokesTokens:
     ):
         token = await _access_for(user)
         # Sanity: the access token validates before the password change.
-        assert (await get_current_user(token=token, db=db)).id == user.id
+        assert (await get_current_user(bare_request(), token=token, db=db)).id == user.id
 
         await service.change_password(
             db,
@@ -41,7 +43,7 @@ class TestChangePasswordRevokesTokens:
         )
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(token=token, db=db)
+            await get_current_user(bare_request(), token=token, db=db)
         assert exc.value.status_code == 401
 
     async def test_old_refresh_token_rejected_after_change(
@@ -101,7 +103,7 @@ class TestChangePasswordRevokesTokens:
         )
         await db.refresh(user)
         token = await _access_for(user)
-        assert (await get_current_user(token=token, db=db)).id == user.id
+        assert (await get_current_user(bare_request(), token=token, db=db)).id == user.id
 
     async def test_legacy_token_without_ver_claim_still_valid(
         self, db: AsyncSession, user
@@ -123,7 +125,7 @@ class TestChangePasswordRevokesTokens:
         legacy = jwt.encode(
             payload, settings.jwt_secret, algorithm=settings.jwt_algorithm
         )
-        assert (await get_current_user(token=legacy, db=db)).id == user.id
+        assert (await get_current_user(bare_request(), token=legacy, db=db)).id == user.id
 
     async def test_unknown_user_still_401(self, db: AsyncSession):
         with pytest.raises(HTTPException):

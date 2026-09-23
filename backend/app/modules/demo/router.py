@@ -20,7 +20,11 @@ from app.modules.demo.schemas import (
     DemoSwitchViewRequest,
     DemoSwitchViewResponse,
 )
-from app.modules.demo.service import create_demo_session, switch_demo_view
+from app.modules.demo.service import (
+    create_demo_session,
+    end_demo_session,
+    switch_demo_view,
+)
 from app.modules.demo.utils import is_demo_tenant
 from app.modules.signup.schemas import SignupRequestCreate
 from app.modules.signup.service import create_signup_request
@@ -149,6 +153,19 @@ async def switch_view(
         db, tenant_id=current_user.tenant_id, persona=payload.persona
     )
     return DemoSwitchViewResponse(**result)
+
+
+@router.post("/end", status_code=status.HTTP_204_NO_CONTENT)
+async def end_session(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """The visitor ends their sandbox — what the SPA calls on demo logout.
+
+    Revokes the sandbox's tokens and hands the tenant to the purge; a
+    paid-account bearer is rejected with 403 inside the service.
+    """
+    await end_demo_session(db, tenant_id=current_user.tenant_id)
 
 
 def _bearer_token(header: str | None) -> str | None:

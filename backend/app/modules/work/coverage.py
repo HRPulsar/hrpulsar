@@ -32,11 +32,13 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.ai_workforce import service as agents_service
@@ -96,6 +98,10 @@ BUCKET_OF_MODE = {
     "blocked_judgment": "stays",
     "blocked_physical": "stays",
 }
+# HRP-861: percent of a reviewed step's hours that stays with the person who
+# checks the agent's work, when the step names no share of its own. Declared
+# once, here: the SPA reads the effective value off the payload.
+DEFAULT_REVIEW_HUMAN_SHARE = 50
 # One mapping run per tenant per window: the first coverage call schedules
 # it, the polls that follow see the lock and report "pending".
 MAPPING_LOCK_SECONDS = 600
@@ -130,6 +136,27 @@ def automation_mode(
     return "draft_then_review"
 
 
+def effective_mode(step: WorkStep, primitives: Sequence[Primitive]) -> str | None:
+    """HRP-863: the company's word outranks the computed mode, the way a
+    named executor outranks the match (HRP-809). Every reader of a step's
+    mode goes through here - the coverage row, the skill gate and the skill
+    task - so the buckets, the To do list and the skill button cannot
+    disagree. Only on a step in scope: one with no cognitive capability is
+    in no bucket, and there is nothing for the override to move."""
+    if step.manual_mode and any(count_toward_coverage(p) for p in primitives):
+        return step.manual_mode
+    return automation_mode(
+        primitives, responsibility=step.responsibility, output_type=step.output_type
+    )
+
+
+def manual_pack(code: str | None, packs: Sequence[dict[str, Any]]) -> dict | None:
+    """HRP-863: the pack the company named on the step, out of the packs
+    visible to the tenant; None when it named none, or the one it named is
+    gone (deleted or deactivated) - the step then reads as without it."""
+    return next((p for p in packs if p["code"] == code), None) if code else None
+
+
 def step_quality(primitives: Sequence[Primitive]) -> str | None:
     """The weakest ``ai_verdict`` among the step's cognitive capabilities
     (§5.3); None for a step out of scope, which has none. Boundary codes
@@ -147,6 +174,66 @@ def step_hours(step: WorkStep) -> float | None:
     if step.hours_per_run is None or step.runs_per_year is None:
         return None
     return float(step.hours_per_run) * step.runs_per_year
+
+
+def review_share(step: WorkStep, mode: str | None) -> int | None:
+    """HRP-861: the percent of the step's hours its checker keeps - the
+    step's own, else the default. None outside the review bucket, where a
+    stored share means nothing."""
+    if mode is None or BUCKET_OF_MODE[mode] != "to_review":
+        return None
+    if step.review_human_share is None:
+        return DEFAULT_REVIEW_HUMAN_SHARE
+    return step.review_human_share
+
+
+def freed_hours(row: Mapping[str, Any]) -> float:
+    """HRP-861/866: the yearly hours a step takes off people - all of them
+    for a step an agent does alone, less what its checker keeps for a step
+    that goes to review. A step nobody estimated frees nothing."""
+    hours = row["hours_per_year"] or 0.0
+    share = row["review_human_share"]
+    return hours if share is None else hours * (1 - share / 100)
+
+
+def step_rate(step: WorkStep, tenant_rate: Decimal | None) -> float | None:
+    """HRP-868: the hourly rate a step is priced at - its own, else the
+    tenant's; None when neither is set, and the step is then in no money.
+    Always in the tenant's currency. Kept apart and small on purpose: the
+    next level of the cascade (HRP-869, the executor's salary) goes between
+    the two."""
+    rate = step.hourly_rate if step.hourly_rate is not None else tenant_rate
+    return None if rate is None else float(rate)
+
+
+def money_of(
+    rows: Sequence[dict[str, Any]], rates: dict[uuid.UUID, float | None]
+) -> dict[str, Any] | None:
+    """HRP-868: the money of the estimated rows, the same set as the hours.
+    A sum over the steps, each at its own rate - total hours times one rate
+    stopped being right the moment a step could name its own. A row without
+    a rate is in no figure and is counted in ``unpriced``, so a partial total
+    can say it is partial; None when no row is priced at all."""
+    priced = [(r, rates[r["step_id"]]) for r in rows]
+    priced = [(r, rate) for r, rate in priced if rate is not None]
+    if not priced:
+        return None
+    money = dict.fromkeys(("moves", "to_review", "to_review_after", "stays"), 0.0)
+    for r, rate in priced:
+        amount = r["hours_per_year"] * rate
+        money[BUCKET_OF_MODE[r["mode"]]] += amount
+        if r["review_human_share"] is not None:
+            money["to_review_after"] += amount * r["review_human_share"] / 100
+    # Clamped: at a share of 100 on fractional hours the subtraction lands
+    # on -1e-16, and "frees up -0" is not a figure anybody should read.
+    freed = max(0.0, money["moves"] + money["to_review"] - money["to_review_after"])
+    total = money["moves"] + money["to_review"] + money["stays"]
+    return {
+        **{key: round(value, 2) for key, value in money.items()},
+        "total": round(total, 2),
+        "freed": round(freed, 2),
+        "unpriced": len(rows) - len(priced),
+    }
 
 
 def gap_label_for(step: WorkStep, container: WorkContainer) -> str:
@@ -199,7 +286,12 @@ async def _agent_layer(
     db: AsyncSession, tenant_id: uuid.UUID
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     packs = [
-        {"id": p["id"], "code": p["code"], "codes": set(p["primitive_codes"])}
+        {
+            "id": p["id"],
+            "code": p["code"],
+            "title": p["title_en"],
+            "codes": set(p["primitive_codes"]),
+        }
         for p in await agents_service.list_packs(db, tenant_id)
     ]
     # ponytail: one page at 1000; a registry that large is not an MVP tenant.
@@ -325,9 +417,10 @@ async def _human_layer(
         cid for ids in expected_of_spec.values() for cid in ids
     }
     codes_of_competence: dict[uuid.UUID, list[str]] = {}
+    title_of_competence: dict[uuid.UUID, str] = {}
     if competence_ids and wanted_codes:
         rows = await db.execute(
-            select(CompetencePrimitive.competence_id, Primitive.code)
+            select(CompetencePrimitive.competence_id, Primitive.code, Competence.title)
             .join(Primitive, Primitive.id == CompetencePrimitive.primitive_id)
             .join(Competence, Competence.id == CompetencePrimitive.competence_id)
             .where(
@@ -338,8 +431,9 @@ async def _human_layer(
                 Competence.applicable_to != "agent",
             )
         )
-        for competence_id, code in rows.all():
+        for competence_id, code, title in rows.all():
             codes_of_competence.setdefault(competence_id, []).append(code)
+            title_of_competence[competence_id] = title
 
     out = []
     for person in people:
@@ -364,12 +458,31 @@ async def _human_layer(
                 "assessed" if percent >= threshold else "failed"
             )
         codes: dict[str, str] = {}
+        # HRP-871: what the cascade stood on, kept instead of collapsed - the
+        # competences that granted a code, each with the score it was read
+        # off. A failed one granted nothing and explains no match.
+        grounds: list[dict[str, Any]] = []
         for competence_id, state in by_competence.items():
             if state == "failed":
                 continue
-            for code in codes_of_competence.get(competence_id, ()):
+            granted = codes_of_competence.get(competence_id, ())
+            for code in granted:
                 if state == "assessed" or code not in codes:
                     codes[code] = state
+            if granted:
+                grounds.append(
+                    {
+                        "competence_id": competence_id,
+                        "title": title_of_competence[competence_id],
+                        "state": state,
+                        "percent": (
+                            latest.get(person.id, {}).get(competence_id)
+                            if state == "assessed"
+                            else None
+                        ),
+                        "codes": list(granted),
+                    }
+                )
         if codes:
             out.append(
                 {
@@ -377,6 +490,8 @@ async def _human_layer(
                     "name": f"{person.first_name} {person.last_name}".strip(),
                     "position": person.title,
                     "codes": codes,
+                    "passing_score": threshold,
+                    "grounds": grounds,
                 }
             )
     return out, competence_ids
@@ -506,17 +621,35 @@ async def _schedule_mapping(
 # --- Matching ---------------------------------------------------------------
 
 
-def _match_agent(codes: set[str], packs, agents) -> dict[str, Any] | None:
+def _match_agent(
+    codes: set[str], packs, agents, manual_pack_code: str | None = None
+) -> dict[str, Any] | None:
     # Several agents of the registry may cover the step: the same one has
     # to win every read, or the coverage tab renames the owner of a step
     # between two refreshes. By name, as the registry is listed; the id
     # settles a collation tie.
-    matches = [a for a in agents if codes <= a["codes"]]
-    if matches:
-        agent = min(matches, key=lambda a: (a["name"], str(a["id"])))
+    def first(found):
+        return min(found, key=lambda a: (a["name"], str(a["id"])), default=None)
+
+    named = manual_pack(manual_pack_code, packs)
+    if named is not None:
+        # HRP-863: the company named the agent type, so the codes are not
+        # asked - the row reads as matched by this pack, with the tenant's
+        # own agent of it when one is registered.
+        agent = first([a for a in agents if a["pack_id"] == named["id"]])
+        return {
+            "pack_id": named["id"],
+            "pack_code": named["code"],
+            "pack_manual": True,
+            "agent_id": agent["id"] if agent else None,
+            "agent_name": agent["name"] if agent else None,
+        }
+    agent = first([a for a in agents if codes <= a["codes"]])
+    if agent:
         return {
             "pack_id": agent["pack_id"],
             "pack_code": agent["pack_code"],
+            "pack_manual": False,
             "agent_id": agent["id"],
             "agent_name": agent["name"],
         }
@@ -525,6 +658,7 @@ def _match_agent(codes: set[str], packs, agents) -> dict[str, Any] | None:
             return {
                 "pack_id": pack["id"],
                 "pack_code": pack["code"],
+                "pack_manual": False,
                 "agent_id": None,
                 "agent_name": None,
             }
@@ -543,12 +677,24 @@ def _match_human(codes: set[str], people) -> dict[str, Any] | None:
     if best is None:
         return None
     assessed, person = best
+    # HRP-871: the competences behind this step's codes, confirmed ones
+    # first; a set is unordered, so the order is made here.
+    grounds = sorted(
+        (
+            {**g, "codes": [c for c in g["codes"] if c in codes]}
+            for g in person["grounds"]
+            if codes.intersection(g["codes"])
+        ),
+        key=lambda g: (g["state"] != "assessed", g["title"], str(g["competence_id"])),
+    )
     return {
         "employee_id": person["id"],
         "name": person["name"],
         "position": person["position"],
         "label": "assessed" if assessed == len(codes) else "expected",
         "missing_codes": [],
+        "passing_score": person["passing_score"],
+        "grounds": grounds,
     }
 
 
@@ -559,34 +705,46 @@ async def compute(
     *,
     user_id: uuid.UUID | None = None,
     schedule_mapping: bool = True,
+    people: bool = True,
 ) -> dict[str, Any]:
     """Coverage of every step of the container, on any step state.
     ``schedule_mapping`` is the caller's right to start a model run over the
     tenant's unmapped competences: a manager's read does, a plain reader's
-    (HRP-810) does not - it is answered from what is mapped."""
+    (HRP-810) does not - it is answered from what is mapped.
+
+    ``people=False`` skips the tenant-wide human layer, for a caller that
+    reads only ``summary_of``: the hours and the shares follow the modes and
+    the agents, and without people an unmatched step reads as a gap."""
     started = time.perf_counter()
     container = await get_container(db, tenant_id, container_id)
     steps = await _steps(db, container.id)
     packs, agents = await _agent_layer(db, tenant_id)
-    people, referenced = await _human_layer(
-        db, tenant_id, {p.code for _step, ps in steps for p in ps}
+    people_layer, referenced = (
+        await _human_layer(db, tenant_id, {p.code for _step, ps in steps for p in ps})
+        if people
+        else ([], set())
     )
     skill_status: dict[uuid.UUID, str] = {}
+    skill_pack: dict[uuid.UUID, uuid.UUID | None] = {}
     unsure: set[uuid.UUID] = set()
     if steps:
         rows = await db.execute(
             select(
-                WorkStepSkill.step_id, WorkStepSkill.status, WorkStepSkill.updated_at
+                WorkStepSkill.step_id,
+                WorkStepSkill.status,
+                WorkStepSkill.updated_at,
+                WorkStepSkill.pack_id,
             ).where(WorkStepSkill.step_id.in_([s.id for s, _ in steps]))
         )
         # A row abandoned in ``generating`` (cancelled request, worker
         # restart) stops blocking here the way it does in the service:
         # past the timeout it reads as failed, so the button retries.
         now = datetime.now(UTC)
-        skill_status = {
-            step_id: service.effective_skill_status(status, updated_at, now)
-            for step_id, status, updated_at in rows.tuples().all()
-        }
+        for step_id, status, updated_at, pack_id in rows.tuples().all():
+            skill_status[step_id] = service.effective_skill_status(
+                status, updated_at, now
+            )
+            skill_pack[step_id] = pack_id
         unsure = set(
             (
                 await db.execute(
@@ -602,15 +760,13 @@ async def compute(
         )
 
     assignees = await _assignees(db, tenant_id, [s for s, _ in steps])
-    codes_of_person = {p["id"]: p["codes"] for p in people}
+    codes_of_person = {p["id"]: p["codes"] for p in people_layer}
 
     result_rows: list[dict[str, Any]] = []
     for step, primitives in steps:
         codes = {p.code for p in primitives}
         cognitive = [p.code for p in primitives if count_toward_coverage(p)]
-        mode = automation_mode(
-            primitives, responsibility=step.responsibility, output_type=step.output_type
-        )
+        mode = effective_mode(step, primitives)
         executor = assignees.get(step.executor_employee_id)
         accountable = assignees.get(step.accountable_employee_id)
         agent = human = None
@@ -624,17 +780,36 @@ async def compute(
                 "missing_codes": [c for c in cognitive if c not in held],
             }
         if cognitive:
-            agent = _match_agent(codes, packs, agents)
+            # The named pack only counts in a mode where an agent produces
+            # the work: on a blocked step it would take the row out of To do
+            # while its hours stay with people - covered by nobody.
+            agent = _match_agent(
+                codes,
+                packs,
+                agents,
+                step.manual_pack_code if mode in CANDIDATE_MODES else None,
+            )
             if executor:
                 verdict = "human"
             else:
                 # Cognitive codes only, like ``required_codes`` and an
                 # assignee's ``missing_codes``: a boundary code is why the
                 # step stays with people, not something an assessment holds.
-                human = _match_human(set(cognitive), people)
+                human = _match_human(set(cognitive), people_layer)
                 verdict = "agent" if agent else "human" if human else "gap"
         else:
             verdict = "out_of_scope"
+        skill = skill_status.get(step.id, "none")
+        if (
+            skill == "ready"
+            and agent is not None
+            and agent["pack_manual"]
+            and skill_pack.get(step.id) != agent["pack_id"]
+        ):
+            # HRP-863: the file was written for the pack the step had before
+            # the company named this one - not a skill of this agent type.
+            # Kept, not deleted: naming the old pack back makes it ready again.
+            skill = "none"
         result_rows.append(
             {
                 "step_id": step.id,
@@ -645,6 +820,7 @@ async def compute(
                 "required_codes": cognitive,
                 "in_scope": bool(cognitive),
                 "mode": mode,
+                "mode_manual": bool(cognitive and step.manual_mode),
                 "quality": step_quality(primitives),
                 "verdict": verdict,
                 "agent": agent,
@@ -663,10 +839,15 @@ async def compute(
                     gap_label_for(step, container) if verdict == "gap" else None
                 ),
                 "hours_per_year": step_hours(step),
-                "skill_status": skill_status.get(step.id, "none"),
+                "skill_status": skill,
                 "tentative": step.state != "accepted" or step.id in unsure,
             }
         )
+
+    # HRP-861: the hours keys of a row are set here, off the row's own mode,
+    # so a mode the company set by hand (HRP-863) is already in it.
+    for r, (step, _primitives) in zip(result_rows, steps, strict=True):
+        r["review_human_share"] = review_share(step, r["mode"])
 
     in_scope = [r for r in result_rows if r["in_scope"]]
     candidates = [r for r in in_scope if r["mode"] in CANDIDATE_MODES]
@@ -675,6 +856,31 @@ async def compute(
     for r in estimated:
         hours[BUCKET_OF_MODE[r["mode"]]] += r["hours_per_year"]
     total = sum(hours.values())
+    # HRP-861: "before" is ``to_review``, untouched; this is "after" - what
+    # the checkers keep - and the difference is freed like the agent bucket.
+    to_review_after = sum(
+        (
+            r["hours_per_year"] * r["review_human_share"] / 100
+            for r in estimated
+            if r["review_human_share"] is not None
+        ),
+        0.0,
+    )
+    # HRP-862: potential is what an agent type could take; automated is what
+    # an agent the tenant registered ("I already use this") does today - on a
+    # step whose mode lets an agent have it at all. A step the mode keeps with
+    # a person counts in ``stays``, and counting its hours here as well made
+    # the card read "120 of 156 already automated" next to 44 that stay.
+    automated = sum(
+        (
+            r["hours_per_year"]
+            for r in estimated
+            if r["mode"] in CANDIDATE_MODES
+            and r["verdict"] == "agent"
+            and r["agent"]["agent_id"] is not None
+        ),
+        0.0,
+    )
     shares = None
     if (
         len(in_scope) >= MIN_STEPS_FOR_SHARES
@@ -693,6 +899,11 @@ async def compute(
 
     # The one rate the ROI is priced at (§5.2); no GEO benchmark behind it.
     tenant = await db.get(Tenant, tenant_id)
+    # HRP-868: a step may name its own rate, so the money is summed here.
+    tenant_rate = tenant.hourly_rate if tenant is not None else None
+    money = money_of(
+        estimated, {step.id: step_rate(step, tenant_rate) for step, _ in steps}
+    )
 
     # Only a caller allowed to start a mapping run pays for finding out
     # there is one to start: a plain reader (HRP-810) could never act on
@@ -710,12 +921,15 @@ async def compute(
         "coverage computed: container=%s steps=%d people=%d agents=%d in %.0f ms",
         container.id,
         len(result_rows),
-        len(people),
+        len(people_layer),
         len(agents),
         (time.perf_counter() - started) * 1000,
     )
     return {
         "container_id": container.id,
+        "title": container.title,
+        # For the skills bundle's README; the packs are loaded here anyway.
+        "pack_titles": {p["code"]: p["title"] for p in packs},
         "status": container.status,
         "mapping_pending": mapping_pending,
         "candidate_step_ids": [r["step_id"] for r in candidates],
@@ -723,8 +937,14 @@ async def compute(
         "hours": {
             "total": total,
             **hours,
+            "to_review_after": to_review_after,
+            "freed": max(
+                0.0, hours["moves"] + hours["to_review"] - to_review_after
+            ),  # clamped like the money, see ``money_of``
+            "automated": automated,
             "unestimated": len(in_scope) - len(estimated),
         },
+        "review_human_share_default": DEFAULT_REVIEW_HUMAN_SHARE,
         "quality": quality_counts,
         "hourly_rate": (
             float(tenant.hourly_rate)
@@ -732,8 +952,79 @@ async def compute(
             else None
         ),
         "hourly_rate_currency": tenant.hourly_rate_currency if tenant else None,
+        "money": money,
         "steps": result_rows,
     }
+
+
+def summary_of(result: dict[str, Any]) -> dict[str, Any]:
+    """HRP-862: what the list page shows of a computed coverage. Hours and
+    shares only - no money and nobody's name: one summary is stored for
+    every reader of the list, whatever each of them may see on the process.
+    Rounded, so the same breakdown always compares equal to what is stored.
+    ``automated_share`` has the denominator of every other share here, the
+    estimated hours, and follows the same gate: a breakdown the process page
+    shows no percentages for shows none in the list either."""
+    hours, shares = result["hours"], result["shares"]
+    return {
+        "hours": {key: round(value, 2) for key, value in hours.items()},
+        "shares": shares and {key: round(value, 2) for key, value in shares.items()},
+        "automated_share": (
+            None
+            if shares is None
+            else round(hours["automated"] * 100 / hours["total"], 2)
+        ),
+    }
+
+
+async def remember_summary(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    container_id: uuid.UUID,
+    result: dict[str, Any],
+) -> bool:
+    """Store ``summary_of(result)`` on the container, for the list; True when
+    it was written. The one writer: the coverage read calls it, ``gaps``
+    - the same computation, for the To do tab and the hire guard - does not.
+
+    Written only when the figures changed, and without moving ``updated_at``:
+    the list is ordered by it, and a figure recomputed on somebody's read is
+    not an edit of the container.
+
+    One statement rather than a read-modify-write: the row is not read back,
+    the "changed?" test is the WHERE clause, and a container edit committed
+    while the coverage was being computed keeps its own ``updated_at``. Two
+    reads racing can still leave the older figures behind - accepted: the
+    next read of either writes them over, and nothing but a list column
+    hangs on them. A cache that cannot be written is not worth the read it
+    serves, so a failure is rolled back and logged, not raised."""
+    summary = summary_of(result)
+    # ``compute`` loaded the container into this session, so ``get`` is an
+    # identity-map hit: an unchanged summary - most reads, the mapping polls
+    # included - costs no statement and no commit.
+    loaded = await db.get(WorkContainer, container_id)
+    if loaded is not None and loaded.coverage_summary == summary:
+        return False
+    try:
+        written = await db.execute(
+            update(WorkContainer)
+            .where(
+                WorkContainer.id == container_id,
+                WorkContainer.tenant_id == tenant_id,
+                WorkContainer.coverage_summary.is_distinct_from(summary),
+            )
+            # In the SET clause with the value it has, so ``onupdate`` stays out.
+            .values(coverage_summary=summary, updated_at=WorkContainer.updated_at)
+            # "fetch", not False: a container already loaded in this
+            # session must not keep the figures it had before the write.
+            .execution_options(synchronize_session="fetch")
+        )
+        await db.commit()
+    except SQLAlchemyError:
+        logger.exception("coverage summary not stored: container=%s", container_id)
+        await db.rollback()
+        return False
+    return bool(written.rowcount)  # type: ignore[attr-defined]
 
 
 # Used by ``compute`` above (resolved at call time) and by ``gaps``.
