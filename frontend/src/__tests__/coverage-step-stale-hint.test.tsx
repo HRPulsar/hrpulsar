@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 //
 // HRP-865 - a saved edit of the step's text does not reclassify it, and the
-// row says so: a hint with the Reclassify action. No edit, no hint; an edit
-// of the hours is not an edit of the text; a refused PATCH changed nothing;
-// the hint outlives the tab switch that unmounts the editor and goes away
-// once the step is reclassified.
+// row says so. No edit, no hint; an edit of the hours is not an edit of the
+// text; a refused PATCH changed nothing; the hint outlives the tab switch that
+// unmounts the editor. REDO: it has no button of its own (Reclassify sits
+// right above it) and goes away on every way out - a reclassification, the
+// capabilities changed by hand, the step accepted.
 
 import { NextIntlClientProvider } from "next-intl";
 import { act } from "react";
@@ -16,7 +17,12 @@ import type { WorkStep } from "@/lib/api/work";
 
 vi.mock("@/lib/api/work", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/work")>()),
-  workApi: { updateStep: vi.fn(), reclassifyStep: vi.fn() },
+  workApi: {
+    updateStep: vi.fn(),
+    reclassifyStep: vi.fn(),
+    confirmCapability: vi.fn(),
+    removeCapability: vi.fn(),
+  },
 }));
 vi.mock("@/context/auth-context", () => ({ useAuth: () => ({ user: null }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -136,8 +142,9 @@ it("shows the hint after a saved title edit and drops it after a reclassificatio
     enMessages.coverage.staleClassificationHint,
   );
 
-  // The action is the existing dialog, not a second way to reclassify.
-  await act(async () => part(step, "stale-hint-btn")!.click());
+  // No second Reclassify inside the hint: the one above it is the way out.
+  expect(part(step, "stale-hint")!.querySelector("button")).toBeNull();
+  await act(async () => part(step, "btn-reclassify")!.click());
   const dialog = document.querySelector('[data-testid="coverage-modal-reclassify"]')!;
   expect(dialog).not.toBeNull();
   const comment = dialog.querySelector("textarea")!;
@@ -204,5 +211,38 @@ it("keeps the hint across the tab switch that unmounts the editor", async () => 
   expect(part(step, "stale-hint")).not.toBeNull();
   // ... but a reader, who cannot reclassify, is not told to.
   await render({ ...step, title: "Draft the contract" }, false);
+  expect(part(step, "stale-hint")).toBeNull();
+});
+
+it("drops the hint once a capability is removed or confirmed by hand", async () => {
+  const suggested = { code: "P1", confidence: 0.5, quote: null, confirmed: false };
+  for (const action of ["remove", "confirm"] as const) {
+    const step = { ...stepOf(`s-caps-${action}`), capabilities: [suggested] };
+    vi.mocked(workApi.updateStep).mockResolvedValue({ ...step, title: "Draft the contract" });
+    const api = action === "remove" ? workApi.removeCapability : workApi.confirmCapability;
+    vi.mocked(api).mockResolvedValue({ ...step, title: "Draft the contract" });
+    await render(step);
+    await edit(step, "title", "Draft the contract");
+    expect(part(step, "stale-hint")).not.toBeNull();
+
+    await act(async () => part(step, `capability-P1-${action}`)!.click());
+
+    expect(api).toHaveBeenCalledWith(step.id, "P1");
+    expect(part(step, "stale-hint")).toBeNull();
+  }
+});
+
+it("drops the hint once the step is accepted, and a later edit of the hours does not bring it back", async () => {
+  const step = stepOf("s-accepted");
+  vi.mocked(workApi.updateStep).mockResolvedValue({ ...step, title: "Draft the contract" });
+  await render(step);
+  await edit(step, "title", "Draft the contract");
+  expect(part(step, "stale-hint")).not.toBeNull();
+
+  // Accept all re-reads the steps: this one comes back accepted.
+  await render({ ...step, title: "Draft the contract", state: "accepted" });
+  expect(part(step, "stale-hint")).toBeNull();
+
+  await render({ ...step, title: "Draft the contract", state: "tenant_edited", hours_per_run: 2 });
   expect(part(step, "stale-hint")).toBeNull();
 });

@@ -11,10 +11,22 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Bot, ChevronDown, ExternalLink, FileText, Scale, ShieldCheck, User, UserRound } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  FileText,
+  ListChecks,
+  Scale,
+  ShieldCheck,
+  User,
+  UserRound,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import {
   Dialog,
   DialogContent,
@@ -60,6 +72,7 @@ import {
   type AgentPack,
   CANDIDATE_MODES,
   type Coverage,
+  type CoveragePerson,
   type CoverageStep,
   type Primitive,
   type StepPatch,
@@ -83,6 +96,8 @@ const VERDICT_COLOR: Record<Verdict, string> = {
   human: BADGE_COLOR.blue,
   gap: BADGE_COLOR.amber,
   out_of_scope: BADGE_COLOR.neutral,
+  // HRP-944: typed in with no capabilities and never classified.
+  unclassified: BADGE_COLOR.yellow,
 };
 
 type Translate = (key: string, values?: Record<string, string | number>) => string;
@@ -301,29 +316,39 @@ export function CoverageTab({
         onChanged={load}
       />
 
-      <ol className="space-y-3" data-testid="coverage-match-list">
-        {coverage.steps.map((row) => (
-          <MatchRow
-            key={row.step_id}
-            row={row}
-            candidate={coverage.candidate_step_ids.includes(row.step_id)}
-            canEdit={canEdit}
-            canOpenHireNeed={canOpenHireNeed}
-            canRegisterAgent={canRegisterAgent}
-            packLabel={packLabel}
-            capabilityLabel={capabilityLabel}
-            t={t}
-            onSkill={() => setSkillStep(row)}
-            onHire={() => setHireStep(row)}
-            onAssign={(field) => setAssign({ row, field })}
-            onChanged={load}
-            packs={packs}
-            onLoadPacks={loadPacks}
-            onOverride={(patch) => void override(row.step_id, patch)}
-            onGrounds={() => setGroundsOf(row.human)}
-          />
-        ))}
-      </ol>
+      {/* HRP-866 REDO: headed like the agent guide above, so the two lists
+          are told apart at a glance. */}
+      <section className="space-y-3">
+        <header className="flex items-center gap-2">
+          <ListChecks className="size-5 text-sky-600" />
+          <h2 className="text-lg font-semibold" data-testid="coverage-match-list-title">
+            {t("matchListTitle")}
+          </h2>
+        </header>
+        <ol className="space-y-3" data-testid="coverage-match-list">
+          {coverage.steps.map((row) => (
+            <MatchRow
+              key={row.step_id}
+              row={row}
+              candidate={coverage.candidate_step_ids.includes(row.step_id)}
+              canEdit={canEdit}
+              canOpenHireNeed={canOpenHireNeed}
+              canRegisterAgent={canRegisterAgent}
+              packLabel={packLabel}
+              capabilityLabel={capabilityLabel}
+              t={t}
+              onSkill={() => setSkillStep(row)}
+              onHire={() => setHireStep(row)}
+              onAssign={(field) => setAssign({ row, field })}
+              onChanged={load}
+              packs={packs}
+              onLoadPacks={loadPacks}
+              onOverride={(patch) => void override(row.step_id, patch)}
+              onGrounds={() => setGroundsOf(row.human)}
+            />
+          ))}
+        </ol>
+      </section>
 
       {wizardOpen && (
         <HoursEditor
@@ -531,11 +556,6 @@ function MatchRow({
                 </Badge>
               </StepOverrideMenu>
             )}
-            {row.mode_manual && (
-              <Badge variant="outline" data-testid={`coverage-manual-mode-${row.step_id}`}>
-                {t("manualChip")}
-              </Badge>
-            )}
             {row.quality && !awaitingAgent && (
               <Badge
                 className={QUALITY_BADGE[row.quality]}
@@ -567,23 +587,16 @@ function MatchRow({
                   testId={`coverage-pack-chip-${row.step_id}`}
                 />
                 {row.agent.agent_name && ` ${t("agentVia", { name: row.agent.agent_name })}`}
-                {row.agent.pack_manual && (
-                  <Badge variant="outline" data-testid={`coverage-manual-pack-${row.step_id}`}>
-                    {t("manualChip")}
-                  </Badge>
-                )}
               </span>
             )}
             {assigned && (
-              <span className="inline-flex flex-wrap items-center gap-1" data-testid={`coverage-executor-${row.step_id}`}>
-                <UserRound className="size-4" />
-                {around(
-                  (name) => t("executorPerson", { name }),
-                  <PersonLink person={assigned} testId={`coverage-link-executor-${row.step_id}`} />,
-                )}
-                {assigned.position && (
-                  <span className="text-xs">{t("humanPosition", { position: assigned.position })}</span>
-                )}
+              <div className="inline-flex flex-wrap items-start gap-1" data-testid={`coverage-executor-${row.step_id}`}>
+                <UserRound className="mt-0.5 size-4" />
+                <PersonLine
+                  sentence={(name) => t("executorPerson", { name })}
+                  person={assigned}
+                  testId={`coverage-link-executor-${row.step_id}`}
+                />
                 <Badge variant="outline">{t("humanLabel_assigned")}</Badge>
                 {assigned.missing_codes.length > 0 && (
                   <Badge
@@ -596,7 +609,7 @@ function MatchRow({
                     {t("noMatchingSkills")}
                   </Badge>
                 )}
-              </span>
+              </div>
             )}
             {assigned && row.agent && (
               <span className="inline-flex items-center gap-1 text-xs" data-testid={`coverage-agent-${row.step_id}`}>
@@ -609,27 +622,22 @@ function MatchRow({
                     testId={`coverage-pack-chip-${row.step_id}`}
                   />,
                 )}
-                {row.agent.pack_manual && (
-                  <Badge variant="outline" data-testid={`coverage-manual-pack-${row.step_id}`}>
-                    {t("manualChip")}
-                  </Badge>
-                )}
               </span>
             )}
             {row.human && !assigned && (
-              <span className="inline-flex items-center gap-1" data-testid={`coverage-human-${row.step_id}`}>
-                <UserRound className="size-4" />
-                {around(
-                  (name) => (row.human_backup ? t("backupPerson", { name }) : name),
-                  <PersonLink person={row.human} testId={`coverage-link-human-${row.step_id}`} />,
-                )}
+              <div className="inline-flex items-start gap-1" data-testid={`coverage-human-${row.step_id}`}>
+                <UserRound className="mt-0.5 size-4" />
+                <PersonLine
+                  sentence={(name) => (row.human_backup ? t("backupPerson", { name }) : name)}
+                  person={row.human}
+                  testId={`coverage-link-human-${row.step_id}`}
+                  summaryTestId={`coverage-human-summary-${row.step_id}`}
+                />
+                {/* After the position, not between it and the name (HRP-859 REDO). */}
                 {row.human_backup && <Hint text={t("backupPersonHint")} />}
-                {row.human.position && (
-                  <span className="text-xs" data-testid={`coverage-human-position-${row.step_id}`}>
-                    {t("humanPosition", { position: row.human.position })}
-                  </span>
-                )}
                 {row.human.grounds?.length ? (
+                  // HRP-871 REDO: a chip that opens a drawer says so with a
+                  // chevron, the way a row that opens a detail does.
                   <button
                     type="button"
                     className="inline-flex rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -637,14 +645,15 @@ function MatchRow({
                     onClick={onGrounds}
                     data-testid={`coverage-btn-grounds-${row.step_id}`}
                   >
-                    <Badge variant="outline" className="underline decoration-dotted underline-offset-4">
+                    <Badge variant="outline" className="cursor-pointer hover:bg-muted">
                       {t(`humanLabel_${row.human.label}`)}
+                      <ChevronRight className="size-3" />
                     </Badge>
                   </button>
                 ) : (
                   <Badge variant="outline">{t(`humanLabel_${row.human.label}`)}</Badge>
                 )}
-              </span>
+              </div>
             )}
             {!row.agent && row.mode && CANDIDATE_MODES.includes(row.mode) && (
               <span className="text-xs" data-testid={`coverage-pack-gap-${row.step_id}`}>
@@ -686,6 +695,12 @@ function MatchRow({
                 {row.mode === "blocked_physical"
                   ? t("outOfScopePhysical")
                   : t("outOfScopeAccountability")}
+              </span>
+            )}
+            {row.verdict === "unclassified" && (
+              <span data-testid={`coverage-unclassified-${row.step_id}`}>
+                {/* A reader has no picker and no Reclassify button to be sent to. */}
+                {t(canEdit ? "unclassifiedHint" : "unclassifiedReadOnly")}
               </span>
             )}
             {canOverride && row.mode && CANDIDATE_MODES.includes(row.mode) && (
@@ -762,6 +777,28 @@ function MatchRow({
   );
 }
 
+/** HRP-859 REDO: a person on the row the way every other screen shows one -
+ * the name, and under it the position in the shared EmployeeSummaryLine
+ * (HRP-182). `sentence` gives the name its role ("Executor: {name}"). */
+function PersonLine({
+  sentence,
+  person,
+  testId,
+  summaryTestId,
+}: {
+  sentence: (name: string) => string;
+  person: CoveragePerson;
+  testId: string;
+  summaryTestId?: string;
+}) {
+  return (
+    <div className="inline-flex min-w-0 flex-col">
+      <span>{around(sentence, <PersonLink person={person} testId={testId} />)}</span>
+      <EmployeeSummaryLine employee={{ position_title: person.position }} hideName data-testid={summaryTestId} />
+    </div>
+  );
+}
+
 /** HRP-809: who checks and signs the step - named, asked for where an
  * agent drafts or somebody answers for the step, or offered quietly. */
 function AccountableLine({
@@ -779,16 +816,14 @@ function AccountableLine({
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
       {row.accountable && (
-        <span className="inline-flex items-center gap-1" data-testid={`coverage-accountable-${row.step_id}`}>
-          <ShieldCheck className="size-4" />
-          {around(
-            (name) => t("accountablePerson", { name }),
-            <PersonLink person={row.accountable} testId={`coverage-link-accountable-${row.step_id}`} />,
-          )}
-          {row.accountable.position && (
-            <span className="text-xs">{t("humanPosition", { position: row.accountable.position })}</span>
-          )}
-        </span>
+        <div className="inline-flex items-start gap-1" data-testid={`coverage-accountable-${row.step_id}`}>
+          <ShieldCheck className="mt-0.5 size-4" />
+          <PersonLine
+            sentence={(name) => t("accountablePerson", { name })}
+            person={row.accountable}
+            testId={`coverage-link-accountable-${row.step_id}`}
+          />
+        </div>
       )}
       {canEdit ? (
         <Button
@@ -852,17 +887,20 @@ function HoursEditor({
     shares[step.id] ?? String(effectiveShare.get(step.id) ?? "");
   const reviewed = steps.filter((s) => effectiveShare.get(s.id) != null);
 
-  // HRP-868: a step's own hourly rate; empty falls back to the company's,
-  // which the placeholder shows. The currency is always the company's, so
-  // without a company rate there is nothing to price a new step rate in -
-  // but a rate a step already carries stays editable, or it could never be
-  // taken off again.
+  // HRP-868: a step's own hourly rate, in the company's currency; empty
+  // falls back to the company rate. HRP-859 REDO: the field is prefilled with
+  // the rate the step is actually priced at, like the review share above, and
+  // open without a company rate too - the money shows once the company names
+  // its currency, and the summary card says so meanwhile.
   const locale = useLocale();
   const [rates, setRates] = useState<Record<string, string>>({});
-  const rateOf = (step: WorkStep) =>
-    rates[step.id] ?? (step.hourly_rate === null ? "" : String(step.hourly_rate));
   const companyRate = coverage.hourly_rate;
-  const rateLocked = (step: WorkStep) => companyRate === null && step.hourly_rate === null;
+  const rateOf = (step: WorkStep) => {
+    const effective = step.hourly_rate ?? companyRate;
+    // A company rate of 0 is below a step's minimum: prefilled, it would
+    // block Save, so the field stays empty and the step follows the company.
+    return rates[step.id] ?? (effective ? String(effective) : "");
+  };
 
   function patchOf(step: WorkStep): StepPatch {
     const patch: StepPatch = {};
@@ -879,7 +917,10 @@ function HoursEditor({
       }
     }
     const rate = parseRate(rateOf(step));
-    if (rate !== step.hourly_rate) patch.hourly_rate = rate;
+    // The prefilled company rate left as it was keeps following the company.
+    if (rate !== step.hourly_rate && !(step.hourly_rate === null && rate === companyRate)) {
+      patch.hourly_rate = rate;
+    }
     return patch;
   }
 
@@ -938,27 +979,25 @@ function HoursEditor({
               {t("weightsReviewShareNote", { share: coverage.review_human_share_default })}
             </p>
           )}
-          {/* In words, not only as a grey placeholder: an empty field showing
-              "50" and a typed "50" are hard to tell apart at a glance. */}
-          {companyRate !== null && (
-            <p className="text-sm text-muted-foreground" data-testid="coverage-weights-rate-hint">
-              {t("weightsRateNote", {
-                rate: companyRate.toLocaleString(locale),
-                currency: coverage.hourly_rate_currency ?? "",
-              })}
-            </p>
-          )}
-          {companyRate === null && (
-            <p className="text-sm text-muted-foreground" data-testid="coverage-weights-rate-locked">
-              {t("weightsRateLocked")}{" "}
-              <Link
-                href={RATE_SETTINGS_HREF}
-                className="text-primary underline-offset-4 hover:underline"
-              >
-                {t("weightsRateLockedLink")}
-              </Link>
-            </p>
-          )}
+          {/* Which rate an untouched step is priced at, and where it is set:
+              "set one" or "change", like the summary card (HRP-859 REDO). */}
+          <p
+            className="text-sm text-muted-foreground"
+            data-testid={companyRate === null ? "coverage-weights-rate-unset" : "coverage-weights-rate-hint"}
+          >
+            {companyRate === null
+              ? t("weightsRateUnset")
+              : t("weightsRateNote", {
+                  rate: companyRate.toLocaleString(locale, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  }),
+                  currency: coverage.hourly_rate_currency ?? "",
+                })}{" "}
+            <Link href={RATE_SETTINGS_HREF} className="text-primary underline-offset-4 hover:underline">
+              {companyRate === null ? t("roiRateSet") : t("roiRateEdit")}
+            </Link>
+          </p>
         </DialogHeader>
         <ol className="max-h-[60vh] space-y-3 overflow-auto">
           {steps.map((step) => (
@@ -996,7 +1035,7 @@ function HoursEditor({
                   min={STEP_RATE_MIN}
                   max={STEP_RATE_MAX}
                   step="any"
-                  disabled={rateLocked(step)}
+                  disabled={false}
                   placeholder={companyRate === null ? undefined : String(companyRate)}
                   testId={`coverage-weights-step-${step.id}-input-rate`}
                   onChange={(raw) => setRates((prev) => ({ ...prev, [step.id]: raw }))}

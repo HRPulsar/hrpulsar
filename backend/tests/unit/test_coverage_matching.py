@@ -35,7 +35,7 @@ from app.modules.primitives.models import (
 )
 from app.modules.work import coverage, service
 from app.modules.work.schemas import ContainerCreate, StepCreate, StepUpdate
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -319,6 +319,54 @@ class TestModes:
         assert row["in_scope"] is False
         # Nothing to match against: it is neither an agent nor a gap.
         assert await coverage.gaps(db, tenant.id, c.id) == []
+
+    async def test_a_step_added_without_codes_is_unclassified(
+        self, db, tenant, user, seeded
+    ):
+        """HRP-944: a step typed in with no codes has not been classified -
+        not the same as a step that needs no capability."""
+        c = await _container(db, tenant, user)
+        step = await service.create_step(
+            db, tenant.id, c.id, StepCreate(title="Approve the budget")
+        )
+        row, result = await _row(db, tenant, c, step["id"])
+        assert row["verdict"] == "unclassified"
+        assert row["in_scope"] is False
+        assert result["candidate_step_ids"] == []
+        assert await coverage.gaps(db, tenant.id, c.id) == []
+
+    async def test_a_writer_that_predates_the_column_leaves_the_step_classified(
+        self, db, tenant, user, seeded
+    ):
+        """Review of HRP-944: the old backend still serving during a deploy,
+        or a raw copy, inserts steps without ``classified_at``; the server
+        default keeps a model's empty step out of scope, not unclassified."""
+        c = await _container(db, tenant, user)
+        step_id = uuid.uuid4()
+        await db.execute(
+            text(
+                "INSERT INTO work_steps "
+                "(id, tenant_id, container_id, position, title, state) "
+                "VALUES (:id, :tenant, :container, 1, 'Signature', "
+                "'system_suggested')"
+            ),
+            {"id": step_id, "tenant": tenant.id, "container": c.id},
+        )
+        await db.commit()
+        row, _ = await _row(db, tenant, c, step_id)
+        assert row["verdict"] == "out_of_scope"
+
+    async def test_an_empty_picker_save_classifies_the_step(
+        self, db, tenant, user, seeded
+    ):
+        """Saving the picker empty is the company's word: nothing is needed."""
+        c = await _container(db, tenant, user)
+        step = await service.create_step(
+            db, tenant.id, c.id, StepCreate(title="Sign the contract")
+        )
+        await service.set_step_primitives(db, tenant.id, step["id"], [])
+        row, _ = await _row(db, tenant, c, step["id"])
+        assert row["verdict"] == "out_of_scope"
 
     async def test_pure_boundary_step_is_out_of_scope_but_blocked_physical(
         self, db, tenant, user, seeded

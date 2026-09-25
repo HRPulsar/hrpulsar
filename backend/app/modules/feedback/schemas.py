@@ -11,7 +11,8 @@ FeedbackSource = Literal["platform", "demo"]
 
 class FeedbackCreate(BaseModel):
     """One feedback submission. Every field is optional on its own — the
-    router rejects a submission that carries neither a rating nor text."""
+    service rejects a submission with no rating, text, clarity answer,
+    contact email or phone."""
 
     rating: Literal["up", "down"] | None = None
     message: str | None = Field(default=None, max_length=2000)
@@ -19,4 +20,8 @@ class FeedbackCreate(BaseModel):
     clarity: Literal["yes", "no"] | None = None
     # Demo popup only: optional address for a follow-up from sales.
     contact_email: EmailStr | None = None
+    # Demo popup only: who to ask for, and a phone on sites that offer
+    # the field (NEXT_PUBLIC_DEMO_CONTACT_PHONE).
+    contact_name: str | None = Field(default=None, max_length=100)
+    contact_phone: str | None = Field(default=None, max_length=40)
     source: FeedbackSource = "platform"

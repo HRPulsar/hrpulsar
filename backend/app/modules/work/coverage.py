@@ -797,6 +797,10 @@ async def compute(
                 # step stays with people, not something an assessment holds.
                 human = _match_human(set(cognitive), people_layer)
                 verdict = "agent" if agent else "human" if human else "gap"
+        elif not codes and step.classified_at is None:
+            # HRP-944: typed in with no codes and never classified - not a
+            # step that needs no capability.
+            verdict = "unclassified"
         else:
             verdict = "out_of_scope"
         skill = skill_status.get(step.id, "none")

@@ -13,6 +13,10 @@
  * `.env` instead of being rebuilt.
  */
 import * as Sentry from "@sentry/nextjs";
+import { guardDomAgainstTranslators } from "@/lib/translator-dom-guard";
+
+// Before hydration, so the first commit already tolerates a page translator.
+guardDomAgainstTranslators();
 
 function runtimeEnv(key: "NEXT_PUBLIC_SENTRY_DSN" | "NEXT_PUBLIC_SENTRY_ENVIRONMENT") {
   return (typeof window !== "undefined" ? window.__ENV__?.[key] : undefined) || undefined;

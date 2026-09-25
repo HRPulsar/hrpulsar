@@ -48,8 +48,9 @@ test.describe("Coverage — manual mode and agent type", () => {
     // The mode, from its badge.
     await page.getByTestId(`coverage-btn-change-mode-${judged.id}`).click();
     await page.getByTestId(`coverage-btn-change-mode-${judged.id}-option-automatable`).click();
-    await expect(page.getByTestId(`coverage-manual-mode-${judged.id}`)).toBeVisible({ timeout: 10000 });
-    await expect(page.getByTestId("coverage-summary-automatable")).toContainText("Decide on the exceptions");
+    await expect(page.getByTestId("coverage-summary-automatable")).toContainText("Decide on the exceptions", {
+      timeout: 10000,
+    });
     await expect.poll(() => share(page, "automatable")).toBeCloseTo(66.7, 1);
     await expect.poll(() => share(page, "blocked")).toBeCloseTo(11.1, 1);
     await expect(page.getByTestId(`coverage-btn-get-skill-${judged.id}`)).toBeVisible();
@@ -60,7 +61,6 @@ test.describe("Coverage — manual mode and agent type", () => {
     // Back to what the catalog says.
     await page.getByTestId(`coverage-btn-change-mode-${judged.id}`).click();
     await page.getByTestId(`coverage-btn-change-mode-${judged.id}-reset`).click();
-    await expect(page.getByTestId(`coverage-manual-mode-${judged.id}`)).toHaveCount(0, { timeout: 10000 });
     await expect.poll(() => share(page, "automatable")).toBeCloseTo(44.4, 1);
     await expect(page.getByTestId("coverage-summary-blocked")).toContainText("Decide on the exceptions");
     await expect(page.getByTestId(`coverage-quality-${judged.id}`)).toBeVisible();
@@ -74,7 +74,10 @@ test.describe("Coverage — manual mode and agent type", () => {
       "agent",
       { timeout: 10000 },
     );
-    await expect(page.getByTestId(`coverage-manual-pack-${uncovered.id}`)).toBeVisible();
+    // Set by hand: its menu offers the computed value back.
+    await page.getByTestId(`coverage-btn-change-pack-${uncovered.id}`).click();
+    await expect(page.getByTestId(`coverage-btn-change-pack-${uncovered.id}-reset`)).toBeVisible();
+    await page.keyboard.press("Escape");
 
     // To do re-reads on open: the step left "nobody covers this".
     await page.getByTestId("coverage-tab-gaps").click();

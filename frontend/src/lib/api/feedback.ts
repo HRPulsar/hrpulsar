@@ -9,6 +9,9 @@ export interface FeedbackPayload {
   clarity?: "yes" | "no" | null;
   /** Demo popup only — optional address for a follow-up. */
   contact_email?: string | null;
+  /** Demo popup only — who to ask for, and a phone where the site offers it. */
+  contact_name?: string | null;
+  contact_phone?: string | null;
   source?: "platform" | "demo";
 }
 

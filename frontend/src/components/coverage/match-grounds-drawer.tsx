@@ -63,13 +63,14 @@ export function MatchGroundsDrawer({
                       {t("groundsCovers", { capabilities: ground.codes.map(capabilityLabel).join(", ") })}
                     </p>
                   </div>
-                  {percent ? (
-                    <Badge variant="secondary" className={BADGE_COLOR.green}>
-                      {percent}
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline">{t("groundsNotAssessed")}</Badge>
-                  )}
+                  {/* Grey "No assessment", as the Talent Market drawer says it
+                      (HRP-871 REDO); short, so the title keeps the room. */}
+                  <Badge
+                    variant="secondary"
+                    className={`shrink-0 ${percent ? BADGE_COLOR.green : BADGE_COLOR.neutral}`}
+                  >
+                    {percent ?? t("groundsNotAssessed")}
+                  </Badge>
                 </li>
               );
             })}

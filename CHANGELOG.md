@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.1.1] - 2026-09-25
+
+### Changed
+- Coverage: the list of processes and projects counts both under its title and is searched and filtered by type and status like the other lists; the title hint now explains a process and a project (HRP-859)
+- Coverage: people on a step row show their position under the name, the hours editor opens from "Edit hours and rates", and a step's rate starts at the company rate and can be set before the company has one (HRP-859)
+- Coverage: a mode or agent type set by hand is no longer marked with a "Set manually" chip; its menu still offers the computed value back (HRP-863)
+- Coverage: the agent setup guide is a headed section on its own background, with unnumbered agent types and steps named "Step N" (HRP-866)
+- Coverage: the match label opens its details with a chevron, and a competence without an assessment reads "No assessment" in grey (HRP-871)
+- Coverage: a step added without capabilities and never classified shows "Not classified" with a hint to pick them or reclassify the step, instead of passing for a step that needs no capability (HRP-944)
+
+### Fixed
+- A page translated by the browser (Yandex Browser, Google Translate) no longer breaks into "Something went wrong" after an action or a navigation (HRP-943)
+- Coverage: the "capabilities not recalculated" hint goes away once the capabilities are changed by hand or the step is accepted, and no longer repeats the Reclassify button (HRP-865)
+
 ## [2.1.0] - 2026-09-23
 
 ### Added

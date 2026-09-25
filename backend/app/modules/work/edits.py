@@ -12,6 +12,14 @@ A step deleted since apply is a rejected step, not a code edit, and is
 skipped. Containers without an applied session (hand-built) have no
 proposal and contribute nothing.
 
+A step reclassified since apply (HRP-945) carries the model's second
+opinion, not only the company's edits: its rows are flagged
+``reclassified``, a code the model added there is ``model_added``, and
+``stats`` counts such rows apart from the company's corrections. A step
+reclassified before ``reclassified_at`` existed is recognised only by a
+code the model added; one where the model only kept or dropped codes still
+reads as the company's edits.
+
 Per tenant the numbers say which codes the company keeps correcting; the
 same numbers across tenants (``tenant_id=None``) are the platform's
 calibration by code - layer one of «generalising processes between
@@ -36,7 +44,10 @@ from app.modules.work.models import (
     WorkStepPrimitive,
 )
 
+# What the company did with a proposed code, or added itself.
 OUTCOMES = ("confirmed", "pending", "removed", "added")
+# HRP-945: a code the model added when the step was reclassified.
+MODEL_ADDED = "model_added"
 
 
 async def outcomes(
@@ -44,9 +55,9 @@ async def outcomes(
 ) -> list[dict[str, Any]]:
     """One row per (step, code) of every applied proposal that still has
     its step: ``{tenant_id, container_id, step_id, code, outcome,
-    confidence}``. ``confidence`` is the model's, ``None`` for a code the
-    company added. ``confirmed`` is an explicit act - a chip click, the
-    picker saved, a code added by hand - never accept alone."""
+    confidence, reclassified}``. ``confidence`` is the model's, ``None`` for
+    a code added afterwards. ``confirmed`` is an explicit act - a chip
+    click, the picker saved, a code added by hand - never accept alone."""
     stmt = (
         select(WorkDecompositionSession)
         .where(WorkDecompositionSession.status == "applied")
@@ -71,6 +82,9 @@ async def outcomes(
     )
     # step id -> {code: confidence} as proposed
     proposed: dict[uuid.UUID, dict[str, float | None]] = {}
+    # Every code the payload named, active or not: a code retired after
+    # apply keeps its link and is still the model's proposal, not an addition.
+    named: dict[uuid.UUID, set[str]] = {}
     owner: dict[uuid.UUID, WorkDecompositionSession] = {}
     for sess in newest.values():
         created = (sess.applied_result or {}).get("created_steps") or []
@@ -85,6 +99,7 @@ async def outcomes(
             proposed[sid] = {
                 c: evidence.get(c) for c in step.get("primitives") or [] if c in active
             }
+            named[sid] = set(step.get("primitives") or [])
             owner[sid] = sess
     if not proposed:
         return []
@@ -92,7 +107,7 @@ async def outcomes(
     # ponytail: one IN over every proposed step of the scope; chunk it or
     # join through the session if a platform-wide export ever gets slow.
     alive = {
-        s.id: s.state
+        s.id: s.reclassified_at is not None
         for s in (
             await db.execute(select(WorkStep).where(WorkStep.id.in_(list(proposed))))
         )
@@ -118,6 +133,14 @@ async def outcomes(
             "step_id": sid,
         }
         links = current[sid]
+        # A code outside the proposal that still carries the model's source
+        # can only come from a reclassification: that marks the step even
+        # when it was reclassified before ``reclassified_at`` existed.
+        additions = links.keys() - named[sid]
+        by_model = {
+            code for code in additions if links[code].source == "system_suggested"
+        }
+        reclassified = alive[sid] or bool(by_model)
         for code, confidence in proposed[sid].items():
             link = links.get(code)
             # Accept is not a confirmation: coverage keeps such a step
@@ -130,10 +153,24 @@ async def outcomes(
             else:
                 outcome = "pending"
             out.append(
-                {**base, "code": code, "outcome": outcome, "confidence": confidence}
+                {
+                    **base,
+                    "code": code,
+                    "outcome": outcome,
+                    "confidence": confidence,
+                    "reclassified": reclassified,
+                }
             )
-        for code in links.keys() - proposed[sid].keys():
-            out.append({**base, "code": code, "outcome": "added", "confidence": None})
+        for code in additions:
+            out.append(
+                {
+                    **base,
+                    "code": code,
+                    "outcome": MODEL_ADDED if code in by_model else "added",
+                    "confidence": None,
+                    "reclassified": reclassified,
+                }
+            )
     return out
 
 
@@ -141,19 +178,25 @@ def stats(
     rows: Iterable[dict[str, Any]], *, by: str = "code"
 ) -> dict[Any, dict[str, int]]:
     """Counts per ``by`` (``code``, ``container_id`` or ``tenant_id``):
-    ``proposed`` (the model's codes), the four outcomes, and ``kept`` =
-    confirmed + pending. ``added`` codes are not proposed."""
+    ``proposed`` (the model's codes), the four outcomes, ``kept`` =
+    confirmed + pending, and ``reclassified`` - the rows of reclassified
+    steps, kept out of every other count so the rest is the company's own
+    corrections. ``added`` codes are not proposed."""
     out: dict[Any, Counter[str]] = {}
     for row in rows:
         counter = out.setdefault(row[by], Counter())
+        if row.get("reclassified"):
+            counter["reclassified"] += 1
+            continue
         counter[row["outcome"]] += 1
-        if row["outcome"] != "added":
+        if row["outcome"] not in ("added", MODEL_ADDED):
             counter["proposed"] += 1
     return {
         key: {
             "proposed": c["proposed"],
             "kept": c["confirmed"] + c["pending"],
             **{o: c[o] for o in OUTCOMES},
+            "reclassified": c["reclassified"],
         }
         for key, c in sorted(out.items(), key=lambda kv: str(kv[0]))
     }

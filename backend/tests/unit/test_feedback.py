@@ -71,6 +71,42 @@ async def test_empty_submission_rejected(auth_client: AsyncClient, captured_even
     assert captured_events == []
 
 
+async def test_contact_email_alone_is_a_request(
+    auth_client: AsyncClient, captured_events
+):
+    """The demo banner's "Talk to us": an address alone asks for a call."""
+    res = await auth_client.post(
+        "/api/feedback",
+        json={"source": "demo", "contact_email": "visitor@example.com"},
+    )
+    assert res.status_code == 204
+    assert captured_events[0]["contact_email"] == "visitor@example.com"
+
+
+async def test_phone_alone_is_a_request(auth_client: AsyncClient, captured_events):
+    """Sites with the phone field: a number alone asks for a call too."""
+    res = await auth_client.post(
+        "/api/feedback",
+        json={
+            "source": "demo",
+            "contact_name": " Anna ",
+            "contact_phone": " +7 900 000-00-00 ",
+        },
+    )
+    assert res.status_code == 204
+    payload = captured_events[0]
+    assert payload["contact_name"] == "Anna"
+    assert payload["contact_phone"] == "+7 900 000-00-00"
+
+
+async def test_name_alone_is_still_empty(auth_client: AsyncClient, captured_events):
+    res = await auth_client.post(
+        "/api/feedback", json={"contact_name": "Anna", "contact_phone": "  "}
+    )
+    assert res.status_code == 400
+    assert captured_events == []
+
+
 async def test_requires_authentication(client: AsyncClient, captured_events):
     res = await client.post("/api/feedback", json={"rating": "up"})
     assert res.status_code == 401

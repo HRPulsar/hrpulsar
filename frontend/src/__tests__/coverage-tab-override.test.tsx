@@ -112,7 +112,7 @@ async function click(id: string) {
   });
 }
 
-it("gives an editor the two menus and marks a value set by hand", async () => {
+it("gives an editor the two menus; a value set by hand shows in its menu, not as a chip", async () => {
   getCoverage.mockResolvedValue(
     coverageOf({
       ...STEP,
@@ -128,10 +128,14 @@ it("gives an editor the two menus and marks a value set by hand", async () => {
 
   expect(byId("coverage-btn-change-mode-s-1")).not.toBeNull();
   expect(byId("coverage-btn-change-pack-s-1")!.textContent).toBe(enMessages.coverage.changeAgent);
-  expect(byId("coverage-manual-mode-s-1")!.textContent).toBe(enMessages.coverage.manualChip);
-  expect(byId("coverage-manual-pack-s-1")).not.toBeNull();
+  // HRP-863 REDO: no "Set manually" chip on a row that is busy enough; the
+  // menu's "Return to computed" is what says the value is the company's.
+  expect(byId("coverage-manual-mode-s-1")).toBeNull();
+  expect(byId("coverage-manual-pack-s-1")).toBeNull();
   // Nothing is fetched until a pack menu is opened.
   expect(listPacks).not.toHaveBeenCalled();
+  await click("coverage-btn-change-mode-s-1");
+  expect(byId("coverage-btn-change-mode-s-1-reset")).not.toBeNull();
 });
 
 it("keeps the verdict and the quality light off a hand-set step with no agent named", async () => {
@@ -144,7 +148,6 @@ it("keeps the verdict and the quality light off a hand-set step with no agent na
   expect(byId("coverage-verdict-s-1")).toBeNull();
   expect(byId("coverage-quality-s-1")).toBeNull();
   expect(byId("coverage-mode-s-1")!.textContent).toContain(enMessages.coverage.mode_automatable);
-  expect(byId("coverage-manual-mode-s-1")).not.toBeNull();
 });
 
 it("brings both back once an agent is named on the hand-set step", async () => {
@@ -200,7 +203,6 @@ it("offers to choose an agent where no single pack matched", async () => {
   await render(true);
 
   expect(byId("coverage-btn-change-pack-s-1")!.textContent).toBe(enMessages.coverage.setAgent);
-  expect(byId("coverage-manual-mode-s-1")).toBeNull();
 });
 
 it("offers no agent type in a blocked mode, where coverage would ignore it", async () => {
@@ -212,13 +214,12 @@ it("offers no agent type in a blocked mode, where coverage would ignore it", asy
   expect(byId("coverage-btn-change-pack-s-1")).toBeNull();
 });
 
-it("shows a reader the value and the chip, never the controls", async () => {
+it("shows a reader the value, never the controls", async () => {
   getCoverage.mockResolvedValue(coverageOf({ ...STEP, mode_manual: true }));
 
   await render(false);
 
   expect(byId("coverage-mode-s-1")).not.toBeNull();
-  expect(byId("coverage-manual-mode-s-1")).not.toBeNull();
   expect(byId("coverage-btn-change-mode-s-1")).toBeNull();
   expect(byId("coverage-btn-change-pack-s-1")).toBeNull();
 });
@@ -293,7 +294,7 @@ it("says so when the packs cannot be loaded, and asks again on the next open", a
   expect(listPacks).toHaveBeenCalledTimes(2);
 });
 
-it("marks a named agent type set by hand next to an assigned person", async () => {
+it("offers to return a named agent type set by hand next to an assigned person", async () => {
   getCoverage.mockResolvedValue(
     coverageOf({
       ...STEP,
@@ -305,7 +306,9 @@ it("marks a named agent type set by hand next to an assigned person", async () =
     }),
   );
 
+  listPacks.mockResolvedValue([]);
   await render(true);
 
-  expect(byId("coverage-manual-pack-s-1")!.textContent).toBe(enMessages.coverage.manualChip);
+  await click("coverage-btn-change-pack-s-1");
+  expect(byId("coverage-btn-change-pack-s-1-reset")).not.toBeNull();
 });

@@ -20,7 +20,7 @@ tie-break. Reorder is one ``UPDATE ... FROM (VALUES ...)``.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -273,6 +273,27 @@ class WorkStep(BaseModel, TenantMixin):
     # HRP-868: the step's own hourly rate in the tenant's currency; null
     # falls back to the tenant's rate.
     hourly_rate: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    # HRP-944: when the step's codes were last decided - by the model or by
+    # the company, an empty set included. Null only on a step typed in with
+    # no codes that nobody has classified yet: coverage calls it
+    # ``unclassified`` instead of «needs no capability».
+    # The ORM drops a None for a column with a default, so the one NULL
+    # (``create_step`` without codes) is written as ``sqlalchemy.null()``.
+    # The server default covers a writer that does not know the column - the
+    # old backend still serving while a deploy migrates, a raw copy.
+    classified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
+    )
+    # HRP-945: the company's last reclassification of the step - its comment
+    # and when. The codes after it are the model's second opinion, which
+    # ``work/edits.py`` keeps out of the company's corrections.
+    classification_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reclassified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class WorkStepPrimitive(BaseModel, TenantMixin):

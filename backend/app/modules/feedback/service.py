@@ -61,9 +61,16 @@ async def _enforce_rate_limit(user_id: uuid.UUID) -> None:
 async def submit_feedback(
     db: AsyncSession, user: User, payload: FeedbackCreate
 ) -> None:
-    """Publish a user's feedback. Empty submissions are rejected."""
+    """Publish a user's feedback. Empty submissions are rejected.
+
+    A bare email or phone is not empty: it is a demo visitor asking to be
+    called back from the banner's "Talk to us" button.
+    """
     message = (payload.message or "").strip()
-    if not payload.rating and not message and not payload.clarity:
+    phone = (payload.contact_phone or "").strip()
+    if not (
+        payload.rating or message or payload.clarity or payload.contact_email or phone
+    ):
         raise AppError("feedback_empty", status.HTTP_400_BAD_REQUEST)
     await _enforce_rate_limit(user.id)
 
@@ -85,6 +92,8 @@ async def submit_feedback(
             "message": message,
             "clarity": payload.clarity,
             "contact_email": payload.contact_email,
+            "contact_name": (payload.contact_name or "").strip(),
+            "contact_phone": phone,
             "user_email": user.email,
             "user_name": " ".join(
                 p for p in (user.first_name, user.last_name) if p

@@ -188,7 +188,9 @@ class StepCreate(BaseModel):
     output_type: OutputType = "draft"
     gap_label: GapLabel | None = None
     notes: str | None = Field(default=None, max_length=TEXT_MAX)
-    primitive_codes: list[str] = Field(default_factory=list, max_length=20)
+    # HRP-944: omitted means «not classified yet»; an empty list is the
+    # company's word that the step needs no capability.
+    primitive_codes: list[str] | None = Field(default=None, max_length=20)
 
 
 class StepUpdate(BaseModel):
@@ -375,7 +377,7 @@ class ApplyResult(BaseModel):
 
 # --- Coverage (HRP-758) ------------------------------------------------------
 
-Verdict = Literal["agent", "human", "gap", "out_of_scope"]
+Verdict = Literal["agent", "human", "gap", "out_of_scope", "unclassified"]
 # ``assigned`` (HRP-809): named on the step by the company, whatever the
 # match says.
 HumanLabel = Literal["assessed", "expected", "assigned"]

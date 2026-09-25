@@ -23,7 +23,7 @@ import { RegisterAgentInline } from "@/components/coverage/register-agent-inline
 import { EECreditCostBadge } from "@/lib/ee-hooks";
 import { CANDIDATE_MODES, type CoverageStep, SKILL_ACTION, type SkillStatus, workApi } from "@/lib/api/work";
 
-type Translate = (key: string) => string;
+type Translate = (key: string, values?: Record<string, string | number>) => string;
 
 /** The skill button's label, on the coverage row and in the guide alike. */
 export function skillLabel(t: Translate, status: SkillStatus): string {
@@ -136,16 +136,22 @@ export function AgentGuide({
     // latter falls under the row chip's `[data-testid^="coverage-agent-"]`
     // in coverage.spec.ts, and a `.first()` there would pin this section
     // instead of the chip it means to assert.
-    <section className="space-y-4 rounded-lg border p-4" data-testid="coverage-guide">
-      <div className="space-y-1">
-        <h3 className="font-medium" data-testid="coverage-guide-title">
-          {t("agentGuideTitle", { count: groups.length })}
-        </h3>
+    // HRP-866 REDO: a headed section on its own background (the vacancy's
+    // Requirements block), so it does not read as more step rows.
+    <section className="space-y-4 rounded-lg bg-muted/50 p-4" data-testid="coverage-guide">
+      <header className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Bot className="size-5 text-sky-600" />
+          <h2 className="text-lg font-semibold" data-testid="coverage-guide-title">
+            {t("agentGuideTitle", { count: groups.length })}
+          </h2>
+        </div>
         <p className="max-w-3xl text-sm text-muted-foreground">{t("agentGuideText")}</p>
-      </div>
+      </header>
 
-      <ol className="space-y-4">
-        {groups.map((group, index) => {
+      {/* Not numbered: a type's number read as a step's (HRP-866 REDO). */}
+      <ul className="space-y-4">
+        {groups.map((group) => {
           const testId = `coverage-guide-group-${group.packCode}`;
           return (
             <li
@@ -156,7 +162,6 @@ export function AgentGuide({
             >
               <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <p className="inline-flex min-w-0 items-center gap-2 font-medium">
-                  <span className="tabular-nums text-muted-foreground">{index + 1}</span>
                   <Bot className="size-4 shrink-0" />
                   <span className="break-words">{packLabel(group.packCode)}</span>
                 </p>
@@ -194,7 +199,7 @@ export function AgentGuide({
                   >
                     <span className="inline-flex min-w-0 flex-wrap items-center gap-2">
                       <span className="break-words">
-                        {step.position}. {step.title}
+                        {t("agentGuideStep", { position: step.position, title: step.title })}
                       </span>
                       {step.mode && <Badge className={MODE_COLOR[step.mode]}>{t(`mode_${step.mode}`)}</Badge>}
                     </span>
@@ -224,7 +229,7 @@ export function AgentGuide({
             </li>
           );
         })}
-      </ol>
+      </ul>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-4">
         <Button

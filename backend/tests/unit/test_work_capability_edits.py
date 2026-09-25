@@ -6,11 +6,14 @@ statistics drawn from those outcomes."""
 from __future__ import annotations
 
 import uuid
+from unittest.mock import patch
 
 import pytest
+from app.modules.ai import llm_client
+from app.modules.primitives.models import Primitive
 from app.modules.work import coverage, edits, service
-from app.modules.work.models import WorkStepPrimitive
-from app.modules.work.schemas import StepCreate
+from app.modules.work.models import WorkStep, WorkStepPrimitive
+from app.modules.work.schemas import ReclassifyRequest, StepCreate
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,8 +78,10 @@ class TestTentative:
         step = await service.create_step(
             db, tenant.id, c.id, StepCreate(title="Manual", primitive_codes=["P1"])
         )
+        # HRP-945: a code the company typed in with the step is its word,
+        # confirmed like one saved in the picker (decision T13b).
         assert step["capabilities"] == [
-            {"code": "P1", "confidence": None, "quote": None, "confirmed": False}
+            {"code": "P1", "confidence": None, "quote": None, "confirmed": True}
         ]
         await service.accept_container(
             db, tenant.id, c.id, user_id=user.id, can_manage=True
@@ -155,6 +160,7 @@ class TestOutcomes:
             "code": "P9",
             "outcome": "added",
             "confidence": None,
+            "reclassified": False,
         }
         assert by[(untouched["id"], "P3")]["outcome"] == "pending"
         assert not any(r["step_id"] == rejected["id"] for r in rows)
@@ -176,6 +182,7 @@ class TestOutcomes:
             "pending": 0,
             "removed": 0,
             "added": 0,
+            "reclassified": 0,
         }
         assert stats["P2"]["removed"] == 1 and stats["P2"]["kept"] == 0
         assert stats["P3"]["pending"] == 1 and stats["P3"]["kept"] == 1
@@ -186,6 +193,7 @@ class TestOutcomes:
             "pending": 0,
             "removed": 0,
             "added": 1,
+            "reclassified": 0,
         }
         per_container = edits.stats(rows, by="container_id")
         assert per_container[c.id]["proposed"] == 4
@@ -193,6 +201,138 @@ class TestOutcomes:
         # the platform's.
         assert await edits.outcomes(db, uuid.uuid4()) == []
         assert len(await edits.outcomes(db, None)) >= len(rows)
+
+    async def test_a_reclassified_step_is_counted_apart(self, db, tenant, user):
+        """HRP-945: after a reclassification the step's codes are the
+        model's second opinion - a code it added is ``model_added``, not the
+        company's ``added``, and the statistics keep the whole step out of
+        the company's corrections."""
+        c, steps = await _applied(
+            db,
+            tenant,
+            user,
+            [
+                {"title": "Asked again", "primitives": ["P1"], "evidence": []},
+                {"title": "Left alone", "primitives": ["P2"], "evidence": []},
+            ],
+        )
+        asked, alone = steps
+
+        def _answer(_prompt, *_a, schema=None, **_k):
+            return schema.model_validate(
+                {
+                    "steps": [
+                        {
+                            "primitives": ["P1", "P7"],
+                            "responsibility": "none",
+                            "output_type": "draft",
+                            "evidence": [],
+                        }
+                    ]
+                }
+            )
+
+        with patch.object(llm_client, "generate_json", side_effect=_answer):
+            await service.reclassify_step(
+                db, tenant.id, asked["id"], ReclassifyRequest(comment="a supplier talk")
+            )
+        rows = await edits.outcomes(db, tenant.id)
+        by = {(r["step_id"], r["code"]): r for r in rows}
+        assert (
+            by[(asked["id"], "P1")]["outcome"],
+            by[(asked["id"], "P1")]["reclassified"],
+        ) == ("pending", True)
+        assert (
+            by[(asked["id"], "P7")]["outcome"],
+            by[(asked["id"], "P7")]["reclassified"],
+        ) == ("model_added", True)
+        assert by[(alone["id"], "P2")]["reclassified"] is False
+
+        stats = edits.stats(rows)
+        assert stats["P7"]["added"] == 0 and stats["P7"]["reclassified"] == 1
+        assert stats["P1"]["proposed"] == 0 and stats["P1"]["reclassified"] == 1
+        assert stats["P2"]["proposed"] == 1 and stats["P2"]["reclassified"] == 0
+
+    async def test_a_code_from_the_model_marks_a_step_reclassified_before_the_column(
+        self, db, tenant, user
+    ):
+        """Review of HRP-945: a step reclassified before v2work11 has no
+        ``reclassified_at``, but a code the model added can only come from a
+        reclassification - the whole step is the model's second opinion, and
+        every counted proposal still lands in exactly one outcome."""
+        _c, steps = await _applied(
+            db,
+            tenant,
+            user,
+            [
+                {"title": "Asked before", "primitives": ["P1"], "evidence": []},
+                {"title": "Kept", "primitives": ["P2", "P3"], "evidence": []},
+            ],
+        )
+        asked, kept = steps
+
+        def _answer(_prompt, *_a, schema=None, **_k):
+            return schema.model_validate(
+                {
+                    "steps": [
+                        {
+                            "primitives": ["P1", "P7"],
+                            "responsibility": "none",
+                            "output_type": "draft",
+                            "evidence": [],
+                        }
+                    ]
+                }
+            )
+
+        with patch.object(llm_client, "generate_json", side_effect=_answer):
+            await service.reclassify_step(
+                db, tenant.id, asked["id"], ReclassifyRequest(comment="before")
+            )
+        # As a reclassification made before the column existed looks.
+        await db.execute(
+            WorkStep.__table__.update()
+            .where(WorkStep.id == asked["id"])
+            .values(reclassified_at=None)
+        )
+        await db.commit()
+
+        rows = await edits.outcomes(db, tenant.id)
+        by = {(r["step_id"], r["code"]): r for r in rows}
+        assert by[(asked["id"], "P1")]["reclassified"] is True
+        assert by[(asked["id"], "P7")]["outcome"] == "model_added"
+        assert by[(asked["id"], "P7")]["reclassified"] is True
+        assert by[(kept["id"], "P2")]["reclassified"] is False
+
+        for row in edits.stats(rows).values():
+            assert row["proposed"] == row["confirmed"] + row["pending"] + row["removed"]
+
+    async def test_a_code_retired_after_apply_is_not_a_reclassification(
+        self, db, tenant, user
+    ):
+        """Re-review of HRP-945: a retired code keeps its links, still with
+        the model's source; it left the catalog, the model did not add it -
+        the step is not reclassified and the code is neither added nor
+        model_added."""
+        _c, steps = await _applied(
+            db,
+            tenant,
+            user,
+            [{"title": "Two codes", "primitives": ["P1", "P2"], "evidence": []}],
+        )
+        [step] = steps
+        retire = Primitive.__table__.update().where(Primitive.code == "P2")
+        await db.execute(retire.values(retired_in="v9.9"))
+        await db.commit()
+        try:
+            rows = await edits.outcomes(db, tenant.id)
+        finally:
+            await db.execute(retire.values(retired_in=None))
+            await db.commit()
+        mine = [r for r in rows if r["step_id"] == step["id"]]
+        assert [(r["code"], r["outcome"], r["reclassified"]) for r in mine] == [
+            ("P1", "pending", False)
+        ]
 
     async def test_newest_applied_session_wins(self, db, tenant, user):
         c, _steps = await _applied(

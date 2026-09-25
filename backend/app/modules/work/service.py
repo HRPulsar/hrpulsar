@@ -25,6 +25,7 @@ from sqlalchemy import (
     column,
     delete,
     func,
+    null,
     or_,
     select,
     update,
@@ -821,6 +822,19 @@ async def _replace_links(
     return existing.keys() != wanted.keys()
 
 
+async def _confirm_links(db: AsyncSession, step: WorkStep) -> None:
+    """Stamp every unconfirmed code of the step: the company vouched for
+    the whole set (HRP-776)."""
+    await db.execute(
+        update(WorkStepPrimitive)
+        .where(
+            WorkStepPrimitive.step_id == step.id,
+            WorkStepPrimitive.confirmed_at.is_(None),
+        )
+        .values(confirmed_at=datetime.now(UTC))
+    )
+
+
 async def create_step(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -828,9 +842,10 @@ async def create_step(
     data: StepCreate,
 ) -> dict[str, Any]:
     """Append a step the tenant typed in — it is ``tenant_edited`` from the
-    start, as are its primitive links."""
+    start, as are its primitive links. Without ``primitive_codes`` nobody
+    has classified it yet (HRP-944)."""
     container = await _locked_container(db, tenant_id, container_id)
-    primitives = await _active_by_code(db, data.primitive_codes)
+    primitives = await _active_by_code(db, data.primitive_codes or [])
     last, count = (
         await db.execute(
             select(func.max(WorkStep.position), func.count()).where(
@@ -846,11 +861,15 @@ async def create_step(
         container_id=container_id,
         position=(last or 0) + 1,
         state="tenant_edited",
+        classified_at=null() if data.primitive_codes is None else datetime.now(UTC),
         **data.model_dump(exclude={"primitive_codes"}),
     )
     db.add(step)
     await db.flush()
     await _replace_links(db, step, primitives, source="tenant_edited")
+    # HRP-945: a code typed in with the step is the company's word, as in
+    # the picker (decision T13b).
+    await _confirm_links(db, step)
     await db.commit()
     await db.refresh(step)
     return await _step_read(db, step)
@@ -970,14 +989,8 @@ async def set_step_primitives(
     if await _replace_links(db, step, primitives, source="tenant_edited"):
         step.state = "tenant_edited"
         _content_changed(container)
-    await db.execute(
-        update(WorkStepPrimitive)
-        .where(
-            WorkStepPrimitive.step_id == step.id,
-            WorkStepPrimitive.confirmed_at.is_(None),
-        )
-        .values(confirmed_at=datetime.now(UTC))
-    )
+    step.classified_at = datetime.now(UTC)
+    await _confirm_links(db, step)
     await db.commit()
     await db.refresh(step)
     return await _step_read(db, step)
@@ -1146,6 +1159,10 @@ async def reclassify_step(
     step.responsibility = result["responsibility"]
     step.output_type = result["output_type"]
     step.state = "tenant_edited"
+    step.classified_at = datetime.now(UTC)
+    # HRP-945: kept for the step's history and the statistics of edits.
+    step.classification_comment = data.comment
+    step.reclassified_at = step.classified_at
     _content_changed(container)
     await db.commit()
     await db.refresh(step)

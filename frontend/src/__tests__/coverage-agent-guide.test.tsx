@@ -172,6 +172,9 @@ describe("AgentGuide", () => {
     ]);
     expect(byId("coverage-guide-group-drafting")!.textContent).toContain("pack:drafting");
     expect(byId("coverage-guide-group-drafting-hours")!.textContent).toBe("≈ 3,000 h/year");
+    // HRP-866 REDO: a type is not numbered, a step says it is a step.
+    expect(byId("coverage-guide-group-drafting")!.textContent).not.toMatch(/^1/);
+    expect(byId("coverage-guide-group-drafting")!.textContent).toContain("Step 2. ");
   });
 
   it("says hours are not estimated rather than showing zero", async () => {

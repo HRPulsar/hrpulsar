@@ -331,6 +331,9 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
     else staleSteps.delete(step.id);
     setStale(next);
   }
+  // HRP-865 REDO: accepting the step (Accept all, or another editor) is the
+  // company signing off on it as it stands - the hint has nothing left to ask.
+  if (stale && step.state === "accepted") markStale(false);
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -393,11 +396,18 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
     }
   }
 
+  // The capabilities were set by hand or by the model after the text edit:
+  // either way they no longer describe the old text (HRP-865 REDO).
+  function capabilitiesSet(updated: WorkStep) {
+    onChange(updated);
+    markStale(false);
+  }
+
   // HRP-776: a suggested chip is confirmed or removed in place; the
   // outcome lands on the step-to-code link.
   async function confirmCapability(code: string) {
     try {
-      onChange(await workApi.confirmCapability(step.id, code));
+      capabilitiesSet(await workApi.confirmCapability(step.id, code));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("saveFailed"));
     }
@@ -405,7 +415,7 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
 
   async function removeCapability(code: string) {
     try {
-      onChange(await workApi.removeCapability(step.id, code));
+      capabilitiesSet(await workApi.removeCapability(step.id, code));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("saveFailed"));
     }
@@ -570,24 +580,16 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
             )}
           </div>
           {/* HRP-865: last in the row, so its appearing moves nothing the
-              user is about to click inside this step. */}
+              user is about to click inside this step. No button of its own:
+              both ways out sit right above it (REDO). */}
           {canEdit && stale && (
-            <div
+            <p
               role="status"
-              className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-300"
+              className="rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-300"
               data-testid={`${testId}-stale-hint`}
             >
-              <span className="min-w-0">{t("staleClassificationHint")}</span>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => setReclassifyOpen(true)}
-                data-testid={`${testId}-stale-hint-btn`}
-              >
-                <Sparkles />
-                {t("reclassify")}
-              </Button>
-            </div>
+              {t("staleClassificationHint")}
+            </p>
           )}
         </div>
         {canEdit && (
@@ -619,7 +621,7 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
           t={t}
           onClose={() => setPickerOpen(false)}
           onSaved={(updated) => {
-            onChange(updated);
+            capabilitiesSet(updated);
             setPickerOpen(false);
           }}
         />
@@ -630,8 +632,7 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
           t={t}
           onClose={() => setReclassifyOpen(false)}
           onSaved={(updated) => {
-            onChange(updated);
-            markStale(false);
+            capabilitiesSet(updated);
             setReclassifyOpen(false);
             toast.success(t("reclassifiedToast"));
           }}

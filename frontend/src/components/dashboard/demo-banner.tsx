@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { MessageCircle } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
+import { OPEN_DEMO_FEEDBACK_EVENT } from "@/components/dashboard/demo-feedback-popup";
 import { useAuth } from "@/context/auth-context";
 import { useIsSaas } from "@/hooks/use-is-saas";
 import { saveDemoAccess, switchDemoPersona, type DemoPersona } from "@/lib/demo";
@@ -15,35 +17,30 @@ import type { CreditBalance } from "@/lib/types";
 
 const REFRESH_EVERY_MS = 60_000;
 
-/** Sentinel returned when the session is over — never rendered (the caller
- * swaps in the expired banner), so it stays out of the message catalog. */
-const EXPIRED = "expired";
-
-function formatRemaining(target: Date | null): string {
-  if (!target) return "—";
+/** Time left in the session; null once it is over (the caller swaps in
+ * the expired banner) or when the tenant carries no expiry. */
+function remainingParts(
+  target: Date | null,
+): { hours: number; minutes: number } | "expired" | null {
+  if (!target) return null;
   const ms = target.getTime() - Date.now();
-  if (ms <= 0) return EXPIRED;
+  if (ms <= 0) return "expired";
   const totalMinutes = Math.floor(ms / 60_000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours <= 0) return `${minutes}m`;
-  return `${hours}h ${minutes.toString().padStart(2, "0")}m`;
+  return { hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 };
 }
 
 function SaveAccessModal({
-  defaultEmail,
-  defaultFirstName,
   onClose,
   onSaved,
 }: {
-  defaultEmail: string;
-  defaultFirstName: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
+  // Starts empty: the session user is a seeded demo persona, and its name
+  // would be sent as the visitor's own.
   const [form, setForm] = useState({
-    email: defaultEmail,
-    first_name: defaultFirstName,
+    email: "",
+    first_name: "",
     last_name: "",
     company_name: "",
     role: "",
@@ -232,11 +229,13 @@ function PersonaSwitch({ activePersona }: { activePersona: DemoPersona }) {
             type="button"
             disabled={switching}
             onClick={() => handleSwitch(p)}
+            // Neutral, not brand: the filled accent in the banner belongs
+            // to "Talk to us", the one action a visitor must spot.
             className={cn(
               "px-2.5 py-0.5 text-sm",
               p === activePersona
-                ? "bg-brand text-white"
-                : "hover:bg-foreground/10",
+                ? "bg-foreground/15 font-semibold"
+                : "text-foreground/70 hover:bg-foreground/5",
             )}
             data-testid={`demo-banner-view-${p}`}
           >
@@ -281,13 +280,22 @@ export function DemoBanner() {
 
   if (!isDemo || !user) return null;
 
-  const remaining = formatRemaining(expiresAt);
-  const expired = remaining === EXPIRED;
+  const parts = remainingParts(expiresAt);
+  const expired = parts === "expired";
+  const remaining =
+    parts === null || parts === "expired"
+      ? "—"
+      : parts.hours > 0
+        ? t("demoHoursMinutes", {
+            hours: parts.hours,
+            minutes: parts.minutes.toString().padStart(2, "0"),
+          })
+        : t("demoMinutes", { minutes: parts.minutes });
   // HRP-547: quote what can actually be spent — credits held by an upload
   // in flight are subtracted from `available`, and the gate reads the same
   // field, so the banner must not promise a number the next action refuses.
   const creditsLeft = credits ? (credits.available ?? credits.total) : null;
-  // tick is consumed only to trigger a re-render so formatRemaining recomputes.
+  // tick is consumed only to trigger a re-render so remainingParts recomputes.
   void tick;
 
   if (expired) {
@@ -337,6 +345,19 @@ export function DemoBanner() {
             {user.demo_persona && (
               <PersonaSwitch activePersona={user.demo_persona} />
             )}
+            {/* Filled, unlike "Save access": visitors who wanted a call
+                restarted the demo looking for a way to reach us. */}
+            <button
+              type="button"
+              onClick={() =>
+                window.dispatchEvent(new Event(OPEN_DEMO_FEEDBACK_EVENT))
+              }
+              className="flex items-center gap-1.5 rounded-md bg-brand px-3 py-1 text-sm font-semibold text-white hover:bg-brand-hover"
+              data-testid="demo-banner-talk"
+            >
+              <MessageCircle className="h-4 w-4" />
+              {t("demoTalkToUs")}
+            </button>
             <button
               type="button"
               onClick={() => setShowModal(true)}
@@ -350,8 +371,6 @@ export function DemoBanner() {
       </div>
       {showModal && (
         <SaveAccessModal
-          defaultEmail=""
-          defaultFirstName={user.first_name || ""}
           onClose={() => setShowModal(false)}
           onSaved={() => {
             /* leave modal open to show the confirmation card */

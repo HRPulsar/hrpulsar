@@ -397,18 +397,24 @@ describe("the step rate in the hours editor", () => {
     byTestId(`coverage-weights-step-${stepId}-input-rate`) as HTMLInputElement;
   const PRICED: Coverage = { ...COVERAGE, hourly_rate: 50, hourly_rate_currency: "EUR" };
 
-  it("falls back to the company rate, shown as the placeholder", async () => {
+  it("prefills the company rate a step falls back to, and keeps following it", async () => {
     getCoverage.mockResolvedValue(PRICED);
     await render();
     await click(byTestId("coverage-btn-weights"));
 
-    expect(rateInput("default").value).toBe("");
-    expect(rateInput("default").placeholder).toBe("50");
+    // HRP-859 REDO: the value, not a grey placeholder next to an empty field.
+    expect(rateInput("default").value).toBe("50");
     expect(rateInput("default").disabled).toBe(false);
     expect(rateInput("default").closest("label")!.textContent).toBe("Hourly rate, EUR");
-    expect(byTestId("coverage-weights-rate-locked")).toBeNull();
-    // Said in words too: a grey "50" reads like a typed "50" at a glance.
-    expect(byTestId("coverage-weights-rate-hint").textContent).toContain("50 EUR/h");
+    expect(byTestId("coverage-weights-rate-unset")).toBeNull();
+    const hint = byTestId("coverage-weights-rate-hint");
+    expect(hint.textContent).toContain("50.00 EUR/h");
+    expect(hint.querySelector("a")!.getAttribute("href")).toBe("/company/profile");
+    expect(hint.querySelector("a")!.textContent).toBe(enMessages.coverage.roiRateEdit);
+
+    // Left as prefilled, it is not a choice: nothing is pinned to today's rate.
+    await click(byTestId("coverage-btn-weights-save"));
+    expect(updateStep).not.toHaveBeenCalled();
   });
 
   it("takes a rate on a step no agent will ever take", async () => {
@@ -436,6 +442,18 @@ describe("the step rate in the hours editor", () => {
     expect(updateStep.mock.calls).toEqual([["blocked", { hourly_rate: 90 }]]);
   });
 
+  it("leaves a company rate of 0 out of the field, so the hours still save", async () => {
+    // The company takes 0, a step does not: prefilled, it would block Save.
+    getCoverage.mockResolvedValue({ ...PRICED, hourly_rate: 0 });
+    await render();
+    await click(byTestId("coverage-btn-weights"));
+
+    expect(rateInput("default").value).toBe("");
+    await click(byTestId("coverage-btn-weights-save"));
+    expect(toastError).not.toHaveBeenCalled();
+    expect(updateStep).not.toHaveBeenCalled();
+  });
+
   it("sends the rate that was typed, and nothing for the steps left alone", async () => {
     getCoverage.mockResolvedValue(PRICED);
     await render();
@@ -457,16 +475,22 @@ describe("the step rate in the hours editor", () => {
     expect(toastError).toHaveBeenCalledTimes(1);
   });
 
-  it("asks for the company rate first, and links to where it is set", async () => {
+  it("takes a step rate without a company rate, and links to where that is set", async () => {
     await render(); // COVERAGE: no company rate
     await click(byTestId("coverage-btn-weights"));
 
-    expect(rateInput("default").disabled).toBe(true);
+    expect(rateInput("default").disabled).toBe(false);
+    expect(rateInput("default").value).toBe("");
     expect(rateInput("default").closest("label")!.textContent).toBe("Hourly rate");
-    const hint = byTestId("coverage-weights-rate-locked");
+    const hint = byTestId("coverage-weights-rate-unset");
     expect(byTestId("coverage-weights-rate-hint")).toBeNull();
-    expect(hint.textContent).toContain("Set the company hourly rate first");
+    expect(hint.textContent).toContain(enMessages.coverage.weightsRateUnset);
     expect(hint.querySelector("a")!.getAttribute("href")).toBe("/company/profile");
+    expect(hint.querySelector("a")!.textContent).toBe(enMessages.coverage.roiRateSet);
+
+    await type(rateInput("default"), "90");
+    await click(byTestId("coverage-btn-weights-save"));
+    expect(updateStep.mock.calls).toEqual([["default", { hourly_rate: 90 }]]);
   });
 
   it("keeps a rate the step already carries removable without a company rate", async () => {
@@ -475,7 +499,6 @@ describe("the step rate in the hours editor", () => {
     await render([step("default"), step("own", { hourly_rate: 80 }), step("agent")]);
     await click(byTestId("coverage-btn-weights"));
 
-    expect(rateInput("default").disabled).toBe(true);
     expect(rateInput("own").disabled).toBe(false);
     expect(rateInput("own").value).toBe("80");
     await type(rateInput("own"), "");
@@ -546,5 +569,33 @@ describe("the list", () => {
     expect(byTestId("coverage-row-never-opened-automated").textContent).toBe("—");
     // The list asks for the list, and for no coverage of any container.
     expect(getCoverage).not.toHaveBeenCalled();
+  });
+
+  it("counts both types under the title and searches by title (HRP-859 REDO)", async () => {
+    listContainers.mockResolvedValue({
+      items: [
+        listed("hiring", null),
+        listed("close", null),
+        { ...listed("launch", null), type: "initiative" as const, title: "Launch the portal" },
+      ],
+      total: 3,
+    });
+    await act(async () => {
+      root.render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <CoveragePage />
+        </NextIntlClientProvider>,
+      );
+    });
+
+    expect(byTestId("coverage-count").textContent).toBe("2 processes · 1 project");
+    await type(byTestId("coverage-input-search") as HTMLInputElement, "PORTAL");
+    expect(byTestId("coverage-row-launch")).not.toBeNull();
+    expect(document.querySelector('[data-testid="coverage-row-hiring"]')).toBeNull();
+    // The count is of the list, not of what the search left.
+    expect(byTestId("coverage-count").textContent).toBe("2 processes · 1 project");
+
+    await type(byTestId("coverage-input-search") as HTMLInputElement, "nothing like it");
+    expect(byTestId("coverage-empty-filtered").textContent).toBe(enMessages.coverage.emptyFiltered);
   });
 });

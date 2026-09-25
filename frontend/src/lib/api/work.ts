@@ -190,7 +190,7 @@ export interface Primitive {
 
 // HRP-758 / HRP-759: coverage of a breakdown and its gaps. Wire types
 // mirror the Coverage* / Gap* / HireNeed* schemas.
-export type Verdict = "agent" | "human" | "gap" | "out_of_scope";
+export type Verdict = "agent" | "human" | "gap" | "out_of_scope" | "unclassified";
 export type AutomationMode =
   | "automatable"
   | "draft_then_review"

@@ -10,14 +10,14 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.core import billing_hooks
 from app.core.errors import AppError
 from app.modules.ai import llm_client
 from app.modules.primitives import catalog_data
-from app.modules.work import _examples, prompts, service, tasks
+from app.modules.work import _examples, coverage, prompts, service, tasks
 from app.modules.work.models import WorkDecompositionSession, WorkStep
 from app.modules.work.schemas import (
     ContainerCreate,
@@ -655,11 +655,59 @@ class TestReclassify:
         assert updated["responsibility"] == "reputational"
         assert updated["output_type"] == "external_change"
         assert updated["state"] == "tenant_edited"
+        # HRP-945: the company's comment is kept on the step, with its time.
+        stored = await db.scalar(
+            select(WorkStep)
+            .where(WorkStep.id == second["id"])
+            .execution_options(populate_existing=True)
+        )
+        assert (
+            stored.classification_comment == "An open-ended negotiation with a supplier"
+        )
+        assert stored.reclassified_at is not None
         steps = {s["id"]: s for s in await service.list_steps(db, tenant.id, c.id)}
         assert steps[first["id"]]["primitive_codes"] == ["P1"]
         assert steps[first["id"]]["state"] == "accepted"
         await db.refresh(c)
         assert c.status == "draft"
+
+    async def test_reclassify_classifies_a_step_typed_in_without_codes(
+        self, db, tenant, user, primitives
+    ):
+        """HRP-944: even an empty answer is a classification - the step
+        stops being ``unclassified``."""
+        c, _first, _second = await self._two_steps(db, tenant, user)
+        typed = await service.create_step(
+            db, tenant.id, c.id, StepCreate(title="Sign the order")
+        )
+
+        def _empty(_prompt, *_a, schema=None, **_k):
+            return schema.model_validate(
+                {
+                    "steps": [
+                        {
+                            "primitives": [],
+                            "responsibility": "formal",
+                            "output_type": "external_change",
+                            "evidence": [],
+                        }
+                    ]
+                }
+            )
+
+        async def _verdict():
+            with patch.object(coverage, "_schedule_mapping", new=AsyncMock()):
+                result = await coverage.compute(db, tenant.id, c.id)
+            return next(s for s in result["steps"] if s["step_id"] == typed["id"])[
+                "verdict"
+            ]
+
+        assert await _verdict() == "unclassified"
+        with patch.object(llm_client, "generate_json", side_effect=_empty):
+            await service.reclassify_step(
+                db, tenant.id, typed["id"], ReclassifyRequest(comment="a signature")
+            )
+        assert await _verdict() == "out_of_scope"
 
     async def test_reclassify_failure_leaves_the_step(
         self, db, tenant, user, primitives

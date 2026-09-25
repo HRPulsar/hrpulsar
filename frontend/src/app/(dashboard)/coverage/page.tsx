@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { Plus } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
+import { Input } from "@/components/ui/input";
+import { MultiSelectFilter } from "@/components/multi-select-filter";
 import {
   Table,
   TableBody,
@@ -33,11 +35,8 @@ const STATUS_COLOR: Record<ContainerStatus, string> = {
   archived: BADGE_COLOR.neutral,
 };
 
-const TYPE_FILTERS: Array<{ value: ContainerType | "all"; key: string }> = [
-  { value: "all", key: "filterAll" },
-  { value: "process", key: "filterProcesses" },
-  { value: "initiative", key: "filterProjects" },
-];
+const TYPES: ContainerType[] = ["process", "initiative"];
+const STATUSES: ContainerStatus[] = ["draft", "active", "archived"];
 
 /** HRP-862: the share of the estimated hours an agent of the company already
  * does, as the coverage last computed it - the list computes nothing. Null
@@ -58,14 +57,20 @@ export default function CoveragePage() {
   const { canCreateCoverage } = usePermissions();
   const [items, setItems] = useState<WorkContainer[] | null>(null);
   const [failed, setFailed] = useState(false);
-  const [type, setType] = useState<ContainerType | "all">("all");
+  // HRP-859 REDO: the filters of every other list (/assessments). The list is
+  // loaded whole, so they filter here and the counts stay the full ones.
+  // ponytail: whole = the first 200 the API gives; server-side filters if a
+  // company ever keeps more.
+  const [search, setSearch] = useState("");
+  const [types, setTypes] = useState<string[]>([]);
+  const [statuses, setStatuses] = useState<string[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
   const retry = useCallback(() => setReloadKey((k) => k + 1), []);
 
   useEffect(() => {
     let stale = false;
     workApi
-      .listContainers(type === "all" ? undefined : type)
+      .listContainers()
       .then((res) => {
         if (stale) return;
         setItems(res.items);
@@ -77,16 +82,35 @@ export default function CoveragePage() {
     return () => {
       stale = true;
     };
-  }, [type, reloadKey]);
+  }, [reloadKey]);
+
+  const query = search.trim().toLocaleLowerCase();
+  const shown = items?.filter(
+    (c) =>
+      (!query || c.title.toLocaleLowerCase().includes(query)) &&
+      (types.length === 0 || types.includes(c.type)) &&
+      (statuses.length === 0 || statuses.includes(c.status)),
+  );
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-semibold" data-testid="coverage-heading">
-            {t("title")}
-          </h1>
-          <Hint text={tSections("coverage.hint")} data-testid="coverage-hint-title" />
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold" data-testid="coverage-heading">
+              {t("title")}
+            </h1>
+            {/* Also says what a process and a project are (HRP-859 REDO). */}
+            <Hint text={tSections("coverage.hint")} data-testid="coverage-hint-title" />
+          </div>
+          {items && items.length > 0 && (
+            <p className="text-sm text-muted-foreground" data-testid="coverage-count">
+              {t("listCount", {
+                processes: items.filter((c) => c.type === "process").length,
+                projects: items.filter((c) => c.type === "initiative").length,
+              })}
+            </p>
+          )}
         </div>
         {canCreateCoverage && (
           <Link href="/coverage/new" className={buttonVariants()} data-testid="coverage-btn-create">
@@ -96,27 +120,40 @@ export default function CoveragePage() {
         )}
       </div>
 
-      {/* HRP-859: the difference between the two types is explained where the
-          list is read, not only on the create form nobody reopens. */}
-      <p className="max-w-3xl text-sm text-muted-foreground">{t("typeExplainer")}</p>
-
-      <div className="flex gap-1" role="group" aria-label={t("filterLabel")}>
-        {TYPE_FILTERS.map((f) => (
-          <Button
-            key={f.value}
-            size="sm"
-            variant={type === f.value ? "default" : "outline"}
-            onClick={() => setType(f.value)}
-            data-testid={`coverage-filter-${f.value}`}
-          >
-            {t(f.key)}
-          </Button>
-        ))}
-      </div>
+      {items && items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative min-w-48 flex-1">
+            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              data-testid="coverage-input-search"
+              placeholder={t("searchPlaceholder")}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8"
+            />
+          </div>
+          <MultiSelectFilter
+            data-testid="coverage-multi-types"
+            options={TYPES.map((value) => ({ value, label: t(`type_${value}`) }))}
+            value={types}
+            onChange={setTypes}
+            placeholder={t("allTypes")}
+            className="w-36"
+          />
+          <MultiSelectFilter
+            data-testid="coverage-multi-statuses"
+            options={STATUSES.map((value) => ({ value, label: t(`status_${value}`) }))}
+            value={statuses}
+            onChange={setStatuses}
+            placeholder={t("allStatuses")}
+            className="w-36"
+          />
+        </div>
+      )}
 
       {failed ? (
         <LoadErrorState onRetry={retry} testIdPrefix="coverage" />
-      ) : items === null ? (
+      ) : items === null || shown === undefined ? (
         <div className="py-12 text-center text-muted-foreground">{tc("loading")}</div>
       ) : items.length === 0 ? (
         <div
@@ -144,6 +181,13 @@ export default function CoveragePage() {
             </div>
           )}
         </div>
+      ) : shown.length === 0 ? (
+        <div
+          className="rounded-lg border border-dashed p-12 text-center text-muted-foreground"
+          data-testid="coverage-empty-filtered"
+        >
+          {t("emptyFiltered")}
+        </div>
       ) : (
         <Table data-testid="coverage-table">
           <TableHeader>
@@ -156,7 +200,7 @@ export default function CoveragePage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((c) => (
+            {shown.map((c) => (
               <TableRow key={c.id} data-testid={`coverage-row-${c.id}`}>
                 <TableCell>
                   <Link href={`/coverage/${c.id}`} className="font-medium hover:underline">

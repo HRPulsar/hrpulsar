@@ -22,6 +22,7 @@ Try HRPulsar Cloud before signing up — no account, no credit card.
 - Comes with free AI credits so you can run real analyses
 - Your sandbox is yours alone and is automatically cleaned up after the session ends
 - Ready to keep your data? Save access from inside the demo and our team will get you set up
+- Want a walkthrough? "Talk to us" in the demo banner, leave your email, and we'll get in touch
 
 ## Usage-Based Billing
 
