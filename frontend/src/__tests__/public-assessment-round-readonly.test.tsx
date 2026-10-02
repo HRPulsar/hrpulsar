@@ -167,7 +167,7 @@ describe("public evaluation page — closed round is read-only", () => {
     // The whole point of the REDO: clicking an answer must not fire a
     // mutation that the backend will only reject with a toast.
     const radio = container.querySelector<HTMLInputElement>(
-      '[data-testid^="assessment-competence-radio-"]',
+      '[data-testid^="assessment-competence-overall-radio-"]',
     );
     // Fake timers only from here: anything the click schedules (the 1.5 s
     // autosave debounce) has to be given its chance to fire.
@@ -204,16 +204,34 @@ describe("public evaluation page — closed round is read-only", () => {
     ).toBeNull();
   });
 
-  it("open round with re-editing on still offers the edit path", async () => {
+  it("live round (open or reopened) with re-editing on takes edits again", async () => {
+    // REDO 11.09: a reopened round is wire-identical to one that was never
+    // closed — the invite's own flag is what decides the edit path. The
+    // sheet is editable, the banner names the edit window, no closed-round
+    // wording is left over, and a click really PATCHes.
     roundStatus = "in_progress";
     allowReediting = true;
     await mount();
 
+    expect(banner()).toContain(enMessages.auth.reeditNote.split("{date}")[0]);
     expect(
-      container.querySelector('[data-testid="public-assessment-reedit-note"]'),
-    ).not.toBeNull();
+      container.querySelector('[data-testid="public-assessment-round-closed-note"]'),
+    ).toBeNull();
+    expect(banner()).not.toContain(enMessages.auth.readOnlyNote);
     expect(
       container.querySelector('[data-testid="public-assessment-submit-btn"]'),
     ).not.toBeNull();
+
+    const radio = container.querySelector<HTMLInputElement>(
+      '[data-testid^="assessment-competence-overall-radio-"]',
+    );
+    expect(radio).not.toBeNull();
+    vi.useFakeTimers();
+    await act(async () => {
+      radio!.click();
+      vi.advanceTimersByTime(5000);
+    });
+    vi.useRealTimers();
+    expect(patch).toHaveBeenCalled();
   });
 });

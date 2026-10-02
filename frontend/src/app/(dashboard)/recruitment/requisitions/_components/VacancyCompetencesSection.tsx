@@ -91,12 +91,11 @@ export function VacancyCompetencesSection({
   // these carry real dictionary ids and are what the talent-market matcher
   // (and therefore the "Post to talent market" bridge) reads.
   const { tree } = useCompetenceTree();
-  // PATCH …/competences is require_role("admin", "recruiter") while this
-  // page is open to every recruitment viewer — same rule, same shape as
-  // the internal-candidates block: disabled with the reason, not a 403
-  // at the end of the flow.
-  const { isAdmin, isRecruiter } = usePermissions();
-  const canManageLibrary = isAdmin || isRecruiter;
+  // PATCH …/competences is `manage` on recruitment (HRP-830) while this
+  // page is open to every `view` holder — same rule, same shape as the
+  // internal-candidates block: disabled with the reason, not a 403 at the
+  // end of the flow.
+  const canManageLibrary = usePermissions().canManageSection("recruitment");
   const [libraryRows, setLibraryRows] = useState<VacancyCompetenceLink[]>([]);
   // The GET is the baseline for a replace-set PATCH, so a failed read is
   // not "no competences" — it is "we do not know", and nothing may be
@@ -388,6 +387,7 @@ export function VacancyCompetencesSection({
           onSessionChange={setActiveSession}
           onReview={openGenerate}
           refreshKey={statusRefreshKey}
+          canAct={canManageLibrary}
         />
         {libraryRows.length > 0 && (
           <div className="space-y-1.5" data-testid="vacancy-library-competences">

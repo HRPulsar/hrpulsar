@@ -33,7 +33,7 @@ export interface ProfileSessionPayload {
   } | null;
   // Server-derived: status === "ready" with an unreviewed payload parked
   // on the session. Present for every role — the payload itself is only
-  // returned to admin/recruiter callers.
+  // returned to `manage` on recruitment (HRP-830).
   has_pending_result?: boolean;
 }
 
@@ -59,6 +59,9 @@ interface ProfileGenerationStatusProps {
   // the review dialog closes so the banner reflects apply/discard/cancel
   // without waiting out the polling interval.
   refreshKey?: number;
+  // HRP-830: review, cancel and dismiss write the vacancy profile -
+  // `manage` on recruitment; a `view` holder sees the banner only.
+  canAct?: boolean;
 }
 
 // Rough generation budget (s). The recruiter sees this as a soft ETA
@@ -90,6 +93,7 @@ export function ProfileGenerationStatus({
   onSessionChange,
   onReview,
   refreshKey = 0,
+  canAct = true,
 }: ProfileGenerationStatusProps) {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
@@ -214,14 +218,16 @@ export function ProfileGenerationStatus({
               </p>
             </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={dismissFailure}
-            data-testid="vacancy-profile-generation-failed-dismiss-btn"
-          >
-            {tc("dismiss")}
-          </Button>
+          {canAct && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={dismissFailure}
+              data-testid="vacancy-profile-generation-failed-dismiss-btn"
+            >
+              {tc("dismiss")}
+            </Button>
+          )}
         </div>
       </div>
     );
@@ -253,13 +259,15 @@ export function ProfileGenerationStatus({
               </p>
             </div>
           </div>
-          <Button
-            size="sm"
-            onClick={onReview}
-            data-testid="vacancy-profile-generation-review-btn"
-          >
-            {t("profileGenStatusReviewButton")}
-          </Button>
+          {canAct && (
+            <Button
+              size="sm"
+              onClick={onReview}
+              data-testid="vacancy-profile-generation-review-btn"
+            >
+              {t("profileGenStatusReviewButton")}
+            </Button>
+          )}
         </div>
       </div>
     );
@@ -303,16 +311,18 @@ export function ProfileGenerationStatus({
             </ul>
           </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleCancel}
-          disabled={cancelling}
-          data-testid="vacancy-profile-generation-cancel-btn"
-        >
-          <X className="mr-1 size-4" />
-          {tc("cancel")}
-        </Button>
+        {canAct && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCancel}
+            disabled={cancelling}
+            data-testid="vacancy-profile-generation-cancel-btn"
+          >
+            <X className="mr-1 size-4" />
+            {tc("cancel")}
+          </Button>
+        )}
       </div>
       {/* tick keeps the countdown live without needing a separate timer */}
       <span className="sr-only" aria-hidden>

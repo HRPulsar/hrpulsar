@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import type { DictionaryItem } from "@/lib/types";
 
 interface UsedData {
@@ -49,6 +50,8 @@ export function UsedDataTooltip({
   data: providedData,
 }: UsedDataTooltipProps) {
   const t = useTranslations("competences");
+  // HRP-831: the AI settings link leads into a section the matrix may close.
+  const canOpenAiSettings = usePermissions().canViewSection("ai-settings");
   const [open, setOpen] = useState(defaultOpen);
   const [fetched, setFetched] = useState<UsedData | null>(null);
   const data = providedData ?? fetched;
@@ -158,7 +161,7 @@ export function UsedDataTooltip({
           <Section
             icon={<Sliders className="h-4 w-4 text-muted-foreground" />}
             title={t("usedDataAiSettings")}
-            href="/settings/ai"
+            href={canOpenAiSettings ? "/settings/ai" : undefined}
             hrefLabel={t("usedDataOpenAiSettings")}
             empty={false}
           >
@@ -185,7 +188,8 @@ function Section({
 }: {
   icon: React.ReactNode;
   title: string;
-  href: string;
+  /** HRP-831: absent when the caller cannot open the linked section. */
+  href?: string;
   hrefLabel: string;
   empty: boolean;
   emptyHint?: string;
@@ -199,15 +203,17 @@ function Section({
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {title}
         </span>
-        <Link
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="ml-auto inline-flex items-center gap-1 text-xs text-primary hover:underline"
-        >
-          {hrefLabel}
-          <ExternalLink className="h-3 w-3" />
-        </Link>
+        {href && (
+          <Link
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-auto inline-flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            {hrefLabel}
+            <ExternalLink className="h-3 w-3" />
+          </Link>
+        )}
       </div>
       {empty ? (
         <p className="rounded-sm border border-dashed px-2 py-1.5 text-xs text-muted-foreground">

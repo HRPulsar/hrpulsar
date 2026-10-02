@@ -30,13 +30,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _board_scope(employee_id: uuid.UUID | None = None) -> TalentScope:
-    """A viewer who manages nothing and authored nothing — the board rule
-    reduces to "published, plus the cards I'm a candidate on"."""
+    """A viewer who runs the board (HRP-824: ``manage`` on the section) but
+    manages no division and authored nothing — the board rule reduces to
+    "published, plus the cards I'm a candidate on"."""
     return TalentScope(
         unrestricted=False,
         division_ids=(),
         user_id=uuid.uuid4(),
         employee_id=employee_id,
+        manages=True,
     )
 
 

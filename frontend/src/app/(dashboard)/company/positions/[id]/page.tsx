@@ -331,12 +331,14 @@ export default function PositionDetailPage() {
   const locale = useLocale();
   const { id } = useParams<{ id: string }>();
   // HRP-631: a division head edits a position only inside their managed
-  // subtree; `can_manage` comes off the position itself, since the role
-  // alone would render controls that 403.
+  // subtree; `can_manage` comes off the position itself, since the level
+  // alone would render controls that 403. HRP-828: the level is `manage` on
+  // company, not the admin/manager role.
   const {
-    canManage: canManageByRole,
+    canManageSection,
     canViewHrData,
     canViewJobProfile,
+    canAdministerCompetences,
   } = usePermissions();
   const [state, setState] = useState<DetailState>(initialState);
   const [loading, setLoading] = useState(true);
@@ -464,7 +466,8 @@ export default function PositionDetailPage() {
   }
 
   const { position, matrix, employees } = state;
-  const canManage = canManageByRole && position.can_manage !== false;
+  const canManage =
+    canManageSection("company") && position.can_manage !== false;
   // HRP-54: when we send the operator to the specialization matrix from a
   // position page, tag the URL so the destination renders a "Back to
   // position" affordance instead of dropping the user into a deep section
@@ -653,8 +656,10 @@ export default function PositionDetailPage() {
           this position", which is nonsense for a viewer the payload no
           longer carries one to. Gated on the same signal as the columns,
           not on a narrower role — a manager kept the card before this
-          ticket and keeps it now. */}
-      {showJobProfile ? (
+          ticket and keeps it now. HRP-827: the card is one button into
+          the competence generation, which is the admin role's on top of
+          `manage` on competences — below that it led to a 403 page. */}
+      {showJobProfile && canAdministerCompetences ? (
         <PositionAIGenerationCard position={position} onApplied={load} />
       ) : null}
 

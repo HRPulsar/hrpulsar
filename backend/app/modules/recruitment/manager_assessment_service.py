@@ -61,6 +61,8 @@ from app.modules.recruitment.models import (
     Vacancy,
     VacancyProfile,
 )
+from app.modules.recruitment.scope import fenced_users, refuse_fenced_assignees
+from app.modules.recruitment.score_normalization import scale_percent, weighted_levels
 
 log = logging.getLogger(__name__)
 
@@ -973,6 +975,10 @@ async def list_eligible_evaluators(
         )
     )
     existing = set(existing_rows.scalars().all())
+    # HRP-971: nobody the fence keeps off the vacancy scores on it.
+    fenced = {
+        u.id for u in await fenced_users(db, tenant_id, await _round_vacancy_id(db, rd))
+    }
 
     rows = await db.execute(
         select(User)
@@ -996,6 +1002,7 @@ async def list_eligible_evaluators(
             "already_evaluator": u.id in existing,
         }
         for u in rows.scalars().all()
+        if u.id not in fenced
     ]
 
 
@@ -1047,6 +1054,9 @@ async def add_evaluator(
     # HRP-369: the FIRST user to start scoring becomes the round's only
     # evaluator (re-adding themselves stays idempotent); any other claim
     # on the slot is rejected.
+    await refuse_fenced_assignees(
+        db, tenant_id, await _round_vacancy_id(db, rd), user_ids={evaluator_user_id}
+    )
     await _assert_pre_interview_slot_free(db, rd, evaluator_user_id=evaluator_user_id)
     existing = await db.execute(
         select(AssessmentRoundEvaluator).where(
@@ -1105,6 +1115,7 @@ async def _notify_evaluator_invited(
             "recruitment.assessment.evaluator_invited",
             {
                 "tenant_id": str(tenant_id),
+                "vacancy_id": str(cv.vacancy_id),
                 "evaluator_user_id": str(evaluator_user_id),
                 "candidate_name": candidate_display_name(candidate, fallback=""),
                 "vacancy_title": vacancy.title if vacancy else None,
@@ -1542,6 +1553,14 @@ async def submit_assessment(
     final_notes: str | None = None,
 ) -> dict[str, Any]:
     a = await _load_assessment(db, tenant_id, assessment_id)
+    # HRP-830: the sheet's scores are its evaluator's (``set_*_score``), so
+    # is submitting it - ``runs_rounds`` reaches every sheet in scope.
+    if (
+        a.evaluator_user_id is not None
+        and user_id is not None
+        and a.evaluator_user_id != user_id
+    ):
+        raise AppError("assessment_sheet_owner_only", status.HTTP_403_FORBIDDEN)
     a.status = "submitted"
     a.submitted_at = datetime.now(timezone.utc)
     if final_notes is not None:
@@ -1661,14 +1680,10 @@ async def round_aggregate(
             assert sc.score_value is not None
             by_competence.setdefault(str(sc.competence_id), []).append(
                 {
+                    # HRP-374 REDO (11.09): the tooltip names every
+                    # evaluator in full, colleague or external alike.
                     "evaluator": evaluator_names[a.id],
                     "evaluator_type": "internal" if is_internal else "external",
-                    # HRP-374 REDO: an internal evaluator is named in the
-                    # tooltip by the very initials their avatar shows;
-                    # an external one by their full name.
-                    "initials": (
-                        _initials(evaluator_names[a.id]) if is_internal else None
-                    ),
                     "score": sc.score_value,
                 }
             )
@@ -1809,6 +1824,9 @@ async def create_invites(
     payload: ManagerAssessmentInviteCreate,
 ) -> list[dict[str, Any]]:
     cv = await _load_cv(db, tenant_id, cv_id)
+    await refuse_fenced_assignees(
+        db, tenant_id, cv.vacancy_id, emails={i.email for i in payload.invitees}
+    )
     round_id = payload.round_id
     rd: AssessmentRound | None = None
     if round_id is not None:
@@ -2240,6 +2258,9 @@ async def resend_invite(
         raise AppError("invite_resend_terminal_status", status.HTTP_409_CONFLICT)
     if inv.token is None:
         raise AppError("invite_not_found", status.HTTP_404_NOT_FOUND)
+    # HRP-971: the link goes out again - not to one who has since applied.
+    cv = await _load_cv(db, tenant_id, inv.candidate_vacancy_id)
+    await refuse_fenced_assignees(db, tenant_id, cv.vacancy_id, emails={inv.email})
 
     # HRP-545: throttled only once the invite is known to be resendable —
     # a dead invite keeps answering the informative 409 instead of
@@ -2250,7 +2271,6 @@ async def resend_invite(
     # invitations aimed at the same mailbox.
     await _claim_invite_mail_budget([inv.email])
 
-    cv = await _load_cv(db, tenant_id, inv.candidate_vacancy_id)
     candidate = await db.get(Candidate, cv.candidate_id)
     vacancy = await db.get(Vacancy, cv.vacancy_id)
 
@@ -2321,6 +2341,9 @@ async def extend_invite(
     # expiry would silently succeed while the link stays invalid forever.
     if inv.revoked_at is not None or inv.status in ("submitted", "declined"):
         raise AppError("invite_extend_terminal_status", status.HTTP_409_CONFLICT)
+    # HRP-971: an extension revives the link - not for one who has since applied.
+    cv = await _load_cv(db, tenant_id, inv.candidate_vacancy_id)
+    await refuse_fenced_assignees(db, tenant_id, cv.vacancy_id, emails={inv.email})
     new_exp = inv.expires_at + timedelta(days=additional_days)
     # Cap at 30 days from creation.
     max_exp = inv.created_at + timedelta(days=30)
@@ -2430,6 +2453,16 @@ async def _load_vacancy(
     if v is None or v.tenant_id != tenant_id:
         raise AppError("vacancy_not_found", status.HTTP_404_NOT_FOUND)
     return v
+
+
+async def _round_vacancy_id(db: AsyncSession, rd: AssessmentRound) -> uuid.UUID:
+    vacancy_id = await db.scalar(
+        select(CandidateVacancy.vacancy_id).where(
+            CandidateVacancy.id == rd.candidate_vacancy_id
+        )
+    )
+    assert vacancy_id is not None  # the link is NOT NULL and cascades
+    return vacancy_id
 
 
 async def _load_cv(
@@ -2731,16 +2764,16 @@ async def _round_average(
 
 
 def _level_to_weight(snapshot: dict[str, Any] | None, level: float) -> float | None:
+    """Percent of scale for ``level`` on the vacancy's frozen scale snapshot.
+
+    HRP-774: one conversion for the whole product — :func:`scale_percent`
+    over the snapshot's level weights; the matrix and the canvas export read
+    the same function, so the header can no longer show 66 % where the
+    matrix shows 75 % for the same score.
+    """
     if snapshot is None:
         return None
-    levels = snapshot.get("levels", [])
-    if not levels:
-        return None
-    nearest = min(
-        levels,
-        key=lambda lvl: abs(float(lvl.get("value", 0)) - level),
-    )
-    return float(nearest.get("weight", 0))
+    return scale_percent(level, weighted_levels(snapshot.get("levels") or []))
 
 
 __all__ = [

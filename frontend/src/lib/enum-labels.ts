@@ -9,9 +9,9 @@
  *
  * - the **value** never changes, only the label. Wire codes, `data-testid`
  *   and stored rows stay on the enum code.
- * - a value outside the offered set (a seeded `position_change`, an
- *   imported history, a plan written before an option was retired) keeps
- *   rendering raw instead of disappearing.
+ * - a value outside the offered set (an imported history, a plan written
+ *   before an option was retired) keeps rendering raw instead of
+ *   disappearing.
  */
 
 /**
@@ -54,7 +54,11 @@ export const EVENT_TYPE_OPTIONS = [
   "other",
 ] as const;
 
-/** Keys live in the `employees` namespace. */
+/**
+ * Keys live in the `employees` namespace. Past the offered options come the
+ * types only the backend writes (HRP-999) — every one of them needs a key,
+ * `enum-labels.test.ts` reads the backend for the list.
+ */
 export const EVENT_TYPE_LABEL_KEYS: Record<string, string> = {
   hire: "eventTypeHire",
   promotion: "eventTypePromotion",
@@ -64,6 +68,14 @@ export const EVENT_TYPE_LABEL_KEYS: Record<string, string> = {
   review: "eventTypeReview",
   training: "eventTypeTraining",
   other: "eventTypeOther",
+  position_change: "eventTypePositionChange",
+  role_changed: "eventTypeRoleChanged",
+  name_change: "eventTypeNameChange",
+  division_change: "eventTypeDivisionChange",
+  termination: "eventTypeTermination",
+  status_inactive: "eventTypeStatusInactive",
+  status_reactivated: "eventTypeStatusReactivated",
+  compensation_change: "eventTypeCompensationChange",
 };
 
 export const eventTypeLabel = labelResolver(EVENT_TYPE_LABEL_KEYS, asIs);

@@ -155,3 +155,23 @@ class TestReapStuckSessions:
             await fresh.commit()
             await fresh.refresh(new_sess)
             assert new_sess.id != old.id
+
+
+class TestForceTerminateKeepsAProcessorRefusal:
+    async def test_no_allowed_processor_is_its_own_code(
+        self, db: AsyncSession, tenant, user, session_factory
+    ):
+        # Review 01.10 (HRP-1005): a workspace whose processor list allows no
+        # provider ended as service_error - "try later" - which no retry fixes.
+        from app.core.errors import AppError
+
+        sess = await _make_session(
+            db, tenant, user, status="running", updated_at=datetime.now(timezone.utc)
+        )
+        await tasks._force_terminate_running(
+            session_factory, sess.id, AppError("ai_no_allowed_processor", 409)
+        )
+        async with session_factory() as fresh:
+            row = await fresh.get(CompetenceGenerationSession, sess.id)
+            assert row.status == "error"
+            assert row.error_code == "no_allowed_processor"

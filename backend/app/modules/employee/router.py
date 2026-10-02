@@ -5,12 +5,15 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access_scope import (
+    ADMIN_ROLE_CODES,
+    assert_division_write_scope,
     assert_employee_read_scope,
+    assert_may_write_person,
     get_current_employee,
     is_employee_in_read_scope,
-    is_employee_only,
 )
 from app.core.errors import AppError
+from app.core.sections import matrix_levels, require_section
 from app.database import get_db
 from app.modules.auth import service as auth_service
 from app.modules.auth.dependencies import (
@@ -53,6 +56,10 @@ from app.modules.employee.schemas import (
 
 router = APIRouter(tags=["employees"])
 
+# HRP-829: running the employee record is ``manage`` on ``employees``; whose
+# record a caller may run stays ``assert_employee_write_scope``'s answer.
+_manage = require_section("employees", "manage")
+
 
 async def read_scope_user(
     employee_id: uuid.UUID,
@@ -74,8 +81,13 @@ async def read_scope_user(
 async def create_employee(
     data: EmployeeCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
+    # HRP-829: a new record lands in the caller's subtree - no division at
+    # all is the workspace's, so an admin-level role's (Maxim, 24.09).
+    await assert_division_write_scope(db, current_user, data.division_id)
+    await service.assert_position_in_scope(db, current_user, data.position_id)
+    await assert_may_write_person(db, current_user, data.user_id)
     return await service.create_employee(db, current_user.tenant_id, data)
 
 
@@ -109,9 +121,13 @@ async def list_employees(
 
     # HRP-623: rank-and-file get the whole company in the directory schema —
     # the point of a directory is finding a colleague, so the read scope that
-    # HRP-616 put on the card does not apply to the list. Admin / HR /
-    # manager keep the full rows their own scope allows.
-    directory = is_employee_only(current_user)
+    # HRP-616 put on the card does not apply to the list. Admin-level roles
+    # and whoever runs the records (``manage`` on ``employees`` - the
+    # manager role until HRP-829) keep the full rows their own scope allows.
+    directory = not (
+        any(r.code in ADMIN_ROLE_CODES for r in current_user.roles)
+        or (await matrix_levels(db, current_user))["employees"] == "manage"
+    )
     visible_ids = (
         None if directory else await get_visible_employee_ids(db, current_user)
     )
@@ -159,9 +175,13 @@ async def list_employees(
 @router.get("/employees/available-users", response_model=list[AvailableUser])
 async def list_available_users(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
-    return await service.list_available_users(db, current_user.tenant_id)
+    return await service.list_available_users(
+        db,
+        current_user.tenant_id,
+        admin_level=any(r.code in ADMIN_ROLE_CODES for r in current_user.roles),
+    )
 
 
 # Registered before ``/employees/{employee_id}``: the other order makes
@@ -219,7 +239,7 @@ async def update_employee(
     employee_id: uuid.UUID,
     data: EmployeeUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.update_employee(
         db, current_user.tenant_id, employee_id, data, current_user
@@ -277,7 +297,9 @@ async def list_events(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(read_scope_user),
 ):
-    return await service.list_events(db, current_user.tenant_id, employee_id, type)
+    return await service.list_events(
+        db, current_user.tenant_id, employee_id, type, current_user
+    )
 
 
 @router.post(
@@ -289,7 +311,7 @@ async def create_event(
     employee_id: uuid.UUID,
     data: EmployeeEventCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.create_event(
         db, current_user.tenant_id, employee_id, data, current_user
@@ -360,7 +382,7 @@ async def create_work_experience(
     employee_id: uuid.UUID,
     data: WorkExperienceCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.create_work_experience(
         db, current_user.tenant_id, employee_id, data, current_user
@@ -376,7 +398,7 @@ async def update_work_experience(
     item_id: uuid.UUID,
     data: WorkExperienceUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.update_work_experience(
         db, current_user.tenant_id, item_id, data, current_user
@@ -391,7 +413,7 @@ async def delete_work_experience(
     employee_id: uuid.UUID,
     item_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.delete_work_experience(
         db, current_user.tenant_id, item_id, current_user
@@ -426,7 +448,7 @@ async def create_previous_employment(
     employee_id: uuid.UUID,
     data: PreviousEmploymentCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.create_previous_employment(
         db, current_user.tenant_id, employee_id, data, current_user
@@ -442,7 +464,7 @@ async def update_previous_employment(
     item_id: uuid.UUID,
     data: PreviousEmploymentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.update_previous_employment(
         db, current_user.tenant_id, item_id, data, current_user
@@ -457,7 +479,7 @@ async def delete_previous_employment(
     employee_id: uuid.UUID,
     item_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.delete_previous_employment(
         db, current_user.tenant_id, item_id, current_user
@@ -614,7 +636,7 @@ async def delete_course(
 async def list_compensations(
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.list_compensations(
         db, current_user.tenant_id, employee_id, current_user
@@ -630,7 +652,7 @@ async def create_compensation(
     employee_id: uuid.UUID,
     data: CompensationCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.create_compensation(
         db, current_user.tenant_id, employee_id, data, current_user
@@ -646,7 +668,7 @@ async def update_compensation(
     item_id: uuid.UUID,
     data: CompensationUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.update_compensation(
         db, current_user.tenant_id, item_id, data, current_user
@@ -661,7 +683,7 @@ async def delete_compensation(
     employee_id: uuid.UUID,
     item_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
     return await service.delete_compensation(
         db, current_user.tenant_id, item_id, current_user

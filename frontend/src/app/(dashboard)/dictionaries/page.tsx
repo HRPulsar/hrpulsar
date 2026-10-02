@@ -16,7 +16,8 @@ import { LoadErrorState } from "@/components/load-error-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { RequireRole } from "@/components/require-role";
+import { RequireSection } from "@/components/require-section";
+import { usePermissions } from "@/hooks/use-permissions";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
@@ -88,14 +89,19 @@ const emptyForm = { title: "", description: "", sort_index: 0, is_active: true }
 // effects never fire for someone who is about to be redirected.
 export default function DictionariesPage() {
   return (
-    <RequireRole admin>
+    // HRP-827: the page edits - it opens at `manage`, `view` on the
+    // section is the pickers other pages read.
+    <RequireSection code="dictionaries" level="manage">
       <DictionariesPageContent />
-    </RequireRole>
+    </RequireSection>
   );
 }
 
 function DictionariesPageContent() {
   const t = useTranslations("dictionaries");
+  // HRP-827: a specialization's grade page writes the grade system, which
+  // is still the admin role's - the link stays with it.
+  const { isAdmin } = usePermissions();
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
@@ -376,7 +382,7 @@ function DictionariesPageContent() {
               {filtered.map((item) => (
                 <TableRow key={item.id} data-testid={`dictionaries-item-${item.id}`}>
                   <TableCell className="font-medium">
-                    {activeType === "specialization" ? (
+                    {activeType === "specialization" && isAdmin ? (
                       <Link
                         href={`/dictionaries/specializations/${item.id}`}
                         className="text-primary hover:underline"

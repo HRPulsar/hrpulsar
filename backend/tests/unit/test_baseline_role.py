@@ -104,6 +104,8 @@ async def test_demo_seed_leaves_no_user_without_a_role(
 
     codes = await _role_codes_by_user(db, tenant_id)
     assert codes, "demo tenant has no users"
+    # HRP-832: the visitor and every seeded persona hold the baseline.
+    assert all("employee" in c for c in codes.values()), codes
     assert all(codes.values()), f"users without any role: {
         [uid for uid, c in codes.items() if not c]
     }"

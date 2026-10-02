@@ -533,6 +533,8 @@ async def _generate_items_from_competences(
                 select(Competence.id, Competence.title).where(
                     Competence.id.in_(comp_ids),
                     Competence.tenant_id == tenant_id,
+                    # HRP-632: a personal draft goes into no plan.
+                    Competence.draft_owner_id.is_(None),
                 )
             )
         ).all()

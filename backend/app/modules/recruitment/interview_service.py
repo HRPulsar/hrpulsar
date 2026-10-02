@@ -55,6 +55,7 @@ from app.modules.recruitment.schemas import (
     TranscriptUpdate,
     UploadChunkAck,
 )
+from app.modules.recruitment.scope import fenced_users, refuse_fenced_assignees
 from app.modules.recruitment.score_normalization import compute_normalized_ai_score
 from app.modules.storage.models import File
 
@@ -669,6 +670,10 @@ async def create_interview(
     # assigned, not to whoever dropped the file.
     interviewer_ids = _ordered_interviewers(data.interviewer_id, data.interviewers)
     primary_interviewer = interviewer_ids[0] if interviewer_ids else None
+    if interviewer_ids:
+        await refuse_fenced_assignees(
+            db, tenant_id, cv.vacancy_id, user_ids=set(interviewer_ids)
+        )
 
     # HRP-202 REDO: inherit the candidate's most recent *signed* consent.
     # ``sign_consent`` only back-fills interviews that existed at signing
@@ -749,6 +754,20 @@ async def update_interview(
     # delta, so "who was added / removed" exists nowhere else.
     ids_before = [link.user_id for link in interview.interviewers]
     date_before = interview.interview_date
+    # HRP-971: only who is added - one already there does not block an edit,
+    # the legacy single interviewer (no link row) included.
+    added = set(_ordered_interviewers(data.interviewer_id, data.interviewers)) - set(
+        _ordered_interviewers(interview.interviewer_id, ids_before)
+    )
+    if added:
+        vacancy_id = (
+            await db.execute(
+                select(CandidateVacancy.vacancy_id).where(
+                    CandidateVacancy.id == interview.candidate_vacancy_id
+                )
+            )
+        ).scalar_one()
+        await refuse_fenced_assignees(db, tenant_id, vacancy_id, user_ids=added)
 
     # Every nullable column below is read off ``model_fields_set`` rather
     # than "is not None": an explicit ``null`` is the client clearing the
@@ -1895,13 +1914,14 @@ async def purge_expired_archived_interviews(
 
 
 async def list_interviewer_options(
-    db: AsyncSession, tenant_id: uuid.UUID
+    db: AsyncSession, tenant_id: uuid.UUID, cv_id: uuid.UUID | None = None
 ) -> list[dict]:
     """HRP-386: active tenant users offered in the Interviewer(s) picker.
 
     Deliberately wider than ``list_hiring_manager_options`` — anyone in
     the tenant can sit in an interview, including engineers without an
-    admin-tier role.
+    admin-tier role. For a candidacy (``cv_id``) it leaves out whoever the
+    fence keeps off its vacancy (HRP-971).
     """
 
     from app.modules.auth.models import User
@@ -1920,6 +1940,15 @@ async def list_interviewer_options(
         .scalars()
         .all()
     )
+    fenced: set[uuid.UUID] = set()
+    if cv_id is not None:
+        vacancy_id = await db.scalar(
+            select(CandidateVacancy.vacancy_id).where(
+                CandidateVacancy.id == cv_id, CandidateVacancy.tenant_id == tenant_id
+            )
+        )
+        if vacancy_id is not None:
+            fenced = {u.id for u in await fenced_users(db, tenant_id, vacancy_id)}
     return [
         {
             "id": row.id,
@@ -1927,6 +1956,7 @@ async def list_interviewer_options(
             "email": row.email,
         }
         for row in rows
+        if row.id not in fenced
     ]
 
 
@@ -2057,6 +2087,8 @@ async def enqueue_transcribe(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     interview_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID | None = None,  # read by the billing wrapper: the charge's "Who"
 ) -> dict:
     from app.modules.demo.utils import is_demo_tenant
     from app.modules.recruitment.tasks import transcribe_interview_task
@@ -2077,6 +2109,15 @@ async def enqueue_transcribe(
         raise AppError("interview_no_uploaded_media", status.HTTP_409_CONFLICT)
     if interview.transcription_status == "processing":
         raise AppError("transcription_already_in_progress", status.HTTP_409_CONFLICT)
+    # HRP-1005: the billing wrapper charges the minutes once this returns,
+    # so a workspace whose processor list leaves no provider is refused
+    # here, not by a worker that can only fail the job it was paid for.
+    from app.modules.recruitment import transcription_service
+
+    if not await db.run_sync(
+        lambda s: transcription_service.get_transcription_chain_sync(s, tenant_id)
+    ):
+        raise AppError("transcription_provider_unavailable", status.HTTP_409_CONFLICT)
 
     interview.transcription_status = "processing"
     interview.transcription_error = None
@@ -2090,6 +2131,7 @@ async def _stamp_pending_full_run(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     interview: Interview,
+    user_id: uuid.UUID | None = None,
 ) -> AIAnalysisRun | None:
     """HRP-492 — make a full analysis visible from the moment it starts.
 
@@ -2130,6 +2172,7 @@ async def _stamp_pending_full_run(
         vacancy_profile_id=profile.id if profile else None,
         vacancy_profile_version=profile.version if profile else None,
         analysis_data={},
+        created_by_id=user_id,
     )
     db.add(run)
     return run
@@ -2139,6 +2182,8 @@ async def enqueue_analyze(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     interview_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID | None = None,  # read by the billing wrapper: the charge's "Who"
 ) -> dict:
     from app.modules.recruitment.tasks import analyze_interview_task
 
@@ -2163,7 +2208,7 @@ async def enqueue_analyze(
     # HRP-492: the row goes in before dispatch — a worker that finishes
     # first would otherwise mirror its own completed run and leave this
     # one pending forever, blocking every later analysis on the pair.
-    run = await _stamp_pending_full_run(db, tenant_id, interview)
+    run = await _stamp_pending_full_run(db, tenant_id, interview, user_id)
     await db.commit()
 
     task = analyze_interview_task.delay(str(interview_id), str(tenant_id))
@@ -2182,6 +2227,8 @@ async def enqueue_analyze_or_cached(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     interview_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID | None = None,
 ) -> dict:
     """HRP-252 (D4): cache-aware analyze entry point.
 
@@ -2259,10 +2306,13 @@ async def enqueue_analyze_or_cached(
                     "candidate_name": None,
                     "cached": True,
                 },
+                # The auto-chain runs this in a worker, where the bus has
+                # no subscribers; the API path delivers the same way.
+                db=db,
             )
             return {"status": "completed", "cached": True}
 
-    return await enqueue_analyze(db, tenant_id, interview_id)
+    return await enqueue_analyze(db, tenant_id, interview_id, user_id=user_id)
 
 
 # Backwards-compat for callers that imported helpers from this module.

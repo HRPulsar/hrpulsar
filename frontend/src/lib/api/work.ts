@@ -40,9 +40,19 @@ export interface AccessLogEntry {
   created_at: string;
 }
 
+/** HRP-810: the owner of a process the way the shared employee line shows a
+ * person; `active` = still with the company (on leave counts). */
+export interface ContainerOwner {
+  user_id: string;
+  name: string;
+  position_title: string | null;
+  status: string;
+  active: boolean;
+}
+
 export interface ContainerAccess {
   visibility: Visibility;
-  owner: { user_id: string; name: string; active: boolean } | null;
+  owner: ContainerOwner | null;
   rules: AccessRule[];
   history: AccessLogEntry[];
 }
@@ -67,6 +77,8 @@ export interface WorkContainer {
   goal: string | null;
   status: ContainerStatus;
   owner_id: string | null;
+  /** HRP-810 REDO: the owner for the list's Owner column. */
+  owner?: ContainerOwner | null;
   created_by_id: string | null;
   source: "manual" | "ai";
   catalog_version: string;
@@ -205,6 +217,9 @@ export interface CoveragePerson {
   employee_id: string;
   name: string;
   position: string | null;
+  /** HRP-959: an assigned person stays on the step after going on leave or
+   * leaving the company; the row shows the status. A match is active. */
+  status?: string;
 }
 
 /** HRP-871: one competence of the matched person behind the step's

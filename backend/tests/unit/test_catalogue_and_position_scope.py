@@ -171,6 +171,13 @@ class TestCatalogueBelongsToHr:
     ):
         h = _headers(catalogue["mgr_user"])
         for method, path, body in _catalogue_mutations(catalogue):
+            if (method, path) == ("post", "/api/competences"):
+                # HRP-632: a division head adds a personal draft - their
+                # own, seen by no picker until HR or an admin publishes it.
+                created = await client.post(path, json=body, headers=h)
+                assert created.status_code == 201, created.text
+                assert created.json()["draft_owner_id"] == str(catalogue["mgr_user"].id)
+                continue
             code = await _call(client, method, path, body, h)
             assert code == 403, f"{method.upper()} {path} -> {code}"
 

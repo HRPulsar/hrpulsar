@@ -22,6 +22,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { GenerationProgress } from "@/components/coverage/generation-progress";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { useCostConfirmation } from "@/hooks/use-cost-confirmation";
 import { EECreditCostBadge } from "@/lib/ee-hooks";
 import { SKILL_ACTION, type SkillStatus, type StepSkill, workApi } from "@/lib/api/work";
 
@@ -54,6 +56,40 @@ export function SkillDialog({
   // One generation per opened dialog: Strict Mode replays the effect, and a
   // second POST would race the first on the step's unique skill row.
   const started = useRef(false);
+  // HRP-960: opening a step with no skill (or a failed one) used to start
+  // the generation - a charge - at once. It waits for a confirmation now;
+  // a ready or running skill opens straight away, reading it costs nothing.
+  const wouldGenerate =
+    canEdit && step.skill_status !== "ready" && step.skill_status !== "generating";
+  const [confirmed, setConfirmed] = useState(!wouldGenerate);
+  // A failed regeneration keeps the skill it had: such a step opens on that
+  // content, free, instead of a confirmation promising a charged generation
+  // that would never run. Read first; ask only when there is nothing.
+  const [probing, setProbing] = useState(
+    wouldGenerate && step.skill_status === "failed",
+  );
+  useEffect(() => {
+    if (!probing) return;
+    let cancelled = false;
+    workApi
+      .getSkill(step.step_id)
+      .then((existing) => {
+        if (cancelled || !existing.content) return;
+        started.current = true;
+        setSkill(existing);
+        if (existing.error_message) setError(existing.error_message);
+        setConfirmed(true);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setProbing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [probing, step.step_id]);
+  // The same price the bulk confirmation on the To do tab names.
+  const { cost } = useCostConfirmation(SKILL_ACTION);
 
   const generate = useCallback(async () => {
     setError(null);
@@ -70,7 +106,7 @@ export function SkillDialog({
   }, [step.step_id, t, onChanged]);
 
   useEffect(() => {
-    if (started.current) return;
+    if (!confirmed || started.current) return;
     started.current = true;
     (async () => {
       if (step.skill_status !== "none") {
@@ -100,7 +136,7 @@ export function SkillDialog({
     })();
     // Runs once per opened step: the dialog is remounted per step.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step.step_id]);
+  }, [step.step_id, confirmed]);
 
   const generating = skill?.status === "generating";
   useEffect(() => {
@@ -146,6 +182,23 @@ export function SkillDialog({
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("saveFailed"));
     }
+  }
+
+  if (probing) return null;
+  if (!confirmed) {
+    return (
+      <ConfirmDialog
+        open
+        onOpenChange={(open) => !open && onClose()}
+        title={t("skillTitle", { title: step.title })}
+        description={cost === null ? t("skillConfirm") : t("skillConfirmCost", { cost })}
+        onConfirm={() => setConfirmed(true)}
+        confirmLabel={t("getSkill")}
+        confirmVariant="default"
+        confirmTestId="coverage-skill-confirm-btn-confirm"
+        cancelTestId="coverage-skill-confirm-btn-cancel"
+      />
+    );
   }
 
   return (

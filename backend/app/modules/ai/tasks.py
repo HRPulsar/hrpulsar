@@ -23,7 +23,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import settings
-from app.core import billing_hooks
+from app.core import ai_usage_hooks, billing_hooks
 from app.core.celery_app import celery
 from app.database import make_async_engine
 
@@ -185,6 +185,14 @@ def generate_positions_task(
     )
 
     async def _run(session_factory: async_sessionmaker[AsyncSession]) -> list[dict]:
+        ai_usage_hooks.bind(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="ai.generate_positions",
+            work_unit_id=ai_usage_hooks.work_unit_id_or(
+                ai_usage_hooks.celery_task_uuid(self.request.id)
+            ),
+        )
         from app.modules.ai import prompts, service
         from app.modules.position.service import _position_to_read
 
@@ -263,6 +271,16 @@ def suggest_pdp_task(
     assessment_id = uuid.UUID(assessment_id_str)
 
     async def _run(session_factory: async_sessionmaker[AsyncSession]) -> list[dict]:
+        ai_usage_hooks.bind(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="ai.generate_pdp_goals",
+            entity_type="assessment",
+            entity_id=assessment_id,
+            work_unit_id=ai_usage_hooks.work_unit_id_or(
+                ai_usage_hooks.celery_task_uuid(self.request.id)
+            ),
+        )
         from app.modules.ai import prompts, service
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
@@ -327,6 +345,14 @@ def generate_competences_task(
     user_id = uuid.UUID(user_id_str) if user_id_str else None
 
     async def _run(session_factory: async_sessionmaker[AsyncSession]) -> list[dict]:
+        ai_usage_hooks.bind(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="ai.generate_competences",
+            work_unit_id=ai_usage_hooks.work_unit_id_or(
+                ai_usage_hooks.celery_task_uuid(self.request.id)
+            ),
+        )
         from app.modules.ai import prompts
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
@@ -388,6 +414,14 @@ def generate_indicators_task(
     user_id = uuid.UUID(user_id_str) if user_id_str else None
 
     async def _run(session_factory: async_sessionmaker[AsyncSession]) -> list[dict]:
+        ai_usage_hooks.bind(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="ai.generate_indicators",
+            work_unit_id=ai_usage_hooks.work_unit_id_or(
+                ai_usage_hooks.celery_task_uuid(self.request.id)
+            ),
+        )
         from app.modules.ai import prompts
 
         tenant_settings = await _load_settings(session_factory, tenant_id)
@@ -435,15 +469,19 @@ def generate_indicators_task(
 
 
 @celery.task(bind=True, max_retries=1, default_retry_delay=30)
-def batch_embed_task(self, items: list[dict]) -> dict:
+def batch_embed_task(self, items: list[dict], tenant_id: str | None = None) -> dict:
     """Generate embeddings for multiple entities in background.
 
     Each item: {"entity_type": str, "entity_id": str, "text_content": str}
+    HRP-954: every row is written for ``tenant_id`` (the caller's tenant).
+    A message queued before that argument existed carries the tenant in
+    its headers only (enqueue_task stamps it), so it is read from there.
     """
     import asyncio
     import uuid
 
-    from sqlalchemy import select
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
     from sqlalchemy.orm import Session
 
     from app.config import settings
@@ -451,7 +489,26 @@ def batch_embed_task(self, items: list[dict]) -> dict:
     from app.modules.ai import llm_client
     from app.modules.ai.models import Embedding
 
+    def _uuid_or_none(raw: object) -> uuid.UUID | None:
+        try:
+            return uuid.UUID(str(raw)) if raw else None
+        except (TypeError, ValueError):
+            return None
+
+    # HRP-964 R11: enqueue_task (ai/router.py) stamps user_id into the
+    # Celery message headers for WS routing (task_enqueue.py) — reuse it so
+    # batch-embed call-journal rows carry an actor. The tenant is the
+    # task's argument (HRP-954: the rows are written for it). Defensive: a
+    # missing/malformed header never raises, it just leaves the user unset.
+    headers = getattr(self.request, "headers", None) or {}
+    tenant_id = tenant_id or headers.get("tenant_id")
+    ai_usage_hooks.bind(
+        tenant_id=_uuid_or_none(tenant_id),
+        user_id=_uuid_or_none(headers.get("user_id")),
+    )
+
     engine = make_sync_engine(settings.database_url)
+    tenant = uuid.UUID(tenant_id)
     processed = 0
     errors = []
 
@@ -463,30 +520,39 @@ def batch_embed_task(self, items: list[dict]) -> dict:
                     entity_id = uuid.UUID(item["entity_id"])
                     text_content = item["text_content"]
 
-                    vector = asyncio.run(llm_client.get_embedding(text_content))
+                    with ai_usage_hooks.call_context(
+                        action="ai.batch_embed",
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                    ):
+                        vector = asyncio.run(llm_client.get_embedding(text_content))
 
-                    existing = db.execute(
-                        select(Embedding).where(
-                            Embedding.entity_type == entity_type,
-                            Embedding.entity_id == entity_id,
+                    # Same upsert as service.create_embedding: one row per
+                    # tenant-scoped key even when two writers race.
+                    db.execute(
+                        pg_insert(Embedding)
+                        .values(
+                            tenant_id=tenant,
+                            entity_type=entity_type,
+                            entity_id=entity_id,
+                            text_content=text_content,
+                            embedding=vector,
                         )
-                    ).scalar_one_or_none()
-
-                    if existing:
-                        existing.text_content = text_content
-                        existing.embedding = vector
-                    else:
-                        db.add(
-                            Embedding(
-                                entity_type=entity_type,
-                                entity_id=entity_id,
-                                text_content=text_content,
-                                embedding=vector,
-                            )
+                        .on_conflict_do_update(
+                            constraint="uq_embeddings_tenant_entity",
+                            set_={
+                                "text_content": text_content,
+                                "embedding": vector,
+                                "updated_at": func.now(),
+                            },
                         )
+                    )
                     db.commit()
                     processed += 1
                 except Exception as e:  # noqa: BLE001 - per-item isolation
+                    # A failed statement leaves the transaction aborted;
+                    # without the rollback every later item fails with it.
+                    db.rollback()
                     errors.append(
                         {
                             "entity_id": item.get("entity_id"),

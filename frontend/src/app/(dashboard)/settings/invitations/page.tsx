@@ -18,7 +18,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PositionCombobox } from "@/components/position-combobox";
-import { RequireRole } from "@/components/require-role";
+import { RequireSection } from "@/components/require-section";
+import { usePermissions } from "@/hooks/use-permissions";
 import { Label } from "@/components/ui/label";
 import {
   Card,
@@ -93,7 +94,10 @@ const INVITE_ALLOWED: Record<string, ReadonlySet<string>> = {
 };
 
 function allowedInviteRoles(userRoles: string[]): Set<string> {
-  const allowed = new Set<string>();
+  // HRP-831: `employee` is every inviter's floor - a role the tenant
+  // opened the section to without a row above invites employees only
+  // (`_allowed_invite_roles`).
+  const allowed = new Set<string>(["employee"]);
   for (const code of userRoles) {
     const set = INVITE_ALLOWED[code];
     if (set) for (const c of set) allowed.add(c);
@@ -102,14 +106,15 @@ function allowedInviteRoles(userRoles: string[]): Set<string> {
 }
 
 
-// HRP-436: Invitations is an Admin-section page — managers and employees get a
-// toast + redirect instead of the (empty, 403-backed) list. Guarding the whole
-// component, not just its JSX, keeps the forbidden fetches from firing at all.
+// HRP-436: whoever the section is closed to gets a toast + redirect instead
+// of the (empty, 403-backed) list. Guarding the whole component, not just its
+// JSX, keeps the forbidden fetches from firing at all. HRP-831: the tenant's
+// matrix decides who that is - `view` reads the registry, `manage` runs it.
 export default function InvitationsPage() {
   return (
-    <RequireRole admin>
+    <RequireSection code="invitations">
       <InvitationsPageContent />
-    </RequireRole>
+    </RequireSection>
   );
 }
 
@@ -122,6 +127,15 @@ function InvitationsPageContent() {
     user?.is_platform_admin || user?.roles?.includes("admin")
   );
   const isDemo = !!user?.tenant_is_demo;
+  // HRP-831: `manage` sends, edits, cancels and resends; changing the role
+  // of a sent invitation stays the admin level's (`isAdmin`, the rbac
+  // seam). Below the admin level the API takes only divisions the caller
+  // heads, so the pickers offer the caller's scope (`/divisions/scope`).
+  const { canManageSection, isAdminLevel } = usePermissions();
+  const canManage = canManageSection("invitations");
+  const [scopeIds, setScopeIds] = useState<Set<string> | null>(null);
+  // A `manage` holder heading nothing has nowhere to send (HRP-829's rule).
+  const canSend = canManage && (isAdminLevel || (scopeIds?.size ?? 0) > 0);
   const inviterRoles: string[] = user?.is_platform_admin
     ? ["platform_admin", ...(user?.roles ?? [])]
     : (user?.roles ?? []);
@@ -153,10 +167,11 @@ function InvitationsPageContent() {
 
   const load = useCallback(async () => {
     try {
-      const [inv, r, d] = await Promise.allSettled([
+      const [inv, r, d, s] = await Promise.allSettled([
         invitationsApi.list({ status: statusFilter || undefined }),
         api.get<Role[]>("/roles"),
         api.get<Division[]>("/divisions"),
+        api.get<{ id: string }[]>("/divisions/scope"),
       ]);
       if (inv.status === "fulfilled") {
         setInvitations(inv.value.items);
@@ -164,6 +179,7 @@ function InvitationsPageContent() {
       }
       if (r.status === "fulfilled") setRoles(r.value);
       if (d.status === "fulfilled") setDivisions(d.value);
+      if (s.status === "fulfilled") setScopeIds(new Set(s.value.map((x) => x.id)));
     } finally {
       setLoading(false);
     }
@@ -178,7 +194,9 @@ function InvitationsPageContent() {
   // hunt for the button after switching pages. useSearchParams is wrapped
   // in Suspense (Next 16 requires it for the static-prerender path).
 
-  const flatDivisions = flattenTree(divisions);
+  const flatDivisions = flattenTree(divisions).filter(
+    (d) => scopeIds === null || scopeIds.has(d.id),
+  );
 
   async function handleInvite() {
     if (!inviteForm.name.trim() || !inviteForm.email) return;
@@ -303,7 +321,7 @@ function InvitationsPageContent() {
   return (
     <div className="space-y-6">
       <Suspense fallback={null}>
-        <DeepLinkInviteOpener onOpen={() => setInviteOpen(true)} />
+        {canSend && <DeepLinkInviteOpener onOpen={() => setInviteOpen(true)} />}
       </Suspense>
       <div className="flex items-center justify-between">
         <div>
@@ -329,10 +347,12 @@ function InvitationsPageContent() {
             </p>
           )}
         </div>
-        <Button data-testid="invitations-btn-invite" onClick={() => setInviteOpen(true)}>
-          <Plus className="mr-1 h-4 w-4" />
-          {t("inviteButton")}
-        </Button>
+        {canSend && (
+          <Button data-testid="invitations-btn-invite" onClick={() => setInviteOpen(true)}>
+            <Plus className="mr-1 h-4 w-4" />
+            {t("inviteButton")}
+          </Button>
+        )}
       </div>
 
       <Card>
@@ -396,7 +416,11 @@ function InvitationsPageContent() {
                 </TableHeader>
                 <TableBody>
                   {invitations.map((inv) => {
-                    const editable = inv.status === "pending";
+                    // Re-addressing is sending: a row is editable only when
+                    // the caller could have sent it (its role is within
+                    // their tier - the API asks the same).
+                    const editable =
+                      inv.status === "pending" && canManage && allowedRoleCodes.has(inv.role_code);
                     return (
                       <TableRow key={inv.id} data-testid={`invitations-row-${inv.id}`}>
                         <TableCell
@@ -408,7 +432,7 @@ function InvitationsPageContent() {
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <span>{inv.email}</span>
-                            {editable && isAdmin && !isDemo && (
+                            {editable && !isDemo && (
                               <Button
                                 variant="ghost"
                                 size="icon-sm"
@@ -488,9 +512,11 @@ function InvitationsPageContent() {
                                 </SelectValue>
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="">
-                                  {t("inviteNoDivision")}
-                                </SelectItem>
+                                {isAdminLevel && (
+                                  <SelectItem value="">
+                                    {t("inviteNoDivision")}
+                                  </SelectItem>
+                                )}
                                 {flatDivisions.map((d) => (
                                   <SelectItem key={d.id} value={d.id}>
                                     {"—".repeat(d.depth)} {d.name}
@@ -506,6 +532,7 @@ function InvitationsPageContent() {
                           {editable ? (
                             <div className="w-[200px]">
                               <PositionCombobox
+                                seat
                                 data-testid={`invitations-row-${inv.id}-edit-position`}
                                 value={inv.position_id ?? null}
                                 disabled={savingRows.has(inv.id)}
@@ -660,6 +687,7 @@ function InvitationsPageContent() {
             <div className="space-y-2">
               <Label>{t("invitePosition")}</Label>
               <PositionCombobox
+                seat
                 data-testid="invitations-modal-invite-select-position"
                 value={inviteForm.position_id || null}
                 onValueChange={(id) =>

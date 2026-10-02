@@ -131,7 +131,9 @@ class TestManagerSeesDraftPDPs:
             PDPCreate(title="Onboarding plan", employee_id=report_emp.id),
         )
 
-        resp = await client.get("/api/pdp", headers=_auth_headers(manager_user, tenant.id))
+        resp = await client.get(
+            "/api/pdp", headers=_auth_headers(manager_user, tenant.id)
+        )
         assert resp.status_code == 200, resp.text
         ids = {str(p["id"]) for p in resp.json()}
         assert str(draft["id"]) in ids
@@ -269,3 +271,81 @@ class TestEmployeeCannotAuthorTheirOwnPlan:
             headers=_auth_headers(admin_user, tenant.id),
         )
         assert resp.status_code == 201, resp.text
+
+
+class TestPDPDetailScope:
+    """HRP-818: ``GET /pdp/{id}`` answers only inside the reading scope.
+
+    ``GET /pdp`` was already trimmed through ``get_visible_employee_ids``,
+    but the detail route filtered by tenant alone — any colleague could
+    read any plan by id. The gate is ``pdp_status_scope``, the one
+    ``/status``, ``/comments`` and ``/versions`` already sit behind, so
+    the named reviewer keeps reading the plan they were named for. The
+    item ``/pass`` route joins it: its service check refused a stranger,
+    but answered ``409`` with the plan's status first.
+    """
+
+    async def test_stranger_is_refused_and_scoped_readers_pass(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        tenant,
+        manager_role: Role,
+        employee_role: Role,
+    ) -> None:
+        manager_user = await _make_user_with_role(
+            db, tenant.id, manager_role, prefix="mgr"
+        )
+        manager_emp = await _make_employee(db, tenant.id, manager_user.id)
+        division = Division(
+            tenant_id=tenant.id, name="Engineering", manager_id=manager_emp.id
+        )
+        db.add(division)
+        await db.commit()
+        await db.refresh(division)
+        manager_emp.division_id = division.id
+        await db.commit()
+
+        report_user = await _make_user_with_role(
+            db, tenant.id, employee_role, prefix="report"
+        )
+        report_emp = await _make_employee(
+            db, tenant.id, report_user.id, division_id=division.id
+        )
+        # No Employee row: the reviewer's visible set is empty, so only the
+        # ``reviewer_id`` clause can let them in.
+        reviewer_user = await _make_user_with_role(
+            db, tenant.id, employee_role, prefix="reviewer"
+        )
+        stranger_user = await _make_user_with_role(
+            db, tenant.id, employee_role, prefix="stranger"
+        )
+        await _make_employee(db, tenant.id, stranger_user.id)
+
+        plan = await pdp_service.create_pdp(
+            db,
+            tenant.id,
+            manager_user.id,
+            PDPCreate(
+                title="Plan", employee_id=report_emp.id, reviewer_id=reviewer_user.id
+            ),
+        )
+        url = f"/api/pdp/{plan['id']}"
+        stranger = _auth_headers(stranger_user, tenant.id)
+
+        resp = await client.get(url, headers=stranger)
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"]["error_code"] == "outside_division_scope"
+        resp = await client.post(f"{url}/items/{uuid.uuid4()}/pass", headers=stranger)
+        assert resp.status_code == 403, resp.text
+
+        for reader in (report_user, manager_user, reviewer_user):
+            resp = await client.get(url, headers=_auth_headers(reader, tenant.id))
+            assert resp.status_code == 200, (reader.email, resp.text)
+        # Past the gate the service speaks: a draft cannot be ticked (409),
+        # which is the answer the reviewer always got — not the new 403.
+        resp = await client.post(
+            f"{url}/items/{uuid.uuid4()}/pass",
+            headers=_auth_headers(reviewer_user, tenant.id),
+        )
+        assert resp.status_code == 409, resp.text

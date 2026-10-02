@@ -16,10 +16,17 @@ from datetime import date, datetime, timezone
 import pytest_asyncio
 from app.core.security import create_access_token, hash_password
 from app.main import app
-from app.modules.assessment.models import PDP, Assessment, ExternalReviewer, PDPItem
+from app.modules.assessment.models import (
+    CPA,
+    PDP,
+    Assessment,
+    ExternalReviewer,
+    PDPItem,
+)
 from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Division
 from app.modules.employee.models import Employee
+from app.modules.exam.models import MassExam
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -445,29 +452,25 @@ class TestEveryMutatingRouteCarriesAGuard:
     GUARDS = {
         "assessment_scope",
         "assessment_group_scope",
+        "cpa_scope",
         "pdp_scope",
         "pdp_status_scope",
     }
 
     # Mutations that are deliberately not fenced by the assessee's
     # division, each for its own reason:
-    #  * CPA and mass-exam rows carry no assessee at all, only an author,
-    #    so there is nothing to fence them by yet (HRP-640). A mass
-    #    assessment does carry assessees and is fenced — see
-    #    ``assessment_group_scope``;
-    #  * answers and item toggles are gated on being a participant or the
-    #    plan's named reviewer — people who are on the plan precisely
-    #    because they sit outside the subtree;
+    #  * creating a CPA round has no row to fence yet - the round is the
+    #    caller's from then on (``cpa_scope``, HRP-640);
+    #  * answers are gated on being a participant or the plan's named
+    #    reviewer — people who are on the plan precisely because they sit
+    #    outside the subtree (HRP-818 put the item toggle behind
+    #    ``pdp_status_scope``, which admits the named reviewer);
     #  * the answer-scale catalogue is tenant-wide with no owning axis, so
     #    it is fenced by role instead (HRP-631);
     #  * the external-review submit route is authenticated by its token.
     EXEMPT = {
         "create_cpa",
-        "add_cpa_criteria",
-        "add_cpa_participant",
-        "copy_cpa",
         "record_answer",
-        "mark_item_passed",
         "create_answer_scale",
         "update_answer_scale",
         "delete_answer_scale",
@@ -495,3 +498,110 @@ class TestEveryMutatingRouteCarriesAGuard:
                 continue
             unguarded.append(f"{sorted(route.methods)} {route.path}")
         assert not unguarded, f"mutating routes without a scope guard: {unguarded}"
+
+
+class TestEveryRunRouteIsTheAuthors:
+    """HRP-640: a route added under a CPA round or a mass exam - reads
+    included - fails here unless it asks for the author."""
+
+    def test_every_run_route_carries_the_author_guard(self):
+        unguarded = []
+        for route in app.routes:
+            path = getattr(route, "path", "")
+            guard = (
+                "cpa_scope"
+                if "{cpa_id}" in path
+                else "mass_exam_scope"
+                if "{mass_exam_id}" in path
+                else None
+            )
+            if guard is None:
+                continue
+            names = {d.call.__name__ for d in route.dependant.dependencies if d.call}
+            if guard not in names:
+                unguarded.append(f"{sorted(route.methods)} {path}")
+        assert not unguarded, f"run routes without the author guard: {unguarded}"
+
+
+class TestGroupRunsAreTheAuthors:
+    """HRP-640 (Vladimir, 29.09): below the admin level a CPA round and a
+    mass exam are their author's alone - listed, opened and changed by
+    them - and so are a mass assessment's own actions. The admin level
+    keeps every run."""
+
+    async def test_a_mass_assessment_over_ones_own_team_is_still_its_authors(
+        self, client: AsyncClient, scoped
+    ):
+        admin = _headers(scoped["admin_user"])
+        h = _headers(scoped["mgr_user"])
+        body = {
+            "title": "Run",
+            "type_code": "360",
+            "employee_ids": [str(scoped["mine_employee"].id)],
+        }
+        by_hr = await client.post("/api/assessment-groups", headers=admin, json=body)
+        assert by_hr.status_code == 201, by_hr.text
+        refused = await client.patch(
+            f"/api/assessment-groups/{by_hr.json()['id']}",
+            headers=h,
+            json={"title": "renamed"},
+        )
+        assert refused.status_code == 403, refused.text
+        assert "not_the_author" in refused.text
+
+        own = await client.post("/api/assessment-groups", headers=h, json=body)
+        assert own.status_code == 201, own.text
+        renamed = await client.patch(
+            f"/api/assessment-groups/{own.json()['id']}",
+            headers=h,
+            json={"title": "renamed"},
+        )
+        assert renamed.status_code == 200, renamed.text
+
+    async def test_cpa_rounds_and_mass_exams_are_their_authors(
+        self, client: AsyncClient, db: AsyncSession, tenant, scoped, assessment_types
+    ):
+        rows: dict[str, tuple[uuid.UUID, uuid.UUID]] = {}
+        for who in ("mgr_user", "admin_user"):
+            cpa = CPA(
+                tenant_id=tenant.id,
+                title=f"{who} round",
+                author_id=scoped[who].id,
+                type_id=assessment_types["360"].id,
+            )
+            exam = MassExam(
+                tenant_id=tenant.id, title=f"{who} exam", initiator_id=scoped[who].id
+            )
+            db.add_all([cpa, exam])
+            await db.commit()
+            rows[who] = (cpa.id, exam.id)
+        mgr = _headers(scoped["mgr_user"])
+        admin = _headers(scoped["admin_user"])
+        own_cpa, own_exam = rows["mgr_user"]
+        their_cpa, their_exam = rows["admin_user"]
+
+        listed = (await client.get("/api/cpa", headers=mgr)).json()
+        assert [x["id"] for x in listed] == [str(own_cpa)]
+        listed = (await client.get("/api/mass-exams", headers=mgr)).json()
+        assert [x["id"] for x in listed] == [str(own_exam)]
+
+        for method, path, body in (
+            ("GET", f"/api/cpa/{their_cpa}", None),
+            ("POST", f"/api/cpa/{their_cpa}/copy", {"title": "mine now"}),
+            ("GET", f"/api/mass-exams/{their_exam}", None),
+            ("GET", f"/api/mass-exams/{their_exam}/results", None),
+            ("PATCH", f"/api/mass-exams/{their_exam}", {"title": "renamed"}),
+        ):
+            resp = await client.request(method, path, json=body, headers=mgr)
+            assert resp.status_code == 403, (method, path, resp.text)
+            assert "not_the_author" in resp.text, (method, path, resp.text)
+
+        assert (await client.get(f"/api/cpa/{own_cpa}", headers=mgr)).status_code == 200
+        assert (
+            await client.get(f"/api/mass-exams/{own_exam}", headers=mgr)
+        ).status_code == 200
+        # The admin level keeps every run.
+        assert len((await client.get("/api/cpa", headers=admin)).json()) == 2
+        assert (
+            await client.get(f"/api/mass-exams/{own_exam}", headers=admin)
+        ).status_code == 200

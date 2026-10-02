@@ -5,9 +5,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import billing_hooks
+from app.core.errors import AppError
 from app.core.schemas import TaskAccepted
+from app.core.sections import require_section
 from app.database import get_db
-from app.modules.ai import service
+from app.modules.ai import processors, service
 from app.modules.assessment.scope import assert_assessment_in_scope
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
@@ -68,7 +70,9 @@ async def generate_competences(
     response: Response,
     sync: bool = Query(False, description="Run synchronously (legacy clients)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    # HRP-827: drafting the catalogue is authoring it - ``/ai`` sits outside
+    # the gate, so the ``competences`` level is asked here.
+    current_user: User = Depends(require_section("competences", "manage")),
 ):
     if sync:
         return await service.generate_competences(
@@ -111,7 +115,7 @@ async def generate_indicators(
     response: Response,
     sync: bool = Query(False, description="Run synchronously (legacy clients)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(require_section("competences", "manage")),
 ):
     if sync:
         return await service.generate_indicators(
@@ -152,7 +156,9 @@ async def suggest_pdp(
     response: Response,
     sync: bool = Query(False, description="Run synchronously (legacy clients)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    # HRP-825: drafting a plan is authoring one - ``/ai`` sits outside the
+    # gate, so the ``development`` level is asked here.
+    current_user: User = Depends(require_section("development", "manage")),
 ):
     # HRP-638: the plan is drafted for the assessment's assessee and paid
     # for out of the tenant's credits, so the same subtree fence as the
@@ -191,13 +197,24 @@ async def generate_positions(
     response: Response,
     sync: bool = Query(False, description="Run synchronously (legacy clients)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    # HRP-828: drafting positions is authoring them - ``/ai`` sits outside
+    # the gate, so the ``company`` level is asked here.
+    current_user: User = Depends(require_section("company", "manage")),
 ):
     # HRP-631: a division head may run the generator, but the drafts it
     # writes land in their own subtree — the generator files each position
     # under a division, and an unfenced run would put drafts (and its
     # sweep of unregenerated ones) across the whole workspace.
     allowed = await resolve_managed_divisions(db, current_user)
+    if allowed == ():
+        # HRP-828: no subtree to file a draft under - refuse before the run
+        # is charged rather than bill a generation that saves nothing.
+        raise AppError(
+            "outside_division_scope",
+            status.HTTP_403_FORBIDDEN,
+            detail_extra={},
+            detail_code_key="error_code",
+        )
     if sync:
         return await service.generate_positions(
             db, current_user.tenant_id, current_user.id, allowed
@@ -230,10 +247,15 @@ async def generate_positions(
 async def create_embedding(
     data: EmbedRequest,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role("admin")),
+    current_user: User = Depends(require_role("admin")),
 ):
+    await processors.require_processor(db, current_user.tenant_id, "openai")
     return await service.create_embedding(
-        db, data.entity_type, data.entity_id, data.text_content
+        db,
+        current_user.tenant_id,
+        data.entity_type,
+        data.entity_id,
+        data.text_content,
     )
 
 
@@ -243,6 +265,7 @@ async def semantic_search(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await processors.require_processor(db, current_user.tenant_id, "openai")
     return await service.semantic_search(
         db,
         current_user.tenant_id,
@@ -259,9 +282,11 @@ async def semantic_search(
 @router.post("/ai/embed/batch", response_model=TaskAccepted)
 async def batch_embed(
     data: BatchEmbedRequest,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin")),
 ):
     """Queue batch embedding generation as background task."""
+    await processors.require_processor(db, current_user.tenant_id, "openai")
     from app.core.task_enqueue import enqueue_task
     from app.modules.ai.tasks import batch_embed_task
 
@@ -276,6 +301,7 @@ async def batch_embed(
     result = enqueue_task(
         batch_embed_task,
         items,
+        str(current_user.tenant_id),
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         module="ai",

@@ -12,8 +12,16 @@ import {
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { BADGE_COLOR } from "@/lib/badge-tones";
-import { aiVerdictCellState, aiVerdictLabel } from "@/lib/recruitment-types";
-import type { AiReadiness, AiVerdict } from "@/lib/recruitment-types";
+import {
+  aiAnalysisBasis,
+  aiVerdictCellState,
+  aiVerdictLabel,
+} from "@/lib/recruitment-types";
+import type {
+  AiAnalysisBasis,
+  AiReadiness,
+  AiVerdict,
+} from "@/lib/recruitment-types";
 
 interface VerdictConfig {
   icon: typeof CheckCircle2;
@@ -35,6 +43,19 @@ const READINESS_TEXT_KEYS: Record<AiReadiness, string> = {
   resume_only: "verdictReadinessResumeOnly",
   transcript_only: "verdictReadinessTranscriptOnly",
   resume_and_transcript: "verdictReadinessResumeAndTranscript",
+};
+
+// HRP-685: the sub-badge names the data the verdict is based on, not the
+// prompt that produced it — see ``aiAnalysisBasis``.
+const BASIS_TEXT_KEYS: Record<AiAnalysisBasis, string> = {
+  resume_only: "verdictModeResumeOnly",
+  transcript_only: "verdictModeTranscriptOnly",
+  full: "verdictModeFull",
+};
+const BASIS_TOOLTIP_KEYS: Record<AiAnalysisBasis, string> = {
+  resume_only: "verdictModeResumeOnlyTooltip",
+  transcript_only: "verdictModeTranscriptOnlyTooltip",
+  full: "verdictModeFullTooltip",
 };
 
 interface Props {
@@ -130,31 +151,25 @@ export function AiVerdictBadge({
     </span>
   );
 
-  const modeSubBadge =
-    analysisMode === "resume_only" || analysisMode === "full" ? (
-      <span
-        className={cn(
-          "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
-          analysisMode === "resume_only"
-            ? "border-amber-300 text-amber-800 dark:border-amber-700 dark:text-amber-300"
-            : "border-emerald-300 text-emerald-800 dark:border-emerald-700 dark:text-emerald-300",
-        )}
-        title={
-          analysisMode === "resume_only"
-            ? t("verdictModeResumeOnlyTooltip")
-            : t("verdictModeFullTooltip")
-        }
-        data-testid={
-          testIdPrefix
-            ? `${testIdPrefix}-ai-analysis-mode-badge-${analysisMode}`
-            : `ai-analysis-mode-badge-${analysisMode}`
-        }
-      >
-        {analysisMode === "resume_only"
-          ? t("verdictModeResumeOnly")
-          : t("verdictModeFull")}
-      </span>
-    ) : null;
+  const basis = aiAnalysisBasis(analysisMode, aiReadiness);
+  const modeSubBadge = basis ? (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
+        basis === "full"
+          ? "border-emerald-300 text-emerald-800 dark:border-emerald-700 dark:text-emerald-300"
+          : "border-amber-300 text-amber-800 dark:border-amber-700 dark:text-amber-300",
+      )}
+      title={t(BASIS_TOOLTIP_KEYS[basis])}
+      data-testid={
+        testIdPrefix
+          ? `${testIdPrefix}-ai-analysis-mode-badge-${basis}`
+          : `ai-analysis-mode-badge-${basis}`
+      }
+    >
+      {t(BASIS_TEXT_KEYS[basis])}
+    </span>
+  ) : null;
 
   return (
     <span className="inline-flex items-center gap-1 align-middle">

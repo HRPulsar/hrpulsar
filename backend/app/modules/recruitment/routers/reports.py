@@ -15,7 +15,7 @@ from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.modules.auth.dependencies import require_role
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     analytics_service,
@@ -24,8 +24,8 @@ from app.modules.recruitment import (
     share_service,
 )
 from app.modules.recruitment.routers.common import (
-    RECRUITMENT_VIEWER_ROLES,
     recruitment_public_limiter,
+    runs_hiring,
 )
 from app.modules.recruitment.schemas import (
     AnalyticsSummary,
@@ -41,8 +41,10 @@ from app.modules.recruitment.schemas import (
     VacancyAnalytics,
 )
 from app.modules.recruitment.scope import (
+    RecruitmentScope,
     export_scope,
     list_scope_filter,
+    recruitment_scope,
     report_scope,
     vacancy_query_scope,
     vacancy_scope,
@@ -64,7 +66,7 @@ async def generate_vacancy_report(
     data: ReportGenerateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hr")),
+    current_user: User = Depends(runs_hiring),
 ):
     """Enqueue an XLSX consolidated report for the given vacancy."""
 
@@ -100,7 +102,7 @@ async def list_vacancy_reports(
     limit: int = Query(50, ge=1, le=100),
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     items, total = await service.list_reports(
@@ -121,7 +123,7 @@ async def list_all_reports(
     vacancy_id: uuid.UUID | None = None,
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     scope_filter: ColumnElement[bool] | None = Depends(list_scope_filter),
     _query_scope: None = Depends(vacancy_query_scope),
 ):
@@ -141,7 +143,7 @@ async def list_all_reports(
 async def get_report(
     export_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(export_scope),
 ):
     return await service.get_report(db, current_user.tenant_id, export_id)
@@ -151,7 +153,7 @@ async def get_report(
 async def delete_report(
     export_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     await service.delete_report(db, current_user.tenant_id, export_id)
     return Response(status_code=204)
@@ -164,7 +166,7 @@ async def delete_report(
 async def get_report_preview(
     export_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(export_scope),
 ):
     """Inline XLSX preview — every sheet rendered as a JSON cell matrix."""
@@ -182,10 +184,11 @@ async def compare_vacancy_candidates(
     vacancy_id: uuid.UUID,
     candidate_ids: list[uuid.UUID] = Query(..., alias="candidate_ids"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
+    scope: RecruitmentScope = Depends(recruitment_scope),
 ):
-    role = service.resolve_user_role(current_user)
+    role = service.resolve_user_role(current_user, full=scope.unrestricted)
     return await service.compare_candidates(
         db,
         current_user.tenant_id,
@@ -207,7 +210,7 @@ async def share_report(
     report_id: uuid.UUID,
     data: ReportShareCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await share_service.create_share(
         db,
@@ -227,7 +230,7 @@ async def share_report(
 async def list_report_shares(
     report_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(report_scope),
 ):
     return await share_service.list_shares(db, current_user.tenant_id, report_id)
@@ -241,7 +244,7 @@ async def revoke_report_share(
     report_id: uuid.UUID,
     share_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     await share_service.revoke_share(
         db, current_user.tenant_id, current_user.id, report_id, share_id
@@ -273,7 +276,7 @@ async def open_shared_report(
 async def get_vacancy_analytics(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     return await analytics_service.vacancy_analytics(
@@ -287,7 +290,7 @@ async def get_vacancy_analytics(
 )
 async def get_recruitment_summary(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await analytics_service.recruitment_summary(db, current_user.tenant_id)
 
@@ -300,7 +303,7 @@ async def get_comparison_radar(
     vacancy_id: uuid.UUID,
     candidate_ids: list[uuid.UUID] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     return await analytics_service.comparison_radar(

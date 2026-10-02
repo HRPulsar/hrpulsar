@@ -193,7 +193,10 @@ class TestMapCompetences:
         assert "kind: boundary" in call["system"]
         # v2 rules (HRP-751 round 1) reach the model.
         assert "least one of its indicators evidences" in call["system"]
-        assert "P12 when the competence is explicitly about following" in call["system"]
+        # v6 (HRP-961): the shared conventions block reaches the model.
+        assert (
+            "the counterpart's reply picks a branch from a known set" in call["system"]
+        )
 
     async def test_batches_by_size(self, db, tenant, llm):
         await _seed(db)
@@ -820,15 +823,18 @@ class TestPromptV5:
         from app.modules.primitives.mapping_service import build_system_prompt
 
         system = build_system_prompt([])
+        # Since v2map.v6 (HRP-961) the code boundaries are the shared
+        # conventions block: escalation by rule is P3, not P11.
         for phrase in (
             f"({TOP_LEVEL_TAG}) alone is not enough evidence",
+            "read 'the step' there as the work a person exercising",
             "party outside the company",
-            "a spoken presentation adds no code",
-            "escalation by rule",
-            "Posting transactions to accounts",
-            "system from its documents is P1",
+            "Escalation by a rule - a threshold, a deadline, a request type - is P3",
+            "a category, a level, a queue, an account - is P3",
+            "Moving fields from a document or a conversation into a system is P1",
         ):
             assert phrase in system, phrase
+        assert "escalation by rule is P11" not in system
 
     async def test_payload_marks_only_the_competence_top_level(self, db, tenant):
         from app.modules.competence.models import SkillLevel

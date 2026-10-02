@@ -37,10 +37,15 @@ from fastapi import Depends, status
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.access_scope import get_visible_employee_ids
+from app.core.access_scope import (
+    ADMIN_ROLE_CODES,
+    assert_authored,
+    get_visible_employee_ids,
+)
 from app.core.errors import AppError
+from app.core.sections import matrix_levels
 from app.database import get_db
-from app.modules.assessment.models import PDP, Assessment
+from app.modules.assessment.models import CPA, PDP, Assessment, AssessmentGroup
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 
@@ -160,18 +165,29 @@ async def assessment_group_scope(
 ) -> None:
     """A mass assessment is the caller's when every assessment in it is.
 
-    This does not answer HRP-640's question — an ``AssessmentGroup``
-    carries no assessee and no division, only an author, and who may
-    *read* one by other means is still open. It applies HRP-638's own
-    rule to the children, which do carry an assessee: without it a
+    An ``AssessmentGroup`` carries no assessee and no division, only an
+    author. This applies HRP-638's own rule to the children, which do
+    carry an assessee: without it a
     division head could name anybody in the create body and then drive
     those assessments through the group's lifecycle routes, which is the
     same write the per-assessment routes refuse.
 
     An empty group is refused as well — nobody's subtree owns it.
+
+    HRP-640 (Vladimir, 29.09): below the admin level the group's own
+    actions are its author's too, so a head does not rename, re-criteria
+    or bulk-move a run HR started over their team. Each assessment in it
+    still follows the assessee rule on its own routes.
     """
     if visible is None:
         return
+    await assert_authored(
+        db,
+        current_user,
+        AssessmentGroup.initiator_id,
+        (AssessmentGroup.id == group_id)
+        & (AssessmentGroup.tenant_id == current_user.tenant_id),
+    )
     row = (
         await db.execute(
             select(
@@ -188,6 +204,20 @@ async def assessment_group_scope(
     total, outside = row
     if not total or outside:
         _refuse()
+
+
+async def cpa_scope(
+    cpa_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """HRP-640: below the admin level a CPA round is its author's alone."""
+    await assert_authored(
+        db,
+        current_user,
+        CPA.author_id,
+        (CPA.id == cpa_id) & (CPA.tenant_id == current_user.tenant_id),
+    )
 
 
 async def pdp_scope(
@@ -237,3 +267,27 @@ async def pdp_status_scope(
     if reviewer_id == current_user.id or employee_id in visible:
         return
     _refuse()
+
+
+async def _admin_or_manage(db: AsyncSession, user: User, section: str) -> bool:
+    if any(r.code in ADMIN_ROLE_CODES for r in user.roles):
+        return True
+    return (await matrix_levels(db, user))[section] == "manage"
+
+
+async def runs_plans(db: AsyncSession, user: User) -> bool:
+    """Sees other people's draft plans and walks the full status graph: an
+    admin-level role or ``manage`` on ``development`` (HRP-825). Used to be
+    "admin-level or manager" - the level replaced the manager role, the
+    admin tier stays."""
+    return await _admin_or_manage(db, user, "development")
+
+
+async def runs_assessments(db: AsyncSession, user: User) -> bool:
+    """Sees drafts and results of the assessments in the caller's read
+    scope: an admin-level role or ``manage`` on ``assessments`` (HRP-826).
+    Used to be ``not is_employee_only`` - "admin-level or manager" - and
+    the level replaced the manager role the same way as ``runs_plans``.
+    Anyone else reads active assessments they take part in, without
+    results."""
+    return await _admin_or_manage(db, user, "assessments")

@@ -312,6 +312,8 @@ export function AssessmentsTab({ vacancyId }: AssessmentsTabProps) {
                       ai_score: null,
                       ai_status: "missing" as const,
                       divergence: false,
+                      manager_percent: null,
+                      ai_percent: null,
                     };
                   const isSelected =
                     selected?.candidate.candidate_vacancy_id ===

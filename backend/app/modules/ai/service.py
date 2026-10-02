@@ -2,7 +2,8 @@ import logging
 import uuid
 
 from fastapi import status
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, exception_summary
@@ -37,6 +38,8 @@ async def generate_competences(
             db=db,
         )
         return result if isinstance(result, list) else [result]  # type: ignore[list-item]
+    except AppError:
+        raise
     except Exception as e:
         logger.exception("Failed to generate competences")
         raise AppError(
@@ -68,6 +71,8 @@ async def generate_indicators(
             db=db,
         )
         return result if isinstance(result, list) else [result]  # type: ignore[list-item]
+    except AppError:
+        raise
     except Exception as e:
         logger.exception("Failed to generate indicators")
         raise AppError(
@@ -130,6 +135,8 @@ async def suggest_pdp(
             db=db,
         )
         return result if isinstance(result, list) else [result]  # type: ignore[list-item]
+    except AppError:
+        raise
     except Exception as e:
         logger.exception("Failed to suggest PDP")
         raise AppError(
@@ -379,6 +386,8 @@ async def generate_positions(
         )
         items = result if isinstance(result, list) else [result]
         items = items[: ctx["count"]]
+    except AppError:
+        raise
     except Exception as e:
         logger.exception("Failed to generate positions")
         raise AppError(
@@ -413,34 +422,38 @@ async def generate_positions(
 
 async def create_embedding(
     db: AsyncSession,
+    tenant_id: uuid.UUID,
     entity_type: str,
     entity_id: uuid.UUID,
     text_content: str,
 ) -> dict:
-    """Generate and store embedding for an entity."""
+    """Generate and store embedding for an entity.
+
+    HRP-954: the upsert key is ``(tenant, entity_type, entity_id)`` — the
+    same entity key in another tenant is a different row.
+    """
     vector = await llm_client.get_embedding(text_content)
 
-    # Upsert
-    existing = await db.execute(
-        select(Embedding).where(
-            Embedding.entity_type == entity_type,
-            Embedding.entity_id == entity_id,
-        )
-    )
-    emb = existing.scalar_one_or_none()
-
-    if emb:
-        emb.text_content = text_content
-        emb.embedding = vector
-    else:
-        emb = Embedding(
+    # Upsert on the tenant-scoped unique key: a racing pair of writers ends
+    # up updating one row instead of inserting two (or failing on the unique).
+    await db.execute(
+        pg_insert(Embedding)
+        .values(
+            tenant_id=tenant_id,
             entity_type=entity_type,
             entity_id=entity_id,
             text_content=text_content,
             embedding=vector,
         )
-        db.add(emb)
-
+        .on_conflict_do_update(
+            constraint="uq_embeddings_tenant_entity",
+            set_={
+                "text_content": text_content,
+                "embedding": vector,
+                "updated_at": func.now(),
+            },
+        )
+    )
     await db.commit()
     return {"entity_type": entity_type, "entity_id": str(entity_id), "status": "stored"}
 
@@ -453,24 +466,29 @@ async def semantic_search(
     entity_type: str | None = None,
     limit: int = 10,
 ) -> list[dict]:
-    """Search entities by semantic similarity."""
+    """Search entities by semantic similarity.
+
+    HRP-954: ``tenant_id`` is the caller's tenant, never a request field —
+    the search never leaves it.
+    """
 
     query_vector = await llm_client.get_embedding(query)
 
     # pgvector cosine distance search
     sql = """
         SELECT entity_type, entity_id, text_content,
-               1 - (embedding <=> :query_vec::vector) AS similarity
+               1 - (embedding <=> CAST(:query_vec AS vector)) AS similarity
         FROM embeddings
+        WHERE tenant_id = :tenant_id
     """
-    params = {"query_vec": str(query_vector)}
+    params: dict[str, object] = {"query_vec": str(query_vector), "tenant_id": tenant_id}
 
     if entity_type:
-        sql += " WHERE entity_type = :entity_type"
+        sql += " AND entity_type = :entity_type"
         params["entity_type"] = entity_type
 
-    sql += " ORDER BY embedding <=> :query_vec::vector LIMIT :limit"
-    params["limit"] = str(limit)
+    sql += " ORDER BY embedding <=> CAST(:query_vec AS vector) LIMIT :limit"
+    params["limit"] = limit
 
     result = await db.execute(text(sql), params)
 

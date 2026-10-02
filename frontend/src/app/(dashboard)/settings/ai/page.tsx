@@ -5,7 +5,8 @@ import { useTranslations } from "next-intl";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
-import { RequireRole } from "@/components/require-role";
+import { RequireSection } from "@/components/require-section";
+import { usePermissions } from "@/hooks/use-permissions";
 import { useIsSaas } from "@/hooks/use-is-saas";
 import { invalidateCostConfirmationCache } from "@/hooks/use-cost-confirmation";
 import { api } from "@/lib/api";
@@ -18,6 +19,7 @@ import {
   type EffortLevel,
   type EffortPreset,
   type LLMProvider,
+  type Processor,
   type ProviderStatus,
 } from "@/lib/api/ai-settings";
 import { localeLabel } from "@/lib/locale";
@@ -25,7 +27,9 @@ import {
   brokenKeyProviders,
   buildPatchDiff,
   isFormValid,
+  modelSubstituted,
   roundUpTenth,
+  selectableProviders,
   settingsToForm,
   type AISettingsFormState as FormState,
 } from "@/lib/ai-settings-form";
@@ -74,11 +78,13 @@ function formatMultiplier(value: number): string {
 
 // HRP-436: every Admin-section page denies access the same way — an error
 // toast plus a redirect to the dashboard — instead of an inline panel.
+// HRP-831: the section decides - `view` reads the settings, `manage` saves
+// and resets them.
 export default function AISettingsPage() {
   return (
-    <RequireRole admin>
+    <RequireSection code="ai-settings">
       <AISettingsPageContent />
-    </RequireRole>
+    </RequireSection>
   );
 }
 
@@ -86,6 +92,7 @@ function AISettingsPageContent() {
   const t = useTranslations("settings");
   const tSections = useTranslations("sections");
   const isSaas = useIsSaas();
+  const canManage = usePermissions().canManageSection("ai-settings");
   const [settings, setSettings] = useState<AISettings | null>(null);
   const [presets, setPresets] = useState<EffortPreset[]>([]);
   const [models, setModels] = useState<AllowedModel[]>([]);
@@ -101,24 +108,27 @@ function AISettingsPageContent() {
   // (nothing to fall back to) and would otherwise vanish from the page
   // without ever telling the operator why generation stopped working.
   const [brokenKeys, setBrokenKeys] = useState<ProviderStatus[]>([]);
+  const [processors, setProcessors] = useState<Processor[] | null>(null);
 
   useEffect(() => {
-    // RequireRole above guarantees an admin, so no in-effect role check.
+    // RequireSection above guarantees at least `view`, so no in-effect check.
     Promise.all([
       aiSettingsApi.get(),
       aiSettingsApi.presets(),
       aiSettingsApi.models(),
       aiSettingsApi.providers().catch(() => null),
+      aiSettingsApi.processors().catch(() => null),
       isSaas ? api.get<unknown>("/billing/costs").catch(() => null) : null,
     ])
-      .then(([s, p, m, provs, costs]) => {
+      .then(([s, p, m, provs, procs, costs]) => {
         setSettings(s);
         setPresets(p);
         setModels(m);
         if (provs) {
-          setProviders(provs.filter((x) => x.configured));
+          setProviders(selectableProviders(provs));
           setBrokenKeys(brokenKeyProviders(provs));
         }
+        setProcessors(procs);
         setForm(settingsToForm(s));
         setProviderFilter(s.effective_provider);
         if (Array.isArray(costs)) {
@@ -156,7 +166,9 @@ function AISettingsPageContent() {
   // back to the classic trio while loading or if the endpoint errors.
   // Brand labels stay verbatim; only the local-server option carries
   // translatable words, so it resolves through the catalog.
-  const providerOptions = useMemo<Array<{ provider: string; label: string }>>(
+  const providerOptions = useMemo<
+    Array<{ provider: string; label: string; blocked?: boolean }>
+  >(
     () =>
       (providers.length > 0
         ? providers
@@ -304,6 +316,9 @@ function AISettingsPageContent() {
         <p className="text-sm text-muted-foreground">{t("aiDescription")}</p>
       </div>
 
+      {/* HRP-831: at `view` the form is read-only - a disabled fieldset
+          disables every native control inside (Radix triggers are buttons). */}
+      <fieldset disabled={!canManage} className="contents">
       {/* Effort tier */}
       <Card>
         <CardHeader>
@@ -403,8 +418,14 @@ function AISettingsPageContent() {
                 </SelectTrigger>
                 <SelectContent>
                   {providerOptions.map((p) => (
-                    <SelectItem key={p.provider} value={p.provider}>
-                      {p.label}
+                    <SelectItem
+                      key={p.provider}
+                      value={p.provider}
+                      disabled={p.blocked}
+                    >
+                      {p.blocked
+                        ? t("aiProviderBlocked", { provider: p.label })
+                        : p.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -482,8 +503,30 @@ function AISettingsPageContent() {
                   ),
                 })}
               </p>
+              {modelSubstituted(settings) && (
+                <p
+                  data-testid="settings-ai-model-substituted"
+                  className="text-xs text-amber-700 dark:text-amber-500"
+                >
+                  {t("aiModelSubstituted", { model: settings.effective_model })}
+                </p>
+              )}
             </div>
           </div>
+
+          {processors && (
+            <div data-testid="settings-ai-processors" className="space-y-1">
+              <Label>{t("aiProcessorsTitle")}</Label>
+              <p className="text-sm">
+                {processors.length > 0
+                  ? processors.map((p) => p.label).join(", ")
+                  : t("aiProcessorsNone")}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t("aiProcessorsHint")}
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -535,6 +578,7 @@ function AISettingsPageContent() {
             </p>
           </div>
 
+          {canManage && (
           <div>
             <Button
               type="button"
@@ -547,6 +591,7 @@ function AISettingsPageContent() {
               {resetting ? t("aiResetting") : t("aiResetToBalanced")}
             </Button>
           </div>
+          )}
         </CardContent>
       </Card>
 
@@ -613,8 +658,10 @@ function AISettingsPageContent() {
         </CardContent>
       </Card>
 
+      </fieldset>
+
       {/* Sticky save bar */}
-      {diff && (
+      {diff && canManage && (
         <div
           data-testid="settings-ai-save-bar"
           className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 backdrop-blur"
@@ -639,6 +686,7 @@ function AISettingsPageContent() {
                 </p>
               )}
             </div>
+            {canManage && (
             <div className="flex gap-2">
               <Button
                 type="button"
@@ -660,6 +708,7 @@ function AISettingsPageContent() {
                 {saving ? t("saving") : t("saveChanges")}
               </Button>
             </div>
+            )}
           </div>
         </div>
       )}

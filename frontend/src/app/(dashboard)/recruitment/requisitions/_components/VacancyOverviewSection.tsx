@@ -760,6 +760,15 @@ function OverviewEditGrid({
   const t = useTranslations("recruitment");
   const specDisabled = !form.position_id || positionSpecOptions.length === 0;
   const gradeDisabled = !form.position_id || positionGradeOptions.length === 0;
+  // HRP-838: a select is sized to its cell, never to its value — a long
+  // value is cut with an ellipsis and shown in full on hover.
+  const positionLabel = form.position_id
+    ? (positions.find((p) => p.id === form.position_id)?.title ??
+      t("vacancySelectPosition"))
+    : t("vacancySelectPosition");
+  const divisionLabel = form.division_id
+    ? (divisions.find((d) => d.id === form.division_id)?.name ?? form.division_id)
+    : t("vacancySelectDivision");
   return (
     <div className="space-y-5">
       <div className="grid gap-4 sm:grid-cols-3">
@@ -772,18 +781,23 @@ function OverviewEditGrid({
           >
             <SelectTrigger
               id="position-select"
+              className="w-full"
               data-testid="vacancy-field-position-select"
             >
               <SelectValue placeholder={t("vacancySelectPosition")}>
-                {form.position_id
-                  ? (positions.find((p) => p.id === form.position_id)?.title ??
-                    t("vacancySelectPosition"))
-                  : t("vacancySelectPosition")}
+                <span className="truncate" title={positionLabel}>
+                  {positionLabel}
+                </span>
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {positions.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
+                <SelectItem
+                  key={p.id}
+                  value={p.id}
+                  className="[&>span:first-child]:block [&>span:first-child]:truncate"
+                  title={p.title}
+                >
                   {p.title}
                 </SelectItem>
               ))}
@@ -826,17 +840,25 @@ function OverviewEditGrid({
             onValueChange={(val) => setField("division_id", val || null)}
             disabled={disabled}
           >
-            <SelectTrigger id="division-select" data-testid="vacancy-field-division">
+            <SelectTrigger
+              id="division-select"
+              className="w-full"
+              data-testid="vacancy-field-division"
+            >
               <SelectValue placeholder={t("vacancySelectDivision")}>
-                {form.division_id
-                  ? (divisions.find((d) => d.id === form.division_id)?.name ??
-                    form.division_id)
-                  : t("vacancySelectDivision")}
+                <span className="truncate" title={divisionLabel}>
+                  {divisionLabel}
+                </span>
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {divisions.map((d) => (
-                <SelectItem key={d.id} value={d.id}>
+                <SelectItem
+                  key={d.id}
+                  value={d.id}
+                  className="[&>span:first-child]:block [&>span:first-child]:truncate"
+                  title={d.name || d.id}
+                >
                   {d.name || d.id}
                 </SelectItem>
               ))}
@@ -856,6 +878,7 @@ function OverviewEditGrid({
                 : t("vacancyPickSpecializations")
             }
             disabled={disabled || specDisabled}
+            className="w-full"
             data-testid="vacancy-field-specializations-multiselect"
           />
         </div>
@@ -870,6 +893,7 @@ function OverviewEditGrid({
           >
             <SelectTrigger
               id="employment-select"
+              className="w-full"
               data-testid="vacancy-field-employment-type"
             >
               <SelectValue placeholder={t("vacancySelectType")}>
@@ -914,6 +938,7 @@ function OverviewEditGrid({
                 : t("vacancyPickGrades")
             }
             disabled={disabled || gradeDisabled}
+            className="w-full"
             data-testid="vacancy-field-grades-multiselect"
           />
         </div>

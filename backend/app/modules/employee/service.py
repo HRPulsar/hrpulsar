@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.access_scope import (
+    ADMIN_ROLE_CODES,
+    assert_division_write_scope,
     assert_employee_write_scope,
     assert_not_self_edit_via_employees,
     directory_show_grades,
@@ -27,7 +29,7 @@ from app.core.s3 import get_presigned_url
 # remain forbidden; cross-domain writes go through events.
 from app.modules.assessment.models import PDP, Assessment
 from app.modules.auth.models import Invitation, Role, User, user_roles
-from app.modules.auth.roles import BASELINE_ROLE_CODE
+from app.modules.auth.roles import BASELINE_ROLE_CODE, ensure_baseline_employee_role
 from app.modules.auth.service import can_send_set_password_link
 from app.modules.company.models import Division
 from app.modules.employee.alerts import (
@@ -303,17 +305,24 @@ async def _create_event(
 # --- Available users ---
 
 
-async def list_available_users(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
-    """Return tenant users that don't yet have an Employee record."""
-    result = await db.execute(
-        select(User).where(
-            User.tenant_id == tenant_id,
-            User.is_active.is_(True),
-            ~User.id.in_(
-                select(Employee.user_id).where(Employee.tenant_id == tenant_id)
-            ),
-        )
+async def list_available_users(
+    db: AsyncSession, tenant_id: uuid.UUID, *, admin_level: bool = True
+) -> list[dict]:
+    """Return tenant users that don't yet have an Employee record.
+
+    HRP-829: below the admin level the admin-level accounts are left out -
+    filing a card for one of them is refused (``assert_may_write_person``).
+    """
+    query = select(User).where(
+        User.tenant_id == tenant_id,
+        User.is_active.is_(True),
+        ~User.id.in_(select(Employee.user_id).where(Employee.tenant_id == tenant_id)),
     )
+    if not admin_level:
+        query = query.where(
+            ~User.roles.any(Role.code.in_(ADMIN_ROLE_CODES))
+        )
+    result = await db.execute(query)
     users = result.scalars().all()
 
     # Find which emails came through accepted invitations
@@ -704,6 +713,10 @@ async def update_employee(
     await assert_employee_write_scope(db, current_user, emp)
     assert_not_self_edit_via_employees(current_user, emp)
     updates = data.model_dump(exclude_unset=True)
+    # HRP-829: a transfer lands in the caller's subtree - anywhere, or out
+    # of every division, only for an admin-level role (Maxim, 24.09).
+    if "division_id" in updates and updates["division_id"] != emp.division_id:
+        await assert_division_write_scope(db, current_user, updates["division_id"])
     today = date.today()
 
     # HRP-121: Name/Last name live on the underlying User row. Strip them
@@ -772,6 +785,7 @@ async def update_employee(
             pos = await db.get(Position, updates["position_id"])
             if not pos or pos.tenant_id != tenant_id:
                 raise AppError("invalid_position_id", status.HTTP_400_BAD_REQUEST)
+            await assert_position_in_scope(db, current_user, pos.id)
             updates["position_title"] = pos.title
         else:
             updates["position_title"] = None
@@ -928,12 +942,14 @@ async def set_employee_role(
     role_code: str,
     current_user: User,
 ) -> dict:
-    """Replace an employee's system roles with ``role_code`` (HRP-620).
+    """Replace an employee's tier role with ``role_code`` (HRP-620).
 
     Supersedes the old manager-only downgrade: a role is now a thing an
-    admin sets, not a thing that only ever decays. A user carries exactly
-    one tenant role afterwards; a ``platform_admin`` membership is left
-    alone (it is granted platform-side, not per tenant).
+    admin sets, not a thing that only ever decays. A user carries the
+    requested role plus the ``employee`` baseline afterwards (HRP-832;
+    ``employee`` itself means the baseline alone, and the no-op check reads
+    the tier the same way); a ``platform_admin``
+    membership is left alone (it is granted platform-side, not per tenant).
     """
     emp = await _get_employee(db, tenant_id, employee_id)
 
@@ -962,7 +978,12 @@ async def set_employee_role(
 
     current = await _role_codes_of(db, emp.user_id)
     tenant_role_codes = {c for c in current if c != _PLATFORM_ROLE_CODE}
-    if tenant_role_codes == {role_code}:
+    stronger = tenant_role_codes - {BASELINE_ROLE_CODE}
+    # Nothing to do only when the baseline is already held: an account with
+    # no tenant role at all set to ``employee`` must get it (HRP-832).
+    if BASELINE_ROLE_CODE in tenant_role_codes and (
+        stronger or {BASELINE_ROLE_CODE}
+    ) == {role_code}:
         return {
             "employee_id": emp.id,
             "user_id": emp.user_id,
@@ -1011,21 +1032,24 @@ async def set_employee_role(
                 count=still_managing,
             )
 
-    stripped = sorted(tenant_role_codes)
-    await db.execute(
-        user_roles.delete().where(
-            user_roles.c.user_id == emp.user_id,
-            user_roles.c.role_id.in_([current[c].id for c in stripped]),
+    stripped = sorted(stronger)
+    if stripped:
+        await db.execute(
+            user_roles.delete().where(
+                user_roles.c.user_id == emp.user_id,
+                user_roles.c.role_id.in_([current[c].id for c in stripped]),
+            )
         )
-    )
-    await db.execute(user_roles.insert().values(user_id=emp.user_id, role_id=role.id))
+    if role_code != BASELINE_ROLE_CODE:
+        await db.execute(user_roles.insert().values(user_id=emp.user_id, role_id=role.id))
+    await ensure_baseline_employee_role(db, emp.user_id)
     await _create_event(
         db,
         emp.id,
         "role_changed",
         f"Role changed to {role.name}",
         date.today(),
-        old_value={"roles": stripped},
+        old_value={"roles": stripped or [BASELINE_ROLE_CODE]},
         new_value={"roles": [role_code]},
     )
     await db.commit()
@@ -1036,7 +1060,7 @@ async def set_employee_role(
             "tenant_id": str(tenant_id),
             "user_id": str(emp.user_id),
             "employee_id": str(emp.id),
-            "from_roles": stripped,
+            "from_roles": stripped or [BASELINE_ROLE_CODE],
             "to_role": role_code,
         },
     )
@@ -1051,11 +1075,37 @@ async def set_employee_role(
 # --- Events ---
 
 
+async def assert_position_in_scope(
+    db: AsyncSession, current_user: User, position_id: uuid.UUID | None
+) -> None:
+    """HRP-829 (Maxim, 24.09): a person takes a seat of the caller's subtree
+    or a workspace-wide one (no division) - not another department's."""
+    pos = await db.get(Position, position_id) if position_id else None
+    # Another tenant's position is left to the service's own refusal:
+    # judging scope by a foreign row told the caller it exists.
+    if pos is not None and pos.tenant_id == current_user.tenant_id and pos.division_id:
+        await assert_division_write_scope(db, current_user, pos.division_id)
+
+
+async def reads_pay(db: AsyncSession, current_user: User, emp: Employee) -> bool:
+    """HRP-829 (Maxim, 24.09): who sees an employee's pay - whoever reads
+    their compensation rows, and the person themselves, who is mailed every
+    change anyway. The events tab carries the amounts too, so it asks this."""
+    if emp.user_id == current_user.id:
+        return True
+    try:
+        await assert_employee_write_scope(db, current_user, emp)
+    except AppError:
+        return False
+    return True
+
+
 async def list_events(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     employee_id: uuid.UUID,
-    event_type: str | None = None,
+    event_type: str | None,
+    current_user: User,
 ) -> list[dict]:
     emp = await _get_employee(db, tenant_id, employee_id)
     query = (
@@ -1065,6 +1115,8 @@ async def list_events(
     )
     if event_type:
         query = query.where(EmployeeEvent.event_type == event_type)
+    if not await reads_pay(db, current_user, emp):
+        query = query.where(EmployeeEvent.event_type != "compensation_change")
     result = await db.execute(query)
     return [_event_to_read(e) for e in result.scalars().all()]
 
@@ -1078,6 +1130,9 @@ async def create_event(
 ) -> dict:
     emp = await _get_employee(db, tenant_id, employee_id)
     await assert_employee_write_scope(db, current_user, emp)
+    # HRP-829 (Maxim, 24.09): nobody below the admin level writes their own
+    # history - a free-typed event is a forged ``compensation_change`` away.
+    assert_not_self_edit_via_employees(current_user, emp)
     event = await _create_event(
         db,
         emp.id,
@@ -1163,6 +1218,10 @@ async def _assert_child_scope(
     if allow_self_owner and emp.user_id == current_user.id:
         return emp
     await assert_employee_write_scope(db, current_user, emp)
+    # HRP-829 (Maxim, 24.09): below the admin level one's own card - work
+    # history and pay included - is not one's to write here; education and
+    # courses returned above.
+    assert_not_self_edit_via_employees(current_user, emp)
     return emp
 
 
@@ -1250,6 +1309,7 @@ def _competence_refs(links) -> list[dict]:
 
 async def _sync_competence_links(
     db: AsyncSession,
+    tenant_id: uuid.UUID,
     link_model: Any,
     fk_field: str,
     parent_id: uuid.UUID,
@@ -1265,6 +1325,9 @@ async def _sync_competence_links(
     UNIQUE constraint. Diffing keeps untouched links in place so editing a
     course or work experience without changing its competences just works.
     """
+    from app.modules.competence.service import assert_catalogue_competences
+
+    await assert_catalogue_competences(db, tenant_id, competence_ids)
     result = await db.execute(
         select(link_model).where(getattr(link_model, fk_field) == parent_id)
     )
@@ -1370,6 +1433,7 @@ async def create_work_experience(
     if data.competence_ids:
         await _sync_competence_links(
             db,
+            tenant_id,
             WorkExperienceCompetence,
             "work_experience_id",
             we.id,
@@ -1403,6 +1467,7 @@ async def update_work_experience(
     if data.competence_ids is not None:
         await _sync_competence_links(
             db,
+            tenant_id,
             WorkExperienceCompetence,
             "work_experience_id",
             we.id,
@@ -1584,7 +1649,7 @@ async def create_course(
     await db.flush()
     if data.competence_ids:
         await _sync_competence_links(
-            db, CourseCompetence, "course_id", course.id, data.competence_ids
+            db, tenant_id, CourseCompetence, "course_id", course.id, data.competence_ids
         )
     await db.commit()
     await db.refresh(course)
@@ -1608,7 +1673,7 @@ async def update_course(
         setattr(course, field, value)
     if data.competence_ids is not None:
         await _sync_competence_links(
-            db, CourseCompetence, "course_id", course.id, data.competence_ids
+            db, tenant_id, CourseCompetence, "course_id", course.id, data.competence_ids
         )
     await db.commit()
     await db.refresh(course)
@@ -1644,6 +1709,7 @@ async def list_compensations(
     # through unconditionally.
     emp = await _get_employee(db, tenant_id, employee_id)
     await assert_employee_write_scope(db, current_user, emp)
+    assert_not_self_edit_via_employees(current_user, emp)
     return await _list_children(db, Compensation, tenant_id, employee_id)
 
 
@@ -1682,6 +1748,8 @@ async def update_compensation(
     current_user: User,
 ) -> dict:
     old = await _get_child(db, Compensation, tenant_id, item_id, "Compensation")
+    # Scope first: a date error on someone else's row would tell its dates.
+    await _assert_child_scope(db, tenant_id, old.employee_id, current_user)
     old_vals = {"type": old.type, "amount": old.amount, "currency": old.currency}
     effective = (
         data.effective_date if data.effective_date is not None else old.effective_date

@@ -84,9 +84,24 @@ test.describe("Coverage — agent skill", () => {
     await expect(page.getByTestId(`coverage-btn-get-skill-${blockedStepId}`)).toHaveCount(0);
   });
 
+  test("Get the skill asks first; Cancel starts nothing (HRP-960)", async ({ page }) => {
+    await page.getByTestId(`coverage-btn-get-skill-${agentStepId}`).click();
+    await expect(page.getByTestId("coverage-skill-confirm-btn-confirm")).toBeVisible();
+    await expect(page.getByTestId("coverage-modal-skill")).toHaveCount(0);
+    await page.getByTestId("coverage-skill-confirm-btn-cancel").click();
+    await expect(page.getByTestId("coverage-skill-confirm-btn-confirm")).toHaveCount(0);
+    await expect(page.getByTestId("coverage-modal-skill")).toHaveCount(0);
+    await expect(page.getByTestId(`coverage-skill-status-${agentStepId}`)).toHaveAttribute(
+      "data-status",
+      "none",
+    );
+  });
+
   test("live: generate, preview and download SKILL.md", async ({ page }) => {
     test.skip(!LIVE_LLM, "needs a live model: run with E2E_LLM=1");
     await page.getByTestId(`coverage-btn-get-skill-${agentStepId}`).click();
+    // HRP-960: the generation is a charge - it starts once confirmed.
+    await page.getByTestId("coverage-skill-confirm-btn-confirm").click();
     const modal = page.getByTestId("coverage-modal-skill");
     await expect(modal).toBeVisible({ timeout: 10000 });
     // Queued, not awaited: the strip and its clock are what the reader sees

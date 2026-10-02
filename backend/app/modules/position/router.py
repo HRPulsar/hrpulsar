@@ -9,6 +9,7 @@ from app.core.access_scope import (
     get_visible_employee_ids,
     trim_position_fields,
 )
+from app.core.sections import matrix_levels, require_section
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
@@ -35,12 +36,25 @@ from app.modules.position.scope import (
 
 router = APIRouter(tags=["positions"])
 
+# HRP-828: authoring positions is ``manage`` on ``company``; which ones a
+# caller may author stays ``position_scope``'s answer.
+_manage = require_section("company", "manage")
+
+
+async def _writable(
+    db: AsyncSession, user: User, allowed: tuple[uuid.UUID, ...] | None
+) -> tuple[uuid.UUID, ...] | None:
+    """The subtree a row's ``can_manage`` is judged by: nothing below
+    ``manage``, so the flag never draws a button the API refuses - an
+    admin-level role at ``view`` (``hr`` by default) used to get ``True``."""
+    return allowed if (await matrix_levels(db, user))["company"] == "manage" else ()
+
 
 @router.post("/positions", response_model=PositionRead, status_code=201)
 async def create_position(
     data: PositionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     allowed: tuple[uuid.UUID, ...] | None = Depends(managed_divisions),
 ):
     assert_division_in_scope(allowed, data.division_id)
@@ -51,7 +65,7 @@ async def create_position(
 async def bulk_action_positions(
     data: PositionBulkAction,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     allowed: tuple[uuid.UUID, ...] | None = Depends(managed_divisions),
 ):
     await assert_positions_in_scope(db, current_user, data.ids, allowed)
@@ -98,6 +112,7 @@ async def list_positions(
     # grade, so the predicates go with the fields.
     show_grades = await can_see_position_grades(db, current_user)
     show_salary = can_see_compensation(current_user)
+    allowed = await _writable(db, current_user, allowed)
     if not show_grades:
         specialization_id = None
         grade_id = None
@@ -135,6 +150,7 @@ async def get_position(
     current_user: User = Depends(get_current_user),
     allowed: tuple[uuid.UUID, ...] | None = Depends(managed_divisions),
 ):
+    allowed = await _writable(db, current_user, allowed)
     return trim_position_fields(
         await service.get_position(db, current_user.tenant_id, position_id, allowed),
         show_grades=await can_see_position_grades(db, current_user),
@@ -147,7 +163,7 @@ async def update_position(
     position_id: uuid.UUID,
     data: PositionUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(position_scope),
     allowed: tuple[uuid.UUID, ...] | None = Depends(managed_divisions),
 ):
@@ -249,7 +265,7 @@ async def set_position_status(
     position_id: uuid.UUID,
     data: PositionStatusUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(position_scope),
 ):
     return await service.set_position_status(
@@ -270,7 +286,7 @@ async def set_position_status(
 async def deactivate_position(
     position_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(position_scope),
 ):
     return await service.deactivate_position(db, current_user.tenant_id, position_id)

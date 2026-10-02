@@ -72,8 +72,14 @@ export function HiringManagerSelect({
       onValueChange={(val: string) => onChange(val || null)}
       disabled={disabled}
     >
-      <SelectTrigger id={id} data-testid={testId}>
-        <SelectValue placeholder={placeholder}>{selectedLabel}</SelectValue>
+      {/* HRP-838: fills the form cell; a long name is cut with an
+          ellipsis and shown in full on hover. */}
+      <SelectTrigger id={id} className="w-full" data-testid={testId}>
+        <SelectValue placeholder={placeholder}>
+          <span className="truncate" title={selectedLabel}>
+            {selectedLabel}
+          </span>
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {options.length === 0 ? (
@@ -82,7 +88,12 @@ export function HiringManagerSelect({
           </div>
         ) : (
           options.map((m) => (
-            <SelectItem key={m.id} value={m.id}>
+            <SelectItem
+              key={m.id}
+              value={m.id}
+              className="[&>span:first-child]:block [&>span:first-child]:truncate"
+              title={m.full_name}
+            >
               {m.full_name}
             </SelectItem>
           ))

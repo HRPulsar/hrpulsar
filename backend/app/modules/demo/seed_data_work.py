@@ -375,7 +375,7 @@ WORK_CONTAINERS: list[dict] = [
                     "Tables, charts and the one-page summary, in the layout "
                     "the leadership already knows how to read."
                 ),
-                "primitives": ["P9"],
+                "primitives": ["P5"],
                 "responsibility": "none",
                 "output_type": "draft",
                 "hours_per_run": 4,
@@ -459,7 +459,7 @@ WORK_CONTAINERS: list[dict] = [
                     "Into the tracker, with an owner and a date, and chased "
                     "until they close."
                 ),
-                "primitives": ["P11"],
+                "primitives": ["P1", "P11"],
                 "responsibility": "none",
                 "output_type": "draft",
                 "hours_per_run": 0.5,

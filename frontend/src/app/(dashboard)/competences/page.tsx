@@ -56,6 +56,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { IndicatorsEditor } from "@/components/competence/indicators-editor";
 import { TreeExpandControls } from "@/components/ui/tree-expand-controls";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useAuth } from "@/context/auth-context";
 import { useTreeExpansion } from "@/hooks/use-tree-expansion";
 import { toast } from "sonner";
 import {
@@ -110,6 +111,8 @@ interface CompetenceItem {
   is_published: boolean;
   is_origin: boolean;
   is_used: boolean;
+  /** HRP-632: set on a division head's personal draft - its author. */
+  draft_owner_id?: string | null;
 }
 
 const emptyGroupForm = {
@@ -165,6 +168,10 @@ function GroupNode({
   onToggleExpand: (groupId: string) => void;
 }) {
   const t = useTranslations("competences");
+  // HRP-827: `view` reads the tree; authoring is `manage`, deleting and AI
+  // generation the admin role on top of it.
+  const { canManageSection, canAdministerCompetences, canDraftCompetences } = usePermissions();
+  const canEdit = canManageSection("competences");
   const isOriginGroup = group.tenant_id === null;
   const expanded = isExpanded(group.id);
   const hasChildren =
@@ -185,7 +192,7 @@ function GroupNode({
   } = useDraggable({
     id: `draggroup-${group.id}`,
     data: { kind: "group", groupId: group.id, isOrigin: isOriginGroup },
-    disabled: isOriginGroup,
+    disabled: isOriginGroup || !canEdit,
   });
 
   return (
@@ -206,24 +213,26 @@ function GroupNode({
         }`}
         style={{ paddingLeft: `${depth * 24 + 12}px` }}
       >
-        <button
-          ref={dragRef}
-          {...dragAttrs}
-          {...dragListeners}
-          type="button"
-          aria-label={t("dragGroupAria")}
-          data-testid={`competences-group-${group.id}-handle`}
-          className={`text-muted-foreground ${
-            isOriginGroup ? "opacity-30 cursor-not-allowed" : "cursor-grab"
-          }`}
-          title={
-            isOriginGroup ? t("originGroupCannotMove") : t("dragToMove")
-          }
-          disabled={isOriginGroup}
-          onClick={(e) => e.preventDefault()}
-        >
-          <GripVertical className="h-3.5 w-3.5" />
-        </button>
+        {canEdit && (
+          <button
+            ref={dragRef}
+            {...dragAttrs}
+            {...dragListeners}
+            type="button"
+            aria-label={t("dragGroupAria")}
+            data-testid={`competences-group-${group.id}-handle`}
+            className={`text-muted-foreground ${
+              isOriginGroup ? "opacity-30 cursor-not-allowed" : "cursor-grab"
+            }`}
+            title={
+              isOriginGroup ? t("originGroupCannotMove") : t("dragToMove")
+            }
+            disabled={isOriginGroup}
+            onClick={(e) => e.preventDefault()}
+          >
+            <GripVertical className="h-3.5 w-3.5" />
+          </button>
+        )}
         <button
           data-testid={`competences-group-${group.id}-toggle`}
           onClick={() => onToggleExpand(group.id)}
@@ -289,7 +298,7 @@ function GroupNode({
             testIdSuffix={`group-${group.id}`}
           />
         )}
-        {!isOriginGroup && (
+        {(canEdit || canDraftCompetences) && !isOriginGroup && (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -308,6 +317,7 @@ function GroupNode({
             <TooltipContent side="top">{t("addCompetences")}</TooltipContent>
           </Tooltip>
         )}
+        {canEdit && (
         <DropdownMenu>
           <DropdownMenuTrigger data-testid={`competences-group-${group.id}-actions`} render={<Button variant="ghost" size="icon-xs" className="opacity-0 group-hover:opacity-100 transition-opacity" />}>
             <MoreHorizontal className="h-4 w-4" />
@@ -321,7 +331,7 @@ function GroupNode({
               <Plus className="mr-2 h-4 w-4" />
               {t("addSubgroup")}
             </DropdownMenuItem>
-            {generationLocked ? (
+            {!canAdministerCompetences ? null : generationLocked ? (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -385,7 +395,7 @@ function GroupNode({
               </DropdownMenuItem>
             )}
             {/* HRP-118: hide Delete when the group is wired into other services. */}
-            {!group.is_used && (
+            {canAdministerCompetences && !group.is_used && (
               <DropdownMenuItem
                 data-testid={`competences-group-${group.id}-btn-delete`}
                 variant="destructive"
@@ -399,6 +409,7 @@ function GroupNode({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+        )}
       </div>
 
       {expanded && (
@@ -500,6 +511,11 @@ function CompetenceRow({
 }) {
   const t = useTranslations("competences");
   const tc = useTranslations("common");
+  const { canManageSection, canAdministerCompetences, canDraftCompetences } = usePermissions();
+  const canEdit = canManageSection("competences");
+  // HRP-632: a division head renames and deletes their own personal draft.
+  const { user } = useAuth();
+  const ownDraft = canDraftCompetences && comp.draft_owner_id === user?.id;
   const compSessions =
     activeSessionsMap.get(
       activeAiSessionsKey("competence_indicators", comp.id),
@@ -513,7 +529,7 @@ function CompetenceRow({
   } = useDraggable({
     id: `dragcomp-${comp.id}`,
     data: { kind: "competence", competenceId: comp.id, isOrigin: isOriginComp },
-    disabled: isOriginComp,
+    disabled: isOriginComp || !canEdit,
   });
   return (
     <div
@@ -525,24 +541,26 @@ function CompetenceRow({
       }`}
       style={{ paddingLeft: `${(depth + 1) * 24 + 12}px` }}
     >
-      <button
-        ref={dragRef}
-        {...dragAttrs}
-        {...dragListeners}
-        type="button"
-        aria-label={t("dragCompetenceAria")}
-        data-testid={`competences-item-${comp.id}-handle`}
-        className={`text-muted-foreground ${
-          isOriginComp ? "opacity-30 cursor-not-allowed" : "cursor-grab"
-        }`}
-        title={
-          isOriginComp ? t("originCompetenceCannotMove") : t("dragToMove")
-        }
-        disabled={isOriginComp}
-        onClick={(e) => e.preventDefault()}
-      >
-        <GripVertical className="h-3.5 w-3.5" />
-      </button>
+      {canEdit && (
+        <button
+          ref={dragRef}
+          {...dragAttrs}
+          {...dragListeners}
+          type="button"
+          aria-label={t("dragCompetenceAria")}
+          data-testid={`competences-item-${comp.id}-handle`}
+          className={`text-muted-foreground ${
+            isOriginComp ? "opacity-30 cursor-not-allowed" : "cursor-grab"
+          }`}
+          title={
+            isOriginComp ? t("originCompetenceCannotMove") : t("dragToMove")
+          }
+          disabled={isOriginComp}
+          onClick={(e) => e.preventDefault()}
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </button>
+      )}
       <Star className="h-3.5 w-3.5" />
       <Link
         href={`/competences/${comp.id}`}
@@ -551,6 +569,15 @@ function CompetenceRow({
       >
         {comp.title}
       </Link>
+      {comp.draft_owner_id && (
+        <Badge
+          variant="outline"
+          className="text-xs font-normal"
+          data-testid={`competences-item-${comp.id}-personal-draft`}
+        >
+          {comp.draft_owner_id === user?.id ? t("personalDraftOwn") : t("personalDraft")}
+        </Badge>
+      )}
       {comp.is_published ? (
         <Tooltip>
           <TooltipTrigger
@@ -659,16 +686,18 @@ function CompetenceRow({
             <ExternalLink className="mr-2 h-4 w-4" />
             {t("openDetailPage")}
           </DropdownMenuItem>
-          <DropdownMenuItem
-            data-testid={`competences-item-${comp.id}-btn-edit`}
-            onClick={() => onEditCompetence(comp)}
-            disabled={isOriginComp}
-            className="whitespace-nowrap"
-          >
-            <Pencil className="mr-2 h-4 w-4" />
-            {t("edit")}
-          </DropdownMenuItem>
-          {generationLocked && generationLockedTargetId !== comp.id ? (
+          {(canEdit || ownDraft) && (
+            <DropdownMenuItem
+              data-testid={`competences-item-${comp.id}-btn-edit`}
+              onClick={() => onEditCompetence(comp)}
+              disabled={isOriginComp}
+              className="whitespace-nowrap"
+            >
+              <Pencil className="mr-2 h-4 w-4" />
+              {t("edit")}
+            </DropdownMenuItem>
+          )}
+          {!canAdministerCompetences ? null : generationLocked && generationLockedTargetId !== comp.id ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -697,7 +726,7 @@ function CompetenceRow({
           {/* HRP-118 redo: mirror the group "Hide from users / Show to
               users" toggle for the individual competence row. Origin
               competences cannot be republished by a tenant. */}
-          {!isOriginComp && (
+          {canEdit && !isOriginComp && (
             <DropdownMenuItem
               data-testid={`competences-item-${comp.id}-btn-publish`}
               onClick={() => onTogglePublishCompetence(comp)}
@@ -716,19 +745,21 @@ function CompetenceRow({
               )}
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem
-            data-testid={`competences-item-${comp.id}-btn-delete`}
-            variant="destructive"
-            onClick={() => onDeleteCompetence(comp)}
-            disabled={isOriginComp || comp.is_used}
-            title={
-              comp.is_used ? t("competenceUsedCannotDelete") : undefined
-            }
-            className="whitespace-nowrap"
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            {tc("delete")}
-          </DropdownMenuItem>
+          {(canAdministerCompetences || ownDraft) && (
+            <DropdownMenuItem
+              data-testid={`competences-item-${comp.id}-btn-delete`}
+              variant="destructive"
+              onClick={() => onDeleteCompetence(comp)}
+              disabled={isOriginComp || comp.is_used}
+              title={
+                comp.is_used ? t("competenceUsedCannotDelete") : undefined
+              }
+              className="whitespace-nowrap"
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              {tc("delete")}
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
@@ -740,7 +771,9 @@ export default function CompetencesPage() {
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const tSections = useTranslations("sections");
-  const { tree, loading: treeLoading, error: treeError } = useCompetenceTree();
+  // HRP-632: the catalogue page is where personal drafts show - the
+  // viewer's own, or every one at `manage`; the pickers never get them.
+  const { tree, loading: treeLoading, error: treeError } = useCompetenceTree({ drafts: true });
   const [compTypes, setCompTypes] = useState<DictionaryItem[]>([]);
   const [auxLoading, setAuxLoading] = useState(true);
   const loading = treeLoading || auxLoading;
@@ -789,7 +822,10 @@ export default function CompetencesPage() {
   // HRP-631: the competence catalogue has no owning column, so a
   // division head cannot be scoped to a slice of it — editing is
   // admin / HR on the API and the toolbar follows.
-  const { canManageCatalogues: canManage } = usePermissions();
+  // HRP-827: authoring follows the section; the generation button the
+  // admin role on top of it.
+  const { canManageSection, canAdministerCompetences } = usePermissions();
+  const canManage = canManageSection("competences");
 
   // AI generation (CR13). HRP-122 REDO #3: the page-level Generate button's
   // session snapshot used to be a bespoke useState updated only by a WS
@@ -1289,16 +1325,18 @@ export default function CompetencesPage() {
         </div>
         {canManage && (
           <div className="flex flex-wrap items-center gap-2">
-            <GenerationStatusButton
-              totalCompetences={totalCompetences}
-              activeSession={activeSession}
-              activeSessionLoading={activeSessionLoading}
-              onCreated={() => {
-                void refreshActiveSession();
-                openOwnDrawer();
-              }}
-              onOpenDrawer={openOwnDrawer}
-            />
+            {canAdministerCompetences && (
+              <GenerationStatusButton
+                totalCompetences={totalCompetences}
+                activeSession={activeSession}
+                activeSessionLoading={activeSessionLoading}
+                onCreated={() => {
+                  void refreshActiveSession();
+                  openOwnDrawer();
+                }}
+                onOpenDrawer={openOwnDrawer}
+              />
+            )}
             <Button data-testid="competences-btn-add-group" size="sm" onClick={() => openCreateGroup()}>
               <Plus className="mr-1 h-4 w-4" />
               {t("addGroup")}
@@ -1569,6 +1607,9 @@ export default function CompetencesPage() {
                   onValueChange={(val) =>
                     setCompForm({ ...compForm, group_id: val })
                   }
+                  // HRP-632: a division head renames their draft; moving it
+                  // is the catalogue's.
+                  disabled={compDialogMode === "edit" && !canManage}
                 >
                   <SelectTrigger data-testid="competences-modal-competence-select-group" className="w-full">
                     <SelectValue placeholder={t("selectGroup")}>
@@ -1583,10 +1624,20 @@ export default function CompetencesPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                {compDialogMode === "edit" && !canManage && (
+                  <p
+                    className="text-xs text-muted-foreground"
+                    data-testid="competences-modal-competence-group-fixed"
+                  >
+                    {t("draftGroupFixed")}
+                  </p>
+                )}
               </div>
             )}
           </div>
-          {compDialogMode === "edit" && editingCompId && (
+          {/* HRP-632: indicators are the catalogue's - a division head
+              editing their draft renames it, nothing more. */}
+          {compDialogMode === "edit" && editingCompId && canManage && (
             <div className="mt-4 border-t pt-4">
               <IndicatorsEditor
                 competenceId={editingCompId}

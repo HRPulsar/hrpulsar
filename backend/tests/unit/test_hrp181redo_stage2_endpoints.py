@@ -13,14 +13,21 @@ status codes / headers / response shape.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from app.core.errors import AppError
 from app.modules.recruitment import service
+from app.modules.recruitment.manager_assessment_models import AssessmentRound
 from app.modules.recruitment.models import (
+    AIAnalysisRun,
+    AssessmentInvite,
     Candidate,
     CandidateFile,
     CandidateVacancy,
+    HumanAssessment,
+    Interview,
+    QuestionSet,
     VacancyStage,
 )
 from app.modules.recruitment.schemas import (
@@ -461,6 +468,78 @@ class TestDeleteCandidateVacancy:
             )
         ).scalar_one()
         assert cand.archived_at is None
+
+    @pytest.mark.parametrize(
+        "history",
+        [
+            lambda t, cv: Interview(tenant_id=t, candidate_vacancy_id=cv),
+            lambda t, cv: HumanAssessment(
+                tenant_id=t, candidate_vacancy_id=cv, competence_id=uuid.uuid4()
+            ),
+            lambda t, cv: AIAnalysisRun(
+                tenant_id=t, candidate_vacancy_id=cv, mode="full"
+            ),
+            lambda t, cv: AssessmentInvite(
+                tenant_id=t,
+                candidate_vacancy_id=cv,
+                token=uuid.uuid4().hex,
+                email=f"eval-{uuid.uuid4().hex[:6]}@example.com",
+                expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+            ),
+            lambda t, cv: QuestionSet(tenant_id=t, candidate_vacancy_id=cv, name="Set"),
+            lambda t, cv: AssessmentRound(
+                tenant_id=t, candidate_vacancy_id=cv, type="pre_interview"
+            ),
+        ],
+        ids=["interview", "score", "analysis", "invite", "question-set", "round"],
+    )
+    async def test_delete_with_history_is_refused(
+        self, db: AsyncSession, tenant, user, history
+    ):
+        """HRP-1004: the cascade would wipe the candidacy's history and
+        lift the HRP-971 fence - such a candidacy is closed by stage."""
+        vacancy = await _make_vacancy(db, tenant.id, user.id)
+        added = await service.add_candidate_to_vacancy_manual(
+            db, tenant.id, user.id, vacancy["id"], _manual_payload()
+        )
+        cv_id = added["candidate_vacancy_id"]
+        db.add(history(tenant.id, cv_id))
+        await db.flush()
+
+        with pytest.raises(AppError) as exc:
+            await service.delete_candidate_vacancy(db, tenant.id, cv_id)
+        assert exc.value.status_code == 409
+        assert exc.value.code == "candidate_vacancy_has_history"
+        assert await db.get(CandidateVacancy, cv_id) is not None
+
+    async def test_legacy_answer_keys_count_as_history(
+        self, db: AsyncSession, tenant, user
+    ):
+        """Review 01.10: R3 answer keys hang off candidate and vacancy, not
+        the link, so no FK named them and a link carrying them was dropped."""
+        from app.modules.recruitment.models import CandidateQuestion
+
+        vacancy = await _make_vacancy(db, tenant.id, user.id)
+        added = await service.add_candidate_to_vacancy_manual(
+            db, tenant.id, user.id, vacancy["id"], _manual_payload()
+        )
+        cv = await db.get(CandidateVacancy, added["candidate_vacancy_id"])
+        db.add(
+            CandidateQuestion(
+                tenant_id=tenant.id,
+                candidate_id=cv.candidate_id,
+                vacancy_id=cv.vacancy_id,
+                question_text="Q",
+                good_answer="g",
+                acceptable_answer="a",
+                poor_answer="p",
+                purpose="verify_skill",
+            )
+        )
+        await db.flush()
+        with pytest.raises(AppError) as exc:
+            await service.delete_candidate_vacancy(db, tenant.id, cv.id)
+        assert exc.value.code == "candidate_vacancy_has_history"
 
     async def test_delete_unknown_returns_404(
         self, db: AsyncSession, tenant

@@ -521,9 +521,7 @@ class TestRedoPublicContextRoundStatus:
         await public_service.public_submit(db, inv.token)
         return inv, rd_id
 
-    async def test_open_round_reports_in_progress(
-        self, db: AsyncSession, tenant, user
-    ):
+    async def test_open_round_reports_in_progress(self, db: AsyncSession, tenant, user):
         inv, _ = await self._submitted_invite(db, tenant, user)
         ctx = await public_service.public_get_context(db, inv.token)
         assert ctx["round_status"] == "in_progress"
@@ -545,3 +543,110 @@ class TestRedoPublicContextRoundStatus:
 
         ctx = await public_service.public_get_context(db, inv.token)
         assert ctx["round_status"] == "archived"
+
+
+class TestRedoReopenKeepsReediting:
+    """REDO 11.09, task 3: complete, then reopen — a submitted external
+    sheet whose invite allows re-editing is handed back to its evaluator.
+
+    Driven end to end through the real invite payload. The flag survives
+    both transitions untouched, the context reports the live round again
+    and the sheet takes writes. What closes that form on a live round is
+    the invite's own re-editing flag, never the reopen itself — the
+    read-only sheet QA saw carried exactly the wording of a live round
+    with re-editing switched off.
+    """
+
+    async def _submitted_external(
+        self, db: AsyncSession, tenant, user, *, allow_reediting: bool
+    ):
+        cv, rd_id = await _round(db, tenant, user)
+        rows = await service.create_invites(
+            db,
+            tenant.id,
+            user.id,
+            cv.id,
+            ManagerAssessmentInviteCreate(
+                invitees=[
+                    ManagerAssessmentInviteIn(
+                        email=f"{uuid.uuid4().hex[:8]}@example.com", name="Ext Eval"
+                    )
+                ],
+                round_id=rd_id,
+                allow_reediting=allow_reediting,
+            ),
+        )
+        inv = await db.get(AssessmentInvite, rows[0]["id"])
+        inv.consent_accepted_at = datetime.now(timezone.utc)
+        await db.commit()
+        await public_service.public_set_competence_score(
+            db, inv.token, uuid.uuid4(), 3, None
+        )
+        await public_service.public_submit(db, inv.token)
+        return inv, rd_id
+
+    async def test_reopened_round_hands_the_sheet_back(
+        self, db: AsyncSession, tenant, user
+    ):
+        inv, rd_id = await self._submitted_external(
+            db, tenant, user, allow_reediting=True
+        )
+        # Re-submitting works on the live round before anything closes it.
+        await public_service.public_submit(db, inv.token)
+
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        ctx = await public_service.public_get_context(db, inv.token)
+        assert (ctx["status"], ctx["round_status"], ctx["allow_reediting"]) == (
+            "submitted",
+            "completed",
+            True,
+        )
+
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "reopen")
+        ctx = await public_service.public_get_context(db, inv.token)
+        assert (ctx["status"], ctx["round_status"], ctx["allow_reediting"]) == (
+            "submitted",
+            "in_progress",
+            True,
+        )
+        # ...and the sheet takes writes again, up to and including resubmit.
+        await public_service.public_set_competence_score(
+            db, inv.token, uuid.uuid4(), 2, None
+        )
+        assert (await public_service.public_submit(db, inv.token))["status"] == (
+            "submitted"
+        )
+
+    async def test_reopen_does_not_unlock_a_sheet_whose_invite_forbids_it(
+        self, db: AsyncSession, tenant, user
+    ):
+        inv, rd_id = await self._submitted_external(
+            db, tenant, user, allow_reediting=False
+        )
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "reopen")
+
+        ctx = await public_service.public_get_context(db, inv.token)
+        assert ctx["round_status"] == "in_progress"
+        assert ctx["allow_reediting"] is False
+        with pytest.raises(HTTPException) as exc:
+            await public_service.public_set_competence_score(
+                db, inv.token, uuid.uuid4(), 2, None
+            )
+        assert exc.value.status_code == 409
+
+    async def test_reopen_does_not_revive_an_expired_invite(
+        self, db: AsyncSession, tenant, user
+    ):
+        """The edit window is the invite's expiry, reopen or not."""
+        inv, rd_id = await self._submitted_external(
+            db, tenant, user, allow_reediting=True
+        )
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await service.apply_round_action(db, tenant.id, user.id, rd_id, "reopen")
+        inv.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        await db.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            await public_service.public_get_context(db, inv.token)
+        assert exc.value.status_code == 410

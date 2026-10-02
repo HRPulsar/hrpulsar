@@ -1,4 +1,6 @@
 import uuid
+from collections.abc import Iterable
+from typing import Literal
 
 from fastapi import status
 from pydantic_core import to_jsonable_python
@@ -183,10 +185,18 @@ async def _levels_completion_map(
 
 
 async def get_competence_tree(
-    db: AsyncSession, tenant_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    drafts: Literal["none", "own", "all"] = "none",
+    viewer_id: uuid.UUID | None = None,
 ) -> list[CompetenceGroupTree]:
     """Returns origin + tenant tree, alphabetically sorted, with usage and
-    levels-completion enrichment."""
+    levels-completion enrichment.
+
+    HRP-632: ``drafts`` says which personal drafts come along - none (the
+    pickers: a draft is attached nowhere until published), the viewer's own,
+    or all of them (``manage`` on the catalogue page)."""
     groups_q = await db.execute(
         select(CompetenceGroup)
         .where(_tenant_filter(tenant_id))
@@ -194,16 +204,22 @@ async def get_competence_tree(
     )
     groups = list(groups_q.scalars().all())
 
-    comps_q = await db.execute(
-        select(Competence)
-        .where(
+    comps_stmt = select(Competence).where(
+        or_(
+            Competence.tenant_id == tenant_id,
+            Competence.tenant_id.is_(None),
+        )
+    )
+    if drafts == "none":
+        comps_stmt = comps_stmt.where(Competence.draft_owner_id.is_(None))
+    elif drafts == "own":
+        comps_stmt = comps_stmt.where(
             or_(
-                Competence.tenant_id == tenant_id,
-                Competence.tenant_id.is_(None),
+                Competence.draft_owner_id.is_(None),
+                Competence.draft_owner_id == viewer_id,
             )
         )
-        .order_by(func.lower(Competence.title))
-    )
+    comps_q = await db.execute(comps_stmt.order_by(func.lower(Competence.title)))
     competences = list(comps_q.scalars().all())
 
     levels_q = await db.execute(
@@ -235,6 +251,7 @@ async def get_competence_tree(
             tenant_id=c.tenant_id,
             is_active=c.is_active,
             is_published=c.is_published,
+            draft_owner_id=c.draft_owner_id,
             applicable_to=c.applicable_to,
             created_at=c.created_at,
             is_origin=(c.tenant_id is None),
@@ -591,12 +608,20 @@ async def create_competence(
     data: CompetenceCreate,
     *,
     actor_id: uuid.UUID | None = None,
+    draft_owner_id: uuid.UUID | None = None,
 ) -> Competence:
+    """``draft_owner_id`` makes it that division head's personal draft
+    (HRP-632); it is unpublished either way."""
     group = await db.get(CompetenceGroup, data.group_id)
     if not group:
         raise AppError("competence_invalid_group", status.HTTP_400_BAD_REQUEST)
+    if group.tenant_id is not None and group.tenant_id != tenant_id:
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
+    _assert_draft_group(group, draft_owner_id)
 
-    comp = Competence(tenant_id=tenant_id, **data.model_dump())
+    comp = Competence(
+        tenant_id=tenant_id, draft_owner_id=draft_owner_id, **data.model_dump()
+    )
     # HRP-118: a competence added under an inactive group inherits that state
     # so it stays hidden until the admin explicitly publishes it.
     if not group.is_active:
@@ -624,6 +649,7 @@ async def bulk_create_competences(
     data: CompetenceBulkCreate,
     *,
     actor_id: uuid.UUID | None = None,
+    draft_owner_id: uuid.UUID | None = None,
 ) -> list[Competence]:
     """Create several competences inside a single group in one transaction.
 
@@ -636,6 +662,7 @@ async def bulk_create_competences(
         raise AppError("competence_invalid_group", status.HTTP_400_BAD_REQUEST)
     if group.tenant_id is not None and group.tenant_id != tenant_id:
         raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
+    _assert_draft_group(group, draft_owner_id)
 
     created: list[Competence] = []
     for item in data.items:
@@ -645,6 +672,7 @@ async def bulk_create_competences(
             title=item.title,
             description=item.description,
             competence_type_id=item.competence_type_id,
+            draft_owner_id=draft_owner_id,
         )
         # HRP-118: inherit the parent's hidden state — bulk-added rows in a
         # hidden group stay hidden until an admin publishes them.
@@ -699,7 +727,6 @@ async def get_competence_detail(
         raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
     if comp.tenant_id is not None and comp.tenant_id != tenant_id:
         raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
-
     allowed_level_ids: set[uuid.UUID] | None = None
     if skill_level_id is not None:
         target = await db.get(SkillLevel, skill_level_id)
@@ -750,6 +777,7 @@ async def get_competence_detail(
         "tenant_id": comp.tenant_id,
         "is_active": comp.is_active,
         "is_published": comp.is_published,
+        "draft_owner_id": comp.draft_owner_id,
         "applicable_to": comp.applicable_to,
         "is_used": usage.is_used,
         "usage": {
@@ -804,9 +832,19 @@ async def update_competence(
     data: CompetenceUpdate,
     *,
     actor_id: uuid.UUID | None = None,
+    draft_owner_id: uuid.UUID | None = None,
 ) -> Competence:
     comp = await _load_competence_for_edit(db, tenant_id, competence_id)
     payload = data.model_dump(exclude_unset=True)
+    if draft_owner_id is not None:
+        # HRP-632: a division head renames and re-describes their own draft;
+        # where it sits and whether it shows is the catalogue's (``manage``).
+        # The edit form sends every field back, so only a change counts.
+        _assert_own_draft(comp, draft_owner_id)
+        if any(
+            payload[f] != getattr(comp, f) for f in set(payload) - _DRAFT_FIELDS
+        ):
+            raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
     for field, value in payload.items():
         setattr(comp, field, value)
     await _audit(
@@ -829,8 +867,11 @@ async def delete_competence(
     competence_id: uuid.UUID,
     *,
     actor_id: uuid.UUID | None = None,
+    draft_owner_id: uuid.UUID | None = None,
 ) -> None:
     comp = await _load_competence_for_edit(db, tenant_id, competence_id)
+    if draft_owner_id is not None:
+        _assert_own_draft(comp, draft_owner_id)
     await ensure_competence_can_delete(db, comp)
     await _audit(
         db,
@@ -909,6 +950,8 @@ async def publish_competence(
     published (they don't have a publish state)."""
     comp = await _load_competence_for_edit(db, tenant_id, competence_id)
     comp.is_published = True
+    # HRP-632: a published division head's draft is the catalogue's now.
+    comp.draft_owner_id = None
     if not comp.is_active:
         comp.is_active = True
     parent = await db.get(CompetenceGroup, comp.group_id)
@@ -1012,6 +1055,51 @@ async def _load_competence_for_edit(
     if comp.tenant_id != tenant_id:
         raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
     return comp
+
+
+_DRAFT_FIELDS = frozenset({"title", "description", "competence_type_id"})
+
+
+async def assert_catalogue_competences(
+    db: AsyncSession, tenant_id: uuid.UUID, competence_ids: Iterable[uuid.UUID]
+) -> None:
+    """HRP-632: only published catalogue competences - the tenant's own or
+    the origin's - attach to anything. A personal draft is attached nowhere
+    until published, and another tenant's id is not there at all."""
+    wanted = set(competence_ids)
+    if not wanted:
+        return
+    found = set(
+        (
+            await db.execute(
+                select(Competence.id).where(
+                    Competence.id.in_(wanted),
+                    or_(Competence.tenant_id == tenant_id, Competence.tenant_id.is_(None)),
+                    Competence.draft_owner_id.is_(None),
+                )
+            )
+        ).scalars()
+    )
+    if found != wanted:
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
+
+
+def _assert_draft_group(group: CompetenceGroup, draft_owner_id: uuid.UUID | None) -> None:
+    """HRP-632: a personal draft goes into one of the tenant's own groups -
+    the built-in library is nobody's to add to."""
+    if draft_owner_id is not None and group.tenant_id is None:
+        raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
+
+
+def _assert_own_draft(comp: Competence, owner_id: uuid.UUID) -> None:
+    """HRP-632: below ``manage`` only one's own personal draft is written.
+
+    Someone else's draft is not there for the caller at all (404); anything
+    else of the catalogue is ``manage``'s (403)."""
+    if comp.draft_owner_id is not None and comp.draft_owner_id != owner_id:
+        raise AppError("competence_not_found", status.HTTP_404_NOT_FOUND)
+    if comp.draft_owner_id != owner_id:
+        raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
 
 
 # --- SkillLevel ---

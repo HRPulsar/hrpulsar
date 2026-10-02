@@ -19,7 +19,12 @@ function devLoopStages(employees: number, withoutPlan: number) {
     assessed: { covered: 8, total_active: 10, percent: 80 },
     gaps: { employees, competences: employees * 2, without_plan: withoutPlan },
     developing: { open_pdps: 1, gap_employees_with_plan: 1 },
-    closed: { window_days: 90, gaps_closed: 0, plans_done_on_time: 0 },
+    closed: {
+      window_days: 90,
+      gaps_closed: 0,
+      plans_completed: 0,
+      plans_done_on_time: 0,
+    },
   };
 }
 
@@ -46,7 +51,12 @@ function myLoop(competences: number, hasPlan: boolean) {
             }
           : null,
       },
-      closed: { window_days: 90, gaps_closed: 0 },
+      closed: {
+        window_days: 90,
+        gaps_closed: 0,
+        plans_completed: 0,
+        plans_done_on_time: 0,
+      },
     },
     findings: [],
     strengths: { top: [], rare_skills: [] },
@@ -131,6 +141,7 @@ describe("the dynamics tile", () => {
       value: 'stageDynamicsValue:{"count":2}',
       testid: "dashboard-loop-dynamics",
       tone: "positive",
+      href: "/development?status=done&finished_days=30",
     });
     const mine = buildMyStages(
       { ...myLoop(0, false), dynamics: moved },
@@ -141,6 +152,7 @@ describe("the dynamics tile", () => {
       value: 'stageDynamicsValue:{"count":2}',
       testid: "dashboard-my-dynamics",
       tone: "positive",
+      href: "/development?status=done&finished_days=30",
     });
   });
 
@@ -167,5 +179,61 @@ describe("the dynamics tile", () => {
     expect(
       dynamicsTile(buildMyStages(myLoop(2, false), t, formatDate))?.tone,
     ).toBeUndefined();
+  });
+});
+
+// HRP-766: the Completed tile leads with the plans finished in the window
+// and sub-lines the on-time subset of the same plans, so the sub-line can
+// never outgrow the headline the way "Completed 1 / 2 plans completed on
+// time" did while the headline counted closed competence gaps.
+
+describe("the completed tile", () => {
+  const tArgs = (key: string, values?: Record<string, string | number>) =>
+    values ? `${key}:${JSON.stringify(values)}` : key;
+  const closed = {
+    window_days: 30,
+    gaps_closed: 7,
+    plans_completed: 3,
+    plans_done_on_time: 2,
+  };
+
+  it("headlines finished plans and bars their on-time share on both heroes", () => {
+    const company = buildStages(
+      { ...devLoopStages(0, 0), closed },
+      DYNAMICS,
+      tArgs,
+    ).find((s) => s.key === "closed");
+    expect(company).toMatchObject({
+      value: "3",
+      sub: 'stageClosedSub:{"count":2,"days":30}',
+      progress: 67,
+      tone: "positive",
+      // HRP-724: the list opens on the plans finished in the same window.
+      href: "/development?status=done&finished_days=30",
+    });
+    const base = myLoop(0, false);
+    const mine = buildMyStages(
+      { ...base, stages: { ...base.stages, closed } },
+      tArgs,
+      formatDate,
+    ).find((s) => s.key === "closed");
+    expect(mine).toMatchObject({
+      value: "3",
+      sub: 'stageClosedSub:{"count":2,"days":30}',
+      progress: 67,
+      tone: "positive",
+      // HRP-724: the list opens on the plans finished in the same window.
+      href: "/development?status=done&finished_days=30",
+    });
+  });
+
+  it("stays untinted with no plan finished, however many gaps closed", () => {
+    const none = { ...closed, plans_completed: 0, plans_done_on_time: 0 };
+    const tile = buildStages(
+      { ...devLoopStages(0, 0), closed: none },
+      DYNAMICS,
+      tArgs,
+    ).find((s) => s.key === "closed");
+    expect(tile).toMatchObject({ value: "0", progress: 0, tone: undefined });
   });
 });

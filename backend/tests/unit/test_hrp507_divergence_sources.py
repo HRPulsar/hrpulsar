@@ -156,8 +156,12 @@ class TestManagerSideReachesTheMatrix:
         assert python["manager_evaluator_count"] == 1
         comms = cells[str(service.normalize_competence_id("communication"))]
         assert comms["manager_score"] == 3.0
-        # (4.0 + 3.0) / (4 * 3) * 100
-        assert matrix["candidates"][0]["manager_percent"] == 58.3
+        # HRP-774: percent of scale is the level's weight on "Standard 1-4"
+        # (4 -> 100, 3 -> 66), averaged over all three profile competences
+        # with the unscored one counting as 0: (100 + 66 + 0) / 3.
+        assert python["manager_percent"] == 100.0
+        assert comms["manager_percent"] == 66.0
+        assert matrix["candidates"][0]["manager_percent"] == 55.3
 
     async def test_top_marks_on_both_sides_reach_full_match(
         self, db: AsyncSession, tenant, user, matrix_scale

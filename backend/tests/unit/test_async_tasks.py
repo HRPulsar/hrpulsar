@@ -100,7 +100,7 @@ class TestAsyncExportEndpoint:
 
 class TestBatchEmbedEndpoint:
     @patch("app.modules.ai.tasks.batch_embed_task")
-    async def test_batch_embed(self, mock_task, auth_client: AsyncClient):
+    async def test_batch_embed(self, mock_task, auth_client: AsyncClient, tenant):
         mock_result = MagicMock()
         mock_result.id = "embed-task-id-101"
         mock_task.apply_async.return_value = mock_result
@@ -131,6 +131,8 @@ class TestBatchEmbedEndpoint:
         items_arg = kwargs["args"][0]
         assert len(items_arg) == 2
         assert items_arg[0]["entity_type"] == "competence"
+        # HRP-954: the rows are written for the caller's tenant.
+        assert kwargs["args"][1] == str(tenant.id)
 
     @patch("app.modules.ai.tasks.batch_embed_task")
     async def test_batch_embed_empty_items(self, mock_task, auth_client: AsyncClient):

@@ -173,6 +173,14 @@ for _key in (
     ALLOWED_DRIFT[_key] = "Index exists in DB by migration, undeclared on the model."
 
 # --- Migration bookkeeping table ------------------------------------------
+# --- HRP-832: the permission codenames, contract step pending -------------
+# The model went first: ``Role.permissions`` was ``selectin``, so a
+# container of the previous release keeps loading the tables while the
+# deploy runs migrations ahead of the swap. The tables go one release
+# later (HRP-973), when no running code reads them.
+for _key in ("remove_table:role_permissions", "remove_table:permissions"):
+    ALLOWED_DRIFT[_key] = "Dropped one release after the model (HRP-973, the HRP-832 contract step)."
+
 ALLOWED_DRIFT["remove_table:hrp305_fk_snapshot"] = (
     "Scratch table hrp305_demo_purge_guard_and_user_fk_cascade creates to "
     "make its own downgrade reversible — deliberately has no model."

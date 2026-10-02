@@ -38,6 +38,9 @@ ERROR_CODES = (
     # the maximum budget — retrying is pointless, the user must narrow
     # the generation scope instead.
     "output_truncated",
+    # HRP-1005: the workspace's processor list allows no AI provider -
+    # retrying changes nothing until an admin changes the list.
+    "no_allowed_processor",
 )
 
 

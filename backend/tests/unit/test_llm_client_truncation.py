@@ -79,7 +79,7 @@ class TestAnthropicTruncation:
     async def test_end_turn_returns_text(self) -> None:
         client = _anthropic_client("end_turn")
         with patch.object(llm_client, "_get_anthropic", return_value=client):
-            result = await llm_client._generate_anthropic(
+            result, _usage = await llm_client._generate_anthropic(
                 "p", None, "claude-sonnet-5", 0.3, 8192
             )
         assert result == '{"ok": true}'
@@ -144,7 +144,7 @@ class TestAnthropicTruncation:
             ],
         )
         with patch.object(llm_client, "_get_anthropic", return_value=client):
-            result = await llm_client._generate_anthropic(
+            result, _usage = await llm_client._generate_anthropic(
                 "p", None, "claude-sonnet-5", 0.3, 8192
             )
         assert result == '{"ok": true}'
@@ -161,7 +161,7 @@ class TestAnthropicTruncation:
             ],
         )
         with patch.object(llm_client, "_get_anthropic", return_value=client):
-            result = await llm_client._generate_anthropic(
+            result, _usage = await llm_client._generate_anthropic(
                 "p", None, "claude-sonnet-5", 0.3, 64000
             )
         assert result == '{"ok": true}'
@@ -245,7 +245,7 @@ class TestOpenAITruncation:
     async def test_stop_finish_reason_returns_text(self) -> None:
         client = _openai_client("stop")
         with patch.object(llm_client, "_get_openai", return_value=client):
-            result = await llm_client._generate_openai("p", None, "gpt-4o", 0.3, 8192)
+            result, _usage = await llm_client._generate_openai("p", None, "gpt-4o", 0.3, 8192)
         assert result == '{"ok": true}'
 
     async def test_max_tokens_clamped_to_model_cap(self) -> None:
@@ -261,6 +261,18 @@ class TestOpenAITruncation:
         client = _openai_client("stop")
         with patch.object(llm_client, "_get_openai", return_value=client):
             await llm_client._generate_openai("p", None, "gpt-99-turbo", 0.3, 32768)
+        sent = client.chat.completions.create.call_args.kwargs
+        assert sent["max_tokens"] == 16384
+
+
+    async def test_a_server_behind_a_base_url_is_capped(self) -> None:
+        # HRP-997: a local 32k-context server took the breakdown's 32768
+        # plus the prompt as a context overflow on every attempt.
+        client = _openai_client("stop")
+        with patch.object(llm_client, "_get_openai", return_value=client):
+            await llm_client._generate_openai(
+                "p", None, "qwen2.5-72b", 0.3, 32768, base_url="http://llm.local/v1"
+            )
         sent = client.chat.completions.create.call_args.kwargs
         assert sent["max_tokens"] == 16384
 
@@ -296,7 +308,7 @@ class TestGeminiTruncation:
     async def test_stop_finish_reason_returns_text(self) -> None:
         client = _gemini_client("FinishReason.STOP")
         with patch.object(llm_client, "_get_gemini", return_value=client):
-            result = await llm_client._generate_gemini(
+            result, _usage = await llm_client._generate_gemini(
                 "p", None, "gemini-2.5-pro", 0.3, 8192
             )
         assert result == '{"ok": true}'
@@ -311,7 +323,7 @@ class TestGeminiTruncation:
             )
         )
         with patch.object(llm_client, "_get_gemini", return_value=client):
-            result = await llm_client._generate_gemini(
+            result, _usage = await llm_client._generate_gemini(
                 "p", None, "gemini-2.5-pro", 0.3, 8192
             )
         assert result == '{"ok": true}'

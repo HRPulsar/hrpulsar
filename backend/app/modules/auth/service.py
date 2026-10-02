@@ -34,6 +34,7 @@ from app.core.security import (
     verify_password,
 )
 from app.modules.auth.models import Invitation, Role, User, user_roles
+from app.modules.auth.roles import ensure_baseline_employee_role
 from app.modules.auth.schemas import (
     AcceptInvitationRequest,
     ChangePasswordRequest,
@@ -287,6 +288,7 @@ async def register(
     role = admin_role.scalar_one_or_none()
     if role:
         await db.execute(user_roles.insert().values(user_id=user.id, role_id=role.id))
+    await ensure_baseline_employee_role(db, user.id)
 
     await db.commit()
 
@@ -756,12 +758,13 @@ async def get_me(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
     # tenant row still answers for the roles that carry the pair.
     payload["can_view_job_profile"] = await can_see_position_grades(db, user)
 
-    # HRP-810: imported here - auth sits under every module and must not
-    # pull the work module in at import time.
-    from app.modules.work import access as work_access
+    # HRP-820: every section the caller opens and how far; hidden and
+    # ``none`` are absent. Imported here - auth sits under every module.
+    from app.core.sections import levels_for
 
-    coverage_level = await work_access.section_level(db, user)
-    payload["sections"] = {"coverage": coverage_level} if coverage_level else {}
+    payload["sections"] = {
+        code: level for code, level in (await levels_for(db, user)).items() if level != "none"
+    }
 
     # Demo-session metadata so the SPA can render <DemoBanner/> without
     # a second /tenant lookup. Cheap: tenant id is on the user already.
@@ -1132,9 +1135,7 @@ async def list_roles(db: AsyncSession, tenant_id: uuid.UUID) -> list[tuple[Role,
     on ``Employee.status`` and is a separate axis the list does filter.
     """
     result = await db.execute(
-        select(Role)
-        .options(selectinload(Role.permissions))
-        .where(or_(Role.tenant_id == tenant_id, Role.is_system == True))  # noqa: E712
+        select(Role).where(or_(Role.tenant_id == tenant_id, Role.is_system == True))  # noqa: E712
     )
     roles = list(result.scalars().all())
     rows = await db.execute(
@@ -1216,7 +1217,10 @@ _INVITE_ALLOWED: dict[str, frozenset[str]] = {
 
 def _allowed_invite_roles(inviter_role_codes: list[str]) -> frozenset[str]:
     tiers = {**_INVITE_ALLOWED, **rbac_hooks.extra_invite_tiers()}
-    allowed: set[str] = set()
+    # HRP-831: the matrix may open the section to a role the table has no
+    # row for; it then invites what a manager invites - employees only.
+    # Mirrored by ``allowedInviteRoles`` on the invitations page.
+    allowed: set[str] = {"employee"}
     for code in inviter_role_codes:
         allowed |= tiers.get(code, frozenset())
     return frozenset(allowed)
@@ -1428,6 +1432,7 @@ async def list_invitations(
     skip: int = 0,
     limit: int = 50,
     status_filter: str | None = None,
+    division_ids: list[uuid.UUID] | None = None,
 ) -> tuple[list[dict], int]:
     query = (
         select(Invitation)
@@ -1441,6 +1446,11 @@ async def list_invitations(
     count_query = select(func.count(Invitation.id)).where(
         Invitation.tenant_id == tenant_id
     )
+    if division_ids is not None:
+        # HRP-831: below the admin level the registry is the caller's
+        # subtree; an invitation with no division is nobody's there.
+        query = query.where(Invitation.division_id.in_(division_ids))
+        count_query = count_query.where(Invitation.division_id.in_(division_ids))
 
     if status_filter:
         query = query.where(Invitation.status == status_filter)
@@ -1697,6 +1707,9 @@ async def accept_invitation(
     role = role_result.scalar_one_or_none()
     if role:
         await db.execute(user_roles.insert().values(user_id=user.id, role_id=role.id))
+    # HRP-832: every account holds the ``employee`` baseline, an invited
+    # manager or hr included.
+    await ensure_baseline_employee_role(db, user.id)
 
     # Create employee card if division or position specified
     emp = None

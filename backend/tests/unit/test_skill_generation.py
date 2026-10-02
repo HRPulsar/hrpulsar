@@ -209,7 +209,11 @@ class TestGeneration:
 
         call = fake.calls[0]
         assert call["schema"] is GeneratedSkillSchema
-        system, prompt = call["system"], call["prompt"]
+        # HRP-951: the skeleton and rules alone in the first block (the one
+        # the provider caches), the tenant's directive and context after it.
+        assert call["system"][0].startswith("You write an Agent Skill")
+        assert "english" in call["system"][1].lower()
+        system, prompt = "\n\n".join(call["system"]), call["prompt"]
         # The skeleton of the matched pack, without its own frontmatter.
         assert "## Verification against the reference" in system
         # R7 (2026-09-10): the reference limits what is certified, not noticed.

@@ -64,8 +64,13 @@ interface EmployeeExamRow {
 }
 
 export default function ExamsPage() {
-  const { canManage } = usePermissions();
-  if (canManage) {
+  // HRP-823: which half of the section this is comes from the tenant's
+  // matrix, not from the role list. `manage` runs the mass exams; every
+  // lower level - `none` included, since the page is outside the section
+  // gate - lands on one's own exams, which an assignment e-mail links to
+  // directly.
+  const { canManageSection } = usePermissions();
+  if (canManageSection("exams")) {
     return <ManagerExamsView />;
   }
   return <EmployeeExamsView />;

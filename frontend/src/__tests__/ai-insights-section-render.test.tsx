@@ -253,6 +253,75 @@ describe("AI Insights — removed chrome (HRP-489, HRP-492)", () => {
   });
 });
 
+describe("AI Insights — analysis basis chip (HRP-685)", () => {
+  // The mode chip's tooltip promises "resume and interview transcript".
+  // A full run made without a resume must not make that promise: the
+  // backend derives ``readiness`` and the chip follows it.
+  it("labels a full run made without a resume as transcript only", async () => {
+    runs.push(
+      mkRun({
+        mode: "full",
+        interview_id: "interview-1",
+        readiness: "transcript_only",
+        verdict: "recommended",
+      }),
+    );
+    eligibility = mkEligibility({ active_run_mode: "full" });
+    await render(false);
+
+    const chip = byTestId("ai-analysis-mode-badge-transcript_only");
+    expect(chip).not.toBeNull();
+    expect(chip!.textContent).toBe("transcript only");
+    expect(byTestId("ai-analysis-mode-badge-full")).toBeNull();
+  });
+
+  it("keeps the full chip when the run had both inputs", async () => {
+    runs.push(
+      mkRun({
+        mode: "full",
+        interview_id: "interview-1",
+        readiness: "resume_and_transcript",
+      }),
+    );
+    eligibility = mkEligibility({ active_run_mode: "full" });
+    await render(true);
+
+    expect(byTestId("ai-analysis-mode-badge-full")).not.toBeNull();
+    expect(byTestId("ai-analysis-mode-badge-transcript_only")).toBeNull();
+  });
+
+  it("names the basis in the history too", async () => {
+    runs.push(
+      mkRun({ mode: "full", interview_id: "interview-1", readiness: "transcript_only" }),
+      mkRun({
+        id: "run-0",
+        mode: "resume_only",
+        readiness: "resume_only",
+        archived_at: "2026-08-02T10:00:00Z",
+      }),
+    );
+    eligibility = mkEligibility({ active_run_mode: "full" });
+    await render(false);
+    await act(async () => {
+      (byTestId("ai-analysis-history-btn") as HTMLButtonElement).click();
+    });
+
+    // The history is a dialog, portalled outside the section's container.
+    const entry = (id: string) =>
+      document.querySelector(`[data-testid="ai-analysis-history-entry-${id}"]`)!;
+    expect(
+      entry("run-1").querySelector(
+        '[data-testid="ai-analysis-mode-badge-transcript_only"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      entry("run-0").querySelector(
+        '[data-testid="ai-analysis-mode-badge-resume_only"]',
+      ),
+    ).not.toBeNull();
+  });
+});
+
 describe("AI Insights — staleness banners (HRP-489, HRP-492)", () => {
   it("offers the split-button for a re-parsed resume", async () => {
     runs.push(mkRun());

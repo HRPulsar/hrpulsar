@@ -169,13 +169,29 @@ describe("Generated date after a re-generate (HRP-740)", () => {
       mkSet({
         generation_mode: "regenerated",
         created_at: "2026-07-14T09:00:00Z",
-        updated_at: "2026-09-07T11:30:00Z",
+        generated_at: "2026-09-07T11:30:00Z",
       }),
     );
     await mount();
     const text = section()?.textContent ?? "";
     expect(text).toContain("Generated 2026-09-07");
     expect(text).not.toContain("2026-07-14");
+  });
+
+  it("is not moved by a status change that brought no questions", async () => {
+    // Review 01.10: a cancelled or failed regeneration moves updated_at.
+    questionSets.push(
+      mkSet({
+        generation_mode: "regenerated",
+        created_at: "2026-07-14T09:00:00Z",
+        generated_at: "2026-09-07T11:30:00Z",
+        updated_at: "2026-10-01T08:00:00Z",
+      }),
+    );
+    await mount();
+    const text = section()?.textContent ?? "";
+    expect(text).toContain("Generated 2026-09-07");
+    expect(text).not.toContain("2026-10-01");
   });
 
   it("still dates a first generation from its own run", async () => {

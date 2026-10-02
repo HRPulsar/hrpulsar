@@ -13,33 +13,24 @@ interface RequireRoleProps {
   manage?: boolean;
   /** Require admin role */
   admin?: boolean;
-  /** HRP-732: require admin, manager or HR — the read-only management
-   *  surface /analytics. */
-  managementData?: boolean;
   /** HRP-810: /auth/me opens Coverage. */
   coverage?: boolean;
   /** HRP-810: may create a process. */
   coverageManage?: boolean;
-  /** HRP-622: the recruiting roles (usePermissions.canRecruit). */
-  recruit?: boolean;
 }
 
 export function RequireRole({
   children,
   manage,
   admin,
-  managementData,
   coverage,
   coverageManage,
-  recruit,
 }: RequireRoleProps) {
   const {
     canManage,
     isAdmin,
-    canViewManagementData,
     canViewCoverage,
     canCreateCoverage,
-    canRecruit,
   } = usePermissions();
   const { user, loading } = useAuth();
   const router = useRouter();
@@ -52,17 +43,13 @@ export function RequireRole({
   // First match wins: pass exactly one flag, or the page gets the loosest gate.
   const allowed = admin
     ? isAdmin
-    : managementData
-      ? canViewManagementData
-      : coverageManage
-        ? canCreateCoverage
-        : coverage
-          ? canViewCoverage
-          : recruit
-            ? canRecruit
-            : manage
-              ? canManage
-              : true;
+    : coverageManage
+      ? canCreateCoverage
+      : coverage
+        ? canViewCoverage
+        : manage
+          ? canManage
+          : true;
 
   useEffect(() => {
     if (!undecided && !allowed) {

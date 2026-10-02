@@ -700,6 +700,7 @@ class TestAssignment:
             "employee_id": emp.id,
             "name": "Jane Novak",
             "position": None,
+            "status": "active",
             "label": "assigned",
             # Cognitive codes only: nobody is short of a boundary one.
             "missing_codes": ["P6", "P8"],
@@ -744,10 +745,19 @@ class TestAssignment:
         assert row["human"]["missing_codes"] == []
         assert row["needs_accountable"] is False
 
-    async def test_terminated_assignee_is_ignored(self, db, tenant, user, seeded):
+    @pytest.mark.parametrize("status", ["on_leave", "inactive", "terminated"])
+    async def test_status_change_keeps_the_assignment(
+        self, db, tenant, user, seeded, status
+    ):
+        """HRP-959: a step names a person, not "whoever is active" - going
+        on leave or leaving the company does not hand the step to a
+        colleague, nor reopen "Who checks?". The row carries the status."""
         c = await _container(db, tenant, user)
         step = await _step(db, tenant, c, ["P6"], responsibility="formal")
-        emp = await _employee(db, tenant)
+        emp = await _employee(db, tenant, last_name="Gone")
+        await _done(db, tenant, emp, await _competence(db, tenant.id, ["P6"]), 90)
+        other = await _employee(db, tenant, last_name="Here")
+        await _done(db, tenant, other, await _competence(db, tenant.id, ["P6"]), 90)
         await _assign(
             db,
             tenant,
@@ -755,13 +765,41 @@ class TestAssignment:
             executor_employee_id=emp.id,
             accountable_employee_id=emp.id,
         )
-        emp.status = "terminated"
+        emp.status = status
         await db.commit()
         row, _ = await _row(db, tenant, c, step["id"])
-        assert row["verdict"] == "gap"
-        assert row["human"] is None
-        assert row["accountable"] is None
-        assert row["needs_accountable"] is True
+        assert row["verdict"] == "human"
+        assert row["human"]["employee_id"] == emp.id
+        assert row["human"]["label"] == "assigned"
+        assert row["human"]["status"] == status
+        # Still theirs: the skills did not leave with the status.
+        assert row["human"]["missing_codes"] == []
+        assert row["accountable"] == {
+            "employee_id": emp.id,
+            "name": "Jane Gone",
+            "position": None,
+            "status": status,
+        }
+        assert row["needs_accountable"] is False
+
+    async def test_inactive_assignee_is_not_matched_elsewhere(
+        self, db, tenant, user, seeded
+    ):
+        """The assignee's codes are resolved for their own step only; the
+        match for an unassigned step still offers active people alone."""
+        c = await _container(db, tenant, user)
+        assigned = await _step(db, tenant, c, ["P6"])
+        free = await _step(db, tenant, c, ["P6"])
+        emp = await _employee(db, tenant)
+        await _done(db, tenant, emp, await _competence(db, tenant.id, ["P6"]), 90)
+        await _assign(db, tenant, assigned, executor_employee_id=emp.id)
+        emp.status = "terminated"
+        await db.commit()
+        result = await coverage.compute(db, tenant.id, c.id)
+        by_id = {s["step_id"]: s for s in result["steps"]}
+        assert by_id[assigned["id"]]["human"]["employee_id"] == emp.id
+        assert by_id[free["id"]]["verdict"] == "gap"
+        assert by_id[free["id"]]["human"] is None
 
     async def test_needs_accountable(self, db, tenant, user, seeded):
         c = await _container(db, tenant, user)
@@ -786,6 +824,7 @@ class TestAssignment:
             "employee_id": emp.id,
             "name": "Jane Keller",
             "position": None,
+            "status": "active",
         }
         # Only the accountable is named: the verdict is still computed.
         assert row["verdict"] == "agent"

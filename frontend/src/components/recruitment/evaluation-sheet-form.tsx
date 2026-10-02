@@ -204,34 +204,22 @@ export function findCompetenceComment(
 }
 
 /** HRP-374 REDO: who scored this competence, one evaluator per line —
- * "AL = 4", "Ivan Petrov = 2".
+ * "Anna Lebedeva: 4", "Ivan Petrov: 2".
  *
- * An internal evaluator is named by the initials their avatar already
- * shows in the round header; an invited external one by their full name,
- * which is the only name the panel has for them. Name and score stay
+ * Every evaluator is named in full, colleague or invited external alike
+ * (REDO 11.09 — initials were asked out). Name and score stay
  * translator-visible ICU arguments rather than glued-together substrings.
- * The lines are prefixed by the "Evaluators disagree" header only when
- * they actually do. */
+ * When the panel disagrees, "Evaluators disagree" heads the list on its
+ * own line; otherwise the lines stand alone. */
 export function scorersTooltip(
   t: (key: string, values?: Record<string, string | number>) => string,
   aggregate: CompetenceAggregate,
 ): string {
   const lines = aggregate.scorers.map((s) =>
-    t("evalSheetScorerEntry", {
-      name:
-        s.evaluator_type === "internal" && s.initials
-          ? s.initials
-          : s.evaluator,
-      score: s.score,
-    }),
+    t("evalSheetScorerEntry", { name: s.evaluator, score: s.score }),
   );
-  if (!aggregate.diverges) return lines.join("\n");
-  // The header names the first evaluator inline, so the message keeps its
-  // "Evaluators disagree: {entries}" shape without a dangling colon.
-  return [
-    t("evalSheetDivergenceTooltip", { entries: lines[0] ?? "" }),
-    ...lines.slice(1),
-  ].join("\n");
+  if (aggregate.diverges) lines.unshift(t("evalSheetDivergenceAria"));
+  return lines.join("\n");
 }
 
 /** HRP-374: one competence's cross-evaluator roll-up for the round. */
@@ -241,8 +229,6 @@ export interface CompetenceAggregate {
   scorers: {
     evaluator: string;
     evaluator_type: "internal" | "external";
-    /** Avatar initials — internal evaluators only. */
-    initials?: string | null;
     score: number;
   }[];
 }

@@ -22,6 +22,7 @@ from app.modules.auth.schemas import (
 )
 from app.modules.company.models import Tenant
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -115,6 +116,9 @@ class TestRegister:
     async def test_register_returns_pending_verification(
         self, db: AsyncSession, admin_role
     ):
+        if not (await db.execute(select(Role).where(Role.code == "employee"))).scalar_one_or_none():
+            db.add(Role(name="Employee", code="employee", is_system=True))
+            await db.commit()
         email = f"new-{uuid.uuid4().hex[:6]}@example.com"
         data = RegisterRequest(
             email=email,
@@ -128,6 +132,14 @@ class TestRegister:
         assert resp["auto_verified"] is False
         assert resp["email"] == email
         assert "access_token" not in resp
+        # HRP-832: the workspace's first admin holds the ``employee`` baseline too.
+        new_user = (await db.execute(select(User).where(User.email == email))).scalar_one()
+        codes = await db.execute(
+            select(Role.code)
+            .join(user_roles, user_roles.c.role_id == Role.id)
+            .where(user_roles.c.user_id == new_user.id)
+        )
+        assert {c for (c,) in codes.all()} == {"admin", "employee"}
 
     async def test_register_duplicate_email_fails(self, db: AsyncSession, admin_role):
         email = f"dup-{uuid.uuid4().hex[:6]}@example.com"

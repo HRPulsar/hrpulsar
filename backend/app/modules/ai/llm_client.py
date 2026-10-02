@@ -8,8 +8,11 @@ import hashlib
 import inspect
 import json
 import logging
+import time
 import uuid
 from collections import OrderedDict
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
 import anthropic
@@ -20,7 +23,7 @@ from google import genai
 from pydantic import BaseModel
 
 from app.config import settings
-from app.core import url_guard
+from app.core import ai_usage_hooks, url_guard
 from app.core.errors import AppError
 from app.modules.ai import model_registry, providers
 
@@ -34,6 +37,103 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class _Usage:
+    """Token counts a provider reported for one call; None = not reported."""
+
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+
+
+def _openai_usage(response: Any) -> _Usage:
+    usage = getattr(response, "usage", None)
+    details = getattr(usage, "prompt_tokens_details", None)
+    return _Usage(
+        input_tokens=getattr(usage, "prompt_tokens", None),
+        output_tokens=getattr(usage, "completion_tokens", None),
+        cache_read_tokens=getattr(details, "cached_tokens", None),
+    )
+
+
+def _anthropic_usage(response: Any) -> _Usage:
+    usage = getattr(response, "usage", None)
+    return _Usage(
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        cache_read_tokens=getattr(usage, "cache_read_input_tokens", None),
+        cache_write_tokens=getattr(usage, "cache_creation_input_tokens", None),
+    )
+
+
+def _gemini_usage(response: Any) -> _Usage:
+    meta = getattr(response, "usage_metadata", None)
+    candidates = getattr(meta, "candidates_token_count", None)
+    thoughts = getattr(meta, "thoughts_token_count", None)
+    # 2.5 models bill thinking as output but report it apart (HRP-966).
+    output = (
+        None
+        if candidates is None and thoughts is None
+        else (candidates or 0) + (thoughts or 0)
+    )
+    return _Usage(
+        input_tokens=getattr(meta, "prompt_token_count", None),
+        output_tokens=output,
+        cache_read_tokens=getattr(meta, "cached_content_token_count", None),
+    )
+
+
+# `provider` inside generate() is the dispatch key; the journal wants the
+# catalog name (HRP-964).
+_PROVIDER_CODES = {"claude": "anthropic"}
+_SOURCE_CODES = {"global": "platform"}
+
+
+def _provenance(
+    provider: str, target: providers.GenerationTarget | None
+) -> tuple[str, str]:
+    """(provider code, credential source) for the journal."""
+    if target is not None:
+        return target.provider, _SOURCE_CODES.get(target.source, target.source)
+    return _PROVIDER_CODES.get(provider, provider), "platform"
+
+
+def _error_code(exc: BaseException) -> str:
+    return exc.code if isinstance(exc, AppError) else type(exc).__name__
+
+
+async def _record(
+    kind: str,
+    provider: str,
+    model: str,
+    credential_source: str,
+    started: float,
+    status: str,
+    *,
+    usage: _Usage | None = None,
+    error_code: str | None = None,
+) -> None:
+    usage = usage or _Usage()
+    record = ai_usage_hooks.CallRecord(
+        kind=kind,
+        provider=provider,
+        model=model,
+        credential_source=credential_source,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        status=status,
+        error_code=error_code,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read_tokens=usage.cache_read_tokens,
+        cache_write_tokens=usage.cache_write_tokens,
+    )
+    try:
+        await ai_usage_hooks.record_call(record)
+    except Exception:  # noqa: BLE001 — the journal must never break a call
+        logger.exception("AI usage record failed (model=%s)", model)
+
+
 class LLMOutputTruncatedError(RuntimeError):
     """The model stopped at the max_tokens ceiling — output is incomplete.
 
@@ -44,12 +144,13 @@ class LLMOutputTruncatedError(RuntimeError):
     prompt.
     """
 
-    def __init__(self, model: str, max_tokens: int) -> None:
+    def __init__(self, model: str, max_tokens: int, usage: _Usage | None = None) -> None:
         super().__init__(
             f"LLM output truncated: {model} stopped at the max_tokens "
             f"ceiling ({max_tokens}); increase the max_tokens budget or "
             "reduce the requested output size"
         )
+        self.usage = usage
 
 
 # Provider clients, cached per (provider, key fingerprint, base_url) so BYOK
@@ -230,12 +331,14 @@ def _get_gemini(api_key: str | None = None) -> genai.Client:
 
 async def generate(
     prompt: str,
-    system: str | None = None,
+    system: str | Sequence[str] | None = None,
     model: str | None = None,
     temperature: float | None = None,
     max_tokens: int = 8192,
     tenant_settings: TenantAISettings | None = None,
     *,
+    top_p: float | None = None,
+    seed: int | None = None,
     db: AsyncSession | None = None,
     tenant_id: uuid.UUID | None = None,
     credentials: providers.GenerationTarget | None = None,
@@ -245,6 +348,20 @@ async def generate(
     Explicit `model` / `temperature` arguments always win. When omitted,
     `tenant_settings` (if provided) supplies the effective values via
     `app.modules.ai_settings.service`.
+
+    HRP-1005: a `credentials` target with `forced_model=True` overrides
+    that — the tenant's processor list replaced the requested model with
+    an allowed substitute, so `target.model` is dispatched even when the
+    caller passed a `model` of its own.
+
+    HRP-951 — `system` may be a list of blocks: the first is a pipeline's
+    static prefix, the same bytes on every call, and Anthropic is asked to
+    cache it; the blocks after it vary per call. Every other provider gets
+    the blocks joined with a blank line — one system message, as before.
+
+    HRP-921 — `top_p` / `seed` pin the sampling where the provider takes
+    them (OpenAI, Gemini). Anthropic has no seed and rejects `top_p` next
+    to `temperature`, so neither reaches it.
 
     HRP-465 — per-tenant credentials: pass `db` (+ `tenant_id`, defaulted
     from `tenant_settings`) to resolve the tenant's BYOK key or local
@@ -277,9 +394,11 @@ async def generate(
     if target is None and db is not None and tenant_id is not None:
         target = await providers.resolve_generation_target(db, tenant_id, model)
 
-    if model is None and target is not None and target.model:
+    if target is not None and target.model and (model is None or target.forced_model):
         # The caller picked no model (recruitment pipeline) — the tenant's
         # BYOK/local config supplies both the credentials and the model.
+        # HRP-1005: or the tenant's processor list replaced the model the
+        # caller asked for.
         model = target.model
 
     # Model first, then provider: the default-model lookup falls back to
@@ -301,50 +420,83 @@ async def generate(
         else:  # openai / openai_compatible
             provider = "openai"
 
+    # A block list is the Anthropic caching layout; every other provider
+    # takes one system message.
+    system_text = (
+        system if system is None or isinstance(system, str) else "\n\n".join(system)
+    )
+
+    provider_code, credential_source = _provenance(provider, target)
+    started = time.perf_counter()
     try:
         if provider == "claude":
-            return await _generate_anthropic(
+            text, usage = await _generate_anthropic(
                 prompt, system, model, temperature, max_tokens, api_key=api_key
             )
-        if provider == "gemini":
-            return await _generate_gemini(
-                prompt, system, model, temperature, max_tokens, api_key=api_key
-            )
-        if provider == "yandex":
-            return await _generate_yandex(
+        elif provider == "gemini":
+            text, usage = await _generate_gemini(
                 prompt,
-                system,
+                system_text,
+                model,
+                temperature,
+                max_tokens,
+                api_key=api_key,
+                top_p=top_p,
+                seed=seed,
+            )
+        elif provider == "yandex":
+            text, usage = await _generate_yandex(
+                prompt,
+                system_text,
                 model,
                 temperature,
                 max_tokens,
                 api_key=api_key,
                 base_url=base_url,
             )
-        return await _generate_openai(
-            prompt,
-            system,
-            model,
-            temperature,
-            max_tokens,
-            api_key=api_key,
-            base_url=base_url,
+        else:
+            text, usage = await _generate_openai(
+                prompt,
+                system_text,
+                model,
+                temperature,
+                max_tokens,
+                api_key=api_key,
+                base_url=base_url,
+                top_p=top_p,
+                seed=seed,
+            )
+    except LLMOutputTruncatedError as exc:
+        logger.warning("LLM output truncated (provider=%s, model=%s)", provider, model)
+        await _record(
+            "generate", provider_code, model, credential_source, started,
+            "truncated", usage=exc.usage, error_code="output_truncated",
         )
-    except Exception:
+        raise
+    except Exception as exc:
         logger.exception(
             "LLM generation failed (provider=%s, model=%s)", provider, model
         )
+        await _record(
+            "generate", provider_code, model, credential_source, started,
+            "error", usage=getattr(exc, "usage", None), error_code=_error_code(exc),
+        )
         raise
+    await _record("generate", provider_code, model, credential_source, started, "ok", usage=usage)
+    return text
 
 
 async def generate_json(
     prompt: str,
-    system: str | None = None,
+    system: str | Sequence[str] | None = None,
     model: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
     tenant_settings: TenantAISettings | None = None,
     schema: type[BaseModel] | None = None,
     *,
+    top_p: float | None = None,
+    seed: int | None = None,
     db: AsyncSession | None = None,
     tenant_id: uuid.UUID | None = None,
     credentials: providers.GenerationTarget | None = None,
@@ -376,12 +528,18 @@ async def generate_json(
             "or trailing prose:\n"
             f"{json.dumps(schema.model_json_schema(), ensure_ascii=False)}"
         )
-        system = f"{system}\n\n{schema_block}" if system else schema_block
+        if system is None or isinstance(system, str):
+            system = f"{system}\n\n{schema_block}" if system else schema_block
+        else:
+            # After the cached prefix: the schema differs by call shape.
+            system = [*system, schema_block]
 
     generate_kwargs: dict[str, Any] = {
         "system": system,
         "model": model,
         "temperature": temperature,
+        "top_p": top_p,
+        "seed": seed,
         "tenant_settings": tenant_settings,
         "db": db,
         "tenant_id": tenant_id,
@@ -409,8 +567,13 @@ async def get_embedding(text: str, model: str | None = None) -> list[float]:
     """Generate embedding vector for text."""
     model = model or _get_embedding_model()
     client = _get_openai()
-
-    response = await client.embeddings.create(model=model, input=[text])
+    started = time.perf_counter()
+    try:
+        response = await client.embeddings.create(model=model, input=[text])
+    except Exception as exc:
+        await _record("embedding", "openai", model, "platform", started, "error", error_code=_error_code(exc))
+        raise
+    await _record("embedding", "openai", model, "platform", started, "ok", usage=_openai_usage(response))
     return response.data[0].embedding
 
 
@@ -420,8 +583,13 @@ async def get_embeddings_batch(
     """Generate embeddings for multiple texts."""
     model = model or _get_embedding_model()
     client = _get_openai()
-
-    response = await client.embeddings.create(model=model, input=texts)
+    started = time.perf_counter()
+    try:
+        response = await client.embeddings.create(model=model, input=texts)
+    except Exception as exc:
+        await _record("embedding", "openai", model, "platform", started, "error", error_code=_error_code(exc))
+        raise
+    await _record("embedding", "openai", model, "platform", started, "ok", usage=_openai_usage(response))
     return [item.embedding for item in response.data]
 
 
@@ -437,7 +605,9 @@ async def _generate_openai(
     *,
     api_key: str | None = None,
     base_url: str | None = None,
-) -> str:
+    top_p: float | None = None,
+    seed: int | None = None,
+) -> tuple[str, _Usage]:
     client = _get_openai(api_key, base_url)
     messages: list[dict[str, str]] = []
     if system:
@@ -453,10 +623,12 @@ async def _generate_openai(
 
     # HRP-134: gpt-4o family rejects max_tokens > 16384 with HTTP 400 —
     # clamp like the Anthropic path so callers can request one generous
-    # budget across providers. Local OpenAI-compatible servers (base_url
-    # set) serve arbitrary models with their own limits — don't clamp.
+    # budget across providers. A server behind a base_url (local
+    # OpenAI-compatible, YandexGPT) gets one fixed cap instead (HRP-997).
     if base_url is None:
         max_tokens = _clamp_openai_max_tokens(model, max_tokens)
+    else:
+        max_tokens = min(max_tokens, model_registry.COMPATIBLE_OUTPUT_CAP)
     kwargs: dict[str, Any] = {"model": model, "messages": messages}
     if base_url is None and model_registry.openai_is_reasoning_model(model):
         # HRP-500: o-series models reject `temperature` and `max_tokens`
@@ -466,6 +638,12 @@ async def _generate_openai(
     else:
         kwargs["temperature"] = temperature
         kwargs["max_tokens"] = max_tokens
+        # HRP-921: pinned sampling where the API takes it; the o-series
+        # branch above rejects every sampling parameter.
+        if top_p is not None:
+            kwargs["top_p"] = top_p
+        if seed is not None:
+            kwargs["seed"] = seed
     try:
         response = await client.chat.completions.create(**kwargs)
     except openai.APIConnectionError as exc:
@@ -477,9 +655,10 @@ async def _generate_openai(
             raise exc.__cause__ from exc
         raise
     choice = response.choices[0]
+    usage = _openai_usage(response)
     if choice.finish_reason == "length":
-        raise LLMOutputTruncatedError(model, max_tokens)
-    return choice.message.content or ""
+        raise LLMOutputTruncatedError(model, max_tokens, usage)
+    return choice.message.content or "", usage
 
 
 def _clamp_openai_max_tokens(model: str, requested: int) -> int:
@@ -524,7 +703,7 @@ async def _generate_yandex(
     *,
     api_key: str | None = None,
     base_url: str | None = None,
-) -> str:
+) -> tuple[str, _Usage]:
     # Key semantics mirror the OpenAI factory: the platform key applies
     # only on the platform endpoint — a tenant base_url (gateway/proxy row)
     # keeps the tenant's own key or none at all, never the platform one.
@@ -552,15 +731,29 @@ async def _generate_yandex(
     )
 
 
+def _anthropic_system(system: str | Sequence[str]) -> str | list[dict[str, Any]]:
+    """A plain string goes as it is. A block list is the pipeline's static
+    prefix first, marked for prompt caching (HRP-951: the breakdown's rules,
+    catalog and examples are 6-7k tokens repeated on both calls of a session
+    and on every reclassification), then the per-call blocks after the cache
+    breakpoint. Below the provider's minimum (1024 tokens on Sonnet, 2048
+    on Haiku) the mark is accepted and ignored."""
+    if isinstance(system, str):
+        return system
+    blocks: list[dict[str, Any]] = [{"type": "text", "text": text} for text in system]
+    blocks[0]["cache_control"] = {"type": "ephemeral"}
+    return blocks
+
+
 async def _generate_anthropic(
     prompt: str,
-    system: str | None,
+    system: str | Sequence[str] | None,
     model: str,
     temperature: float,
     max_tokens: int,
     *,
     api_key: str | None = None,
-) -> str:
+) -> tuple[str, _Usage]:
     client = _get_anthropic(api_key)
     kwargs: dict = {
         "model": model,
@@ -576,7 +769,7 @@ async def _generate_anthropic(
     if model_registry.anthropic_accepts_temperature(model):
         kwargs["temperature"] = temperature
     if system:
-        kwargs["system"] = system
+        kwargs["system"] = _anthropic_system(system)
 
     if kwargs["max_tokens"] > _ANTHROPIC_STREAM_THRESHOLD_TOKENS:
         # HRP-432: budgets above the proven non-streaming ceiling (tree
@@ -591,11 +784,15 @@ async def _generate_anthropic(
                 response = await stream.get_final_message()
     else:
         response = await client.messages.create(**kwargs)
+    usage = _anthropic_usage(response)
     if response.stop_reason == "max_tokens":
-        raise LLMOutputTruncatedError(model, kwargs["max_tokens"])
+        raise LLMOutputTruncatedError(model, kwargs["max_tokens"], usage)
     if not response.content:
-        raise ValueError(
-            f"Anthropic returned no content blocks (stop_reason={response.stop_reason})"
+        raise _with_usage(
+            ValueError(
+                f"Anthropic returned no content blocks (stop_reason={response.stop_reason})"
+            ),
+            usage,
         )
     # HRP-509: thinking-capable models (balanced/thorough catalog tiers)
     # emit a ThinkingBlock before the text — return the first text block,
@@ -603,12 +800,22 @@ async def _generate_anthropic(
     for block in response.content:
         text = getattr(block, "text", None)
         if text is not None:
-            return text
+            return text, usage
     block_types = ", ".join(type(block).__name__ for block in response.content)
-    raise ValueError(
-        f"Anthropic returned no text content block "
-        f"(stop_reason={response.stop_reason}, blocks={block_types})"
+    raise _with_usage(
+        ValueError(
+            f"Anthropic returned no text content block "
+            f"(stop_reason={response.stop_reason}, blocks={block_types})"
+        ),
+        usage,
     )
+
+
+def _with_usage(exc: Exception, usage: Any) -> Exception:
+    """The tokens of an answer that came back unusable were billed all the
+    same: ``generate`` journals them with the error (HRP-964)."""
+    exc.usage = usage  # type: ignore[attr-defined]
+    return exc
 
 
 # HRP-432: 32768 is the largest budget proven to work through the
@@ -633,26 +840,32 @@ async def _generate_gemini(
     max_tokens: int,
     *,
     api_key: str | None = None,
-) -> str:
+    top_p: float | None = None,
+    seed: int | None = None,
+) -> tuple[str, _Usage]:
     client = _get_gemini(api_key)
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
     max_tokens = _clamp_gemini_max_tokens(model, max_tokens)
 
+    config: genai.types.GenerateContentConfigDict = {
+        "temperature": temperature,
+        "max_output_tokens": max_tokens,
+    }
+    if top_p is not None:
+        config["top_p"] = top_p
+    if seed is not None:
+        config["seed"] = seed
     response = await client.aio.models.generate_content(
-        model=model,
-        contents=full_prompt,
-        config={
-            "temperature": temperature,
-            "max_output_tokens": max_tokens,
-        },
+        model=model, contents=full_prompt, config=config
     )
     candidates = response.candidates or []
     finish_reason = (
         getattr(candidates[0], "finish_reason", None) if candidates else None
     )
+    usage = _gemini_usage(response)
     if finish_reason is not None and "MAX_TOKENS" in str(finish_reason):
-        raise LLMOutputTruncatedError(model, max_tokens)
-    return response.text or ""
+        raise LLMOutputTruncatedError(model, max_tokens, usage)
+    return response.text or "", usage
 
 
 def _clamp_gemini_max_tokens(model: str, requested: int) -> int:

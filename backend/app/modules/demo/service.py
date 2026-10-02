@@ -31,6 +31,7 @@ from app.modules.ai_settings.models import TenantAISettings
 from app.modules.ai_settings.schemas import ContentLanguage
 from app.modules.ai_settings.service import DEFAULT_LANGUAGE
 from app.modules.auth.models import Role, User, user_roles
+from app.modules.auth.roles import ensure_baseline_employee_role
 from app.modules.company.models import Tenant
 from app.modules.demo.seed import clone_seed_into_demo_tenant
 from app.modules.demo.seed_i18n import translate
@@ -187,11 +188,12 @@ async def _create_demo_user(
         # the misconfig instead of silently shipping a broken demo.
         logger.warning(
             "demo: system 'admin' role not found — demo user %s "
-            "will start with no roles. Run the role-seed migration.",
+            "will start without the admin role. Run the role-seed migration.",
             user.id,
         )
     else:
         await db.execute(user_roles.insert().values(user_id=user.id, role_id=role.id))
+    await ensure_baseline_employee_role(db, user.id)
     return user
 
 

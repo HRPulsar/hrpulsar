@@ -22,6 +22,7 @@ from typing import Any
 from sqlalchemy import (
     ColumnElement,
     Integer,
+    and_,
     column,
     delete,
     func,
@@ -312,7 +313,8 @@ async def accept_container(
 ) -> WorkContainer:
     """Accept the whole breakdown: every step → ``accepted``, the container
     → ``active``, ``catalog_version`` re-pinned to the current catalog. The
-    container's owner may accept; ``can_manage`` is the admin / hr bypass."""
+    container's owner may accept; ``can_manage`` is the section manager's
+    bypass."""
     row = await _writable_container(db, tenant_id, container_id)
     if not can_manage and row.owner_id != user_id:
         raise AppError("work_container_accept_forbidden", 403)
@@ -419,23 +421,57 @@ async def _user_names(
     }
 
 
-async def _user_active(
-    db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID
-) -> bool:
-    """Left means what login means: an employee on leave is still with the
-    company. An account with no employee card (an admin who never got one)
-    counts by the account alone."""
+async def owner_summaries(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_ids: set[uuid.UUID],
+    *,
+    reveal_leave: bool = False,
+) -> dict[uuid.UUID, dict[str, Any]]:
+    """Process owners the way the shared employee line shows a person
+    (HRP-810 REDO): name, position, status. The status is the employee
+    card's; an account with no card (an admin who never got one) counts by
+    the account alone, and one switched off reads as inactive. ``active``
+    means what login means: on leave is still with the company. An id from
+    another tenant stays unlisted."""
     from app.modules.auth.service import BLOCKED_EMPLOYEE_STATUSES
 
-    user = await db.get(User, user_id)
-    if user is None or not user.is_active:
-        return False
-    status = await db.scalar(
-        select(Employee.status).where(
-            Employee.user_id == user_id, Employee.tenant_id == tenant_id
+    if not user_ids:
+        return {}
+    rows = await db.execute(
+        select(
+            User.id,
+            User.first_name,
+            User.last_name,
+            User.email,
+            User.is_active,
+            Employee.status,
+            func.coalesce(Position.title, Employee.position_title),
         )
+        .outerjoin(
+            Employee,
+            and_(Employee.user_id == User.id, Employee.tenant_id == tenant_id),
+        )
+        .outerjoin(Position, Position.id == Employee.position_id)
+        .where(User.id.in_(list(user_ids)), User.tenant_id == tenant_id)
     )
-    return status not in BLOCKED_EMPLOYEE_STATUSES
+    out: dict[uuid.UUID, dict[str, Any]] = {}
+    for uid, first, last, email, is_active, status, title in rows.tuples().all():
+        status = status or "active"
+        if not is_active and status == "active":
+            status = "inactive"
+        # Leave is HR data the directory withholds (HRP-623): only a reader
+        # who may see it (``list_people``'s rule) reads it on the owner too.
+        if status == "on_leave" and not reveal_leave:
+            status = "active"
+        out[uid] = {
+            "user_id": uid,
+            "name": f"{first} {last}".strip() or email,
+            "position_title": title,
+            "status": status,
+            "active": bool(is_active) and status not in BLOCKED_EMPLOYEE_STATUSES,
+        }
+    return out
 
 
 async def _ensure_current_employee(
@@ -500,7 +536,11 @@ async def list_people(
 
 
 async def get_container_access(
-    db: AsyncSession, tenant_id: uuid.UUID, container_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    container_id: uuid.UUID,
+    *,
+    reveal_leave: bool = False,
 ) -> dict[str, Any]:
     container = await get_container(db, tenant_id, container_id)
     rules = (
@@ -532,17 +572,15 @@ async def get_container_access(
         .all()
     )
     labels = await _rule_labels(db, tenant_id, rules)
-    people = {e.actor_id for e in log if e.actor_id is not None}
-    if container.owner_id is not None:
-        people.add(container.owner_id)
-    names = await _user_names(db, tenant_id, people)
+    names = await _user_names(
+        db, tenant_id, {e.actor_id for e in log if e.actor_id is not None}
+    )
     owner = None
     if container.owner_id is not None:
-        owner = {
-            "user_id": container.owner_id,
-            "name": names.get(container.owner_id, ""),
-            "active": await _user_active(db, tenant_id, container.owner_id),
-        }
+        owners = await owner_summaries(
+            db, tenant_id, {container.owner_id}, reveal_leave=reveal_leave
+        )
+        owner = owners.get(container.owner_id)
     return {
         "visibility": container.visibility,
         "owner": owner,
@@ -574,6 +612,7 @@ async def set_container_access(
     data: ContainerAccessUpdate,
     *,
     user_id: uuid.UUID,
+    reveal_leave: bool = False,
 ) -> dict[str, Any]:
     """Replace the visibility and the rules, logging every difference. Not
     a content edit: an accepted breakdown stays accepted. The container row
@@ -644,7 +683,9 @@ async def set_container_access(
         )
         _log_access(db, container, "rule_added", payload(ref), user_id)
     await db.commit()
-    return await get_container_access(db, tenant_id, container_id)
+    return await get_container_access(
+        db, tenant_id, container_id, reveal_leave=reveal_leave
+    )
 
 
 # --- Steps ------------------------------------------------------------------

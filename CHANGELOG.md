@@ -6,6 +6,98 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-02
+
+### Added
+- Company: admins narrow which menu sections each role opens - none, view or manage per section and role, or hidden for everyone - with today's access as the default (HRP-820)
+- Competences: division heads add their own competence drafts, which only they, HR and admins see until HR or an admin publishes them (HRP-632)
+- Company: the section access screen says that everyone also holds the Employee role and no longer offers a role a level below the Employee column, which would change nothing (HRP-998)
+- Instance-level list of outside AI providers allowed to receive workspace data; Settings → AI shows the workspace its AI processors (HRP-1005)
+
+### Changed
+- Recruitment: a candidate for a vacancy is no longer offered or accepted as an interviewer or evaluator on it, and no evaluator link is sent to a candidate's email (HRP-971)
+- Talent market: a manager who competes for a card no longer gets its emails about their employees on it - reacted, appointed, cancelled or asking for a plan (HRP-971)
+- Talent market: a division head may react to a card they run; the confirmation says they will no longer run it once they compete for it (HRP-971)
+- Coverage: who runs the section - every process, the agent registry and everyone's assignments - is the section access setting, not a fixed pair of roles (HRP-821)
+- Analytics: who opens the section is the section access setting, with the exports and the AI summary of the loop reserved for management (HRP-822)
+- Exams: who writes, assigns and reads mass exams is the section access setting; an exam already assigned stays open to the person taking it (HRP-823)
+- Assessments and exams: below admins and HR, a CPA round and a mass exam are listed, opened and changed only by their author, and a mass assessment is renamed, re-configured and moved in bulk only by its author (HRP-640)
+- Talent market: who authors the board is the section access setting, each card still fenced by the org structure; everyone the section is open to keeps the cards their own name is on (HRP-824)
+- Talent market: a division head creates a development plan from a card only for a candidate in the divisions they lead; for anyone else the button is inactive and says the plan is for that employee's own manager or HR (HRP-856)
+- Recruitment: a vacancy is posted to the talent market only when the market is open to the poster (HRP-824)
+- Development plans: who authors plans is the section access setting, each plan still fenced by the org structure; the owner and the reviewer keep their side of the plan (HRP-825)
+- Assessments: who runs assessments, mass assessments and CPA is the section access setting, each assessment still fenced by the org structure; respondents keep answering the assessments they take part in (HRP-826)
+- Competences: who edits the competence library is the section access setting; deleting, skill levels and AI generation of the tree stay with admins (HRP-827)
+- Dictionaries: who edits dictionaries is the section access setting; every form keeps reading them whatever the setting says (HRP-827)
+- Company: who shapes divisions and authors positions is the section access setting, each still fenced by the org structure; the division, position and grade pickers keep working whatever the setting says (HRP-828)
+- Company: a division manager names a head or deputy only from the divisions they lead, or themselves; someone from elsewhere is appointed by an admin (HRP-857)
+- Employees: who adds, edits and moves people is the section access setting, each still fenced by the org structure; the employee pickers keep working whatever the setting says (HRP-829)
+- Recruitment: who runs hiring is the section access setting - admins, HR and recruiters by default; hiring managers keep evaluating candidates and division managers keep running hiring rounds on their own vacancies (HRP-830)
+- Settings: who opens data import, invitations, roles and AI settings is the section access setting - admins by default, and HR and division managers for invitations; the four stay open to admins whatever the setting says (HRP-831)
+- Invitations: HR and division managers get the invitations page - HR the whole workspace, a division manager the departments they head; a role given the section invites employees unless the inviter hierarchy allows more (HRP-831)
+- Coverage: the list's search and filters get a Clear button once any of them is set (HRP-859)
+- Coverage: the list of processes and projects has an Owner column, and the owner in the access dialog is shown like any employee - name, position and status (HRP-810)
+- Coverage: on a step row Assign, Change and Change agent are buttons, Change agent sits right after the agent type, the executor's Assigned chip is gone, and a person's position and status sit on the line with the name (HRP-809)
+- Coverage: "Get the skill" first asks for a confirmation that names the cost; Cancel closes without starting a generation (HRP-960)
+- Recruitment: the manager's percent of scale is one formula — a level is worth its weight on the assessment scale — in the round header, the vacancy table, the assessment matrix and canvas, and the canvas export; the vacancy report workbook converts the percentages it prints the same way (HRP-774)
+- Dashboard: the Completed tile counts development plans finished in the chosen period and how many of them met their deadline (HRP-766)
+- Dashboards and profile: development dynamics counts a competence as raised only when an assessment completed after a finished plan scores it above the one before the plan; the dynamics and Completed tiles open the plans finished in the chosen period, and the profile's tenure and dynamics values keep their lower case (HRP-724)
+- Assessment create dialogs: the type hint is one sentence contrasting self-assessment with 180° and 360° instead of a per-type line (HRP-723)
+- Talent market: the below-the-bar auto-reply and the development-plan request follow the live competence verdict only; a candidate who has since met the competences but lacks the years of experience gets neither (HRP-739)
+- Demo: every development plan in progress offers a linked book, course, article and video among its materials (HRP-767)
+- Coverage: repeat breakdown calls and reclassifications cost less with AI providers that cache prompts (HRP-951)
+- Coverage: a breakdown keeps the capability codes of its first pass next to the final ones, and the capability edits export reports how often the two passes agree (HRP-949)
+- Coverage: a description broken down before is answered from the stored result at once for thirty days, and the same text gives the same steps (HRP-921)
+- Recruitment: archived vacancies are hidden from the vacancy list until "Show archived (N)" is ticked; the count comes with the list (HRP-417)
+- Recruitment: Position, Division, Hiring manager, Specializations and Grades on the vacancy create and edit forms and in the Overview editor fill their column; a long value is cut with an ellipsis and shown in full on hover (HRP-838)
+- Recruitment: interview question sets are generated in the background — the block shows progress with a Cancel button while the model works, and other sets stay usable meanwhile (HRP-471)
+- Talent market: a development plan request reads "{name} requests a development plan for {card}" in the manager's notification and email, and the email's link reads "View candidate matches" (HRP-714)
+- Coverage: process breakdown and competence mapping assign capabilities by one set of conventions, and the catalog descriptions of "Coordination" and "Consolidating people's contributions" follow them (HRP-961)
+
+### Removed
+- Roles: the unused `permissions` list of `GET /api/roles` (HRP-832)
+
+### Fixed
+- Employee card: the events feed names role, position, division, name, status and compensation changes in the interface language instead of showing the event code, and a role change reads as old role → new role (HRP-999)
+- Talent market: a division head deletes the cards they may edit, instead of a Delete entry that answered 403 (HRP-824)
+- Employee card: the actions menu offers a development plan or an assessment only to those who may create one (HRP-826)
+- Recruitment: a division manager sees the candidate table of their vacancies instead of an empty list (HRP-830)
+- Employee directory and global search keep working for a role whose assessments section is closed (HRP-826)
+- Mass assessment analytics show a respondent only their own result, as the assessment page does (HRP-826)
+- Competences: the tree and the competence page offer editing, deleting and AI generation only to those who may use them (HRP-827)
+- Company: specialization and position pages offer deleting a specialization, adding one inline and AI generation only to those who may use them (HRP-827)
+- Company: the position picker offers creating a position only to those who may, and the specialization list opens its menu to whoever may delete a specialization (HRP-828)
+- Company: AI position drafts, deleting a position and a grade's attributes are offered only to those who may change them (HRP-828)
+- Analytics: salary figures and the division headcount matrix cover the reader's own subtree instead of the whole workspace (HRP-822)
+- Development plans: a plan is readable by id only inside the reading scope - the employee, their division head, the named reviewer, admin and HR (HRP-818)
+- Company: a division head creates, edits, moves and maps specializations only for divisions inside their managed subtree (HRP-819)
+- Roles: every account holds the `employee` baseline: signup, invitation acceptance, signup approval and tenant creation grant it, a role change keeps it, and accounts created without it are backfilled (HRP-832)
+- Recruitment: a consent link replaced by a newer one can no longer be signed, and a resend to a corrected email sends a new link (HRP-684)
+- Company: a division can no longer be moved under one of its own subdivisions (HRP-819)
+- Company: the position form offers a division head only the divisions they lead (HRP-829)
+- Talent market: a division head opens the match breakdown only for the cards they run or the candidates of a card they read (HRP-824)
+- Assessment: saving an answer to the same question twice, even at the same moment, no longer breaks the survey; duplicated answers are cleaned up (HRP-910)
+- Coverage: a process opened by a direct link that is hidden or deleted says it was not found, with a way back to the list, instead of "Load failed" with a retry (HRP-853)
+- Coverage: a step's executor and accountable stay assigned when the employee goes on leave, inactive or is terminated; the row shows the status instead of switching to another active colleague or asking "Who checks?" again (HRP-959)
+- Recruitment: the Mgr score in the candidate page's Vacancy applications block updates as soon as a round score, round action or revoked invitation changes it, without a page reload (HRP-812)
+- Recruitment: the Divergence chip in the vacancy candidates table reads "N/M" (divergent of all profile competences) and its hover card links to the full-screen canvas filtered to that candidate's divergent cells; the chip itself is no longer a link (HRP-507)
+- Recruitment: the "submitted assessment" email's link reads "Open candidate's assessments" and opens the candidate's Manager assessments on the round that was evaluated and scrolls to it (HRP-379)
+- Recruitment: the round-average tooltip on an evaluation sheet lists every evaluator by full name as "Name: score", headed by "Evaluators disagree" only when they do (HRP-374)
+- Recruitment: Back on a candidate card opened from the Candidates list returns to that list; opened from a vacancy it still returns to the vacancy (HRP-840)
+- Recruitment: the vacancy attachments block (context files for AI profile generation) is back on the vacancy page, above the competence profile (HRP-846)
+- Assessments: the "Status changed to ..." message after a status change names the status in the interface language instead of its English code (HRP-917)
+- Action and kebab menus across the system are as wide as their longest command and wrap long commands by words instead of cutting them off (HRP-837)
+- Recruitment: once a vacancy is posted to the internal talent market, the "Allow internal search" box on the edit form is grey and the note under it says the search cannot be turned off right now (HRP-667)
+- Recruitment: a full analysis of a candidate without a resume is labelled "transcript only" on the candidate card and in the vacancy's candidates table, matching the tooltip and the report (HRP-685)
+- Recruitment: the "Interview transcript was updated" banner no longer appears right after a fresh resume + interview analysis; it shows only when a transcript was uploaded after that analysis (HRP-492)
+- Recruitment: resending the recording-consent link goes to the candidate's current email, and an expired link is replaced by a new one instead of an error (HRP-684)
+- Recruitment: the recording-consent email is sent in the company's language on both the first send and Resend (HRP-834)
+- Recruitment: an employee who applies to a vacancy no longer reads, evaluates or gets mail about it - its candidates, interviews, questions and scores stay out of their reach, even after it closes - and a division head who applies to a talent-market card reads it as an applicant instead of running it (HRP-971)
+- Recruitment: "Remove from this vacancy" is refused for a candidate who already has interviews, scores or analyses on it, since removing would erase them; such a candidate is moved to Rejected or Withdrew (HRP-1004)
+
+### Security
+- Semantic search and stored embeddings are scoped to the caller's workspace: another workspace's entries are neither found nor overwritten (HRP-954)
+
 ## [2.1.1] - 2026-09-25
 
 ### Changed

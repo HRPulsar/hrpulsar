@@ -54,6 +54,30 @@ from __future__ import annotations
 
 ASSESSMENTS: list[dict] = [
     # --- Done (with results) ---
+    # HRP-724 REDO: the reading Anna's Q3 plan is measured against. A
+    # competence counts as raised only when an assessment completed after
+    # a finished plan scores it above the one before the plan — so the demo
+    # needs a "before". Python and mentoring, the two competences the Q3
+    # plan worked on, sit lower here than in the Q4 review that follows the
+    # plan, and the dynamics tile reads "2 competences raised" in every
+    # period. Dated before the plan even started (7 + 83 days back).
+    {
+        "title": "Q2 360° review — Anna Rising",
+        "employee_index": 2,
+        "type_code": "360",
+        "status_code": "done",
+        "finished_days_ago": 120,
+        "criteria_type": "competences",
+        "specialization_key": "backend-dev",
+        "grade_key": "g-senior",
+        "competence_keys": ["c-python", "c-postgres", "c-distributed", "c-mentoring"],
+        "result_overrides": [
+            ("c-python", 2.8, 70),
+            ("c-postgres", 3.0, 75),
+            ("c-distributed", 2.6, 65),
+            ("c-mentoring", 2.6, 65),
+        ],
+    },
     {
         "title": "Q4 360° review — Anna Rising",
         "employee_index": 2,  # Anna Rising, Backend L3 → manager Adam Kovacs (idx 0)

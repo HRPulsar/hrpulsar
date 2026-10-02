@@ -43,12 +43,14 @@ async def create_mass_exam(
     return _me_to_read(me)
 
 
-async def list_mass_exams(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
-    result = await db.execute(
-        select(MassExam)
-        .where(MassExam.tenant_id == tenant_id)
-        .order_by(MassExam.created_at.desc())
-    )
+async def list_mass_exams(
+    db: AsyncSession, tenant_id: uuid.UUID, initiator_id: uuid.UUID | None = None
+) -> list[dict]:
+    """``initiator_id`` narrows to one author's mass exams (HRP-640)."""
+    stmt = select(MassExam).where(MassExam.tenant_id == tenant_id)
+    if initiator_id is not None:
+        stmt = stmt.where(MassExam.initiator_id == initiator_id)
+    result = await db.execute(stmt.order_by(MassExam.created_at.desc()))
     return [_me_to_read(m) for m in result.scalars().all()]
 
 

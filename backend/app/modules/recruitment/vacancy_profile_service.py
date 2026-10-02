@@ -326,6 +326,13 @@ async def generate_profile_now(
 
         creds = await ai_providers.resolve_generation_target(db, tenant_id, None)
         profile_data = await generate_vacancy_profile(vacancy_data, credentials=creds)
+    except AppError as exc:
+        # HRP-1005 (F13 review): AppError must reach the caller unchanged
+        # (F2), but the session row still needs to end "failed" — without
+        # this the banner-polling row stays "running" forever and every
+        # later Generate call 409s with profile_generation_in_progress.
+        await _mark_session_failed(exc.code)
+        raise
     except Exception as exc:  # noqa: BLE001
         import logging
 
@@ -511,7 +518,7 @@ async def get_active_profile_session(
     banner and the action-button lock). ``include_result=False`` strips
     the generated ``profile_data`` from the response — the poll is
     readable by any tenant member, but the unapproved matrix itself is
-    only for callers who can open the review dialog (admin/recruiter).
+    only for callers who can open the review dialog (``manage``).
     """
     from app.modules.recruitment.models import VacancyProfileSession
 

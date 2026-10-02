@@ -1163,6 +1163,28 @@ async def list_vacancies(
     return items, total
 
 
+async def count_archived_vacancies(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    status: str | None = None,
+    search: str | None = None,
+    scope_filter: ColumnElement[bool] | None = None,
+) -> int:
+    """HRP-417: how many archived vacancies the list's "Show archived (N)"
+    toggle would add — same status / search / scope filters as
+    ``list_vacancies``, restricted to ``archived_at IS NOT NULL``."""
+    query = select(func.count(Vacancy.id)).where(
+        Vacancy.tenant_id == tenant_id, Vacancy.archived_at.is_not(None)
+    )
+    if scope_filter is not None:
+        query = query.where(scope_filter)
+    if status:
+        query = query.where(Vacancy.status == status)
+    if search:
+        query = query.where(Vacancy.title.ilike(f"%{search}%"))
+    return (await db.execute(query)).scalar() or 0
+
+
 async def get_vacancy(
     db: AsyncSession, tenant_id: uuid.UUID, vacancy_id: uuid.UUID
 ) -> dict:

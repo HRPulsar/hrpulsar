@@ -72,7 +72,7 @@ test.describe("Recruitment vacancy CRUD (HRP-177)", () => {
     expect((await fresh.json()).title).toBe(newTitle);
   });
 
-  test("archive keeps the row under All statuses and restore clears the badge", async ({
+  test("archive hides the row until Show archived is on; restore clears the badge (HRP-417)", async ({
     page,
   }) => {
     const admin = await registerUser(page);
@@ -92,15 +92,27 @@ test.describe("Recruitment vacancy CRUD (HRP-177)", () => {
     });
     await page.getByTestId("vacancy-archive-modal-confirm").click();
 
-    // HRP-363: "All statuses" includes archived vacancies — the row stays
-    // visible but flips its badge to "archived".
+    // HRP-417: archived vacancies leave the list by default…
+    await expect(page.getByTestId(`vacancy-list-row-${v.id}`)).toBeHidden({
+      timeout: 10000,
+    });
+    // …and come back, badged "archived", once "Show archived (N)" is on.
+    await expect(
+      page.getByTestId("recruitment-vacancies-show-archived"),
+    ).toContainText("(1)");
+    await page.getByTestId("recruitment-vacancies-show-archived").click();
     await expect(
       page.getByTestId(`vacancy-list-row-${v.id}`).getByText("archived"),
     ).toBeVisible({ timeout: 10000 });
 
-    // A concrete status filter still hides the archived row.
+    // With the toggle on, a concrete status filter keeps the archived row
+    // of that status; off again, the filter hides it.
     await page.getByTestId("vacancy-status-filter").click();
     await page.getByRole("option", { name: "Draft" }).click();
+    await expect(page.getByTestId(`vacancy-list-row-${v.id}`)).toBeVisible({
+      timeout: 10000,
+    });
+    await page.getByTestId("recruitment-vacancies-show-archived").click();
     await expect(page.getByTestId(`vacancy-list-row-${v.id}`)).toBeHidden({
       timeout: 10000,
     });

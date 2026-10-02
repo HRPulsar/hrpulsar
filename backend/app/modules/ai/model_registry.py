@@ -32,6 +32,14 @@ YANDEX_FAST = "yandexgpt-lite"
 YANDEX_BALANCED = "yandexgpt"
 YANDEX_THOROUGH = "yandexgpt"
 
+# --- Decision provider (HRP-936) ---------------------------------------------
+# Pinned version, never the ``jev-latest`` alias: per-code thresholds are
+# tuned against one version, and an alias moves under them. Bumping it is a
+# task of its own with a re-run of the HRP-937/938 measurements.
+JEV_MODEL = "jev-1.13.0"
+# Input tokens only; Jev output is free (docs.typesafe.ai/models, 23.09.2026).
+JEV_USD_PER_MTOK_INPUT = 0.042
+
 # --- Embeddings --------------------------------------------------------------
 EMBEDDING_MODEL = "text-embedding-3-small"
 
@@ -114,6 +122,13 @@ OPENAI_OUTPUT_CAPS: dict[str, int] = {
     "o4": 100000,
 }
 OPENAI_DEFAULT_OUTPUT_CAP = 16384
+# HRP-997: a server behind a base_url (a tenant's own OpenAI-compatible one,
+# YandexGPT) serves models with limits we cannot look up. Requests above
+# this cap are cut to it: a 32k-context server took the breakdown's 32768
+# plus the prompt as a context overflow (HTTP 400) on every attempt.
+# ponytail: one cap for every such server; a per-row limit on the
+# provider config if a tenant's model needs more or less.
+COMPATIBLE_OUTPUT_CAP = 16384
 
 # HRP-500 (review #9): the o-series reasoning models reject `temperature`
 # and take their output budget as `max_completion_tokens`; sending the

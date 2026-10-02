@@ -131,7 +131,7 @@ class TestCompensation:
             ),
             user,
         )
-        events = await service.list_events(db, tenant.id, employee.id)
+        events = await service.list_events(db, tenant.id, employee.id, None, user)
         comp_events = [e for e in events if e["event_type"] == "compensation_change"]
         assert len(comp_events) >= 1
 
@@ -199,7 +199,7 @@ class TestCompensation:
             user,
         )
         assert updated["amount"] == 450000
-        events = await service.list_events(db, tenant.id, employee.id)
+        events = await service.list_events(db, tenant.id, employee.id, None, user)
         comp_events = [e for e in events if e["event_type"] == "compensation_change"]
         assert any(
             (e.get("new_value") or {}).get("effective_date") == "2024-06-30"

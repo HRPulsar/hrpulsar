@@ -67,6 +67,34 @@ class TestTruncationFailFast:
         assert code is None
         assert isinstance(result, _Payload)
 
+    async def test_a_malformed_answer_is_retried_unpinned(self) -> None:
+        # Review 01.10 (HRP-921): the breakdown pins temperature, top_p and
+        # seed; a retry of a malformed answer with the same request came
+        # back the same, so the retry budget did nothing.
+        seen: list[dict] = []
+
+        async def fake_generate_json(prompt, **kwargs):
+            seen.append(kwargs)
+            if len(seen) == 1:
+                raise ValueError("not JSON")
+            return _Payload(ok=True)
+
+        with patch.object(llm_client, "generate_json", new=fake_generate_json):
+            result, code = await tasks._generate_with_retries(
+                user_prompt="p",
+                system="s",
+                schema=_Payload,
+                tenant_settings=None,
+                max_attempts=2,
+                temperature=0.0,
+                top_p=1.0,
+                seed=0,
+            )
+
+        assert code is None and isinstance(result, _Payload)
+        assert seen[0]["seed"] == 0
+        assert not {"seed", "temperature", "top_p"} & set(seen[1])
+
     async def test_tree_scopes_request_model_ceiling(self) -> None:
         # llm_client clamps per model (Haiku 8192, Opus 32000, gpt-4o
         # 16384); the scope map asks for the sonnet-class ceiling from

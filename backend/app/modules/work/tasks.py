@@ -4,7 +4,9 @@ A copy of ``ai_competence_generation.tasks`` cut down to two LLM calls
 (``v2work.v5``, decision 2026-09-10): load the ``pending`` row, flip to
 ``running``, split the description into steps with the first call, then
 classify the fixed list with the second - the capability codes of the
-first call are discarded, its titles, descriptions and scales stay. Only
+first call stay in the payload as ``first_pass_codes`` next to the final
+ones (HRP-949: the comparison of the two passes on live data), its titles,
+descriptions and scales stay. Only
 catalog codes are kept, then the payload is persisted, the row flipped to
 ``ready`` and the credits consumed in one commit - a run that fails or is
 cancelled at any point is never charged. The reaper beat job frees a
@@ -24,8 +26,11 @@ prechecks, the task consumes in the commit that writes the file.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
+import unicodedata
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -34,10 +39,12 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core import billing_hooks
+from app.core import ai_usage_hooks, billing_hooks
 from app.core.celery_app import celery
-from app.core.errors import exception_summary
+from app.core.errors import AppError, exception_summary
+from app.core.redis import redis_client
 from app.modules.ai.tasks import _run_with_async_session
+from app.modules.work import prompts
 from app.modules.work.models import (
     HOURS_PER_RUN_MAX,
     HOURS_PER_RUN_MIN,
@@ -65,6 +72,88 @@ logger = logging.getLogger(__name__)
 REAPER_STUCK_AGE_MINUTES = 30
 MIN_ATTEMPTS = 3
 WS_EVENT = "work.session.updated"
+
+# HRP-921 (a): the breakdown samples nothing - the same text must give the
+# same steps and verdicts, whatever the tenant's effort preset says. One
+# place for the parameters; ``llm_client`` hands each to the providers that
+# take it: OpenAI and Gemini all three, Anthropic the temperature on the
+# models that still accept one - Sonnet 5 and later accept none, and there
+# the result cache below is what keeps a repeated text stable.
+DETERMINISTIC_GENERATION: dict[str, Any] = {"temperature": 0.0, "top_p": 1.0, "seed": 0}
+# Output budget of the split and the classification (HRP-995). Both calls
+# think before they answer and the thinking counts against max_tokens:
+# the default 8192 cut a 15-step process off in the HRP-961 measurement.
+# 32768 is the largest budget proven without streaming (HRP-432);
+# llm_client clamps it per model. Only the tokens used are billed.
+BREAKDOWN_MAX_TOKENS = 32768
+
+# HRP-921 (b): a finished breakdown by the normalised text it was made from,
+# in Redis for 30 days. The same text run again by the same company gets the
+# stored steps without a model call and without a charge. The key carries
+# the company - another company's identical text is a miss: it pays for its
+# own breakdown and learns nothing about who analysed the text before - and
+# everything else the answer depends on: the prompt version, the model, the
+# directive for the content language and the catalog in force. Text
+# normalisation: NFKC, trimmed, runs of whitespace collapsed; the case is
+# kept - names and abbreviations are signal.
+# ponytail: company_context is not in the prompt yet (HRP-952); when it is,
+# it goes into the key, or the cache serves one company's context to another.
+BREAKDOWN_CACHE_TTL_S = 30 * 24 * 3600
+
+
+def _normalised(value: Any) -> str:
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).split())
+
+
+def breakdown_cache_key(
+    container: Mapping[str, Any],
+    *,
+    tenant_id: uuid.UUID | str,
+    language: str,
+    model: str,
+    catalog: str,
+) -> str:
+    material = json.dumps(
+        {
+            "tenant": str(tenant_id),
+            "container": {
+                key: _normalised(container.get(key))
+                for key in ("type", "title", "description", "goal")
+            },
+            "language": language,
+            "model": model,
+            "prompt": prompts.PROMPT_VERSION,
+            # The catalog as the model reads it, not its version: a
+            # quarterly revision rewrites a verdict in the table without
+            # bumping CATALOG_VERSION, and the prompt changes with it.
+            "catalog": hashlib.sha256(catalog.encode()).hexdigest(),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return "work:breakdown:" + hashlib.sha256(material.encode()).hexdigest()
+
+
+async def _cached_breakdown(key: str) -> dict[str, Any] | None:
+    """A Redis outage, or a corrupt or foreign value under the key, is a
+    miss: the run then pays for a model call rather than fail."""
+    try:
+        async with redis_client() as client:
+            raw = await client.get(key)
+        return json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001
+        logger.warning("work breakdown cache unavailable", exc_info=True)
+        return None
+
+
+async def _remember_breakdown(key: str, payload: dict[str, Any]) -> None:
+    try:
+        async with redis_client() as client:
+            await client.set(
+                key, json.dumps(payload, ensure_ascii=False), ex=BREAKDOWN_CACHE_TTL_S
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("work breakdown cache write failed", exc_info=True)
 
 
 async def _broadcast(
@@ -129,6 +218,13 @@ async def _force_terminate_running(
     async with session_factory() as db:
         sess = await db.get(WorkDecompositionSession, session_id)
         if sess is None or sess.status not in ("pending", "running"):
+            return
+        if isinstance(exc, AppError) and exc.code == "ai_no_allowed_processor":
+            # A refusal with a reason (HRP-1005): "crashed" would send the
+            # reader to try again, which changes nothing.
+            await _terminate(
+                db, sess, error_code="no_allowed_processor", message=str(exc.detail)
+            )
             return
         await _terminate(
             db,
@@ -244,21 +340,26 @@ async def split_steps(
     max_attempts: int,
 ) -> list[dict[str, Any]]:
     """Phase one: the v4 prompt as it was - steps with their attributes.
-    The codes it returns are a first guess the second phase replaces."""
+    The codes it returns are a first guess the second phase replaces; the
+    worker keeps them in the payload for the comparison (HRP-949)."""
     from app.modules.ai_competence_generation.tasks import _generate_with_retries
-    from app.modules.work import prompts
 
     language = _language(tenant_settings)
     parsed, _ = await _generate_with_retries(
         # Restated last: the JSON schema and the English examples come after
         # the system prompt and would otherwise out-argue the directive.
         user_prompt=f"{prompts.build_user_prompt(container)}\n\n{language}",
-        system="\n\n".join([prompts.build_system_prompt(primitives), language]),
+        # The shared prefix alone in the first block - the same bytes on
+        # both calls of a session and for every tenant, so the provider
+        # caches it (HRP-951); the directive varies by tenant and follows.
+        system=[prompts.build_system_prompt(primitives), language],
+        max_tokens=BREAKDOWN_MAX_TOKENS,
         schema=DecompositionSchema,
         tenant_settings=tenant_settings,
         max_attempts=max_attempts,
         credentials=credentials,
         model=model,
+        **DETERMINISTIC_GENERATION,
     )
     assert isinstance(parsed, DecompositionSchema)
     return [s.model_dump() for s in parsed.steps]
@@ -281,7 +382,6 @@ async def classify_steps(
     same prompt classifies that one step, the rest being context, and the
     result is a one-element list."""
     from app.modules.ai_competence_generation.tasks import _generate_with_retries
-    from app.modules.work import prompts
 
     language = _language(tenant_settings)
     schema = classification_schema(1 if only is not None else len(steps))
@@ -290,19 +390,83 @@ async def classify_steps(
             f"{prompts.build_classify_user_prompt(container, steps, only=only, comment=comment)}"
             f"\n\n{language}"
         ),
-        system="\n\n".join(
-            [prompts.build_classify_system_prompt(primitives), language]
-        ),
+        system=[*prompts.classify_system_blocks(primitives), language],
+        max_tokens=BREAKDOWN_MAX_TOKENS,
         schema=schema,
         tenant_settings=tenant_settings,
         max_attempts=max_attempts,
         credentials=credentials,
         model=model,
+        **DETERMINISTIC_GENERATION,
     )
     return [
         StepClassification.model_validate(c).model_dump()
         for c in parsed.model_dump()["steps"]
     ]
+
+
+async def _deliver(
+    db: AsyncSession,
+    sess: WorkDecompositionSession,
+    payload: dict[str, Any],
+    *,
+    charge: bool,
+) -> dict[str, Any]:
+    """Flip the row to ``ready`` with the payload and settle the credits.
+
+    A cancel (or the reaper) may have landed during the LLM call: the
+    answer is discarded and nothing is billed. The flip is guarded on the
+    row so a cancel committed between the check and the write cannot be
+    overwritten - and then charged. ``charge=False`` is a result served
+    from the cache (HRP-921): no model was called, nothing is consumed,
+    the hold goes either way.
+    """
+    flipped = await db.execute(
+        update(WorkDecompositionSession)
+        .where(
+            WorkDecompositionSession.id == sess.id,
+            WorkDecompositionSession.status == "running",
+        )
+        .values(
+            status="ready",
+            phase=None,
+            payload=payload,
+            finished_at=datetime.now(UTC),
+        )
+        .returning(WorkDecompositionSession.id)
+    )
+    if flipped.scalar_one_or_none() is None:
+        await db.rollback()
+        await db.refresh(sess)
+        return {"status": sess.status, "session_id": str(sess.id)}
+    if charge:
+        params = sess.params or {}
+        await billing_hooks.consume_action(
+            db,
+            sess.tenant_id,
+            sess.user_id,
+            params.get("billing_action") or "work_decomposition.start",
+            amount_override=params.get("cost"),
+        )
+    await release_session_hold(db, sess.tenant_id, sess.id)
+    await db.commit()
+    await db.refresh(sess)
+    await _broadcast(sess)
+    return {"status": "ready", "session_id": str(sess.id)}
+
+
+def _bind_session_context(sess: Any) -> None:
+    """HRP-964: attribute the run's model calls to the decomposition session.
+    Reset by celery_signals.on_task_postrun."""
+    params = sess.params or {}
+    ai_usage_hooks.bind(
+        tenant_id=sess.tenant_id,
+        user_id=sess.user_id,
+        action=params.get("billing_action") or "work_decomposition.start",
+        entity_type="work_container",
+        entity_id=sess.container_id,
+        work_unit_id=ai_usage_hooks.work_unit_id_or(sess.id),
+    )
 
 
 async def _execute_body(
@@ -323,6 +487,7 @@ async def _execute_body(
         sess.phase = "splitting"
         await db.commit()
         await _broadcast(sess)
+        _bind_session_context(sess)
 
         tenant_settings = await ai_settings_service.get_or_default(db, sess.tenant_id)
         effective_model = await ai_settings_service.get_effective_model_async(
@@ -347,6 +512,20 @@ async def _execute_body(
         await db.refresh(sess, attribute_names=["status"])
         if sess.status == "cancelled":
             return {"status": "cancelled", "session_id": str(sess.id)}
+        codes = {p.code for p in primitives}
+        cache_key = breakdown_cache_key(
+            container,
+            tenant_id=sess.tenant_id,
+            language=_language(tenant_settings),
+            model=effective_model,
+            catalog=prompts.build_system_prompt(primitives)
+            + prompts.build_classify_system_prompt(primitives),
+        )
+        cached = await _cached_breakdown(cache_key)
+        if cached is not None:
+            # HRP-921: this text was broken down before - the stored steps,
+            # no model call, no charge.
+            return await _deliver(db, sess, cached, charge=False)
         credentials = await ai_providers.resolve_generation_target(
             db, sess.tenant_id, effective_model
         )
@@ -389,43 +568,27 @@ async def _execute_body(
                 return {"status": sess.status, "session_id": str(sess.id)}
             code, message = _failure_message(exc, "classifying")
             return await _terminate(db, sess, error_code=code, message=message)
-        merged = [{**step, **cls} for step, cls in zip(steps, classes, strict=True)]
-
-        # A cancel (or the reaper) may have landed during the LLM call: the
-        # answer is discarded and nothing is billed. The flip is guarded on
-        # the row so a cancel committed between the check and the write
-        # cannot be overwritten - and then charged.
-        flipped = await db.execute(
-            update(WorkDecompositionSession)
-            .where(
-                WorkDecompositionSession.id == sess.id,
-                WorkDecompositionSession.status == "running",
-            )
-            .values(
-                status="ready",
-                phase=None,
-                payload=_normalise(merged, {p.code for p in primitives}),
-                finished_at=datetime.now(UTC),
-            )
-            .returning(WorkDecompositionSession.id)
-        )
-        if flipped.scalar_one_or_none() is None:
-            await db.rollback()
-            await db.refresh(sess)
-            return {"status": sess.status, "session_id": str(session_id)}
-        params = sess.params or {}
-        await billing_hooks.consume_action(
-            db,
-            sess.tenant_id,
-            sess.user_id,
-            params.get("billing_action") or "work_decomposition.start",
-            amount_override=params.get("cost"),
-        )
-        await release_session_hold(db, sess.tenant_id, sess.id)
-        await db.commit()
-        await db.refresh(sess)
-        await _broadcast(sess)
-        return {"status": "ready", "session_id": str(sess.id)}
+        merged = [
+            # HRP-949: the first call's codes, filtered like the final ones,
+            # stay next to them for the comparison of the two passes on live
+            # data; nothing on screen reads them.
+            {
+                **step,
+                **cls,
+                "first_pass_codes": [
+                    c for c in dict.fromkeys(step.get("primitives") or []) if c in codes
+                ],
+            }
+            for step, cls in zip(steps, classes, strict=True)
+        ]
+        payload = _normalise(merged, codes)
+        result = await _deliver(db, sess, payload, charge=True)
+        # Kept only once paid for: a run cancelled during the model call is
+        # billed nothing, and its answer must not serve the next run on the
+        # same text from the cache for free.
+        if result["status"] == "ready":
+            await _remember_breakdown(cache_key, payload)
+        return result
 
 
 async def execute_session(
@@ -620,11 +783,14 @@ async def _execute_skill_body(
         indicators = await skills.load_indicators(
             db, row.tenant_id, [p.id for p in primitives]
         )
-        system = skills.build_system_prompt(
-            pack["code"],
-            step,
-            extras=ai_settings_service.build_system_prompt_extras(tenant_settings),
-        )
+        # The pack's skeleton and rules in the first block, the tenant's
+        # directive and context after it: the first block is what the
+        # provider caches (HRP-951) - below its minimum today, in place for
+        # when the skeleton grows.
+        system = [
+            skills.build_system_prompt(pack["code"], step),
+            *ai_settings_service.build_system_prompt_extras(tenant_settings),
+        ]
         prompt = skills.build_user_prompt(
             container=container, step=step, primitives=primitives, indicators=indicators
         )
@@ -632,6 +798,14 @@ async def _execute_skill_body(
             db, row.tenant_id, model
         )
         pack_code, tenant_id, user_id = pack["code"], row.tenant_id, row.generated_by_id
+        ai_usage_hooks.bind(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="work_skill.generate",
+            entity_type="work_container",
+            entity_id=container.id,
+            work_unit_id=ai_usage_hooks.work_unit_id_or(skill_id),
+        )
         title = step.title
         # Last statement before the LLM call: the commit releases the
         # connection, so the idle-in-transaction timeout cannot kill it

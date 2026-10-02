@@ -18,6 +18,19 @@ from app.modules.recruitment.transcription_service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _every_processor_allowed(monkeypatch):
+    """HRP-1005: the chain reads the tenant's processor list; the fake sync
+    session cannot answer that query."""
+    from app.modules.ai import processors
+
+    monkeypatch.setattr(
+        processors,
+        "allowed_processors_sync",
+        lambda db, tenant_id: frozenset(processors.PROCESSORS),
+    )
+
+
 def test_whisper_payload_parses_segments():
     body = {
         "text": "Hello world. How are you?",
@@ -700,6 +713,168 @@ def test_chain_puts_the_tenants_own_keys_ahead_of_platform_ones(monkeypatch):
     assert chain[0]._api_key == "tenant-aai"
 
 
+def test_chain_leaves_out_processors_the_tenant_may_not_use(monkeypatch):
+    import uuid as _uuid
+
+    from app.modules.ai import processors
+    from app.modules.recruitment import transcription_service
+
+    monkeypatch.setattr(transcription_service.settings, "deepgram_api_key", "dg")
+    monkeypatch.setattr(transcription_service.settings, "openai_api_key", "oa")
+    monkeypatch.setattr(
+        processors, "allowed_processors_sync", lambda db, tenant_id: frozenset({"deepgram"})
+    )
+    chain = transcription_service.get_transcription_chain_sync(
+        _FakeSyncSession([]), _uuid.uuid4()
+    )
+    assert [p.provider_name for p in chain] == ["deepgram"]
+
+
+def test_chain_keyless_row_with_denied_processor_stays_out(monkeypatch):
+    """F1 regression: the chain's own key lookup used to fall back to the
+    platform key inline, so a row with no key (or an undecryptable one)
+    dispatched on the platform key without ever going through the
+    processor check — that check only covered the fallback loop for
+    unconfigured providers."""
+    import uuid as _uuid
+
+    from app.modules.ai import processors
+    from app.modules.recruitment import transcription_service
+    from app.modules.recruitment.models import TranscriptionProviderConfig
+
+    monkeypatch.setattr(
+        transcription_service.settings, "deepgram_api_key", "platform-dg"
+    )
+    monkeypatch.setattr(
+        processors, "allowed_processors_sync", lambda db, tenant_id: frozenset()
+    )
+    row = TranscriptionProviderConfig(
+        provider="deepgram", api_key_encrypted=None, is_active=True
+    )
+    chain = transcription_service.get_transcription_chain_sync(
+        _FakeSyncSession([row]), _uuid.uuid4()
+    )
+    assert chain == []
+
+
+def test_chain_keyed_row_with_denied_processor_stays_in(monkeypatch):
+    """BYOK is never restricted by the processor list (HRP-1005 R4) — a
+    tenant's own key must still dispatch even when the instance has since
+    disallowed that processor for platform-keyed calls."""
+    import uuid as _uuid
+
+    from app.core.crypto import encrypt_secret
+    from app.modules.ai import processors
+    from app.modules.recruitment import transcription_service
+    from app.modules.recruitment.models import TranscriptionProviderConfig
+
+    monkeypatch.setattr(
+        processors, "allowed_processors_sync", lambda db, tenant_id: frozenset()
+    )
+    row = TranscriptionProviderConfig(
+        provider="deepgram",
+        api_key_encrypted=encrypt_secret("dg-tenant-key"),
+        is_active=True,
+    )
+    chain = transcription_service.get_transcription_chain_sync(
+        _FakeSyncSession([row]), _uuid.uuid4()
+    )
+    assert [p.provider_name for p in chain] == ["deepgram"]
+    assert chain[0]._api_key == "dg-tenant-key"
+
+
+def test_chain_keyless_row_with_allowed_processor_uses_platform_key(monkeypatch):
+    """F14: the mirror case of F1 — a keyless row whose processor IS
+    allowed must still fall back to the platform key (not silently drop
+    it), carrying the row's own ``settings`` (e.g. ``speakers_expected``)
+    the way the tenant configured it, not the bare defaults the
+    unconfigured-provider loop below would use."""
+    import uuid as _uuid
+
+    from app.modules.ai import processors
+    from app.modules.recruitment import transcription_service
+    from app.modules.recruitment.models import TranscriptionProviderConfig
+
+    monkeypatch.setattr(
+        transcription_service.settings, "assemblyai_api_key", "platform-aai"
+    )
+    monkeypatch.setattr(
+        processors,
+        "allowed_processors_sync",
+        lambda db, tenant_id: frozenset({"assemblyai"}),
+    )
+    row = TranscriptionProviderConfig(
+        provider="assemblyai",
+        api_key_encrypted=None,
+        is_active=True,
+        settings={"speakers_expected": 3},
+    )
+    chain = transcription_service.get_transcription_chain_sync(
+        _FakeSyncSession([row]), _uuid.uuid4()
+    )
+    assert [p.provider_name for p in chain] == ["assemblyai"]
+    assert chain[0]._api_key == "platform-aai"
+    assert chain[0]._speakers_expected == 3
+
+
+def test_chain_undecryptable_row_with_allowed_processor_uses_platform_key(
+    monkeypatch,
+):
+    """A key that no longer decrypts (ENCRYPTION_KEY rotation) must degrade
+    to the platform key exactly like a keyless row, when the processor is
+    allowed."""
+    import uuid as _uuid
+
+    from app.modules.ai import processors
+    from app.modules.recruitment import transcription_service
+    from app.modules.recruitment.models import TranscriptionProviderConfig
+
+    monkeypatch.setattr(
+        transcription_service.settings, "deepgram_api_key", "platform-dg"
+    )
+    monkeypatch.setattr(
+        processors,
+        "allowed_processors_sync",
+        lambda db, tenant_id: frozenset({"deepgram"}),
+    )
+    row = TranscriptionProviderConfig(
+        provider="deepgram",
+        api_key_encrypted="not-a-valid-ciphertext",
+        is_active=True,
+    )
+    chain = transcription_service.get_transcription_chain_sync(
+        _FakeSyncSession([row]), _uuid.uuid4()
+    )
+    assert [p.provider_name for p in chain] == ["deepgram"]
+    assert chain[0]._api_key == "platform-dg"
+
+
+def test_chain_keyless_row_with_allowed_processor_but_no_platform_key_stays_out(
+    monkeypatch,
+):
+    """Allowed is necessary but not sufficient: without a platform key
+    there is nothing to fall back to, so the row must not appear."""
+    import uuid as _uuid
+
+    from app.modules.ai import processors
+    from app.modules.recruitment import transcription_service
+    from app.modules.recruitment.models import TranscriptionProviderConfig
+
+    monkeypatch.setattr(transcription_service.settings, "deepgram_api_key", "")
+    monkeypatch.setattr(
+        processors,
+        "allowed_processors_sync",
+        lambda db, tenant_id: frozenset({"deepgram"}),
+    )
+    row = TranscriptionProviderConfig(
+        provider="deepgram", api_key_encrypted=None, is_active=True
+    )
+    chain = transcription_service.get_transcription_chain_sync(
+        _FakeSyncSession([row]), _uuid.uuid4()
+    )
+    assert chain == []
+
+
 def test_assemblyai_speaker_count_comes_from_the_tenant_row(monkeypatch):
     """A panel interview is configured, not hardcoded: the provider row
     carries the number of voices to expect."""
@@ -715,16 +890,16 @@ def test_assemblyai_speaker_count_comes_from_the_tenant_row(monkeypatch):
         is_active=True,
         settings={"speakers_expected": 4},
     )
-    provider = transcription_service.get_transcription_provider_sync(
+    chain = transcription_service.get_transcription_chain_sync(
         _FakeSyncSession([row]), _uuid.uuid4()
     )
-    assert provider._speakers_expected == 4
+    assert chain[0]._speakers_expected == 4
 
     row.settings = None
-    provider = transcription_service.get_transcription_provider_sync(
+    chain = transcription_service.get_transcription_chain_sync(
         _FakeSyncSession([row]), _uuid.uuid4()
     )
-    assert provider._speakers_expected == 2
+    assert chain[0]._speakers_expected == 2
 
 
 def test_yandex_provider_carries_the_folder_from_the_tenant_row(monkeypatch):
@@ -744,16 +919,16 @@ def test_yandex_provider_carries_the_folder_from_the_tenant_row(monkeypatch):
         settings={"folder_id": "b1gtenant"},
     )
 
-    provider = transcription_service.get_transcription_provider_sync(
+    chain = transcription_service.get_transcription_chain_sync(
         _FakeSyncSession([row]), _uuid.uuid4()
     )
-    assert provider._folder_id == "b1gtenant"
+    assert chain[0]._folder_id == "b1gtenant"
 
     row.settings = None
-    provider = transcription_service.get_transcription_provider_sync(
+    chain = transcription_service.get_transcription_chain_sync(
         _FakeSyncSession([row]), _uuid.uuid4()
     )
-    assert provider._folder_id == "platform"
+    assert chain[0]._folder_id == "platform"
 
 
 class _FakeSyncResult:
@@ -786,8 +961,7 @@ class _FakeSyncSession:
         return _FakeSyncResult(self._rows)
 
 
-@pytest.mark.asyncio
-async def test_byok_transcription_key_is_decrypted(db, tenant, monkeypatch):
+def test_byok_transcription_key_is_decrypted(monkeypatch):
     """The stored column is ciphertext — the provider must receive the
     plaintext key, never the blob (HRP-506)."""
     import uuid as _uuid
@@ -796,71 +970,15 @@ async def test_byok_transcription_key_is_decrypted(db, tenant, monkeypatch):
     from app.modules.recruitment import transcription_service
     from app.modules.recruitment.models import TranscriptionProviderConfig
 
-    monkeypatch.setattr(
-        transcription_service.settings, "deepgram_api_key", "platform-deepgram"
-    )
     row = TranscriptionProviderConfig(
-        tenant_id=tenant.id,
         provider="deepgram",
         api_key_encrypted=encrypt_secret("dg-tenant-key"),
         is_active=True,
     )
-    db.add(row)
-    await db.commit()
-
-    provider = await transcription_service.get_transcription_provider(db, tenant.id)
-    assert provider._api_key == "dg-tenant-key"
-
-    sync_provider = transcription_service.get_transcription_provider_sync(
-        _FakeSyncSession(row), _uuid.uuid4()
+    chain = transcription_service.get_transcription_chain_sync(
+        _FakeSyncSession([row]), _uuid.uuid4()
     )
-    assert sync_provider._api_key == "dg-tenant-key"
-
-
-@pytest.mark.asyncio
-async def test_row_without_key_falls_back_to_platform_key(db, tenant, monkeypatch):
-    from app.modules.recruitment import transcription_service
-    from app.modules.recruitment.models import TranscriptionProviderConfig
-
-    monkeypatch.setattr(
-        transcription_service.settings, "deepgram_api_key", "platform-deepgram"
-    )
-    db.add(
-        TranscriptionProviderConfig(
-            tenant_id=tenant.id,
-            provider="deepgram",
-            api_key_encrypted=None,
-            is_active=True,
-        )
-    )
-    await db.commit()
-
-    provider = await transcription_service.get_transcription_provider(db, tenant.id)
-    assert provider._api_key == "platform-deepgram"
-
-
-@pytest.mark.asyncio
-async def test_unreadable_key_falls_back_to_platform_key(db, tenant, monkeypatch):
-    """A key encrypted under a rotated ENCRYPTION_KEY must degrade to the
-    platform credential instead of shipping garbage to the provider."""
-    from app.modules.recruitment import transcription_service
-    from app.modules.recruitment.models import TranscriptionProviderConfig
-
-    monkeypatch.setattr(
-        transcription_service.settings, "deepgram_api_key", "platform-deepgram"
-    )
-    db.add(
-        TranscriptionProviderConfig(
-            tenant_id=tenant.id,
-            provider="deepgram",
-            api_key_encrypted="not-a-valid-ciphertext",
-            is_active=True,
-        )
-    )
-    await db.commit()
-
-    provider = await transcription_service.get_transcription_provider(db, tenant.id)
-    assert provider._api_key == "platform-deepgram"
+    assert chain[0]._api_key == "dg-tenant-key"
 
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,7 @@ equal to their own filtered list.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
@@ -50,6 +50,7 @@ from app.modules.assessment.models import (
     Assessment,
     AssessmentResult,
     AssessmentStatus,
+    PDPItem,
 )
 from app.modules.assessment.pdp_service import PDP_FINALIZED_STATUSES
 from app.modules.employee.models import Employee
@@ -164,6 +165,10 @@ class IssueFacts:
     # the fixed 90-day tiles do not answer. Already fetched — dropping them
     # only bought a second query later.
     pdp_rows: Sequence[Row] = ()
+    # HRP-724: the competences each finished plan's items were about. The
+    # dynamics tile counts a rise only on those, and only when an
+    # assessment completed after the plan measured it.
+    plan_competences: dict[uuid.UUID, set[uuid.UUID]] = field(default_factory=dict)
 
     @property
     def total_active(self) -> int:
@@ -275,16 +280,25 @@ async def collect_issue_facts(
     visible_employee_ids: set[uuid.UUID] | None = None,
     employee_ids: set[uuid.UUID] | None = None,
     now: datetime | None = None,
+    with_plan_competences: bool = False,
 ) -> IssueFacts:
     """One pass over the cohort's assessments and plans.
 
-    Three queries regardless of cohort size — active employees, their done
-    assessments, the per-competence results — plus one for the plans.
+    Five queries regardless of cohort size: active employees, their done
+    assessments, the per-competence results, the plans, and the open
+    assessments' end dates (HRP-720). A sixth — the competences each done
+    plan's items were about — runs only when ``with_plan_competences`` is
+    set: :func:`development_dynamics` is its one reader, so the loops ask
+    for it and the employee card, the directory badges and the ``?issue=``
+    filters do not pay for it (HRP-724).
 
-    The ``gaps_closed`` / ``plans_done_on_time`` fields here answer over
-    the default :data:`CLOSED_WINDOW_DAYS`. A caller that lets the reader
-    pick a window asks :func:`closed_in_window` instead — it derives the
-    same two numbers from these facts without a second query (HRP-766).
+    The ``gaps_closed`` / ``plans_done_on_time`` fields are the fixed
+    :data:`CLOSED_WINDOW_DAYS` defaults the cohort rules were written
+    against. The dashboards do not read them: they derive the Completed
+    stage over the reader's window through :func:`closed_in_window` and the
+    period tiles' plan numbers through :func:`plans_finished_in_window`,
+    both pure functions over these facts — no second query either way
+    (HRP-766).
     """
     now = now or datetime.now(UTC)
     stale_cutoff = now - timedelta(days=STALE_DAYS)
@@ -338,6 +352,7 @@ async def collect_issue_facts(
         )
     )
     pdp_q = select(
+        PDP.id,
         PDP.employee_id,
         PDP.status,
         PDP.deadline,
@@ -426,6 +441,25 @@ async def collect_issue_facts(
         )
 
     pdp_rows = (await db.execute(pdp_q)).all()
+    plan_competences: dict[uuid.UUID, set[uuid.UUID]] = {}
+    if with_plan_competences:
+        # HRP-724: which competences each done plan worked on, read off its
+        # items. Every done plan of the cohort, not only the window's — the
+        # window is the reader's choice and is applied later, in
+        # ``development_dynamics``, without another query.
+        plan_comp_q = (
+            select(PDPItem.pdp_id, PDPItem.competence_id)
+            .join(PDP, PDP.id == PDPItem.pdp_id)
+            .where(
+                PDP.tenant_id == tenant_id,
+                PDP.status == "done",
+                PDPItem.competence_id.is_not(None),
+            )
+        )
+        if cohort is not None:
+            plan_comp_q = plan_comp_q.where(PDP.employee_id.in_(set(active_by_id)))
+        for pdp_id, competence_id in (await db.execute(plan_comp_q)).all():
+            plan_competences.setdefault(pdp_id, set()).add(competence_id)
     open_pdp_employees = {
         r.employee_id for r in pdp_rows if r.status not in PDP_FINALIZED_STATUSES
     }
@@ -535,7 +569,85 @@ async def collect_issue_facts(
         pdp_overdue_days=pdp_overdue_days,
         pdp_stuck_days=pdp_stuck_days,
         pdp_rows=pdp_rows,
+        plan_competences=plan_competences,
     )
+
+
+def plans_finished_in_window(facts: IssueFacts, window_start: datetime) -> list[Row]:
+    """Plans that reached ``done`` inside the window, for active employees.
+
+    HRP-766: the one set every period-dependent plan number is drawn from.
+    The Completed tile's headline, its on-time sub-line and the dynamics
+    tile's plan count all read this list, so none of them can disagree.
+    The tile used to headline closed competence gaps over a sub-line about
+    plans — two sets with no reason to match — and "Completed 1 / 2 plans
+    completed on time" was the result.
+    """
+    return [
+        r
+        for r in facts.pdp_rows
+        if r.status == "done"
+        and r.finished_at is not None
+        and r.finished_at >= window_start
+        and r.employee_id in facts.active_by_id
+    ]
+
+
+def plans_on_time(finished: Iterable[Row | PDP]) -> int:
+    """How many of the finished plans met their deadline.
+
+    A subset of ``finished`` by construction, so on-time can never exceed
+    completed. Compared by calendar day: a deadline is entered as a date
+    and stored at midnight, and a plan closed that afternoon was not late.
+    """
+    return len(
+        [
+            r
+            for r in finished
+            if r.finished_at is not None
+            and r.deadline is not None
+            and r.finished_at.date() <= r.deadline.date()
+        ]
+    )
+
+
+def raised_after_plans(
+    finished: Iterable[Row | PDP],
+    plan_competences: dict[uuid.UUID, set[uuid.UUID]],
+    done_by_employee: dict[uuid.UUID, list[Row]],
+    results_by_assessment: dict[uuid.UUID, list[Row]],
+) -> set[tuple[uuid.UUID, uuid.UUID]]:
+    """HRP-724: (employee, competence) pairs a finished plan demonstrably raised.
+
+    The reporter's rule, applied per finished plan:
+    (a) the competences in question are the ones the plan's items were about;
+    (b) the "after" reading is the newest completed assessment that finished
+        later than the plan did, the "before" reading the newest one that
+        finished earlier — the same split :func:`improved_against_previous`
+        makes, anchored on the plan's finish instead of the window's start;
+    (c) a competence counts when the after reading is strictly higher than
+        the before reading. No before reading, no rise — only a first score.
+
+    A plan with no competence-linked items contributes nothing, a rise
+    measured before the plan finished is not the plan's doing, and a
+    competence raised by two plans counts once.
+    """
+    raised: set[tuple[uuid.UUID, uuid.UUID]] = set()
+    for plan in finished:
+        wanted = plan_competences.get(plan.id)
+        if not wanted or plan.finished_at is None:
+            continue
+        after, before = split_by_window(
+            done_by_employee.get(plan.employee_id, []), plan.finished_at
+        )
+        raised.update(
+            (plan.employee_id, competence_id)
+            for competence_id in improved_against_previous(
+                after, before, results_by_assessment
+            )
+            if competence_id in wanted
+        )
+    return raised
 
 
 def closed_in_window(
@@ -543,10 +655,13 @@ def closed_in_window(
 ) -> dict:
     """HRP-766: the Completed stage over the period the reader picked.
 
-    The two numbers the dashboard's Completed tile shows — competence gaps
-    a re-assessment confirmed closed, and development plans that finished
-    on or before their deadline. Both used to be pinned to the fixed
-    90-day window, so the period switch above them changed nothing.
+    What the dashboard's Completed tile shows: development plans that
+    finished inside the window and how many of them met their deadline —
+    one set, so the sub-line can never outgrow the headline. Competence
+    gaps a re-assessment confirmed closed stay in the payload for the
+    summary and the tests, but the tile no longer leads with them. Both
+    used to be pinned to the fixed 90-day window, so the period switch
+    above them changed nothing.
 
     A pure function over ``facts`` rather than a parameter on
     ``collect_issue_facts``, for the same reason ``development_dynamics``
@@ -581,19 +696,12 @@ def closed_in_window(
             closed_against_previous(passed_now, earlier, facts.results_by_assessment)
         )
 
-    plans_done_on_time = sum(
-        1
-        for r in facts.pdp_rows
-        if r.status == "done"
-        and r.finished_at is not None
-        and r.finished_at >= cutoff
-        and r.deadline is not None
-        and r.finished_at <= r.deadline
-    )
+    finished = plans_finished_in_window(facts, cutoff)
     return {
         "window_days": days,
         "gaps_closed": gaps_closed,
-        "plans_done_on_time": plans_done_on_time,
+        "plans_completed": len(finished),
+        "plans_done_on_time": plans_on_time(finished),
     }
 
 
@@ -603,41 +711,28 @@ def development_dynamics(
     """HRP-724: what actually moved in the last ``days``.
 
     Two numbers, both about people and not about paperwork: development plans
-    that reached ``done`` inside the window, and (employee, competence) pairs
-    scoring higher now than they did before the window opened.
+    that reached ``done`` inside the window, and the (employee, competence)
+    pairs those plans raised — scored higher in an assessment completed after
+    the plan than in the one before it (:func:`raised_after_plans`).
 
-    Deliberately separate from the ``closed`` stage: that one counts gaps
-    crossing the passing bar in a fixed 90-day window and is what the loop is
-    graded on. This one answers "did the last quarter change anything", which
-    a competence climbing 40 to 55 does even though no bar was crossed.
+    Deliberately separate from the ``closed`` stage's gap count: that one is
+    about crossing the passing bar, this one about any strict rise a plan
+    can take credit for — a competence climbing 40 to 55 after its plan is
+    movement worth reporting even though the gap is still open.
     """
     window_start = (now or datetime.now(UTC)) - timedelta(days=days)
-    # Both halves of the tile count the same population: active employees.
-    # Without the filter a terminated employee's finished plan still raised
-    # plans_completed while their competences could never raise the other
-    # number (review finding).
-    plans_completed = sum(
-        1
-        for r in facts.pdp_rows
-        if r.status == "done"
-        and r.finished_at is not None
-        and r.finished_at >= window_start
-        and r.employee_id in facts.active_by_id
-    )
+    finished = plans_finished_in_window(facts, window_start)
     done_by_employee: dict[uuid.UUID, list[Row]] = {}
     for row in facts.done_rows:
         if row.employee_id in facts.active_by_id:
             done_by_employee.setdefault(row.employee_id, []).append(row)
-    competences_improved = 0
-    for rows in done_by_employee.values():
-        inside, before = split_by_window(rows, window_start)
-        competences_improved += len(
-            improved_against_previous(inside, before, facts.results_by_assessment)
-        )
+    raised = raised_after_plans(
+        finished, facts.plan_competences, done_by_employee, facts.results_by_assessment
+    )
     return {
         "days": days,
-        "plans_completed": plans_completed,
-        "competences_improved": competences_improved,
+        "plans_completed": len(finished),
+        "competences_improved": len(raised),
     }
 
 

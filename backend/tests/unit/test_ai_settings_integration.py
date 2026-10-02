@@ -79,7 +79,7 @@ class TestLLMClientUsesSettings:
         async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             captured["model"] = model
             captured["temperature"] = temperature
-            return "ok"
+            return "ok", llm_client._Usage()
 
         with patch.object(llm_client, "_generate_anthropic", new=fake_anthropic):
             await llm_client.generate(
@@ -99,7 +99,7 @@ class TestLLMClientUsesSettings:
         async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             captured["model"] = model
             captured["temperature"] = temperature
-            return "ok"
+            return "ok", llm_client._Usage()
 
         with patch.object(llm_client, "_generate_anthropic", new=fake_anthropic):
             await llm_client.generate(
@@ -121,7 +121,7 @@ class TestLLMClientUsesSettings:
         async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             captured["model"] = model
             captured["temperature"] = temperature
-            return "ok"
+            return "ok", llm_client._Usage()
 
         with patch.object(llm_client, "_generate_anthropic", new=fake_anthropic):
             await llm_client.generate(
@@ -152,7 +152,7 @@ class TestLLMClientUsesSettings:
         async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             captured["model"] = model
             captured["temperature"] = temperature
-            return "ok"
+            return "ok", llm_client._Usage()
 
         with patch.object(llm_client, "_generate_anthropic", new=fake_anthropic):
             await llm_client.generate(

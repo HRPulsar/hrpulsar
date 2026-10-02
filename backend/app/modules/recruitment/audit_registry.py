@@ -135,6 +135,12 @@ AUDITED: dict[str, list[tuple[str, str]]] = {
         ("enqueue_bulk_resume_only", "ai.bulk_analyze_resume_only"),
         ("cancel_ai_analysis_run", "ai.analyze_cancelled"),
     ],
+    # HRP-471: question-set generation runs in the background; the start
+    # and a cancel are the recruiter's acts, the worker's writes are not.
+    "app.modules.recruitment.question_service": [
+        ("enqueue_question_set_generation", "question_set.generate"),
+        ("cancel_question_set_generation", "question_set.generation_cancelled"),
+    ],
     "app.modules.recruitment.consent_service": [
         ("create_consent_template", "consent.template_create"),
         ("update_consent_template", "consent.template_update"),

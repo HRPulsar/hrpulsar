@@ -7,12 +7,22 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from app.models import BaseModel
+from app.models import BaseModel, TenantMixin
 
 
-class Embedding(BaseModel):
+class Embedding(BaseModel, TenantMixin):
+    """HRP-954: a row belongs to the tenant that embedded it. Search and
+    upsert stay inside that tenant, so the same entity key may exist once
+    per tenant."""
+
     __tablename__ = "embeddings"
     __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "entity_type",
+            "entity_id",
+            name="uq_embeddings_tenant_entity",
+        ),
         Index(
             "ix_embeddings_vector",
             "embedding",

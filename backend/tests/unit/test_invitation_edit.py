@@ -1,7 +1,7 @@
 """Tests for INV2/INV3: PATCH /api/invitations/{id} and PATCH /api/invitations/{id}/email."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +15,7 @@ from app.modules.auth.schemas import (
     InvitationUpdate,
 )
 from app.modules.company.models import Division, Tenant
+from app.modules.employee.models import Employee
 from app.modules.position.models import Position
 from fastapi import HTTPException
 from httpx import AsyncClient
@@ -479,7 +480,7 @@ class TestUpdateInvitationRouter:
         )
         assert resp.status_code == 403
 
-    async def test_manager_cannot_change_email_via_router(
+    async def test_manager_cannot_change_email_of_a_role_above_their_tier(
         self,
         client: AsyncClient,
         db: AsyncSession,
@@ -488,14 +489,33 @@ class TestUpdateInvitationRouter:
         admin_role,
         manager_role,
     ):
-        inv = await _create_pending(db, tenant, user)
+        # HRP-831: re-addressing is sending. The invitation sits in the
+        # manager's own subtree, so the fence passes and the tier answers.
         manager = await _make_user_with_role(db, tenant, manager_role, label="mgr")
+        emp = Employee(user_id=manager.id, tenant_id=tenant.id, hire_date=date(2024, 1, 1))
+        db.add(emp)
+        await db.commit()
+        mine = Division(tenant_id=tenant.id, name="Mine", manager_id=emp.id)
+        db.add(mine)
+        await db.commit()
+        inv = await service.create_invitation(
+            db,
+            tenant.id,
+            user.id,
+            InvitationCreate(
+                email=f"target-{uuid.uuid4().hex[:6]}@test.com",
+                name="Target",
+                role_code="admin",
+                division_id=mine.id,
+            ),
+        )
         c = _client_for(client, manager, tenant)
         resp = await c.patch(
             f"/api/invitations/{inv['id']}/email",
             json={"email": "elsewhere@test.com"},
         )
         assert resp.status_code == 403
+        assert resp.json()["detail"]["error_code"] == "role_above_inviter"
 
     async def test_employee_cannot_update_invitation_via_router(
         self,

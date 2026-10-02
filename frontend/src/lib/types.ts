@@ -1,4 +1,5 @@
 import type { DemoPersona } from "./demo";
+import type { SectionCode, SectionLevel } from "./sections";
 
 export interface User {
   id: string;
@@ -30,8 +31,9 @@ export interface User {
    *  specialization, as answered by `can_see_position_grades` on the
    *  backend — role set included, so the SPA does not mirror it. */
   can_view_job_profile?: boolean;
-  /** HRP-810: sections /auth/me opens for this caller and how far. */
-  sections?: Partial<Record<"coverage", "view" | "manage">>;
+  /** HRP-810/820: sections /auth/me opens for this caller and how far;
+   *  hidden and closed sections are absent. */
+  sections?: Partial<Record<SectionCode, SectionLevel>>;
   /** HRP-808: tenant branding set by the platform admin. With the platform
    *  logo hidden the sidebar shows `tenant_logo_url` (signed only then),
    *  or the tenant initials + name when the tenant has no logo. */
@@ -289,6 +291,8 @@ export interface EmployeeEvent {
   description: string | null;
   event_date: string;
   metadata: Record<string, unknown> | null;
+  old_value: Record<string, unknown> | null;
+  new_value: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -436,7 +440,6 @@ export interface Role {
   description: string | null;
   is_system: boolean;
   tenant_id: string | null;
-  permissions: string[];
   /** HRP-634: active holders in the tenant; `null` unless it came from `GET /roles`. */
   user_count: number | null;
 }
@@ -1347,11 +1350,36 @@ export interface CreditTransaction {
   balance_after_paid: number;
   balance_after_bonus: number;
   created_at: string;
+  user_id: string | null;
+  user_name: string | null;
+  work_unit_id: string | null;
 }
 
 export interface CreditHistoryList {
   items: CreditTransaction[];
   total: number;
+}
+
+// GET /billing/credits/history/{id} — admin-only (HRP-965).
+
+export interface EntityRef {
+  type: string;
+  id: string;
+  title: string | null;
+  path: string | null;
+}
+
+export interface CallsSummary {
+  count: number;
+  models: string[];
+  total_latency_ms: number;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface CreditTransactionDetail extends CreditTransaction {
+  entity: EntityRef | null;
+  calls: CallsSummary | null;
 }
 
 // Public price list — GET /billing/costs + GET /billing/config
@@ -1440,6 +1468,11 @@ export interface PlatformTenantDetail extends PlatformTenantItem {
   hide_app_version: boolean;
   brand_theme: string | null;
   brand_accent_color: string | null;
+  /** HRP-1005: AI processors — the instance list, this tenant's delta, the result. */
+  ai_processor_overrides: Record<string, boolean> | null;
+  ai_own_keys_only: boolean;
+  ai_processors_instance: string[];
+  ai_processors_effective: string[];
 }
 
 export interface PlatformTenantList {
@@ -1581,6 +1614,8 @@ export interface VacancyList {
   total: number;
   page: number;
   page_size: number;
+  /** HRP-417: archived vacancies under the same filters, for "Show archived (N)". */
+  archived_count: number;
 }
 
 export interface Candidate {
@@ -1831,6 +1866,10 @@ export interface AssessmentMatrixCell {
   ai_score: number | null;
   ai_status: AssessmentMatrixAIStatus;
   divergence: boolean;
+  // HRP-774 — the cell in percent of scale (the scale's level weights),
+  // computed by the backend; null wherever the score is null.
+  manager_percent: number | null;
+  ai_percent: number | null;
 }
 
 export interface AssessmentMatrixCandidate {

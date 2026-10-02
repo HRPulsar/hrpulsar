@@ -99,14 +99,18 @@ def _matrix_stub() -> dict:
                     {
                         "competence_id": comp_a,
                         "manager_score": 4.0,
+                        "manager_percent": 100.0,
                         "ai_score": 2.0,
+                        "ai_percent": 50.0,
                         "ai_status": "ready",
                         "divergence": True,
                     },
                     {
                         "competence_id": comp_b,
                         "manager_score": 2.0,
+                        "manager_percent": 50.0,
                         "ai_score": None,
+                        "ai_percent": None,
                         "ai_status": "not_covered",
                         "divergence": False,
                     },
@@ -122,14 +126,18 @@ def _matrix_stub() -> dict:
                     {
                         "competence_id": comp_a,
                         "manager_score": None,
+                        "manager_percent": None,
                         "ai_score": 4.0,
+                        "ai_percent": 100.0,
                         "ai_status": "ready",
                         "divergence": False,
                     },
                     {
                         "competence_id": comp_b,
                         "manager_score": None,
+                        "manager_percent": None,
                         "ai_score": 4.0,
+                        "ai_percent": 100.0,
                         "ai_status": "ready",
                         "divergence": False,
                     },
@@ -179,7 +187,8 @@ class TestExportMirrorsTheToolbar:
         body = csv_rows[1]
         assert body[0] == "Ekaterina Velikaya"
         assert body[1] == "AI"
-        # 2.0 of 4 with a divergence marker, then the not-covered cell.
+        # The cell's own percent of scale (HRP-774) with a divergence
+        # marker, then the not-covered cell.
         assert body[2] == "50.0% ⚠"
         assert body[3] == "n/a"
         assert body[-1] == "50.0%"

@@ -25,7 +25,7 @@ const { AccessDialog } = await import("@/components/coverage/access-dialog");
 
 const ACCESS: ContainerAccess = {
   visibility: "restricted",
-  owner: { user_id: "u-1", name: "Alice Adams", active: true },
+  owner: { user_id: "u-1", name: "Alice Adams", position_title: "Head of Finance", status: "active", active: true },
   // A person the directory has no name for: the chip must still say who.
   rules: [{ role_code: null, position_id: null, employee_id: "e-2", label: "" }],
   history: [],
@@ -110,6 +110,17 @@ it("offers only people at work as the next owner", async () => {
   const list = byTestId("coverage-access-owner-list").textContent ?? "";
   expect(list).toContain("Alice Adams");
   expect(list).not.toContain("bob@example.com");
+});
+
+it("shows the owner like any employee - name, position, status chip (HRP-810 REDO)", async () => {
+  getAccess.mockResolvedValue({ ...ACCESS, owner: { ...ACCESS.owner!, status: "on_leave" } });
+  await render();
+
+  expect(byTestId("coverage-access-owner-summary-name").textContent).toBe("Alice Adams");
+  expect(byTestId("coverage-access-owner-summary-position").textContent).toBe("Head of Finance");
+  expect(byTestId("coverage-access-owner-summary-status").textContent).toBe(
+    enMessages.employees.statusOnLeave,
+  );
 });
 
 it("names a rule with no name by the person behind it", async () => {

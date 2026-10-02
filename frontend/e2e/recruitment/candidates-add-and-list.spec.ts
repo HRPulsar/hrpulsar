@@ -129,9 +129,11 @@ test.describe("Recruitment HRP-181 canonical candidate flow", () => {
       .fill(manualEmail);
     await dialog.getByTestId("vacancy-candidates-add-submit-btn").click();
 
-    await page.waitForURL(/\/recruitment\/candidates\/[0-9a-f-]+$/, {
-      timeout: 15000,
-    });
+    // HRP-840: a card opened from the vacancy carries it, so Back returns there.
+    await page.waitForURL(
+      new RegExp(`/recruitment/candidates/[0-9a-f-]+\\?vacancyId=${vacancy.id}$`),
+      { timeout: 15000 },
+    );
 
     // ── Bulk upload two minimal PDFs ───────────────────────────────────
     await page.goto(`/recruitment/requisitions/${vacancy.id}`);

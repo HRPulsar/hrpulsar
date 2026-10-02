@@ -133,6 +133,7 @@ the hosted-product entry surface.
 | `DEEPGRAM_API_KEY` | No | — | Deepgram key for interview transcription |
 | `YANDEX_SPEECHKIT_API_KEY` | No | — | Yandex SpeechKit key for interview transcription; falls back to the `YANDEX_API_KEY` service account and uses `YANDEX_FOLDER_ID` |
 | `TRANSCRIPTION_PROVIDER_DEFAULT` | No | `whisper` | Transcription provider tried first (`whisper`, `deepgram`, `assemblyai`, `yandex_speechkit`). Every key configured above joins the fallback chain |
+| `AI_PROCESSORS_DEFAULT` | No | Empty (all allowed) | Comma-separated AI processors every workspace may use on the platform's keys: `anthropic`, `openai`, `gemini`, `yandex`, `jev`, `deepgram`, `assemblyai`. Empty (default) allows all. An unknown name stops the application at startup |
 | `SMTP_HOST` | No | — | SMTP server for email notifications |
 | `SMTP_PORT` | No | `587` | SMTP port |
 | `SMTP_USER` | No | — | SMTP username |

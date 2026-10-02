@@ -85,8 +85,8 @@ STEP_PRIMITIVE_SOURCES = ("system_suggested", "tenant_edited")
 # and the people on its steps. ``company`` - every user of the tenant;
 # ``restricted`` - only the people its access rules name.
 VISIBILITIES = ("company", "restricted")
-# Roles a rule may name. admin and hr manage the section and read every
-# container anyway; platform_admin is not a tenant role.
+# Roles a rule may name. A role the matrix gives ``manage`` on ``coverage``
+# reads every container anyway; platform_admin is not a tenant role.
 RULE_ROLE_CODES = ("manager", "recruiter", "hiring_manager", "employee")
 ACCESS_LOG_ACTIONS = (
     "owner_changed",
@@ -108,6 +108,8 @@ ERROR_CODES = (
     "parse_error",
     "reaped_stuck",
     "output_truncated",
+    # HRP-1005: the workspace's processor list allows no AI provider.
+    "no_allowed_processor",
 )
 
 

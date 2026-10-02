@@ -40,6 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { usePermissions } from "@/hooks/use-permissions";
 
 const LIFECYCLE_OPTIONS: PositionLifecycleStatus[] = [
   "active",
@@ -143,6 +144,12 @@ export function PositionEditDialog({
   onSaved,
 }: PositionEditDialogProps) {
   const t = useTranslations("company");
+  // HRP-827: specializations and grades are dictionary items - creating
+  // one inline asks the dictionaries row; a grade is also chained into the
+  // grade system, which is still the admin role's.
+  const { canManageSection, isAdmin, isAdminLevel } = usePermissions();
+  const canAddSpecialization = canManageSection("dictionaries");
+  const canAddGrade = canAddSpecialization && isAdmin;
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const locale = useLocale();
@@ -158,6 +165,7 @@ export function PositionEditDialog({
   const [saving, setSaving] = useState(false);
   const [specializations, setSpecializations] = useState<DictionaryItem[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
+  const [scopeIds, setScopeIds] = useState<Set<string> | null>(null);
   const [gradesForSpec, setGradesForSpec] = useState<SpecializationGrade[]>([]);
   const [gradesLoading, setGradesLoading] = useState(false);
   const [refDataLoaded, setRefDataLoaded] = useState(false);
@@ -188,19 +196,25 @@ export function PositionEditDialog({
     if (!open || refDataLoaded) return;
     let cancelled = false;
     void (async () => {
-      const [specRes, divRes] = await Promise.allSettled([
+      const [specRes, divRes, scopeRes] = await Promise.allSettled([
         api.get<DictionaryItem[]>("/dictionaries/specialization"),
         api.get<Division[]>("/divisions"),
+        isAdminLevel
+          ? Promise.resolve(null)
+          : api.get<{ id: string }[]>("/divisions/scope"),
       ]);
       if (cancelled) return;
       if (specRes.status === "fulfilled") setSpecializations(specRes.value);
       if (divRes.status === "fulfilled") setDivisions(divRes.value);
+      if (scopeRes.status === "fulfilled" && scopeRes.value) {
+        setScopeIds(new Set(scopeRes.value.map((d) => d.id)));
+      }
       setRefDataLoaded(true);
     })();
     return () => {
       cancelled = true;
     };
-  }, [open, refDataLoaded]);
+  }, [open, refDataLoaded, isAdminLevel]);
 
   // §6.5: Grade options are not the global grade dictionary — only those
   // attached to the chosen Specialization. Fetched on every spec change.
@@ -238,6 +252,23 @@ export function PositionEditDialog({
   }, [open, form.specialization_id, t]);
 
   const flatDivisions = useMemo(() => flattenTree(divisions), [divisions]);
+  // HRP-829: below the admin level a position belongs to a division of the
+  // caller's subtree - the API refuses "None" and any other division. The
+  // current one stays listed so an existing value still reads.
+  const pickableDivisions = useMemo(
+    () =>
+      scopeIds
+        ? flatDivisions.filter(
+            (d) => scopeIds.has(d.id) || d.id === form.division_id,
+          )
+        : flatDivisions,
+    [flatDivisions, scopeIds, form.division_id],
+  );
+  useEffect(() => {
+    if (!open || position || !scopeIds || form.division_id) return;
+    const first = flatDivisions.find((d) => scopeIds.has(d.id));
+    if (first) setForm((prev) => ({ ...prev, division_id: first.id }));
+  }, [open, position, scopeIds, form.division_id, flatDivisions]);
 
   const selectedSpec = form.specialization_id
     ? specializations.find((s) => s.id === form.specialization_id) ?? null
@@ -486,17 +517,19 @@ export function PositionEditDialog({
                 </Button>
               </div>
             ) : (
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="-ml-2 h-7 text-xs"
-                onClick={() => setSpecAddOpen(true)}
-                data-testid="position-edit-btn-add-specialization"
-              >
-                <Plus className="mr-1 h-3.5 w-3.5" />
-                {t("addNewSpecialization")}
-              </Button>
+              canAddSpecialization && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="-ml-2 h-7 text-xs"
+                  onClick={() => setSpecAddOpen(true)}
+                  data-testid="position-edit-btn-add-specialization"
+                >
+                  <Plus className="mr-1 h-3.5 w-3.5" />
+                  {t("addNewSpecialization")}
+                </Button>
+              )
             )}
           </div>
 
@@ -608,7 +641,7 @@ export function PositionEditDialog({
                 </Button>
               </div>
             ) : (
-              form.specialization_id && (
+              canAddGrade && form.specialization_id && (
                 <Button
                   type="button"
                   size="sm"
@@ -721,8 +754,8 @@ export function PositionEditDialog({
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">{t("none")}</SelectItem>
-                {flatDivisions.map((d) => (
+                {!scopeIds && <SelectItem value="">{t("none")}</SelectItem>}
+                {pickableDivisions.map((d) => (
                   <SelectItem key={d.id} value={d.id}>
                     {"—".repeat(d.depth)} {d.name}
                   </SelectItem>

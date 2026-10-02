@@ -151,6 +151,7 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
     from sqlalchemy.orm import Session
 
     from app.config import settings
+    from app.core import ai_usage_hooks
     from app.core.pii_filter import redact_pii
     from app.core.s3 import get_presigned_url
     from app.modules.recruitment.models import (
@@ -172,6 +173,14 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
             if not interview:
                 logger.error("Interview %s not found", interview_id)
                 return {"status": "error", "error": "Interview not found"}
+
+            ai_usage_hooks.bind(
+                tenant_id=interview.tenant_id,
+                action="recruitment.transcribe_interview_min",
+                entity_type="interview",
+                entity_id=interview.id,
+                work_unit_id=ai_usage_hooks.work_unit_id_or(interview.id),
+            )
 
             interview.transcription_status = "processing"
             interview.transcription_error = None
@@ -289,6 +298,18 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 return {"status": "failed", "error": "File record missing"}
 
             providers = get_transcription_chain_sync(db, uuid.UUID(tenant_id))
+
+            if not providers:
+                # HRP-1005: no own key and no platform key the tenant may use.
+                interview.transcription_status = "failed"
+                interview.transcription_error = (
+                    "No transcription provider is available for this workspace"
+                )
+                db.commit()
+                return {
+                    "status": "failed",
+                    "error": "No transcription provider is available",
+                }
 
             # Every provider downloads the media from inside the worker,
             # so the URL is always signed for the internal endpoint — the
@@ -569,6 +590,7 @@ def _notify_analysis_result(
         )
         context = {
             "candidate_vacancy_id": str(cv.id),
+            "vacancy_id": str(cv.vacancy_id),
             "candidate_name": candidate_name,
             "analysis_mode": mode,
             "link": candidate_ai_insights_deep_link(cv.candidate_id, cv.vacancy_id),
@@ -626,6 +648,8 @@ def _finalize_full_analysis_run(
     cv,
     candidate_name,
     analysis,
+    analysed_transcript_hash: str | None = None,
+    had_resume: bool | None = None,
 ) -> None:
     """HRP-204: mirror a successful full analysis into ``ai_analysis_runs``.
 
@@ -683,6 +707,7 @@ def _finalize_full_analysis_run(
     # ``manager_score`` on the candidates table.
     from app.modules.recruitment.models import ScaleConfig
     from app.modules.recruitment.resume_analysis_service import (
+        _derive_readiness,
         aggregate_ai_score_sync,
     )
     from app.modules.recruitment.score_normalization import (
@@ -720,6 +745,13 @@ def _finalize_full_analysis_run(
 
     payload = {
         "mode": "full",
+        # HRP-492: what the banner compares the current transcript with —
+        # the text the model was given, hashed before the call, not the row
+        # as it reads now (the task commits mid-run).
+        "transcript_hash": analysed_transcript_hash,
+        # HRP-685: whether the prompt carried a resume - the run's basis,
+        # which a resume uploaded later must not rewrite.
+        "had_resume": had_resume,
         "data_completeness": analysis.data_completeness,
         "competence_assessments": [
             a.model_dump() for a in analysis.competence_assessments
@@ -834,7 +866,19 @@ def _finalize_full_analysis_run(
     cv.ai_analysis_mode = "full"
     cv.ai_data_completeness = analysis.data_completeness
     cv.ai_analysis_completed_at = now
-    cv.ai_readiness = "resume_and_transcript"
+    # HRP-685: the full prompt takes the resume as an *optional* input,
+    # so a candidate interviewed without one still gets a full run. The
+    # mirror used to stamp ``resume_and_transcript`` regardless; every
+    # API reader derives readiness now, and the mirror follows the same
+    # derivation and the same HRP-704 presence predicate.
+    from app.modules.recruitment.resume_presence import (
+        candidate_ids_with_resume_sync,
+    )
+
+    cv.ai_readiness = _derive_readiness(
+        bool(candidate_ids_with_resume_sync(db, tenant_id, [cv.candidate_id])),
+        True,
+    )
     cv.ai_score = ai_score
     cv.ai_score_normalized = ai_score_normalized
     cv.ai_verdict = analysis.verdict
@@ -867,6 +911,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
     from sqlalchemy.orm import Session
 
     from app.config import settings
+    from app.core import ai_usage_hooks
     from app.modules.ai.llm_client import generate_json
     from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
     from app.modules.recruitment.analysis_language import (
@@ -922,6 +967,14 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
             interview.analysis_error = None
             db.commit()
 
+            ai_usage_hooks.bind(
+                tenant_id=interview.tenant_id,
+                action="recruitment.analyze_interview",
+                entity_type="interview",
+                entity_id=interview.id,
+                work_unit_id=ai_usage_hooks.work_unit_id_or(interview.id),
+            )
+
             # HRP-270: locate the in-flight AIAnalysisRun so the cancel
             # endpoint + InFlightCard can track which stage we're in. We
             # also include ``cancelled`` in the WHERE so the worker
@@ -947,6 +1000,11 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 .limit(1)
             ).scalar_one_or_none()
             if pending_run is not None:
+                ai_usage_hooks.bind(user_id=pending_run.created_by_id)
+                if pending_run.supersedes_id is not None:
+                    # A top-up run (``enqueue_topup_to_full``) is billed
+                    # under its own price-list code.
+                    ai_usage_hooks.bind(action="recruitment.analyze_topup_to_full")
                 if pending_run.status == "cancelled":
                     logger.info(
                         "Full analysis run %s already cancelled — skipping",
@@ -1060,13 +1118,21 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 for s in segments
             ]
 
+            from app.modules.recruitment.resume_analysis_service import (
+                transcript_hash,
+            )
+
+            analysed_transcript = interview.transcript or ""
+            # HRP-492: recorded on the run so the "transcript updated"
+            # banner compares against exactly what the model read.
+            analysed_transcript_hash = transcript_hash(analysed_transcript)
             prompt = build_interview_analysis_prompt(
                 vacancy_title=(vacancy.title if vacancy else ""),
                 analysis_language=resolve_analysis_language_sync(
                     db, tenant_id, vacancy
                 ),
                 profile_competences=profile_competences,
-                transcript=interview.transcript or "",
+                transcript=analysed_transcript,
                 segments=segments_payload,
                 candidate_name=candidate_name,
                 resume_summary=(str(latest_resume)[:4000] if latest_resume else None),
@@ -1197,6 +1263,8 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                         cv=cv,
                         candidate_name=candidate_name,
                         analysis=analysis,
+                        analysed_transcript_hash=analysed_transcript_hash,
+                        had_resume=bool(latest_resume),
                     )
             except Exception:  # noqa: BLE001
                 logger.exception(
@@ -1386,6 +1454,7 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
     from sqlalchemy.orm import Session
 
     from app.config import settings
+    from app.core import ai_usage_hooks
     from app.modules.ai.llm_client import generate_json
     from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
     from app.modules.recruitment.analysis_language import (
@@ -1427,6 +1496,15 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
             run.current_stage = "pre_check"
             run.error_message = None
             db.commit()
+
+            ai_usage_hooks.bind(
+                tenant_id=uuid.UUID(tenant_id),
+                user_id=run.created_by_id,
+                action="recruitment.analyze_resume_only",
+                entity_type="candidate_vacancy",
+                entity_id=run.candidate_vacancy_id,
+                work_unit_id=ai_usage_hooks.work_unit_id_or(run.id),
+            )
 
             cv = db.get(CandidateVacancy, run.candidate_vacancy_id)
             if cv is None:

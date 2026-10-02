@@ -594,6 +594,8 @@ async def _competences_in_tenant(
         select(Competence.id).where(
             Competence.id.in_(wanted),
             or_(Competence.tenant_id == tenant_id, Competence.tenant_id.is_(None)),
+            # HRP-632: a personal draft is attached nowhere until published.
+            Competence.draft_owner_id.is_(None),
         )
     )
     found = set(rows.scalars().all())

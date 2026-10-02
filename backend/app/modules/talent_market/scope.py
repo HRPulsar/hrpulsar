@@ -6,6 +6,13 @@ mutating routes stood on ``require_role("admin", "manager")`` alone, so a
 division head could publish, re-scope, close and staff a neighbouring
 department's card, and could read every department's drafts besides.
 
+Since HRP-824 the role list is the tenant's section access matrix:
+``manage`` on ``talent-market`` is what the writing routes ask for, and
+the scope below adds the org-structure fence to it. The level also
+settles how wide a restricted caller reads — ``candidate_only`` — so a
+role the tenant raised to ``manage`` sees the cards it authored rather
+than only the ones its own name is on.
+
 Same shape as ``recruitment.scope`` (HRP-629), because a talent card
 carries the same two axes as a vacancy — ``division_id`` and
 ``author_id``:
@@ -32,7 +39,7 @@ from dataclasses import dataclass
 
 import sqlalchemy as sa
 from fastapi import Depends, status
-from sqlalchemy import ColumnElement, or_, select
+from sqlalchemy import ColumnElement, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access_scope import (
@@ -41,9 +48,12 @@ from app.core.access_scope import (
     get_managed_division_ids,
 )
 from app.core.errors import AppError
+from app.core.sections import matrix_levels
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
+from app.modules.recruitment.models import Vacancy
+from app.modules.recruitment.scope import own_candidacy
 from app.modules.talent_market.models import TalentCandidate, TalentCard
 
 
@@ -55,6 +65,25 @@ class TalentScope:
     division_ids: tuple[uuid.UUID, ...]
     user_id: uuid.UUID
     employee_id: uuid.UUID | None
+    manages: bool  # HRP-824: ``manage`` on the tenant's ``talent-market`` row
+    # HRP-971: cards the caller competes on - reacted to, or the twin of a
+    # vacancy the recruitment fence keeps them out of. Below the admin level
+    # such a card reads as it does for a rank-and-file applicant
+    # (``employee_read_filter``) and is never theirs to run. Resolved only
+    # for callers who could run a card at all.
+    competing_card_ids: frozenset[uuid.UUID] = frozenset()
+
+    def competes_on(self, card_id: uuid.UUID) -> bool:
+        return card_id in self.competing_card_ids
+
+    @property
+    def candidate_only(self) -> bool:
+        """HRP-209 / HRP-765 / HRP-824: the board is not a catalogue for
+        the people on it. A caller who runs no part of it - no admin-level
+        role, no managed division, and the section at ``view`` - reads the
+        cards their own name is on and nothing else. Used to be "holds
+        neither admin nor manager"; the level replaced the role."""
+        return not self.unrestricted and not self.manages and not self.division_ids
 
     def card_filter(self) -> ColumnElement[bool]:
         """Write condition on ``TalentCard``; only valid when restricted.
@@ -65,12 +94,19 @@ class TalentScope:
         clauses: list[ColumnElement[bool]] = [TalentCard.author_id == self.user_id]
         if self.division_ids:
             clauses.append(TalentCard.division_id.in_(self.division_ids))
-        return or_(*clauses)
+        if not self.competing_card_ids:
+            return or_(*clauses)
+        return and_(or_(*clauses), TalentCard.id.not_in(self.competing_card_ids))
 
     def writable(self, card: TalentCard) -> bool:
         """``card_filter`` for a card already in hand — feeds the
         ``can_manage`` flag the UI gates its buttons on, so a button that
-        would 403 is never rendered (HRP-622's rule)."""
+        would 403 is never rendered (HRP-622's rule). Below ``manage`` the
+        routes refuse every write, so nothing is writable (HRP-824) - the
+        one way this differs from ``card_filter``, which stays the org
+        condition alone because ``read_filter`` builds on it."""
+        if not self.manages or self.competes_on(card.id):
+            return False
         if self.unrestricted or card.author_id == self.user_id:
             return True
         return card.division_id is not None and card.division_id in self.division_ids
@@ -80,8 +116,17 @@ class TalentScope:
 
         Kept next to the SQL twin above so the two cannot drift: the list
         route narrows a query, the detail route holds one row with its
-        candidates eager-loaded and has nothing to narrow.
+        candidates eager-loaded and has nothing to narrow. Reading does not
+        ask ``manages`` - a ``view`` caller keeps their subtree (HRP-824).
         """
+        if self.competes_on(card.id):
+            # ``employee_read_filter`` in hand: on the list, and past Draft
+            # unless appointed.
+            return any(
+                ca.employee_id == self.employee_id
+                and (card.status != "draft" or ca.status == "appointed")
+                for ca in card.candidates
+            )
         if self.unrestricted or card.is_published:
             return True
         if card.author_id == self.user_id:
@@ -103,7 +148,16 @@ class TalentScope:
                     )
                 )
             )
-        return or_(*clauses)
+        if not self.competing_card_ids:
+            return or_(*clauses)
+        # HRP-971: a card one competes on is read the applicant's way.
+        return or_(
+            and_(or_(*clauses), TalentCard.id.not_in(self.competing_card_ids)),
+            and_(
+                TalentCard.id.in_(self.competing_card_ids),
+                employee_read_filter(self.employee_id),
+            ),
+        )
 
 
 def employee_read_filter(employee_id: uuid.UUID | None) -> ColumnElement[bool]:
@@ -172,12 +226,17 @@ async def resolve_talent_scope(db: AsyncSession, current_user: User) -> TalentSc
     # are often employees too.
     emp = await get_current_employee(db, current_user)
     employee_id = emp.id if emp is not None else None
+    # ponytail: the global section gate resolved this matrix a moment ago
+    # for the same request; stash it on request.state if it shows in profiles.
+    levels = await matrix_levels(db, current_user)
+    manages = levels["talent-market"] == "manage"
     if any(r.code in ADMIN_ROLE_CODES for r in current_user.roles):
         return TalentScope(
             unrestricted=True,
             division_ids=(),
             user_id=current_user.id,
             employee_id=employee_id,
+            manages=manages,
         )
     division_ids: tuple[uuid.UUID, ...] = ()
     if emp is not None:
@@ -189,7 +248,63 @@ async def resolve_talent_scope(db: AsyncSession, current_user: User) -> TalentSc
         division_ids=division_ids,
         user_id=current_user.id,
         employee_id=employee_id,
+        manages=manages,
+        # A caller who runs no card reads the applicant's way already.
+        competing_card_ids=(
+            await _competing_card_ids(
+                db, current_user, employee_id, twins=levels["recruitment"] != "manage"
+            )
+            if manages or division_ids
+            else frozenset()
+        ),
     )
+
+
+async def competes_on_card(db: AsyncSession, user: User, card_id: uuid.UUID) -> bool:
+    """HRP-971: whether ``user`` competes on the card - the fence above,
+    asked about someone other than the caller: the manager a letter about
+    the card's candidates would go to. Admins and HR never compete."""
+    if any(r.code in ADMIN_ROLE_CODES for r in user.roles):
+        return False
+    emp = await get_current_employee(db, user)
+    levels = await matrix_levels(db, user)
+    return card_id in await _competing_card_ids(
+        db,
+        user,
+        emp.id if emp is not None else None,
+        twins=levels["recruitment"] != "manage",
+    )
+
+
+async def _competing_card_ids(
+    db: AsyncSession, user: User, employee_id: uuid.UUID | None, *, twins: bool
+) -> frozenset[uuid.UUID]:
+    """HRP-971: the cards the caller reacted to and, with ``twins`` - the
+    recruitment fence applies to them, i.e. below ``manage`` there - the
+    twins of the vacancies they are a candidate on."""
+    ids: set[uuid.UUID] = set()
+    if employee_id is not None:
+        ids.update(
+            (
+                await db.execute(
+                    select(TalentCandidate.card_id).where(
+                        TalentCandidate.employee_id == employee_id,
+                        TalentCandidate.response_at.isnot(None),
+                    )
+                )
+            ).scalars()
+        )
+    own = own_candidacy(Vacancy.id, user.person_id, user.email) if twins else None
+    if own is not None:
+        rows = await db.execute(
+            select(Vacancy.talent_card_id).where(
+                Vacancy.tenant_id == user.tenant_id,
+                Vacancy.talent_card_id.isnot(None),
+                own,
+            )
+        )
+        ids.update(card_id for card_id in rows.scalars() if card_id is not None)
+    return frozenset(ids)
 
 
 def _refuse() -> None:

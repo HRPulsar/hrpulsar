@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import { api } from "@/lib/api";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useAuth } from "@/context/auth-context";
 import type {
   AssessmentDetail,
   AssessmentGroupDetail,
@@ -62,7 +63,10 @@ export default function AssessmentGroupPage() {
   const t = useTranslations("assessments");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
-  const { canManage, canManageCatalogues } = usePermissions();
+  const { canManageSection, canManageCatalogues, isAdminLevel } = usePermissions();
+  const { user } = useAuth();
+  // HRP-826: running assessments is the section's `manage`, not a role flag.
+  const canManage = canManageSection("assessments");
   const [group, setGroup] = useState<AssessmentGroupDetail | null>(null);
   const [recommendations, setRecommendations] = useState<
     Record<string, { grade_id: string | null; grade_title: string | null; passed: boolean }>
@@ -173,6 +177,10 @@ export default function AssessmentGroupPage() {
     );
   }
 
+  // HRP-640: the run is its author's below the admin level - another's
+  // mass assessment keeps its read scope but none of its actions.
+  const runsGroup = canManage && (isAdminLevel || group.initiator_id === user?.id);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
@@ -211,7 +219,7 @@ export default function AssessmentGroupPage() {
           ) : (
             <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
               <span>{group.title}</span>
-              {canManage && (
+              {runsGroup && (
                 <Button
                   size="icon-sm"
                   variant="ghost"
@@ -242,7 +250,7 @@ export default function AssessmentGroupPage() {
       <Card data-testid="group-criteria-card">
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle className="text-base">{t("evaluationCriteria")}</CardTitle>
-          {canManage && isGroupDraft(group) && (
+          {runsGroup && isGroupDraft(group) && (
             <Button
               data-testid="group-criteria-btn-edit"
               size="sm"
@@ -271,7 +279,7 @@ export default function AssessmentGroupPage() {
       <Card data-testid="group-scale-card">
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle className="text-base">{t("ratingScale")}</CardTitle>
-          {canManage && isGroupDraft(group) && group.scale && (
+          {runsGroup && isGroupDraft(group) && group.scale && (
             <Button
               data-testid="group-scale-btn-change"
               size="sm"
@@ -321,7 +329,7 @@ export default function AssessmentGroupPage() {
               <p className="text-sm text-muted-foreground">
                 {t("noScaleGroup")}
               </p>
-              {canManage && isGroupDraft(group) && (
+              {runsGroup && isGroupDraft(group) && (
                 <Button
                   data-testid="group-scale-btn-add"
                   size="sm"

@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import settings
-from app.core import billing_hooks
+from app.core import ai_usage_hooks, billing_hooks
 from app.core.celery_app import celery
 from app.core.llm_sanitize import sanitize_user_refinement
 from app.database import make_async_engine
@@ -443,13 +443,14 @@ def _annotate_group_augment_snapshot(
 async def _generate_with_retries(
     *,
     user_prompt: str,
-    system: str,
+    system: str | Sequence[str],
     schema: type[BaseModel],
     tenant_settings: Any,
     max_attempts: int,
     max_tokens: int | None = None,
     credentials: Any = None,
     model: str | None = None,
+    **generation: Any,
 ) -> tuple[BaseModel, str | None]:
     """Returns (model_instance, error_code_or_None). Bounded exponential backoff.
 
@@ -461,6 +462,10 @@ async def _generate_with_retries(
     and surface as ``parse_error`` because the partial JSON fails schema
     validation. Callers derive a scope-aware budget via
     ``_max_tokens_for_scope`` and forward it here.
+
+    ``system`` as a block list and the sampling parameters in
+    ``**generation`` (``temperature``, ``top_p``, ``seed``) go to
+    ``llm_client.generate_json`` as they are (HRP-951, HRP-921).
     """
     from app.modules.ai import llm_client
 
@@ -476,6 +481,7 @@ async def _generate_with_retries(
         # kill-switch unapplied on this Celery path while billing already
         # priced the substitute.
         "model": model,
+        **generation,
     }
     if max_tokens is not None:
         generate_kwargs["max_tokens"] = max_tokens
@@ -499,6 +505,10 @@ async def _generate_with_retries(
                 max_attempts,
                 exc,
             )
+            # A pinned request (HRP-921) would come back malformed the same
+            # way: the retry lets the model sample, which is what fixes it.
+            for key in ("seed", "temperature", "top_p"):
+                generate_kwargs.pop(key, None)
         except Exception as exc:  # provider/network/etc  # noqa: BLE001
             last_exc = exc
             last_code = "service_error"
@@ -1587,6 +1597,33 @@ async def execute_session(
             logger.exception("compgen heartbeat task error on shutdown")
 
 
+# HRP-964: the object a generation session works on, per scope.
+# whole_base has no target — the row carries no entity.
+_SCOPE_ENTITY = {
+    "group": "competence_group",
+    "competence_indicators": "competence",
+    "specialization_matrix": "specialization",
+}
+
+
+def _bind_session_context(sess: Any) -> None:
+    """Attribute every model call of this run to the session row.
+    Reset by celery_signals.on_task_postrun."""
+    from app.modules.ai_competence_generation.billing_actions import (
+        start_action_for_scope,
+    )
+
+    entity_type = _SCOPE_ENTITY.get(sess.scope)
+    ai_usage_hooks.bind(
+        tenant_id=sess.tenant_id,
+        user_id=sess.user_id,
+        action=(sess.params or {}).get("billing_action") or start_action_for_scope(sess.scope),
+        entity_type=entity_type,
+        entity_id=sess.target_id if entity_type else None,
+        work_unit_id=ai_usage_hooks.work_unit_id_or(sess.id),
+    )
+
+
 async def _execute_session_body(
     session_factory: async_sessionmaker[AsyncSession],
     session_id: uuid.UUID,
@@ -1623,6 +1660,7 @@ async def _execute_session_body(
 
         tenant_id = sess.tenant_id
         user_id = sess.user_id
+        _bind_session_context(sess)
         await _broadcast_session_update(tenant_id, user_id, sess.id, "running")
         # HRP-71 phase 4: kick off the progress checklist as soon as we flip
         # to running so the UI shows «model is thinking…» immediately, not
@@ -1890,12 +1928,20 @@ async def _force_terminate_running(
         sess = await db.get(CompetenceGenerationSession, session_id)
         if sess is None or sess.status not in ("pending", "running"):
             return
+        from app.core.errors import AppError
+
         sess.status = "error"
-        sess.error_code = "service_error"
-        sess.error_message = (
-            f"Generation crashed unexpectedly: "
-            f"{type(exc).__name__}: {str(exc)[:200]}"
-        )
+        if isinstance(exc, AppError) and exc.code == "ai_no_allowed_processor":
+            # A refusal with a reason (HRP-1005): "crashed" would send the
+            # reader to try again, which changes nothing.
+            sess.error_code = "no_allowed_processor"
+            sess.error_message = str(exc.detail)
+        else:
+            sess.error_code = "service_error"
+            sess.error_message = (
+                f"Generation crashed unexpectedly: "
+                f"{type(exc).__name__}: {str(exc)[:200]}"
+            )
         sess.finished_at = datetime.now(timezone.utc)
         await db.commit()
         await _broadcast_session_update(

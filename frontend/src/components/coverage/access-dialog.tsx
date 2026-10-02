@@ -13,6 +13,7 @@ import { PeopleSelectList } from "@/components/people-select-list";
 import { PositionCombobox } from "@/components/position-combobox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import {
   Dialog,
   DialogContent,
@@ -242,11 +243,19 @@ export function AccessDialog({
             <section className="space-y-2">
               <Label>{t("accessOwner")}</Label>
               <div className="flex flex-wrap items-center gap-2" data-testid="coverage-access-owner">
-                <span>{data.owner?.name || t("accessOwnerNone")}</span>
-                {data.owner && !data.owner.active && (
-                  <Badge variant="outline" data-testid="coverage-access-owner-inactive">
-                    {t("accessOwnerInactive")}
-                  </Badge>
+                {/* HRP-810 REDO: the owner like any employee - name, position
+                    under it, status chip when they are not active. */}
+                {data.owner ? (
+                  <EmployeeSummaryLine
+                    employee={{
+                      user_name: data.owner.name,
+                      position_title: data.owner.position_title,
+                      status: data.owner.status,
+                    }}
+                    data-testid="coverage-access-owner-summary"
+                  />
+                ) : (
+                  <span>{t("accessOwnerNone")}</span>
                 )}
                 {canChangeOwner && (
                   <Button

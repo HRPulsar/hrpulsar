@@ -29,6 +29,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ApiError, api } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import { formatDate } from "@/lib/date-format";
 import { cn } from "@/lib/utils";
 import { BADGE_OUTLINE, resolveBadgeColor } from "@/lib/badge-tones";
@@ -140,6 +141,10 @@ export function VacancyCandidatesTable({
 }: VacancyCandidatesTableProps) {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  // HRP-830: moving a candidate through the funnel is evaluation (`manage`
+  // or the hiring manager); removing one and the bulk AI run are `manage`.
+  const { canManageSection, canEvaluateCandidates } = usePermissions();
+  const canManage = canManageSection("recruitment");
   const [rows, setRows] = useState<CandidateVacancyEnrichedRow[]>([]);
   const [stages, setStages] = useState<VacancyStage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -410,11 +415,13 @@ export function VacancyCandidatesTable({
 
   return (
     <>
-      <BulkAnalyzeBar
-        vacancyId={vacancyId}
-        eligibleRows={eligibleRows}
-        onDone={() => void load()}
-      />
+      {canManage && (
+        <BulkAnalyzeBar
+          vacancyId={vacancyId}
+          eligibleRows={eligibleRows}
+          onDone={() => void load()}
+        />
+      )}
       <SortControl
         sortBy={sortBy}
         sortDir={sortDir}
@@ -482,6 +489,8 @@ export function VacancyCandidatesTable({
                 row={row}
                 vacancyId={vacancyId}
                 stages={stages}
+                canMoveStage={canEvaluateCandidates}
+                canRemove={canManage}
                 onStageSelected={onStageSelected}
                 onDelete={(cvId, candidateName) =>
                   setDeleting({ cvId, candidateName })
@@ -500,6 +509,8 @@ export function VacancyCandidatesTable({
             row={row}
             vacancyId={vacancyId}
             stages={stages}
+            canMoveStage={canEvaluateCandidates}
+            canRemove={canManage}
             onStageSelected={onStageSelected}
             onDelete={(cvId, candidateName) =>
               setDeleting({ cvId, candidateName })
@@ -555,6 +566,8 @@ interface RowProps {
   row: CandidateVacancyEnrichedRow;
   vacancyId: string;
   stages: VacancyStage[];
+  canMoveStage: boolean;
+  canRemove: boolean;
   onStageSelected: (row: CandidateVacancyEnrichedRow, value: string) => void;
   onDelete: (cvId: string, candidateName: string) => void;
 }
@@ -563,6 +576,8 @@ function Row({
   row,
   vacancyId,
   stages,
+  canMoveStage,
+  canRemove,
   onStageSelected,
   onDelete,
 }: RowProps) {
@@ -608,6 +623,7 @@ function Row({
         <Select
           value={row.stage_id ?? undefined}
           onValueChange={(v) => onStageSelected(row, v)}
+          disabled={!canMoveStage}
         >
           <SelectTrigger
             size="sm"
@@ -704,17 +720,19 @@ function Row({
         {formatDate(row.added_at)}
       </td>
       <td className="px-3 py-2 align-top text-right">
-        <button
-          type="button"
-          onClick={() => onDelete(row.id, row.candidate_name)}
-          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-          aria-label={t("candidatesTableRemoveAria", {
-            name: row.candidate_name,
-          })}
-          data-testid={`vacancy-candidates-row-${row.id}-delete-btn`}
-        >
-          <Trash2 className="size-4" />
-        </button>
+        {canRemove && (
+          <button
+            type="button"
+            onClick={() => onDelete(row.id, row.candidate_name)}
+            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            aria-label={t("candidatesTableRemoveAria", {
+              name: row.candidate_name,
+            })}
+            data-testid={`vacancy-candidates-row-${row.id}-delete-btn`}
+          >
+            <Trash2 className="size-4" />
+          </button>
+        )}
       </td>
     </tr>
   );
@@ -724,6 +742,8 @@ interface MobileCardProps {
   row: CandidateVacancyEnrichedRow;
   vacancyId: string;
   stages: VacancyStage[];
+  canMoveStage: boolean;
+  canRemove: boolean;
   onStageSelected: (row: CandidateVacancyEnrichedRow, value: string) => void;
   onDelete: (cvId: string, candidateName: string) => void;
 }
@@ -732,6 +752,8 @@ function MobileCard({
   row,
   vacancyId,
   stages,
+  canMoveStage,
+  canRemove,
   onStageSelected,
   onDelete,
 }: MobileCardProps) {
@@ -823,6 +845,7 @@ function MobileCard({
         <Select
           value={row.stage_id ?? undefined}
           onValueChange={(v) => onStageSelected(row, v)}
+          disabled={!canMoveStage}
         >
           <SelectTrigger
             size="sm"
@@ -856,17 +879,19 @@ function MobileCard({
           riskMitigation={row.ai_risk_mitigation}
           testIdPrefix={`vacancy-candidates-mobile-row-${row.id}`}
         />
-        <button
-          type="button"
-          onClick={() => onDelete(row.id, row.candidate_name)}
-          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-          aria-label={t("candidatesTableRemoveAria", {
-            name: row.candidate_name,
-          })}
-          data-testid={`vacancy-candidates-mobile-row-${row.id}-delete-btn`}
-        >
-          <Trash2 className="size-4" />
-        </button>
+        {canRemove && (
+          <button
+            type="button"
+            onClick={() => onDelete(row.id, row.candidate_name)}
+            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            aria-label={t("candidatesTableRemoveAria", {
+              name: row.candidate_name,
+            })}
+            data-testid={`vacancy-candidates-mobile-row-${row.id}-delete-btn`}
+          >
+            <Trash2 className="size-4" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1079,6 +1104,10 @@ function DivergenceBadge({ row, vacancyId }: DivergenceBadgeProps) {
       </span>
     );
   }
+  // HRP-507 REDO: "N/M" — N divergent out of the M competences the vacancy
+  // profile asks about.
+  const total = row.profile_competence_count ?? 0;
+  const ratio = total > 0 ? `${count}/${total}` : String(count);
   // HRP-507: the preview is capped server-side at 5 competences; anything
   // beyond that is summarised by the trailing "and N more" line.
   const preview = row.divergence_top ?? [];
@@ -1095,22 +1124,31 @@ function DivergenceBadge({ row, vacancyId }: DivergenceBadgeProps) {
     };
   });
   const remaining = count - lines.length;
+  // HRP-507 REDO: the chip itself is not a link. The tooltip's last line is,
+  // and it opens the full-screen canvas on the divergent cells of this one
+  // candidate — both filters travel in the URL.
+  const canvasHref = `/recruitment/requisitions/${vacancyId}/assessments/canvas?filter=divergences&candidates=${row.id}`;
   return (
     <Tooltip>
       <TooltipTrigger
-        render={<span className="inline-flex" />}
+        // Focusable, so keyboard and screen-reader users reach the chip and
+        // its hover card; the label says what the ratio means.
+        render={
+          <span
+            className="inline-flex"
+            tabIndex={0}
+            aria-label={t("candidatesTableDivergenceAria", { count, total })}
+          />
+        }
         data-testid={`vacancy-candidates-row-${row.id}-divergence-trigger`}
       >
-        <Link
-          href={`/recruitment/requisitions/${vacancyId}/canvas?filter=divergences`}
+        <Badge
+          className="border-amber-400 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
           data-testid={`vacancy-candidates-row-${row.id}-divergence-badge`}
-          aria-label={t("candidatesTableDivergenceAria", { count })}
         >
-          <Badge className="border-amber-400 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-200">
-            <AlertTriangle className="mr-1 size-3" />
-            {count}
-          </Badge>
-        </Link>
+          <AlertTriangle className="mr-1 size-3" />
+          {ratio}
+        </Badge>
       </TooltipTrigger>
       <TooltipContent
         className="max-w-xs"
@@ -1131,9 +1169,13 @@ function DivergenceBadge({ row, vacancyId }: DivergenceBadgeProps) {
             {t("candidatesTableDivergenceMore", { count: remaining })}
           </p>
         )}
-        <p className="mt-1.5 opacity-80">
+        <Link
+          href={canvasHref}
+          className="mt-1.5 block underline underline-offset-2 hover:opacity-80"
+          data-testid={`vacancy-candidates-row-${row.id}-divergence-canvas-link`}
+        >
           {t("candidatesTableDivergenceCanvasHint")}
-        </p>
+        </Link>
       </TooltipContent>
     </Tooltip>
   );

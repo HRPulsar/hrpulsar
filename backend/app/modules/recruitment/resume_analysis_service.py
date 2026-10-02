@@ -166,6 +166,18 @@ def _compute_resume_snapshot_hash(parsed_data: dict | None) -> str | None:
     return hashlib.sha256(payload).hexdigest()
 
 
+def transcript_hash(text: str | None) -> str:
+    """HRP-492 — fingerprint of the transcript a full run analysed.
+
+    Stored on the run (``analysis_data["transcript_hash"]``) so the
+    "Interview transcript was updated" banner keys on the transcript
+    itself. The interview row's ``updated_at`` also moves on a rename, a
+    note, an interviewer change or a cache-hit re-analysis — none of which
+    make the verdict stale.
+    """
+    return hashlib.sha256((text or "").encode()).hexdigest()
+
+
 async def current_resume_hash_for_candidate(
     db: AsyncSession, tenant_id: uuid.UUID, candidate_id: uuid.UUID
 ) -> str | None:
@@ -430,13 +442,30 @@ async def evaluate_analysis_staleness(
     out["analysis_expired"] = _run_age(active) > timedelta(days=TOPUP_WINDOW_DAYS)
 
     if active.mode == "full" and transcribed_interview is not None:
-        analysed_at = _aware(active.created_at)
-        transcript_at = _aware(transcribed_interview.updated_at)
-        newer = transcribed_interview.id != active.interview_id or (
-            analysed_at is not None
-            and transcript_at is not None
-            and transcript_at > analysed_at
+        # HRP-492 (REDO 3): a transcript the run never saw is another
+        # interview, or the same interview with different text. Runs
+        # written before the hash was stored fall back to timestamps —
+        # against the run's *completion* (``updated_at``), not its enqueue:
+        # the worker writes the verdict onto the interview row in the same
+        # transaction that completes the run, so ``created_at`` always
+        # trailed the interview and the banner fired after every analysis.
+        stored_hash = (
+            active.analysis_data.get("transcript_hash")
+            if isinstance(active.analysis_data, dict)
+            else None
         )
+        if transcribed_interview.id != active.interview_id:
+            newer = True
+        elif stored_hash is not None:
+            newer = transcript_hash(transcribed_interview.transcript) != stored_hash
+        else:
+            analysed_at = _aware(active.updated_at)
+            transcript_at = _aware(transcribed_interview.updated_at)
+            newer = (
+                analysed_at is not None
+                and transcript_at is not None
+                and transcript_at > analysed_at
+            )
         if newer:
             out["transcript_outdated"] = True
             out["newer_transcribed_interview_id"] = str(transcribed_interview.id)
@@ -804,14 +833,21 @@ async def cancel_ai_analysis_run(
             if action is not None:
                 refund_amount = await resolve_cost(db, tenant_id, action)
                 if refund_amount > 0:
+                    # The entity the charge carries (ee ACTION_ENTITIES), so
+                    # the refund finds it and returns credits to the pool
+                    # they came from - the run id matched no charge at all.
+                    if action == "recruitment.analyze_interview":
+                        charged = ("interview", run.interview_id)
+                    else:
+                        charged = ("candidate_vacancy", run.candidate_vacancy_id)
                     await refund_credits(
                         db,
                         tenant_id,
                         actor_user_id,
                         action,
                         refund_amount,
-                        entity_type="ai_analysis_run",
-                        entity_id=run.id,
+                        entity_type=charged[0],
+                        entity_id=charged[1],
                     )
 
     await db.commit()
@@ -972,9 +1008,28 @@ def extract_resume_excerpts(run: AIAnalysisRun) -> list[dict[str, Any]]:
     return out
 
 
+async def candidate_has_resume_for_cv(
+    db: AsyncSession, tenant_id: uuid.UUID, cv_id: uuid.UUID
+) -> bool:
+    """HRP-685 — the HRP-704 presence predicate, keyed by candidate-vacancy."""
+    candidate_id = await db.scalar(
+        select(CandidateVacancy.candidate_id).where(
+            CandidateVacancy.id == cv_id,
+            CandidateVacancy.tenant_id == tenant_id,
+        )
+    )
+    if candidate_id is None:
+        return False
+    return candidate_id in await candidate_ids_with_resume(
+        db, tenant_id, [candidate_id]
+    )
+
+
 def serialize_run_for_read(
     run: AIAnalysisRun,
     current_resume_hash: str | None = None,
+    *,
+    candidate_has_resume: bool = False,
 ) -> AIAnalysisRunRead:
     """HRP-271 — ORM → ``AIAnalysisRunRead`` with extracted excerpts.
 
@@ -1003,6 +1058,20 @@ def serialize_run_for_read(
         and stored is not None
         and current_resume_hash is not None
         and stored != current_resume_hash
+    )
+    # HRP-685: what the run was based on, through the one derivation the
+    # candidates table already uses. A resume-only run had a resume by
+    # definition; a full run had one when it stamped a snapshot hash
+    # (HRP-492) or when the candidate has one on file now (legacy rows
+    # predate the stamp). A full run with neither ran on the transcript
+    # alone, and its chip must say so instead of "full".
+    had_resume = (run.analysis_data or {}).get("had_resume")
+    read.readiness = _derive_readiness(
+        run.mode == "resume_only"
+        # A run that recorded its basis keeps it; the presence on file now
+        # stands in only for rows from before the record.
+        or (had_resume if had_resume is not None else stored is not None or candidate_has_resume),
+        run.mode == "full",
     )
     return read
 
@@ -1253,5 +1322,6 @@ __all__ = [
     "extract_resume_excerpts",
     "finalize_topup_after_full_analysis",
     "list_runs_for_cv",
+    "candidate_has_resume_for_cv",
     "serialize_run_for_read",
 ]

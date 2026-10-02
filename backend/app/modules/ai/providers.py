@@ -145,9 +145,14 @@ class GenerationTarget:
     api_key: str | None = None  # None → the provider's global env key
     base_url: str | None = None  # OpenAI-compatible servers only
     source: str = "global"  # global | byok | local
-    # The BYOK/local row's configured model. llm_client uses it only when
-    # the caller did not pick a model itself (recruitment pipeline).
+    # The BYOK/local row's configured model. llm_client uses it when the
+    # caller did not pick a model itself (recruitment pipeline), or always
+    # when ``forced_model`` is set — see that field.
     model: str | None = None
+    # HRP-1005: set when the tenant's processor list replaced the requested
+    # model — llm_client dispatches ``model`` even when the caller passed
+    # one of its own.
+    forced_model: bool = False
 
 
 def base_url_from_settings(provider_settings: dict[str, Any] | None) -> str | None:
@@ -438,28 +443,79 @@ def _rows_query(tenant_id: uuid.UUID) -> Any:
     )
 
 
+async def load_rows(db: AsyncSession, tenant_id: uuid.UUID) -> list[Any]:
+    """The tenant's active BYOK/local config rows, newest first."""
+    return list((await db.execute(_rows_query(tenant_id))).scalars().all())
+
+
+def load_rows_sync(db: Session, tenant_id: uuid.UUID) -> list[Any]:
+    return list(db.execute(_rows_query(tenant_id)).scalars().all())
+
+
+def byok_models(rows: list[Any]) -> dict[str, str | None]:
+    """Providers the tenant reaches through its own credentials (a BYOK key
+    or its own base_url), with that row's model. The tenant's processor list
+    never restricts these (HRP-1005)."""
+    out: dict[str, str | None] = {}
+    for row in rows:
+        provider = resolve_provider_name(row.provider)
+        if provider is None or provider in out or not row_is_consistent(row):
+            continue
+        target = _pick_target([row], None)
+        if target is not None:
+            out[provider] = target.model
+    return out
+
+
 async def resolve_generation_target(
     db: AsyncSession, tenant_id: uuid.UUID, model: str | None
 ) -> GenerationTarget:
-    """BYOK/local-aware dispatch target (async request path)."""
-    result = await db.execute(_rows_query(tenant_id))
-    rows = list(result.scalars().all())
+    """BYOK/local-aware dispatch target (async request path).
+
+    HRP-1005 (F5): ``enforce_target`` keeps a keyless fallback target as-is
+    when its provider is not one of ``LLM_PROVIDERS`` or is already on the
+    tenant's list — the same rule is applied here, before the query, so the
+    (comparatively heavy) approved-catalog load only runs when a
+    substitution can actually happen.
+    """
+    from app.modules.ai import processors
+
+    rows = await load_rows(db, tenant_id)
     picked = _pick_target(rows, model)
     if picked is not None:
         return picked
-    return _fallback_target(model, await _catalog_provider(db, model))
+    target = _fallback_target(model, await _catalog_provider(db, model))
+    if target.provider not in processors.LLM_PROVIDERS:
+        return target
+    allowed = await processors.allowed_processors(db, tenant_id)
+    if target.provider in allowed:
+        return target
+    return processors.enforce_target(
+        target, model, rows, allowed, await processors.approved_catalog(db)
+    )
 
 
 def resolve_generation_target_sync(
     db: Session, tenant_id: uuid.UUID, model: str | None
 ) -> GenerationTarget:
     """Sync twin of :func:`resolve_generation_target` for Celery workers
-    that hold a synchronous Session (recruitment analysis tasks)."""
-    rows = list(db.execute(_rows_query(tenant_id)).scalars().all())
+    that hold a synchronous Session (recruitment analysis tasks). See
+    :func:`resolve_generation_target` for the HRP-1005 (F5) early return."""
+    from app.modules.ai import processors
+
+    rows = load_rows_sync(db, tenant_id)
     picked = _pick_target(rows, model)
     if picked is not None:
         return picked
-    return _fallback_target(model, _catalog_provider_sync(db, model))
+    target = _fallback_target(model, _catalog_provider_sync(db, model))
+    if target.provider not in processors.LLM_PROVIDERS:
+        return target
+    allowed = processors.allowed_processors_sync(db, tenant_id)
+    if target.provider in allowed:
+        return target
+    return processors.enforce_target(
+        target, model, rows, allowed, processors.approved_catalog_sync(db)
+    )
 
 
 async def configured_providers(
@@ -478,6 +534,10 @@ async def configured_providers(
     ``decrypt_failed`` instead, and the effective source is whatever the
     fallback actually uses.
     """
+    from app.modules.ai import processors
+
+    allowed = await processors.allowed_processors(db, tenant_id)
+
     result = await db.execute(_rows_query(tenant_id))
     rows = list(result.scalars().all())
 
@@ -507,6 +567,11 @@ async def configured_providers(
                 key_status = "ok"
         if source is None and global_key(spec.name) is not None:
             source = "global"
+        # HRP-1005: a platform key the tenant may not use is not a source —
+        # the picker shows the provider as not enabled for the workspace.
+        blocked = source == "global" and spec.name not in allowed
+        if blocked:
+            source = None
         out.append(
             {
                 "provider": spec.name,
@@ -515,6 +580,7 @@ async def configured_providers(
                 "source": source,
                 "supports_local": spec.supports_local,
                 "key_status": key_status,
+                "blocked": blocked,
             }
         )
     return out

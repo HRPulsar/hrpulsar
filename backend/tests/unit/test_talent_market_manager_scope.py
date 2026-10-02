@@ -340,15 +340,15 @@ class TestEveryMutatingRouteCarriesAGuard:
 
     # `react` derives the candidate from the viewer's own employee record
     # and the service refuses anyone without a TalentCandidate row, so the
-    # card id in the URL grants nothing; `delete_card` is admin-only;
-    # `search` is a read that happens to be a POST — it carries the board's
-    # own read filter instead. HRP-714's plan request is `react`'s twin:
-    # employee-facing, acting only on the caller's own candidate row, and
-    # a manager scope would lock the employee out of their own card.
+    # card id in the URL grants nothing; `search` is a read that happens
+    # to be a POST — it carries the board's own read filter instead.
+    # HRP-714's plan request is `react`'s twin: employee-facing, acting
+    # only on the caller's own candidate row, and a manager scope would
+    # lock the employee out of their own card. `delete_card` used to be
+    # exempt as admin-only; since HRP-824 it is a write like the others.
     EXEMPT = {
         "react_to_card",
         "request_development_plan",
-        "delete_card",
         "search_cards",
     }
 
@@ -370,3 +370,32 @@ class TestEveryMutatingRouteCarriesAGuard:
                 continue
             unguarded.append(f"{sorted(route.methods)} {route.path}")
         assert not unguarded, f"talent-market mutations without a scope: {unguarded}"
+
+
+async def test_a_plan_is_only_for_someone_in_the_authors_subtree(client, db, board):
+    """HRP-856: the pool is workspace-wide, the plan goes into the
+    employee's record - a division head planning for someone elsewhere got
+    403 on their own plan afterwards. Refused up front, as ``POST /pdp``."""
+    outsider = TalentCandidate(
+        card_id=board["mine_card"].id, employee_id=board["theirs_employee"].id
+    )
+    db.add(outsider)
+    await db.commit()
+    await db.refresh(outsider)
+    path = "/api/talent-market/{}/candidates/{}/development-plan"
+    headers = _headers(board["mgr_user"])
+
+    refused = await client.post(
+        path.format(board["mine_card"].id, outsider.id), json={}, headers=headers
+    )
+    assert refused.status_code == 403
+    assert "outside_division_scope" in refused.text
+
+    # One of their own passes the fence and meets the card's own rule.
+    inside = await client.post(
+        path.format(board["mine_card"].id, board["mine_candidate"].id),
+        json={},
+        headers=headers,
+    )
+    assert inside.status_code == 409
+    assert "tm_no_required_competences" in inside.text

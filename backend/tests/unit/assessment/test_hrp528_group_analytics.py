@@ -777,6 +777,32 @@ class TestGroupAnalyticsRespondentVisibility:
         assert data["growth_zones"] == []
         assert data["top_competences"] == []
 
+    async def test_a_respondent_heading_a_division_reads_only_their_own(
+        self, db: AsyncSession, tenant, user, assessment_statuses, assessment_types
+    ):
+        """HRP-826: a manager lowered to ``view`` still heads a subtree, but
+        the detail and ``/results`` hide a subordinate's numbers from a
+        respondent - the aggregation must not hand them back."""
+        group = await _make_group(db, tenant, user)
+        comp = await _make_competence(db, tenant, "Competence A")
+        head = await _make_employee(db, tenant, "respondent-head")
+        report = await _make_employee(db, tenant, "respondent-report")
+        await _add_child(db, tenant, user, group, head, "done", [(comp, 40)])
+        await _add_child(db, tenant, user, group, report, "done", [(comp, 95)])
+
+        data = await get_group_analytics(
+            db,
+            tenant.id,
+            group.id,
+            visible_employee_ids={head.id, report.id},
+            participant_user_id=head.user_id,
+            restrict_to_active=True,
+            hide_results_for_employee=True,
+        )
+
+        assert [e["employee_id"] for e in data["employees"]] == [head.id]
+        assert data["done_count"] == 1
+
     async def test_manager_keeps_seeing_the_whole_wave(
         self, db: AsyncSession, tenant, user, assessment_statuses, assessment_types
     ):

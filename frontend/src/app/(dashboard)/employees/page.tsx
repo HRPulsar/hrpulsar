@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { flattenTree } from "@/lib/utils";
 import { dictionaryItemLabel, gradeTitleLabel } from "@/lib/reference-labels";
-import { ASSIGNABLE_ROLE_CODES, resolveRoleLabel } from "@/lib/user-role-label";
+import { ASSIGNABLE_ROLE_CODES, holdsAdminLevel, resolveRoleLabel } from "@/lib/user-role-label";
 import type {
   AssessmentList,
   DictionaryItem,
@@ -64,6 +64,7 @@ import {
 import { Pagination } from "@/components/pagination";
 import { employeeStatusLabel } from "@/components/employees/employee-status";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useAuth } from "@/context/auth-context";
 import { toast } from "sonner";
 import Link from "next/link";
 import { CheckCircle, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
@@ -265,7 +266,21 @@ export default function EmployeesPage() {
 
   const [saving, setSaving] = useState(false);
 
-  const { canManage, canViewHrData } = usePermissions();
+  const { user } = useAuth();
+  const {
+    canImport,
+    canManageSection,
+    canViewEmployeeRecords: canViewHrData,
+    isAdmin,
+    isAdminLevel,
+  } = usePermissions();
+  // HRP-829: running the records is `manage` on employees. Deleting someone
+  // is the admin role's; below the admin level one's own row is edited
+  // through /auth/me and an admin-level colleague's not at all - the API
+  // refuses each.
+  const canManage = canManageSection("employees");
+  const canEditRow = (emp: Employee) =>
+    isAdminLevel || (emp.user_id !== user?.id && !holdsAdminLevel(emp.roles));
 
   // HRP-120: search is debounced and can fire overlapping requests. Track
   // the latest call with a monotonic token so an older response can't
@@ -313,7 +328,11 @@ export default function EmployeesPage() {
           api
             .get<DictionaryItem[]>("/dictionaries/grade")
             .catch(() => [] as DictionaryItem[]),
-          api.get<AssessmentList>("/assessments?limit=100"),
+          // HRP-826: a closed assessments section answers 403 - the
+          // list still renders, without the "assessed" marks.
+          api
+            .get<AssessmentList>("/assessments?limit=100")
+            .catch(() => ({ items: [], total: 0 }) as AssessmentList),
         ]);
       setDivisions(divData);
       setScopedDivisions(scopeData);
@@ -373,6 +392,16 @@ export default function EmployeesPage() {
   }, [page, filters, debouncedSearch, sort]);
 
   const flatDivisions = useMemo(() => flattenTree(divisions), [divisions]);
+  // HRP-829: a new record and a transfer land in the caller's subtree, and
+  // no division at all is the admin level's - the API answers
+  // outside_division_scope to anything else.
+  const writableDivisions = useMemo(() => {
+    if (isAdminLevel) return flatDivisions;
+    const ids = new Set(scopedDivisions.map((d) => d.id));
+    return flatDivisions.filter((d) => ids.has(d.id));
+  }, [isAdminLevel, flatDivisions, scopedDivisions]);
+  // A `manage` holder heading nothing has nowhere to file anyone.
+  const canCreate = canManage && (isAdminLevel || writableDivisions.length > 0);
 
   // Use scoped list for the filter (manager → only own subtree),
   // but fall back to the full tree for admins/hr (scope endpoint returns all).
@@ -586,16 +615,20 @@ export default function EmployeesPage() {
             {t("totalCount", { count: total })}
           </p>
         </div>
-        {canManage && (
+        {(canCreate || canImport) && (
           <div className="flex items-center gap-2">
-            <Button data-testid="employees-btn-import" variant="outline" size="sm" render={<Link href="/settings/import" />}>
-              <Upload className="mr-1 h-4 w-4" />
-              {t("import")}
-            </Button>
-            <Button data-testid="employees-btn-create" size="sm" onClick={() => { loadAvailableUsers(); setCreateError(EMPTY_FORM_ERROR); setCreateOpen(true); }}>
-              <Plus className="mr-1 h-4 w-4" />
-              {t("addEmployee")}
-            </Button>
+            {canImport && (
+              <Button data-testid="employees-btn-import" variant="outline" size="sm" render={<Link href="/settings/import" />}>
+                <Upload className="mr-1 h-4 w-4" />
+                {t("import")}
+              </Button>
+            )}
+            {canCreate && (
+              <Button data-testid="employees-btn-create" size="sm" onClick={() => { loadAvailableUsers(); setCreateError(EMPTY_FORM_ERROR); if (!isAdminLevel) setCreateForm((f) => ({ ...f, division_id: f.division_id || writableDivisions[0].id })); setCreateOpen(true); }}>
+                <Plus className="mr-1 h-4 w-4" />
+                {t("addEmployee")}
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -836,15 +869,19 @@ export default function EmployeesPage() {
                     )}
                     {canManage && (
                       <TableCell>
+                        {canEditRow(emp) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger data-testid={`employees-row-${emp.id}-actions`} render={<Button variant="ghost" size="icon-xs" />}>
                             <MoreHorizontal className="h-4 w-4" />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            {canEditRow(emp) && (
                             <DropdownMenuItem data-testid={`employees-row-${emp.id}-btn-edit`} onClick={() => openEdit(emp)}>
                               <Pencil className="mr-2 h-4 w-4" />
                               {t("edit")}
                             </DropdownMenuItem>
+                            )}
+                            {isAdmin && (
                             <DropdownMenuItem
                               data-testid={`employees-row-${emp.id}-btn-delete`}
                               variant="destructive"
@@ -853,8 +890,10 @@ export default function EmployeesPage() {
                               <Trash2 className="mr-2 h-4 w-4" />
                               {tc("delete")}
                             </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
+                        )}
                       </TableCell>
                     )}
                   </TableRow>
@@ -918,6 +957,7 @@ export default function EmployeesPage() {
             <div className="space-y-2">
               <Label>{t("position")}</Label>
               <PositionCombobox
+                seat
                 data-testid="employees-modal-create-input-position"
                 value={createForm.position_id || null}
                 onValueChange={(id) =>
@@ -944,8 +984,8 @@ export default function EmployeesPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">{t("noDivision")}</SelectItem>
-                  {flatDivisions.map((d) => (
+                  {isAdminLevel && <SelectItem value="">{t("noDivision")}</SelectItem>}
+                  {writableDivisions.map((d) => (
                     <SelectItem key={d.id} value={d.id}>
                       {"—".repeat(d.depth)} {d.name}
                     </SelectItem>
@@ -1026,6 +1066,7 @@ export default function EmployeesPage() {
             <div className="space-y-2">
               <Label>{t("position")}</Label>
               <PositionCombobox
+                seat
                 data-testid="employees-modal-edit-input-position"
                 value={editForm.position_id || null}
                 onValueChange={(id) =>
@@ -1048,8 +1089,8 @@ export default function EmployeesPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">{t("noDivision")}</SelectItem>
-                  {flatDivisions.map((d) => (
+                  {isAdminLevel && <SelectItem value="">{t("noDivision")}</SelectItem>}
+                  {writableDivisions.map((d) => (
                     <SelectItem key={d.id} value={d.id}>
                       {"—".repeat(d.depth)} {d.name}
                     </SelectItem>

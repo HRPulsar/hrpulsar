@@ -42,7 +42,6 @@ from typing import Any
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -753,6 +752,14 @@ _PROVIDER_REGISTRY: dict[str, type[TranscriptionProvider]] = {
 # A tenant's own key always outranks a platform one, whatever the provider.
 _CHAIN_ORDER = ("assemblyai", "deepgram", "yandex_speechkit", "whisper")
 
+# HRP-1005: the company each chain entry hands audio to.
+_CHAIN_PROCESSOR = {
+    "assemblyai": "assemblyai",
+    "deepgram": "deepgram",
+    "yandex_speechkit": "yandex",
+    "whisper": "openai",
+}
+
 
 def _platform_key_for(provider: str) -> str:
     if provider == "whisper":
@@ -800,67 +807,6 @@ def _build(
     raise ValueError(f"Unknown transcription provider: {provider}")
 
 
-def _tenant_key(row: TranscriptionProviderConfig) -> str:
-    """Plaintext BYOK key of a row, falling back to the platform one.
-
-    HRP-506: the column holds ciphertext — decrypting it here is what
-    keeps a tenant BYOK key working (and keeps the ciphertext from
-    travelling to the provider as a Bearer token). An unreadable key
-    degrades to the platform credential, like the LLM dispatch path.
-    """
-
-    return decrypt_row_key(row, kind="transcription_provider") or _platform_key_for(
-        row.provider
-    )
-
-
-def _provider_from_row(row: TranscriptionProviderConfig) -> TranscriptionProvider:
-    return _build(row.provider, _tenant_key(row), row.settings)
-
-
-def _default_provider() -> TranscriptionProvider:
-    provider = settings.transcription_provider_default or "whisper"
-    return _build(provider, _platform_key_for(provider))
-
-
-async def get_transcription_provider(
-    db: AsyncSession, tenant_id: uuid.UUID
-) -> TranscriptionProvider:
-    row = (
-        await db.execute(
-            select(TranscriptionProviderConfig)
-            .where(
-                TranscriptionProviderConfig.tenant_id == tenant_id,
-                TranscriptionProviderConfig.is_active.is_(True),
-            )
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-    if row and row.provider:
-        return _provider_from_row(row)
-    return _default_provider()
-
-
-def get_transcription_provider_sync(
-    db: Session, tenant_id: uuid.UUID
-) -> TranscriptionProvider:
-    row = (
-        db.execute(
-            select(TranscriptionProviderConfig)
-            .where(
-                TranscriptionProviderConfig.tenant_id == tenant_id,
-                TranscriptionProviderConfig.is_active.is_(True),
-            )
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-    if row and row.provider:
-        return _provider_from_row(row)
-    return _default_provider()
-
-
 def get_transcription_chain_sync(
     db: Session, tenant_id: uuid.UUID
 ) -> list[TranscriptionProvider]:
@@ -889,13 +835,34 @@ def get_transcription_chain_sync(
     )
     by_provider = {row.provider: row for row in rows if row.provider}
 
+    from app.modules.ai import processors
+
+    allowed = processors.allowed_processors_sync(db, tenant_id)
+
     chain: list[TranscriptionProvider] = []
     for name in _CHAIN_ORDER:
         row = by_provider.get(name)
-        if row is not None and _tenant_key(row):
-            chain.append(_provider_from_row(row))
+        if row is None:
+            continue
+        own_key = decrypt_row_key(row, kind="transcription_provider")
+        if own_key:
+            # BYOK is never restricted by the processor list (HRP-1005 R4).
+            chain.append(_build(name, own_key, row.settings))
+            continue
+        # HRP-1005 (F1 review): no own key decrypted, so this row would
+        # dispatch on the platform key exactly like the fallback loop below
+        # — it must clear the same processor check, not ride in for free
+        # because a row happens to exist.
+        platform_key = _platform_key_for(name)
+        if _CHAIN_PROCESSOR[name] in allowed and platform_key:
+            chain.append(_build(name, platform_key, row.settings))
+
     for name in _CHAIN_ORDER:
         if name in by_provider or not _platform_key_for(name):
+            continue
+        # HRP-1005: a platform key reaches only the processors the tenant
+        # may use — the fallback walk included.
+        if _CHAIN_PROCESSOR[name] not in allowed:
             continue
         chain.append(_build(name, _platform_key_for(name)))
     return chain
@@ -1081,8 +1048,6 @@ __all__ = [
     "DeepgramProvider",
     "AssemblyAIProvider",
     "FasterWhisperProvider",
-    "get_transcription_provider",
-    "get_transcription_provider_sync",
     "get_transcription_chain_sync",
     "merge_chunk_results",
     "transcribe_with_chain",

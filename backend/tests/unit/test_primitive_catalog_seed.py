@@ -27,9 +27,9 @@ CATALOG_YAML = REPO / "docs" / "plans" / "process-library" / "_catalog.yaml"
 
 ROWS = catalog_data.PRIMITIVES
 VERDICTS = {"strong", "better_than_human", "draft", "no"}
-# Golden hash of catalog v1.1 as seeded by v2prim01 — see
+# Golden hash of catalog v1.1 as seeded by v2prim01 and rewritten by v2prim03 — see
 # test_seed_content_is_pinned for what bumping it commits you to.
-SEED_SHA256 = "36ec3b54ea2e6ea28e4ded08d2cbc5b915c6b14573c6566ba8aa82bdaf62e82a"
+SEED_SHA256 = "0aa0e729ab05993a37a6d417d222e65a8ed2fb839248d8a63492b805b24fce51"
 
 
 def test_seed_has_17_unique_codes():

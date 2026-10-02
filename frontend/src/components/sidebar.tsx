@@ -8,6 +8,7 @@ import { useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useAuth } from "@/context/auth-context";
+import { SECTION_CODES, type SectionCode } from "@/lib/sections";
 import { useEENavItems } from "@/lib/ee-hooks";
 import { getBrandName, getLogoUrl, getSidebarLogoHeight } from "@/lib/brand";
 import { resolveRoleLabel } from "@/lib/user-role-label";
@@ -16,7 +17,7 @@ import { SidebarTenantSwitcher, TenantInitials } from "@/components/tenant-switc
 
 const emptySubscribe = () => () => {};
 
-interface NavItem {
+export interface NavItem {
   id: string;
   /** Key in the `sidebar` message namespace (core items). */
   labelKey?: string;
@@ -27,17 +28,11 @@ interface NavItem {
   badge?: string;
   requireManage?: boolean;
   requireAdmin?: boolean;
-  /** HRP-622: recruitment-viewer roles (see usePermissions.canRecruit). */
-  requireRecruit?: boolean;
-  /** HRP-732, HRP-756: admin / manager / HR — the read-only management
-   *  surfaces (see usePermissions.canViewManagementData). */
-  requireManagementData?: boolean;
-  /** HRP-765: the employee role, or the roles that manage the surface —
-   *  the talent market is read by the people on its cards and written by
-   *  admin / manager, and belongs in neither gate alone. */
-  requireEmployeeOrManage?: boolean;
   /** HRP-810: /auth/me opens Coverage (see usePermissions.canViewCoverage). */
   requireCoverage?: boolean;
+  /** HRP-827: the entry opens at `manage` - `view` on the section is the
+   *  pickers other pages read, not a page of its own. */
+  requireSectionManage?: boolean;
 }
 
 interface NavSection {
@@ -45,7 +40,7 @@ interface NavSection {
   items: string[];
 }
 
-const navigation: NavItem[] = [
+export const navigation: NavItem[] = [
   {
     id: "dashboard",
     labelKey: "dashboard",
@@ -120,12 +115,9 @@ const navigation: NavItem[] = [
     id: "talent-market",
     labelKey: "talentMarket",
     href: "/talent-market",
-    // HRP-765: the employee role reads the cards it is a candidate on
-    // (HRP-209), so the entry is theirs as well as admin/manager's. Every
-    // mutation behind it stays admin/manager-gated. Not ungated outright:
-    // recruiter and hiring_manager work the shortlist from the vacancy,
-    // and the ticket asked for the employee.
-    requireEmployeeOrManage: true,
+    // HRP-824: no role flag - the tenant's matrix alone opens the entry.
+    // The employee's `view` (the cards their own name is on, HRP-765) is a
+    // row in it, and so is a role the tenant closed it for.
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18 9 11.25l4.306 4.306a11.95 11.95 0 0 1 5.814-5.518l2.74-1.22m0 0-5.94-2.281m5.94 2.28-2.28 5.941" />
@@ -148,9 +140,6 @@ const navigation: NavItem[] = [
     id: "recruitment",
     labelKey: "recruitment",
     href: "/recruitment",
-    // HRP-615 closed recruitment reads behind a role gate; without this
-    // flag a rank-and-file employee still saw the entry and landed on 403.
-    requireRecruit: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 0 0 .75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 0 0-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0 1 12 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 0 1-.673-.38m0 0A2.18 2.18 0 0 1 3 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 0 1 3.413-.387m7.5 0V5.25A2.25 2.25 0 0 0 13.5 3h-3a2.25 2.25 0 0 0-2.25 2.25v.894m7.5 0a48.667 48.667 0 0 0-7.5 0" />
@@ -161,7 +150,6 @@ const navigation: NavItem[] = [
     id: "analytics",
     labelKey: "analytics",
     href: "/analytics",
-    requireManagementData: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
@@ -172,7 +160,7 @@ const navigation: NavItem[] = [
     id: "dictionaries",
     labelKey: "dictionaries",
     href: "/dictionaries",
-    requireAdmin: true,
+    requireSectionManage: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
@@ -183,7 +171,6 @@ const navigation: NavItem[] = [
     id: "import",
     labelKey: "dataImport",
     href: "/settings/import",
-    requireAdmin: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
@@ -194,7 +181,6 @@ const navigation: NavItem[] = [
     id: "invitations",
     labelKey: "invitations",
     href: "/settings/invitations",
-    requireAdmin: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
@@ -205,7 +191,6 @@ const navigation: NavItem[] = [
     id: "roles",
     labelKey: "roles",
     href: "/settings/roles",
-    requireAdmin: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" />
@@ -216,7 +201,6 @@ const navigation: NavItem[] = [
     id: "ai-settings",
     labelKey: "aiSettings",
     href: "/settings/ai",
-    requireAdmin: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
@@ -226,10 +210,12 @@ const navigation: NavItem[] = [
   },
 ];
 
-// HRP-436: every item of the Admin section is admin-only, so the whole group
-// collapses for managers and employees (the render loop drops empty sections).
-// Keep new Admin entries `requireAdmin` and guard their pages with
-// `<RequireRole admin>` so a direct link is denied too.
+// HRP-436 / HRP-831: the Admin section follows the tenant's matrix like the
+// rest - an entry shows when /auth/me opens its section, and the whole group
+// collapses for whoever it opens nothing to (the render loop drops empty
+// sections). Guard a new Admin page with `<RequireSection>` so a direct link
+// is denied too; `requireAdmin` is for the enterprise entries outside the
+// matrix (billing).
 const sections: NavSection[] = [
   { labelKey: "sectionWorkspace", items: ["dashboard", "employees", "company"] },
   { labelKey: "sectionTalent", items: ["assessments", "development", "exams", "competences"] },
@@ -245,11 +231,10 @@ export function Sidebar() {
   const { resolvedTheme } = useTheme();
   const {
     canManage,
-    canRecruit,
     isAdmin,
-    isEmployee,
-    canViewManagementData,
     canViewCoverage,
+    canViewSection,
+    canManageSection,
   } = usePermissions();
   const { user } = useAuth();
   const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
@@ -339,12 +324,22 @@ export function Sidebar() {
             .map((id) => byId.get(id))
             .filter((item): item is NavItem => {
               if (!item) return false;
+              // HRP-820: the matrix only narrows, and only what it knows - an
+              // id outside SECTION_CODES (dashboard, the enterprise entries)
+              // is not its business; the flags below narrow further where
+              // an entry asks for more than `view` (dictionaries, coverage).
+              if (
+                (SECTION_CODES as readonly string[]).includes(item.id) &&
+                !canViewSection(item.id as SectionCode)
+              )
+                return false;
               if (item.requireAdmin && !isAdmin) return false;
               if (item.requireManage && !canManage) return false;
-              if (item.requireRecruit && !canRecruit) return false;
-              if (item.requireManagementData && !canViewManagementData) return false;
               if (item.requireCoverage && !canViewCoverage) return false;
-              if (item.requireEmployeeOrManage && !isEmployee && !canManage)
+              if (
+                item.requireSectionManage &&
+                !canManageSection(item.id as SectionCode)
+              )
                 return false;
               return true;
             });

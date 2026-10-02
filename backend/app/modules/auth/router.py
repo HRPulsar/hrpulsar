@@ -18,21 +18,19 @@ from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.access_scope import assert_division_write_scope, get_visible_division_ids
 from app.core.client_ip import client_ip
 from app.core.dev_guard import dev_endpoints_enabled, require_dev_endpoint
 from app.core.errors import AppError
 from app.core.i18n import resolve_locale_from_request
 from app.core.rate_limit import make_limiter
+from app.core.sections import matrix_levels, require_section
 from app.core.security import decode_token
 from app.core.upload_validation import assert_declared_size_within_limit
 from app.database import get_db
 from app.modules.auth import service
-from app.modules.auth.dependencies import (
-    get_current_user,
-    require_admin,
-    require_role,
-)
-from app.modules.auth.models import User
+from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.models import Invitation, User
 from app.modules.auth.schemas import (
     AcceptInvitationRequest,
     ChangePasswordRequest,
@@ -64,6 +62,7 @@ from app.modules.auth.schemas import (
     VerifyEmailRequest,
     VerifyEmailResponse,
 )
+from app.modules.position.models import Position
 
 logger = logging.getLogger(__name__)
 
@@ -414,6 +413,14 @@ async def dev_seed_origin_group(
 
 
 # --- Roles ---
+#
+# HRP-831: the roles section on the tenant's matrix. The list is a shared
+# read (``SHARED_READS``) because the invitation form is built on it, so
+# it answers whoever opens roles or invitations at ``view`` or better -
+# not every signed-in caller: it carries how many people hold each role.
+# Writing a role asks for ``manage``.
+
+_manage_roles = require_section("roles", "manage")
 
 
 def _role_to_dict(role, user_count: int | None = None):
@@ -424,7 +431,6 @@ def _role_to_dict(role, user_count: int | None = None):
         "description": role.description,
         "is_system": role.is_system,
         "tenant_id": role.tenant_id,
-        "permissions": [p.codename for p in role.permissions],
         "user_count": user_count,
     }
 
@@ -432,8 +438,11 @@ def _role_to_dict(role, user_count: int | None = None):
 @router.get("/roles", response_model=list[RoleRead])
 async def list_roles(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ):
+    levels = await matrix_levels(db, current_user)
+    if levels["roles"] == "none" and levels["invitations"] == "none":
+        raise AppError("auth_insufficient_permissions", 403)
     roles = await service.list_roles(db, current_user.tenant_id)
     return [_role_to_dict(r, count) for r, count in roles]
 
@@ -442,7 +451,7 @@ async def list_roles(
 async def create_role(
     data: RoleCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(_manage_roles),
 ):
     role = await service.create_role(db, current_user.tenant_id, data)
     return _role_to_dict(role)
@@ -453,7 +462,7 @@ async def update_role(
     role_id: uuid.UUID,
     data: RoleUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(_manage_roles),
 ):
     role = await service.update_role(db, current_user.tenant_id, role_id, data)
     return _role_to_dict(role)
@@ -463,26 +472,65 @@ async def update_role(
 async def delete_role(
     role_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(_manage_roles),
 ):
     await service.delete_role(db, current_user.tenant_id, role_id)
 
 
 # --- Invitations (GF3) ---
 #
-# HRP-436: the invitation registry (list/update/cancel/resend) is an admin
-# surface — it backs the Admin sidebar section, which managers and employees no
-# longer see. Creating an invitation stays on the inviter hierarchy
-# (``_INVITE_ALLOWED``), so a manager may still invite an employee it owns
-# without being able to read or manage the tenant-wide registry.
+# HRP-831: the invitations section on the tenant's matrix - ``view`` reads
+# the registry, ``manage`` sends, edits, cancels and resends. Below the
+# admin level the registry is the caller's subtree: an invitation lands in
+# a division they manage (``assert_division_write_scope``, so none at all
+# is the admin level's) on a seat of that subtree or a workspace-wide one
+# (HRP-829), and one outside it is not theirs to see. Which role an
+# inviter may hand out stays the inviter hierarchy's (``_INVITE_ALLOWED``),
+# and so is which sent invitation they may touch: re-addressing an
+# invitation is sending it, so a ``manage`` holder edits, cancels and
+# resends only the invitations they could have sent (review round 1: hr
+# re-addressing an admin invitation to themselves). Changing the role of a
+# sent invitation stays the admin level's (``update_invitation``).
+
+_view_invitations = require_section("invitations", "view")
+_manage_invitations = require_section("invitations", "manage")
+
+
+async def _invitation_in_reach(
+    db: AsyncSession, current_user: User, invitation_id: uuid.UUID
+) -> None:
+    """403 ``outside_division_scope`` for an invitation outside the caller's
+    subtree, 403 ``role_above_inviter`` for one carrying a role the caller
+    could not hand out; a missing one is left to the service's 404."""
+    inv = await db.get(Invitation, invitation_id)
+    if inv is not None and inv.tenant_id == current_user.tenant_id:
+        await assert_division_write_scope(db, current_user, inv.division_id)
+        service._assert_role_within_inviter(
+            [r.code for r in current_user.roles], inv.role_code
+        )
+
+
+async def _seat_division(
+    db: AsyncSession, position_id: uuid.UUID | None, tenant_id: uuid.UUID
+) -> uuid.UUID | None:
+    """The division a position belongs to; ``None`` for no position or a
+    workspace-wide seat, which anyone in scope may hand out. Another
+    tenant's position counts as none: the service refuses it with its own
+    error, and judging scope by a foreign row told it exists."""
+    pos = await db.get(Position, position_id) if position_id else None
+    return pos.division_id if pos and pos.tenant_id == tenant_id else None
 
 
 @router.post("/invitations", response_model=InvitationRead, status_code=201)
 async def create_invitation(
     data: InvitationCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr", "manager")),
+    current_user: User = Depends(_manage_invitations),
 ):
+    seat = await _seat_division(db, data.position_id, current_user.tenant_id)
+    await assert_division_write_scope(
+        db, current_user, data.division_id, *([seat] if seat else [])
+    )
     inviter_role_codes = [r.code for r in current_user.roles]
     return await service.create_invitation(
         db,
@@ -497,7 +545,7 @@ async def create_invitation(
 async def bulk_create_invitations(
     data: InvitationBulkCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr", "manager")),
+    current_user: User = Depends(_manage_invitations),
 ):
     """Create a batch of invitations, reporting per-address outcomes.
 
@@ -516,11 +564,20 @@ async def bulk_create_invitations(
     """
     inviter_role_codes = [r.code for r in current_user.roles]
     # Read once: the rollback below expires current_user, and reloading it
-    # lazily in an async session raises (HRP-833).
+    # lazily in an async session raises (HRP-833). The subtree too (HRP-831).
     tenant_id, inviter_id = current_user.tenant_id, current_user.id
+    visible = await get_visible_division_ids(db, current_user)
     created: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
     for inv_data in data.invitations:
+        seat = await _seat_division(db, inv_data.position_id, tenant_id)
+        if visible is not None and (
+            inv_data.division_id not in visible or (seat and seat not in visible)
+        ):
+            failed.append(
+                {"email": inv_data.email, "error_code": "outside_division_scope"}
+            )
+            continue
         try:
             created.append(
                 await service.create_invitation(
@@ -556,10 +613,15 @@ async def list_invitations(
     limit: int = Query(50, ge=1, le=100),
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin()),
+    current_user: User = Depends(_view_invitations),
 ):
     items, total = await service.list_invitations(
-        db, current_user.tenant_id, skip, limit, status
+        db,
+        current_user.tenant_id,
+        skip,
+        limit,
+        status,
+        division_ids=await get_visible_division_ids(db, current_user),
     )
     return {"items": items, "total": total}
 
@@ -569,8 +631,15 @@ async def update_invitation(
     invitation_id: uuid.UUID,
     data: InvitationUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin()),
+    current_user: User = Depends(_manage_invitations),
 ):
+    await _invitation_in_reach(db, current_user, invitation_id)
+    if "division_id" in data.model_fields_set:
+        await assert_division_write_scope(db, current_user, data.division_id)
+    if "position_id" in data.model_fields_set:
+        seat = await _seat_division(db, data.position_id, current_user.tenant_id)
+        if seat:
+            await assert_division_write_scope(db, current_user, seat)
     role_codes = [r.code for r in current_user.roles]
     return await service.update_invitation(
         db,
@@ -588,8 +657,9 @@ async def update_invitation_email(
     invitation_id: uuid.UUID,
     data: InvitationEmailUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin()),
+    current_user: User = Depends(_manage_invitations),
 ):
+    await _invitation_in_reach(db, current_user, invitation_id)
     return await service.update_invitation_email(
         db, current_user.tenant_id, invitation_id, data, changed_by_id=current_user.id
     )
@@ -599,8 +669,9 @@ async def update_invitation_email(
 async def cancel_invitation(
     invitation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin()),
+    current_user: User = Depends(_manage_invitations),
 ):
+    await _invitation_in_reach(db, current_user, invitation_id)
     return await service.cancel_invitation(db, current_user.tenant_id, invitation_id)
 
 
@@ -610,8 +681,9 @@ async def resend_invitation(
     request: Request,
     invitation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin()),
+    current_user: User = Depends(_manage_invitations),
 ):
+    await _invitation_in_reach(db, current_user, invitation_id)
     return await service.resend_invitation(db, current_user.tenant_id, invitation_id)
 
 

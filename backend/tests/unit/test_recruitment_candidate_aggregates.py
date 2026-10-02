@@ -130,6 +130,8 @@ class TestApplyMatrixAggregates:
         # (5+2) / (5 * 4) * 100 = 35%
         assert row["ai_percent"] == 35.0
         assert row["divergence_count"] == 1
+        # HRP-507 REDO: the chip's denominator is the whole profile.
+        assert row["profile_competence_count"] == len(_COMPETENCE_SEED)
         assert len(row["divergence_top"]) == 1
         top = row["divergence_top"][0]
         assert top["competence_name"] == "Communication"

@@ -58,6 +58,16 @@ describe("selectableRounds", () => {
     expect(selectableRounds(rounds, sets).map((r) => r.id)).toEqual(["i2"]);
   });
 
+  it("does not count a failed attempt as the round's set", () => {
+    const sets = [
+      { id: "s1", assessment_round_id: "i1", archived_at: null, status: "failed" },
+    ];
+    expect(selectableRounds(rounds, sets).map((r) => r.id)).toEqual([
+      "i1",
+      "i2",
+    ]);
+  });
+
   it("frees a round again once its set is archived", () => {
     const sets = [
       { id: "s1", assessment_round_id: "i1", archived_at: "2026-08-01" },

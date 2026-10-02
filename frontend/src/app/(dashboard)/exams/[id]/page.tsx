@@ -5,7 +5,8 @@ import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
-import { api } from "@/lib/api";
+import { RequireSection } from "@/components/require-section";
+import { ApiError, api } from "@/lib/api";
 import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type {
   DictionaryItem,
@@ -84,7 +85,18 @@ interface OptionForm {
   is_correct: boolean;
 }
 
-export default function ExamDetailPage() {
+export default function ExamDetailGuarded() {
+  // HRP-823: every call on this page is a mass exam one, so `view` on the
+  // section is not enough to open it - the section gate in the layout only
+  // knows the page's section, not the level it needs.
+  return (
+    <RequireSection code="exams" level="manage">
+      <ExamDetailPage />
+    </RequireSection>
+  );
+}
+
+function ExamDetailPage() {
   const t = useTranslations("exams");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
@@ -167,8 +179,9 @@ export default function ExamDetailPage() {
       ]);
       setExam(detail);
       setResults(resultsData);
-    } catch {
-      toast.error(t("errorLoadExam"));
+    } catch (err) {
+      // HRP-640: another's exam answers 403 not_the_author - say so.
+      toast.error(err instanceof ApiError ? err.message : t("errorLoadExam"));
     } finally {
       setLoading(false);
     }

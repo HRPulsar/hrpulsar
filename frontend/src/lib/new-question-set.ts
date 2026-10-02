@@ -27,6 +27,7 @@ export interface QuestionSetRow {
   id: string | null;
   assessment_round_id?: string | null;
   archived_at?: string | null;
+  status?: string;
 }
 
 /**
@@ -57,7 +58,8 @@ export function nextInterviewNumber(rounds: AssessmentRoundRow[]): number {
  *
  * A round already holding a live set is not offered — the server
  * enforces one set per round (409 ``round_already_has_question_set``)
- * and the dialog should not let a user walk into that.
+ * and the dialog should not let a user walk into that. A failed attempt
+ * holds no questions and does not hold the round: the retry takes it over.
  */
 export function selectableRounds(
   rounds: AssessmentRoundRow[],
@@ -65,7 +67,9 @@ export function selectableRounds(
 ): AssessmentRoundRow[] {
   const taken = new Set(
     sets
-      .filter((s) => !s.archived_at && s.assessment_round_id)
+      .filter(
+        (s) => !s.archived_at && s.assessment_round_id && s.status !== "failed",
+      )
       .map((s) => String(s.assessment_round_id)),
   );
   return rounds.filter(

@@ -111,6 +111,22 @@ async def primitives(db: AsyncSession):
     await db.commit()
 
 
+@pytest.fixture(autouse=True)
+def no_result_cache(monkeypatch):
+    """HRP-921: the worker answers a text it has broken down before from
+    Redis, which outlives a test run - and every container here has the
+    same text. The cache's own tests are in test_work_tasks_generation.py."""
+
+    async def _miss(_key):
+        return None
+
+    async def _forget(_key, _payload):
+        return None
+
+    monkeypatch.setattr(tasks, "_cached_breakdown", _miss)
+    monkeypatch.setattr(tasks, "_remember_breakdown", _forget)
+
+
 async def _container(db: AsyncSession, tenant, user, **overrides):
     data = ContainerCreate(
         **{
@@ -148,18 +164,20 @@ class TestCorpus:
             assert f"- {p['code']} - " in system
         for phrase in (
             "do not improve",
-            "no capability at all",
+            "empty list where the conventions say so",
             "kind: boundary",
             "property of the step",
             # rounds 2-3 (decision 2026-09-09): sign-off inside the step,
-            # content-weighing approval is P6, boundaries, posting is P3,
-            # responsibility hints
+            # responsibility hints; since v2work.v9 (HRP-961) the code
+            # boundaries come from the conventions module - approval on
+            # the merits is P6, people by judgment are P8, posting is P3,
+            # registering from documents is P1
             "stays inside that step",
-            "is a judgment: P6",
+            "chooses on the merits and answers for the risk is P6",
             "party outside the company",
-            "Assigning people, collecting opinions",
-            "Posting transactions to accounts",
-            "Registering an object in a system",
+            "Choosing a person by skills, load and relationships",
+            "a category, a level, a queue, an account - is P3",
+            "Moving fields from a document or a conversation into a system is P1",
             "`formal` when someone other than the doer",
             "Example 6 output",
         ):
@@ -397,6 +415,57 @@ class TestWorker:
         assert consumed == []
         await db.refresh(sess)
         assert sess.payload is None
+
+    async def test_a_run_cancelled_during_the_model_call_is_not_cached(
+        self, db, tenant, user, primitives, session_factory, monkeypatch
+    ):
+        # Review 01.10 (HRP-921): the answer went into the cache before the
+        # guarded flip, so a run cancelled during classification - billed
+        # nothing - served the next run on the same text from the cache, free.
+        c = await _container(db, tenant, user)
+        sess = await service.create_session(db, tenant.id, user.id, c.id)
+        remembered: list[dict] = []
+
+        async def _remember(_key, payload):
+            remembered.append(payload)
+
+        monkeypatch.setattr(tasks, "_remember_breakdown", _remember)
+
+        async def _cancel_while_classifying(*_a, schema=None, **_k):
+            if schema is DecompositionSchema:
+                return schema.model_validate(_PAYLOAD)
+            async with session_factory() as other:
+                row = await other.get(WorkDecompositionSession, sess.id)
+                row.status = "cancelled"
+                await other.commit()
+            return _ok(schema=schema)
+
+        with patch.object(
+            llm_client, "generate_json", side_effect=_cancel_while_classifying
+        ):
+            result = await tasks.execute_session(session_factory, sess.id)
+        assert result["status"] == "cancelled"
+        assert remembered == []
+
+    async def test_a_processor_refusal_keeps_its_own_code(
+        self, db, tenant, user, primitives, session_factory, monkeypatch
+    ):
+        # Review 01.10 (HRP-1005): a workspace whose processor list allows
+        # no provider ended as service_error - "try later" - which no retry
+        # fixes.
+        from app.core.errors import AppError
+        from app.modules.ai import providers as ai_providers
+
+        async def refuse(*_a, **_k):
+            raise AppError("ai_no_allowed_processor", 409)
+
+        monkeypatch.setattr(ai_providers, "resolve_generation_target", refuse)
+        c = await _container(db, tenant, user)
+        sess = await service.create_session(db, tenant.id, user.id, c.id)
+        result = await tasks.execute_session(session_factory, sess.id)
+        assert result["status"] == "error"
+        await db.refresh(sess)
+        assert sess.error_code == "no_allowed_processor"
 
     async def test_failure_marks_error_without_payload(
         self, db, tenant, user, primitives, session_factory, monkeypatch

@@ -1644,6 +1644,11 @@ class QuestionSet(BaseModel, TenantMixin):
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # HRP-740: when questions last landed - the "Generated <date>" line.
+    # Not ``updated_at``, which status-only writes move too (HRP-471).
+    generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )

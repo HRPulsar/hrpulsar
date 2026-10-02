@@ -36,6 +36,12 @@ export function formatDateTime(value: DateInput, fallback = ""): string {
   return `${base} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
+/** Whole minutes and remaining seconds of a duration in milliseconds (HRP-965). */
+export function splitDuration(ms: number): { minutes: number; seconds: number } {
+  const total = Math.max(0, Math.round(ms / 1000));
+  return { minutes: Math.floor(total / 60), seconds: total % 60 };
+}
+
 // Backend stores date-only fields as ISO `YYYY-MM-DD`. Parsing that
 // directly via `new Date(value)` interprets it as UTC midnight and can
 // roll the day over depending on the viewer's timezone. This helper

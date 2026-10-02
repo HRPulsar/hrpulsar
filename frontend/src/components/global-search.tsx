@@ -44,7 +44,7 @@ export function GlobalSearch() {
     try {
       const [empData, asmtData, vacData, candData] = await Promise.all([
         api.get<EmployeeList>("/employees?limit=50"),
-        api.get<AssessmentList>("/assessments?limit=100"),
+        api.get<AssessmentList>("/assessments?limit=100").catch(() => ({ items: [] })),
         api.get<VacancyList>("/recruitment/vacancies?limit=50").catch(() => ({ items: [] })),
         api.get<CandidateList>("/recruitment/candidates?limit=50").catch(() => ({ items: [] })),
       ]);

@@ -3,12 +3,11 @@
 // HRP-634: the Roles page. Two things must hold and neither is visible in
 // the component source alone:
 //
-//   1. a non-admin never renders it (the sidebar entry is hidden, but a
-//      typed URL must be denied too — `RequireRole admin`);
-//   2. it prints the holder counts and the plain-language capability text,
-//      and never the seeded `permissions` codenames: those rows exist in
-//      the DB but no gate reads them, so showing them would claim a
-//      recruiter can do nothing.
+//   1. whoever the matrix closed the roles section to never renders it
+//      (the sidebar entry is hidden, but a typed URL must be denied too —
+//      `RequireSection`, HRP-831; it was `RequireRole admin` before);
+//   2. it prints the holder counts and the plain-language capability text
+//      that mirrors the gates the product enforces.
 
 import { NextIntlClientProvider } from "next-intl";
 import { act } from "react";
@@ -28,7 +27,6 @@ const ROLES: Role[] = [
     description: null,
     is_system: true,
     tenant_id: null,
-    permissions: ["employees.read", "company.read"],
     user_count: 23,
   },
   {
@@ -38,7 +36,6 @@ const ROLES: Role[] = [
     description: null,
     is_system: true,
     tenant_id: null,
-    permissions: [],
     user_count: 3,
   },
   {
@@ -48,7 +45,6 @@ const ROLES: Role[] = [
     description: null,
     is_system: false,
     tenant_id: "t-1",
-    permissions: [],
     user_count: 0,
   },
   {
@@ -58,7 +54,6 @@ const ROLES: Role[] = [
     description: "Read-only observer",
     is_system: false,
     tenant_id: "t-1",
-    permissions: [],
     user_count: 0,
   },
 ];
@@ -69,7 +64,13 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/hooks/use-permissions", () => ({
-  usePermissions: () => ({ isAdmin, canManage: isAdmin }),
+  usePermissions: () => ({
+    isAdmin,
+    canManage: isAdmin,
+    canViewSection: () => isAdmin,
+    canManageSection: () => isAdmin,
+    canViewEmployeeRecords: isAdmin,
+  }),
 }));
 
 vi.mock("@/context/auth-context", () => ({
@@ -145,7 +146,7 @@ describe("roles page", () => {
     expect(href("employee")).toBe("/employees");
   });
 
-  it("describes what a role can do instead of listing dead permissions", async () => {
+  it("describes what a role can do", async () => {
     await render();
 
     const text = container.textContent ?? "";
@@ -154,12 +155,9 @@ describe("roles page", () => {
     // unless the tenant wrote its own description.
     expect(text).toContain(enMessages.settings.rolesCapCustom);
     expect(text).toContain("Read-only observer");
-    for (const codename of ROLES[0].permissions) {
-      expect(text, `${codename} must not be printed`).not.toContain(codename);
-    }
   });
 
-  it("renders nothing for a non-admin", async () => {
+  it("renders nothing for a caller the matrix closed the section to", async () => {
     isAdmin = false;
     await render();
 

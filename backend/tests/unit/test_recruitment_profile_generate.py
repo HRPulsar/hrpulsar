@@ -546,6 +546,34 @@ class TestProfileGenerationSession:
             is None
         )
 
+    async def test_disallowed_processor_error_marks_session_failed(
+        self, db: AsyncSession, tenant, user
+    ):
+        """F13 (HRP-1005 re-review): an AppError propagating out of the
+        generation call (e.g. ai_no_allowed_processor, 409) must still end
+        the session ``failed`` — not leave it ``running`` forever, which
+        would make ``/profile/sessions/active`` show the banner forever and
+        every later Generate return 409 profile_generation_in_progress."""
+        from app.core.errors import AppError
+
+        vacancy = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data())
+
+        with patch(
+            "app.modules.ai.providers.resolve_generation_target",
+            new_callable=AsyncMock,
+        ) as mock_resolve:
+            mock_resolve.side_effect = AppError("ai_no_allowed_processor", 409)
+            with pytest.raises(AppError) as exc:
+                await service.generate_profile_now(
+                    db, tenant.id, user.id, vacancy["id"]
+                )
+            assert exc.value.code == "ai_no_allowed_processor"
+
+        active = await service.get_active_profile_session(db, tenant.id, vacancy["id"])
+        assert active is not None
+        assert active["status"] == "failed"
+        assert "ai_no_allowed_processor" in (active["error_message"] or "")
+
 
 class TestCancelProfileSession:
     """HRP-235: dismiss banner by marking the running session cancelled."""

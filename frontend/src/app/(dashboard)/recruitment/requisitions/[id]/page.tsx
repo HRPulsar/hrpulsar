@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import type { Vacancy, VacancyProfile } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ import {
 } from "@/components/recruitment";
 import { VacancyAnalyticsTab } from "@/components/recruitment/vacancy-analytics-tab";
 import { VacancyAssessmentScaleBlock } from "@/components/recruitment/vacancy-assessment-scale";
+import { VacancyAttachments } from "@/components/recruitment/vacancy-attachments";
 import { VacancyActionsMenu } from "../_components/VacancyActionsMenu";
 import { VacancyOverviewSection } from "../_components/VacancyOverviewSection";
 import { VacancyCompetencesSection } from "../_components/VacancyCompetencesSection";
@@ -39,6 +41,7 @@ export default function VacancyDetailPage() {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
   const router = useRouter();
+  const { canManageSection } = usePermissions();
   const searchParams = useSearchParams();
   const [vacancy, setVacancy] = useState<Vacancy | null>(null);
   const [etag, setEtag] = useState<string | null>(null);
@@ -118,7 +121,14 @@ export default function VacancyDetailPage() {
     );
   }
 
-  const canEdit = !vacancy.archived_at && vacancy.status !== "closed";
+  // HRP-830: editing the vacancy is running hiring - `manage` on
+  // recruitment; a `view` holder reads the same page. Attachments
+  // upload/delete ask the same level (`runs_hiring`), so a reader gets
+  // the block read-only instead of a 403.
+  const canEdit =
+    canManageSection("recruitment") &&
+    !vacancy.archived_at &&
+    vacancy.status !== "closed";
 
   function handleSaved(next: Vacancy, nextEtag: string | null) {
     setVacancy(next);
@@ -173,12 +183,14 @@ export default function VacancyDetailPage() {
                 })}
           </p>
         </div>
-        <VacancyActionsMenu
-          vacancy={vacancy}
-          onChanged={() => {
-            void loadVacancy();
-          }}
-        />
+        {canManageSection("recruitment") && (
+          <VacancyActionsMenu
+            vacancy={vacancy}
+            onChanged={() => {
+              void loadVacancy();
+            }}
+          />
+        )}
       </div>
 
       {vacancy.archived_at && (
@@ -250,6 +262,10 @@ export default function VacancyDetailPage() {
                 ).assessment_scale_snapshot ?? null,
             }}
           />
+
+          {/* HRP-846: context files for the profile prompt, back where the
+              old Profile tab had them — right above the generated profile. */}
+          <VacancyAttachments vacancyId={id} canEdit={canEdit} />
 
           <VacancyCompetencesSection
             vacancy={vacancy}

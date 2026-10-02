@@ -46,6 +46,18 @@ describe("Internal search switch lock (HRP-667)", () => {
     expect(FORM).toContain("disabled={disabled || internalSearchLocked}");
   });
 
+  it("paints the locked box grey instead of a dimmed accent (REDO 10.09)", () => {
+    // Disabled alone only halves the opacity of the accent colour, which
+    // the tester read as "still mine to toggle". Locked = grey box and
+    // grey label.
+    expect(FORM).toContain(
+      'internalSearchLocked ? "data-checked:border-muted-foreground data-checked:bg-muted-foreground" : undefined',
+    );
+    expect(FORM).toContain(
+      'internalSearchLocked ? "text-muted-foreground" : undefined',
+    );
+  });
+
   it("explains the lock under the checkbox", () => {
     expect(FORM).toContain(
       'internalSearchLocked ? t("vacancyInternalSearchLockedHint") : t("vacancyInternalSearchHint")',
@@ -62,6 +74,13 @@ describe("Internal search switch lock (HRP-667)", () => {
         `${locale}.recruitment.vacancyInternalSearchLockedHint`,
       ).toBeTruthy();
     }
+    // Wording set by the reporter on 10.09: states the link and that the
+    // search cannot be turned off now — no instructions about the card.
+    const en = Object.fromEntries(CATALOGS).en.recruitment
+      .vacancyInternalSearchLockedHint;
+    expect(en).toBe(
+      "This vacancy is linked to a card on the internal talent market. Internal search cannot be turned off right now.",
+    );
   });
 
   it("locks from the live link the vacancy page reads, not a stale id", () => {

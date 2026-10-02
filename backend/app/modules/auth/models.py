@@ -16,23 +16,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import BaseModel, TenantMixin
 
-role_permissions = Table(
-    "role_permissions",
-    BaseModel.metadata,
-    Column(
-        "role_id",
-        UUID(as_uuid=True),
-        ForeignKey("roles.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    Column(
-        "permission_id",
-        UUID(as_uuid=True),
-        ForeignKey("permissions.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-)
-
 user_roles = Table(
     "user_roles",
     BaseModel.metadata,
@@ -117,30 +100,11 @@ class Role(BaseModel):
         index=True,
     )
 
-    permissions: Mapped[list["Permission"]] = relationship(
-        secondary=role_permissions, back_populates="roles", lazy="selectin"
-    )
     # lazy="raise": never traversed at runtime; association rows are removed
     # by the DB-level ON DELETE CASCADE on user_roles (passive_deletes).
     users: Mapped[list["User"]] = relationship(
         secondary=user_roles,
         back_populates="roles",
-        lazy="raise",
-        passive_deletes=True,
-    )
-
-
-class Permission(BaseModel):
-    __tablename__ = "permissions"
-
-    codename: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
-
-    # lazy="raise": never traversed at runtime; association rows are removed
-    # by the DB-level ON DELETE CASCADE on role_permissions (passive_deletes).
-    roles: Mapped[list["Role"]] = relationship(
-        secondary=role_permissions,
-        back_populates="permissions",
         lazy="raise",
         passive_deletes=True,
     )

@@ -51,7 +51,10 @@ export default function CandidateListPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterSource, setFilterSource] = useState("");
 
-  const { canManage } = usePermissions();
+  // HRP-830: creating and the row actions are `manage` on recruitment -
+  // `canManage` (admin/manager) showed them to a manager who got 403 and
+  // hid them from the recruiter who runs hiring.
+  const canManage = usePermissions().canManageSection("recruitment");
 
   const loadCandidates = useCallback(async () => {
     try {

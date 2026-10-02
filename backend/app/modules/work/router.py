@@ -9,6 +9,7 @@ the ``access`` dependencies, so a hidden container is a 404 everywhere.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -17,12 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import billing_hooks
 from app.core.access_scope import get_visible_employee_ids
 from app.core.errors import AppError
+from app.core.sections import require_section
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.work import access, bundle, coverage, service
 from app.modules.work.models import WorkContainer
 from app.modules.work.schemas import (
+    AccessOwnerRead,
     ApplyResult,
     ContainerAccessRead,
     ContainerAccessUpdate,
@@ -55,10 +58,37 @@ router = APIRouter(prefix="/work", tags=["work"])
 SKILL_RESERVE_ENTITY = "work_step_skill"
 
 
-def _read(actor: access.Actor, row: WorkContainer) -> ContainerRead:
-    return ContainerRead.model_validate(row).model_copy(
-        update={"my_access": access.level(actor, row)}
+async def _reads(
+    db: AsyncSession, actor: access.Actor, rows: Sequence[WorkContainer]
+) -> list[ContainerRead]:
+    """``my_access`` is the caller's, ``owner`` (HRP-810 REDO) the summary the
+    list's Owner column shows - both on every path a container comes out of,
+    so no response silently drops them; the owners are read in one query."""
+    owners = await service.owner_summaries(
+        db,
+        actor.tenant_id,
+        {r.owner_id for r in rows if r.owner_id is not None},
+        reveal_leave=actor.manage,
     )
+    return [
+        ContainerRead.model_validate(row).model_copy(
+            update={
+                "my_access": access.level(actor, row),
+                "owner": (
+                    AccessOwnerRead(**owners[row.owner_id])
+                    if row.owner_id in owners
+                    else None
+                ),
+            }
+        )
+        for row in rows
+    ]
+
+
+async def _read(
+    db: AsyncSession, actor: access.Actor, row: WorkContainer
+) -> ContainerRead:
+    return (await _reads(db, actor, [row]))[0]
 
 
 # --- Containers -------------------------------------------------------------
@@ -82,7 +112,7 @@ async def list_containers(
         skip=skip,
         limit=limit,
     )
-    return {"items": [_read(actor, row) for row in items], "total": total}
+    return {"items": await _reads(db, actor, items), "total": total}
 
 
 @router.post("/containers", response_model=ContainerRead, status_code=201)
@@ -94,7 +124,7 @@ async def create_container(
     row = await service.create_container(
         db, actor.tenant_id, data, user_id=actor.user_id
     )
-    return _read(actor, row)
+    return await _read(db, actor, row)
 
 
 @router.get("/containers/{container_id}", response_model=ContainerRead)
@@ -104,7 +134,7 @@ async def get_container(
     actor: access.Actor = Depends(access.read_container),
 ):
     row = await service.get_container(db, actor.tenant_id, container_id)
-    return _read(actor, row)
+    return await _read(db, actor, row)
 
 
 @router.patch("/containers/{container_id}", response_model=ContainerRead)
@@ -120,7 +150,7 @@ async def update_container(
     row = await service.update_container(
         db, actor.tenant_id, container_id, data, user_id=actor.user_id
     )
-    return _read(actor, row)
+    return await _read(db, actor, row)
 
 
 @router.delete("/containers/{container_id}", status_code=204)
@@ -139,7 +169,7 @@ async def accept_container(
     db: AsyncSession = Depends(get_db),
     actor: access.Actor = Depends(access.edit_container),
 ):
-    """The owner accepts the breakdown; admin and hr may accept any."""
+    """The owner accepts the breakdown; the section's managers accept any."""
     row = await service.accept_container(
         db,
         actor.tenant_id,
@@ -147,7 +177,7 @@ async def accept_container(
         user_id=actor.user_id,
         can_manage=actor.manage,
     )
-    return _read(actor, row)
+    return await _read(db, actor, row)
 
 
 @router.get("/containers/{container_id}/access", response_model=ContainerAccessRead)
@@ -157,7 +187,9 @@ async def get_container_access(
     actor: access.Actor = Depends(access.edit_container),
 ):
     """The owner's and the managers' panel: who else reads, and the history."""
-    return await service.get_container_access(db, actor.tenant_id, container_id)
+    return await service.get_container_access(
+        db, actor.tenant_id, container_id, reveal_leave=actor.manage
+    )
 
 
 @router.put("/containers/{container_id}/access", response_model=ContainerAccessRead)
@@ -168,7 +200,12 @@ async def set_container_access(
     actor: access.Actor = Depends(access.edit_container),
 ):
     return await service.set_container_access(
-        db, actor.tenant_id, container_id, data, user_id=actor.user_id
+        db,
+        actor.tenant_id,
+        container_id,
+        data,
+        user_id=actor.user_id,
+        reveal_leave=actor.manage,
     )
 
 
@@ -335,6 +372,11 @@ async def list_gaps(
     "/containers/{container_id}/gaps/hire-need",
     response_model=HireNeedRead,
     status_code=201,
+    # HRP-821: a draft vacancy is Recruitment's record, so the caller needs
+    # that section as well. Coverage became the tenant's to hand out, and
+    # handing it to a role must not open a door into a section the matrix
+    # keeps closed for them.
+    dependencies=[Depends(require_section("recruitment", "manage"))],
 )
 async def create_hire_need(
     container_id: uuid.UUID,
@@ -342,9 +384,9 @@ async def create_hire_need(
     db: AsyncSession = Depends(get_db),
     actor: access.Actor = Depends(access.manage_actor),
 ):
-    """A person opens the hire need (§6); the section's managers are within
-    the recruitment viewer roles the frontend gates the button on. The
-    owner does not: a draft vacancy is Recruitment's record (HRP-810)."""
+    """A person opens the hire need (§6): the section's managers who also
+    manage Recruitment. The owner does not: a draft vacancy is
+    Recruitment's record (HRP-810)."""
     return await service.create_hire_need(
         db, actor.tenant_id, container_id, data, user_id=actor.user_id
     )

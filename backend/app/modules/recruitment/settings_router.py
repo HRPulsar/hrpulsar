@@ -11,14 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.database import get_db
-from app.modules.auth.dependencies import require_role
+from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     audit_service,
     gdpr_service,
     settings_service,
 )
-from app.modules.recruitment.routers.common import RECRUITMENT_VIEWER_ROLES
+from app.modules.recruitment.routers.common import (
+    evaluates,
+    reads_hiring_settings,
+)
 from app.modules.recruitment.settings_schemas import (
     BrandingRead,
     BrandingUpdate,
@@ -51,15 +54,16 @@ router = APIRouter(tags=["recruitment-settings"])
 # not just admins: each UI that renders a score — interview-analysis page,
 # candidate cards, review forms — must read the active scale whatever the
 # viewer's role. HRP-615 narrowed that from "any authenticated user" to
-# ``RECRUITMENT_VIEWER_ROLES``; the surfaces that need these are all inside
-# recruitment. Mutating endpoints below still require admin. The
+# the recruitment roles, and HRP-830 to ``view`` on the section; the
+# surfaces that need these are all inside recruitment. Mutating endpoints
+# below still require admin. The
 # corresponding entries in ``BILLING_EXEMPT`` carry the same justification.
 
 
 @router.get("/recruitment/settings/scales", response_model=list[ScaleConfigRead])
 async def list_scales(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
 ):
     return await settings_service.list_scales(db, current_user.tenant_id)
 
@@ -70,7 +74,7 @@ async def list_scales(
 )
 async def get_active_scale(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
 ):
     return await settings_service.get_active_scale(db, current_user.tenant_id)
 
@@ -343,14 +347,15 @@ async def delete_transcription_provider(
 @router.get("/recruitment/settings/ui")
 async def get_ui_settings(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
 ):
     """HRP-205 REDO: read-only tenant UI flags for the recruitment roles.
 
     Wider than the branding hub, which is closed to hiring managers —
     they need ``hm_questions_above_resume`` to reorder candidate-page
-    sections. HRP-615 narrowed "any authenticated user" to
-    ``RECRUITMENT_VIEWER_ROLES``, which still covers them.
+    sections. HRP-615 narrowed "any authenticated user" to the
+    recruitment roles, HRP-830 to ``view`` on the section, which still
+    covers them.
     """
     return await settings_service.get_ui_settings(db, current_user.tenant_id)
 
@@ -358,7 +363,7 @@ async def get_ui_settings(
 @router.get("/recruitment/settings/branding", response_model=BrandingRead)
 async def get_branding(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hr")),
+    current_user: User = Depends(reads_hiring_settings),
 ):
     return await settings_service.get_branding(db, current_user.tenant_id)
 
@@ -423,7 +428,7 @@ async def update_retention(
 async def get_matrix_settings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(
-        require_role("admin", "recruiter", "hr", "hiring_manager")
+        evaluates
     ),
 ):
     """Read-only view of the divergence threshold used by Compact matrix.

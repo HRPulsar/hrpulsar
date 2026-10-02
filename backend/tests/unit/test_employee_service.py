@@ -193,7 +193,7 @@ class TestEmployeeEvents:
             event_date=date(2024, 1, 15),
         )
         await service.create_event(db, tenant.id, employee.id, data, user)
-        events = await service.list_events(db, tenant.id, employee.id)
+        events = await service.list_events(db, tenant.id, employee.id, None, user)
         assert len(events) >= 1
 
 

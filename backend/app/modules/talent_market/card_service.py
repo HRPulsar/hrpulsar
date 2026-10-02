@@ -200,16 +200,14 @@ async def get_card_detail(
     scope = None
     employee_view = False
     if current_user is not None:
-        from app.core.access_scope import is_employee_only
-
         scope = await resolve_talent_scope(db, current_user)
-        employee_view = (
-            not scope.unrestricted
-            and is_employee_only(current_user)
-            and not scope.division_ids
-        )
+        # HRP-824: the scope, not the role, says whether this viewer reads
+        # only the cards their own name is on. HRP-971: so does competing
+        # on this card - a division head who applied reads it as an
+        # applicant, not as the one running it.
+        employee_view = scope.candidate_only or scope.competes_on(card.id)
         if not scope.unrestricted:
-            if employee_view:
+            if scope.candidate_only:
                 # HRP-765: the same condition the list narrows on, asked
                 # about this one row — one rule, so the two cannot drift.
                 await assert_employee_card_visible(

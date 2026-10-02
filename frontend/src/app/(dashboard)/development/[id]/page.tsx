@@ -111,7 +111,10 @@ export default function PDPDetailPage() {
   const [saving, setSaving] = useState(false);
 
   // Inline edit
-  const { canManage, isAdmin, roles } = usePermissions();
+  const { canManageSection, isAdmin, roles } = usePermissions();
+  // HRP-825: authoring the plan follows the section's level; the owner
+  // and the reviewer keep their half at `view`.
+  const canManage = canManageSection("development");
   const { user } = useAuth();
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -647,11 +650,17 @@ export default function PDPDetailPage() {
   const ownerCanSubmitForReview =
     ownerOnlySubmitFlow &&
     ["sent", "in_progress", "returned"].includes(pdp.status);
+  // HRP-825: the full graph is the backend's "admin tier or `manage`"; any
+  // other viewer who is not the owner - a manager the tenant lowered to
+  // `view`, a named reviewer - gets no status actions, only 403s.
+  const runsPlans = canManage || adminTier;
   const nextStatuses: PDPStatus[] = ownerOnlySubmitFlow
     ? ownerCanSubmitForReview
       ? ["review"]
       : []
-    : pdpNextStatuses(pdp.status);
+    : runsPlans
+      ? pdpNextStatuses(pdp.status)
+      : [];
   // HRP-12: the admin can't send an empty plan or one whose items lack
   // materials — disable "send" with a tooltip until both conditions hold.
   // HRP-191 REDO: a past deadline no longer disables the Send button —

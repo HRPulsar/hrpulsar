@@ -6,13 +6,15 @@ means "the user is not linked to any employee" and lists should return nothing.
 """
 
 import uuid
+from typing import Any
 
 from fastapi import status
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
-from app.modules.auth.models import User
+from app.core.sections import matrix_levels
+from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Division, Tenant
 from app.modules.employee.models import Employee
 
@@ -55,11 +57,11 @@ async def directory_show_grades(db: AsyncSession, tenant_id: uuid.UUID) -> bool:
 # get two predicates rather than one ``is_employee_only()`` used twice.
 # Hiring cannot raise a requisition without the grade and specialization of
 # the position it is filling (the requisition form fills its pickers from
-# them — HRP-180), but compensation is not theirs to read.
-GRADE_ROLE_CODES = ADMIN_ROLE_CODES | MANAGER_ROLE_CODES | {
-    "recruiter",
-    "hiring_manager",
-}
+# them — HRP-180), but compensation is not theirs to read. HRP-830: hiring
+# is whoever reaches the recruitment section, not the recruiter and
+# hiring_manager roles - the defaults open it to exactly those two on top
+# of the admin-level and manager roles below.
+GRADE_ROLE_CODES = ADMIN_ROLE_CODES | MANAGER_ROLE_CODES
 
 
 async def can_see_position_grades(db: AsyncSession, current_user: User) -> bool:
@@ -72,10 +74,13 @@ async def can_see_position_grades(db: AsyncSession, current_user: User) -> bool:
     payload: off means a rank-and-file caller sees neither the grade nor the
     specialization of a position, on means they see both.
 
-    Deliberately not ``is_employee_only()``: the hiring roles read the pair
-    and not the band, so the two predicates carry different role sets.
+    Deliberately not ``is_employee_only()``: hiring - ``view`` on
+    recruitment - reads the pair and not the band, so the two predicates
+    carry different rules.
     """
     if any(r.code in GRADE_ROLE_CODES for r in current_user.roles):
+        return True
+    if (await matrix_levels(db, current_user))["recruitment"] != "none":
         return True
     return await directory_show_grades(db, current_user.tenant_id)
 
@@ -166,9 +171,15 @@ async def get_managed_division_ids(
             children_map.setdefault(d.parent_id, []).append(d.id)
 
     subtree_ids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
     queue = [d.id for d in managed_roots]
     while queue:
         current = queue.pop(0)
+        if current in seen:
+            # A corrupted parent chain (a cycle) ends here instead of
+            # hanging the request — same guard as company.service.get_division_subtree_ids.
+            continue
+        seen.add(current)
         subtree_ids.append(current)
         queue.extend(children_map.get(current, []))
     return subtree_ids
@@ -280,26 +291,60 @@ async def assert_employee_write_scope(
 ) -> None:
     """Raise 403 if `current_user` cannot perform a write on `target`.
 
-    - admin / hr / platform_admin → pass.
-    - manager → target must be within `get_visible_employee_ids` (own division
-      subtree). Otherwise 403 ``outside_division_scope``.
-    - any other role → 403 ``employee_write_forbidden`` (router-level guards
-      already block this; the assert is defence in depth).
+    HRP-829: writing on someone's record is ``manage`` on ``employees`` -
+    the tenant's matrix, ``admin`` and ``manager`` by default - in place of
+    the manager role.
+
+    - below ``manage`` → 403 ``employee_write_forbidden``; ``hr`` included,
+      which the admin tier used to let through on another's education and
+      courses (Maxim, 24.09).
+    - admin-level (admin / hr / platform_admin) → the whole workspace.
+    - anyone else → `target` must be within `get_visible_employee_ids` (own
+      card + managed subtree). Otherwise 403 ``outside_division_scope``.
     """
+    if (await matrix_levels(db, current_user))["employees"] != "manage":
+        raise AppError(
+            "employee_write_forbidden",
+            status.HTTP_403_FORBIDDEN,
+            detail_extra={},
+            detail_code_key="error_code",
+        )
     if _is_admin(current_user):
         return
-
-    if _is_manager(current_user):
-        visible = await get_visible_employee_ids(db, current_user)
-        if visible is None or target.id in visible:
-            return
+    # The subtree first: an out-of-scope target answers the same whoever
+    # they are - asking "is this an admin-level account" first told the
+    # caller who holds admin and hr across the workspace.
+    visible = await get_visible_employee_ids(db, current_user)
+    if visible is not None and target.id not in visible:
         raise AppError(
             "outside_division_scope",
             status.HTTP_403_FORBIDDEN,
             detail_extra={},
             detail_code_key="error_code",
         )
+    await assert_may_write_person(db, current_user, target.user_id)
 
+
+def _admin_level_filter(user_ids: Any) -> Select:
+    """``user_roles.user_id`` of the admin-level role holders among ``user_ids``."""
+    return (
+        select(user_roles.c.user_id)
+        .join(Role, Role.id == user_roles.c.role_id)
+        .where(user_roles.c.user_id.in_(user_ids), Role.code.in_(ADMIN_ROLE_CODES))
+    )
+
+
+async def assert_may_write_person(
+    db: AsyncSession, current_user: User, user_id: uuid.UUID
+) -> None:
+    """HRP-829 (Maxim, 24.09): below the admin level nobody writes an
+    admin-level person's record - status, transfer, history, pay. A role the
+    tenant raised to ``manage`` could otherwise file the workspace owner in
+    their division and terminate them out of the app."""
+    if _is_admin(current_user):
+        return
+    if await db.scalar(_admin_level_filter([user_id]).limit(1)) is None:
+        return
     raise AppError(
         "employee_write_forbidden",
         status.HTTP_403_FORBIDDEN,
@@ -308,19 +353,122 @@ async def assert_employee_write_scope(
     )
 
 
-def assert_not_self_edit_via_employees(current_user: User, target: Employee) -> None:
-    """Block manager from editing their own employee record via /employees.
+async def pay_visible_employee_ids(
+    db: AsyncSession, current_user: User
+) -> set[uuid.UUID] | None:
+    """HRP-829: whose pay an aggregate may count for this caller - the read
+    scope less the admin-level people, whose record (pay included) is
+    closed below the admin level. ``None`` for an admin-level role."""
+    visible = await get_visible_employee_ids(db, current_user)
+    if not visible:
+        return visible
+    admins = await db.scalars(
+        select(Employee.id).where(
+            Employee.id.in_(visible),
+            Employee.user_id.in_(
+                _admin_level_filter(select(Employee.user_id).where(Employee.id.in_(visible)))
+            ),
+        )
+    )
+    return visible - set(admins)
 
-    Admin / hr / platform_admin can edit themselves freely. Managers cannot
-    self-demote (status), reassign their own position/division, or otherwise
-    mutate their own card via this endpoint — profile self-edits are routed
-    through ``/auth/me`` (EMP1 allowlist).
+
+async def assert_division_write_scope(
+    db: AsyncSession, current_user: User, *division_ids: uuid.UUID | None
+) -> None:
+    """Raise 403 unless every id sits in the caller's managed subtree.
+
+    - admin / hr / platform_admin → pass.
+    - anyone else → each id must be in ``get_visible_division_ids``, the
+      managed subtree. ``None`` (the root) is in nobody's subtree, so a
+      manager neither creates a top-level division nor detaches one from
+      the tree (HRP-819).
+
+    Which roles may write at all is the router's question (``require_role``);
+    this only asks whether the caller's subtree holds the ids.
     """
-    if _is_admin(current_user):
+    visible = await get_visible_division_ids(db, current_user)
+    if visible is None or all(d in visible for d in division_ids):
         return
-    if not _is_manager(current_user):
+    raise AppError(
+        "outside_division_scope",
+        status.HTTP_403_FORBIDDEN,
+        detail_extra={},
+        detail_code_key="error_code",
+    )
+
+
+def authored_only(current_user: User) -> uuid.UUID | None:
+    """Whose group runs the caller reaches: ``None`` - all of them - at the
+    admin level, otherwise the caller's own user id.
+
+    A CPA round and a mass exam carry no assessee and no division, only
+    their author, so below the admin level each is the author's alone - to
+    list, open and change; a mass assessment's own actions are too
+    (HRP-640, Vladimir 29.09).
+    """
+    return None if _is_admin(current_user) else current_user.id
+
+
+async def assert_authored(
+    db: AsyncSession,
+    current_user: User,
+    author_column: Any,
+    row_filter: Any,
+) -> None:
+    """403 unless ``authored_only`` lets the caller reach the row.
+
+    A row that does not exist is refused the same way, as the assessment
+    scope does: telling a caller that someone else's run exists is a leak.
+    """
+    author = authored_only(current_user)
+    if author is None:
         return
-    if target.user_id != current_user.id:
+    if await db.scalar(select(author_column).where(row_filter)) != author:
+        raise AppError(
+            "not_the_author",
+            status.HTTP_403_FORBIDDEN,
+            detail_extra={},
+            detail_code_key="error_code",
+        )
+
+
+async def assert_division_heads_in_scope(
+    db: AsyncSession, current_user: User, *employee_ids: uuid.UUID | None
+) -> None:
+    """Raise 403 unless every named head sits in the caller's reach.
+
+    Naming a division's manager or deputy grants the ``manager`` role
+    (``sync_role_on_assign``), so below the admin level it is someone of
+    the caller's own subtree, or the caller - a person from elsewhere is
+    the admin's to appoint (HRP-857, Vladimir 29.09). ``None`` clears the
+    seat and needs no check.
+    """
+    heads = [e for e in employee_ids if e is not None]
+    if not heads:
+        return
+    visible = await get_visible_employee_ids(db, current_user)
+    if visible is None or all(e in visible for e in heads):
+        return
+    raise AppError(
+        "outside_division_scope",
+        status.HTTP_403_FORBIDDEN,
+        detail_extra={},
+        detail_code_key="error_code",
+    )
+
+
+def assert_not_self_edit_via_employees(current_user: User, target: Employee) -> None:
+    """Block a non-admin-level writer from their own employee record via /employees.
+
+    Admin / hr / platform_admin can edit themselves freely. Anyone else who
+    writes here holds ``manage`` on ``employees`` (a manager by default,
+    HRP-829) and cannot self-demote (status), reassign their own
+    position/division, set their own pay or otherwise mutate their own card
+    via this endpoint — profile self-edits are routed through ``/auth/me``
+    (EMP1 allowlist).
+    """
+    if _is_admin(current_user) or target.user_id != current_user.id:
         return
     raise AppError(
         "cannot_edit_self_status",

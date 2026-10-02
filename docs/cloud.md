@@ -35,6 +35,7 @@ Pay only for what you use. Every organization starts with a free tier — no cre
 - **Data import is priced per row** — importing employees or other records costs credits for every data row in the uploaded file, not once per file, so a 500-person import costs what 500 people cost. A file the platform cannot read, or an import type it does not know, is refused without charging anything
 - **Read operations are always free** — browsing, viewing, and searching cost nothing
 - **Spending visibility** — real-time credit balance, transaction history, and spending analytics
+- **Every AI charge explained** — open any transaction to see who started it, which object it worked on, which model answered, how long it took and how many model calls it made
 - **Bonus credits** — additional credits granted by support for special cases
 - **Deduction order** — free credits are used first, then bonus, then purchased
 - **No surprises** — cost confirmation before expensive operations
@@ -62,6 +63,9 @@ Run multiple organizations on a single HRPulsar Cloud instance with complete dat
 - One email address can belong to multiple organizations
 - Switch between organizations instantly — no re-login required
 - Organization picker on login when multiple workspaces are available
+- **Per-workspace AI processors.** Each workspace's data reaches only the AI providers
+  agreed for it — we can switch a provider off for your workspace or keep you on your own
+  keys only, and every change is logged
 
 ## Platform Administration
 

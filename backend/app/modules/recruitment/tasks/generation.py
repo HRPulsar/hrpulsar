@@ -37,6 +37,7 @@ def generate_questions_task(
     from sqlalchemy.orm import Session
 
     from app.config import settings
+    from app.core import ai_usage_hooks
     from app.modules.recruitment.models import (
         Candidate,
         CandidateQuestion,
@@ -54,6 +55,14 @@ def generate_questions_task(
             if not candidate:
                 logger.error("Candidate %s not found", candidate_id)
                 return {"status": "error", "error": "Candidate not found"}
+
+            ai_usage_hooks.bind(
+                tenant_id=uuid.UUID(tenant_id),
+                action="recruitment.generate_candidate_questions",
+                entity_type="candidate",
+                entity_id=candidate.id,
+                work_unit_id=ai_usage_hooks.celery_task_uuid(self.request.id),
+            )
 
             vacancy = db.get(Vacancy, uuid.UUID(vacancy_id))
             if not vacancy:
@@ -160,6 +169,88 @@ def generate_questions_task(
         engine.dispose()
 
 
+@celery.task(bind=True, name="app.modules.recruitment.tasks.generate_question_set_task")
+def generate_question_set_task(
+    self,
+    set_id: str,
+    tenant_id: str,
+    cv_id: str,
+    payload: dict,
+    user_id: str | None,
+    expected_version: int | None,
+    cost: float | None = None,
+) -> dict:
+    """HRP-471: fill the question set the API enqueued.
+
+    The whole body is ``question_service._run_generation_job``: it runs
+    the model, charges the pinned ``cost`` in the transaction that turns
+    the row ``ready``, drops the result when the row was cancelled
+    meanwhile, and settles the row (``failed``, or back to ``ready``) when
+    anything raises — before, in or after the model call. No retries: a
+    retry would ask the model a second time for a set the recruiter has
+    already been told failed.
+    """
+    import asyncio
+    import uuid
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.config import settings
+    from app.core import ai_usage_hooks
+    from app.database import make_async_engine
+    from app.modules.recruitment import question_service
+    from app.modules.recruitment.schemas import GenerateQuestionSetRequest
+
+    # HRP-964: the job runs past the billing wrapper (HRP-471), so the task
+    # binds the context itself. The run - this task - is the work unit
+    # shared by the model calls and the charge the job makes when the set
+    # turns ready: the set row is reused by every regeneration, and as the
+    # unit it merged their calls and timings into one charge's detail.
+    ai_usage_hooks.bind(
+        tenant_id=uuid.UUID(tenant_id),
+        user_id=uuid.UUID(user_id) if user_id else None,
+        action="recruitment.generate_question_set",
+        entity_type="candidate_vacancy",
+        entity_id=uuid.UUID(cv_id),
+        work_unit_id=ai_usage_hooks.work_unit_id_or(
+            ai_usage_hooks.celery_task_uuid(self.request.id)
+        ),
+    )
+
+    async def _inner() -> dict:
+        engine = make_async_engine(
+            settings.database_url,
+            pool_size=1,
+            max_overflow=1,
+            pool_recycle=300,
+            pool_pre_ping=True,
+        )
+        session_factory = async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
+        try:
+            async with session_factory() as db:
+                return await question_service._run_generation_job(
+                    db,
+                    uuid.UUID(tenant_id),
+                    uuid.UUID(cv_id),
+                    GenerateQuestionSetRequest.model_validate(payload),
+                    current_user_id=uuid.UUID(user_id) if user_id else None,
+                    into_set_id=uuid.UUID(set_id),
+                    expected_version=expected_version,
+                    cost=cost,
+                )
+        finally:
+            await engine.dispose()
+
+    try:
+        result = asyncio.run(_inner())
+    except Exception:  # noqa: BLE001
+        logger.exception("question set generation failed for set %s", set_id)
+        return {"status": "failed", "set_id": set_id}
+    return {"status": result.get("status"), "set_id": set_id}
+
+
 @celery.task(
     bind=True,
     max_retries=2,
@@ -183,6 +274,7 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
     from sqlalchemy.orm import Session
 
     from app.config import settings
+    from app.core import ai_usage_hooks
     from app.modules.recruitment.analysis_language import (
         resolve_analysis_language_sync,
     )
@@ -197,6 +289,14 @@ def generate_profile_task(self, vacancy_id: str, tenant_id: str) -> dict:
             if not vacancy:
                 logger.error("Vacancy %s not found", vacancy_id)
                 return {"status": "error", "error": "Vacancy not found"}
+
+            ai_usage_hooks.bind(
+                tenant_id=vacancy.tenant_id,
+                action="recruitment.generate_profile",
+                entity_type="vacancy",
+                entity_id=vacancy.id,
+                work_unit_id=ai_usage_hooks.celery_task_uuid(self.request.id),
+            )
 
             # HRP-628 / HRP-702: resolved once — the prompt is written in
             # this language and ``VacancyProfile.language`` records it.

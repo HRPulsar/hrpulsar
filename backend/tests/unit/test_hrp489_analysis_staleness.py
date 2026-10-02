@@ -274,12 +274,10 @@ class TestAnalysisStaleness:
         self, db: AsyncSession, tenant, user, pair
     ):
         analysed = await _add_transcribed_interview(db, tenant, user, pair)
+        # The run completes after the transcript it consumed landed.
         run = await _add_run(
             db, tenant, pair, mode="full", interview_id=analysed.id, age_days=0
         )
-        # Analysis is newer than the transcript it consumed.
-        run.created_at = datetime.now(UTC) + timedelta(minutes=5)
-        await db.commit()
 
         cv = await db.get(CandidateVacancy, pair["cv_id"])
         out = await resume_analysis_service.evaluate_analysis_staleness(
@@ -287,6 +285,110 @@ class TestAnalysisStaleness:
         )
         assert out["transcript_outdated"] is False
         assert out["newer_transcribed_interview_id"] is None
+
+    async def _complete_full_run(
+        self, db: AsyncSession, tenant, user, pair
+    ) -> tuple[AIAnalysisRun, Interview]:
+        """A full run the way the worker leaves it (HRP-492 REDO 3).
+
+        The row is stamped ``pending`` at the click (``created_at``) and
+        the verdict is written onto the interview in the same transaction
+        that completes the run — so the interview row is always touched
+        *after* the run was created.
+        """
+        analysed = await _add_transcribed_interview(db, tenant, user, pair)
+        run = await _add_run(
+            db, tenant, pair, mode="full", interview_id=analysed.id, age_days=0
+        )
+        run.created_at = datetime.now(UTC) - timedelta(minutes=10)
+        await db.commit()
+        analysed.analysis_status = "completed"
+        run.verdict_summary = "Fresh verdict."
+        await db.commit()
+        await db.refresh(run)
+        await db.refresh(analysed)
+        return run, analysed
+
+    async def test_fresh_full_run_is_not_stale(
+        self, db: AsyncSession, tenant, user, pair
+    ):
+        """QA (15.09): the banner showed after *every* fresh analysis."""
+        run, analysed = await self._complete_full_run(db, tenant, user, pair)
+
+        cv = await db.get(CandidateVacancy, pair["cv_id"])
+        out = await resume_analysis_service.evaluate_analysis_staleness(
+            db, tenant.id, cv, run, analysed
+        )
+        assert out["transcript_outdated"] is False
+        assert out["newer_transcribed_interview_id"] is None
+
+    async def _hashed_full_run(
+        self, db: AsyncSession, tenant, user, pair
+    ) -> tuple[AIAnalysisRun, Interview]:
+        """A full run that recorded the transcript it analysed (HRP-492)."""
+        analysed = await _add_transcribed_interview(db, tenant, user, pair)
+        run = await _add_run(
+            db, tenant, pair, mode="full", interview_id=analysed.id, age_days=0
+        )
+        run.analysis_data = {
+            "mode": "full",
+            "transcript_hash": resume_analysis_service.transcript_hash(
+                analysed.transcript
+            ),
+        }
+        await db.commit()
+        return run, analysed
+
+    async def test_editing_the_interview_card_is_not_a_new_transcript(
+        self, db: AsyncSession, tenant, user, pair
+    ):
+        """Review: a rename or a note moves ``updated_at`` too — the banner
+        must key on the transcript, not on the row."""
+        run, analysed = await self._hashed_full_run(db, tenant, user, pair)
+        analysed.title = "Renamed after the analysis"
+        analysed.notes = "Good conversation"
+        await db.commit()
+        await db.refresh(analysed)
+
+        cv = await db.get(CandidateVacancy, pair["cv_id"])
+        out = await resume_analysis_service.evaluate_analysis_staleness(
+            db, tenant.id, cv, run, analysed
+        )
+        assert out["transcript_outdated"] is False
+
+    async def test_a_changed_transcript_is_stale_even_if_older_than_the_run(
+        self, db: AsyncSession, tenant, user, pair
+    ):
+        run, analysed = await self._hashed_full_run(db, tenant, user, pair)
+        analysed.transcript = "a different conversation"
+        await db.commit()
+        await db.refresh(analysed)
+        # Timestamps say nothing here: the hash is what decides.
+        run.updated_at = datetime.now(UTC) + timedelta(hours=1)
+        await db.commit()
+
+        cv = await db.get(CandidateVacancy, pair["cv_id"])
+        out = await resume_analysis_service.evaluate_analysis_staleness(
+            db, tenant.id, cv, run, analysed
+        )
+        assert out["transcript_outdated"] is True
+        assert out["newer_transcribed_interview_id"] == str(analysed.id)
+
+    async def test_transcript_reuploaded_after_the_analysis_is_stale(
+        self, db: AsyncSession, tenant, user, pair
+    ):
+        """A new transcript on the same interview card, after the run."""
+        run, analysed = await self._complete_full_run(db, tenant, user, pair)
+        analysed.transcript = "a different conversation"
+        await db.commit()
+        await db.refresh(analysed)
+
+        cv = await db.get(CandidateVacancy, pair["cv_id"])
+        out = await resume_analysis_service.evaluate_analysis_staleness(
+            db, tenant.id, cv, run, analysed
+        )
+        assert out["transcript_outdated"] is True
+        assert out["newer_transcribed_interview_id"] == str(analysed.id)
 
     async def test_resume_only_run_ignores_transcripts(
         self, db: AsyncSession, tenant, user, pair
@@ -489,3 +591,52 @@ class TestApplyAiAnalysisState:
             db, tenant.id, items
         )
         assert items == []
+
+
+class TestFinalizerRecordsTheAnalysedTranscript:
+    async def test_the_hash_of_what_the_model_read_is_stored(
+        self, db: AsyncSession, tenant, user
+    ):
+        """Review: the hash is taken from the text sent to the model, not
+        re-read at finalize — the task commits mid-run, and a transcript
+        replaced meanwhile must still read as newer than the analysis."""
+        from app.modules.recruitment.tasks.analysis import (
+            _finalize_full_analysis_run,
+        )
+        from sqlalchemy.orm import Session
+
+        from tests.unit.test_hrp274_normalized_ai_score import (
+            _make_analysis,
+            _seed_cv_with_interview,
+            _sync_engine,
+        )
+
+        seeded = await _seed_cv_with_interview(db, tenant, user)
+        read_by_model = resume_analysis_service.transcript_hash("what the model read")
+        engine = _sync_engine()
+        try:
+            with Session(engine) as sync_db:
+                cv = sync_db.get(CandidateVacancy, seeded["cv_id"])
+                interview = sync_db.get(Interview, seeded["interview_id"])
+                interview.transcript = "replaced while the model ran"
+                _finalize_full_analysis_run(
+                    sync_db,
+                    tenant_id=tenant.id,
+                    interview=interview,
+                    cv=cv,
+                    candidate_name="Hash Check",
+                    analysis=_make_analysis(),
+                    analysed_transcript_hash=read_by_model,
+                )
+                sync_db.commit()
+                run = (
+                    sync_db.query(AIAnalysisRun)
+                    .filter(
+                        AIAnalysisRun.candidate_vacancy_id == cv.id,
+                        AIAnalysisRun.status == "completed",
+                    )
+                    .one()
+                )
+                assert run.analysis_data["transcript_hash"] == read_by_model
+        finally:
+            engine.dispose()

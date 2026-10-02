@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { AuthProvider } from "@/context/auth-context";
 import { PlatformAdminRedirect } from "@/components/platform-admin-redirect";
 import { Sidebar } from "@/components/sidebar";
+import { SectionGate } from "@/components/require-section";
 import { Header } from "@/components/header";
 import { ImpersonationBanner } from "@/components/impersonation-banner";
 import { AIGenerationBanner } from "@/components/ai-generation-banner";
@@ -56,7 +57,9 @@ export default function DashboardLayout({
                 <AIGenerationBanner />
                 <DemoBanner />
                 <Header />
-                <main className="flex-1 overflow-auto p-4 sm:p-6">{children}</main>
+                <main className="flex-1 overflow-auto p-4 sm:p-6">
+                  <SectionGate>{children}</SectionGate>
+                </main>
                 <DemoFeedbackPopup />
               </div>
             </div>

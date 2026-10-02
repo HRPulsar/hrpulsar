@@ -718,6 +718,37 @@ async def _attach_media(db: AsyncSession, interview: Interview, tenant_id) -> No
 
 
 @pytest.mark.asyncio
+async def test_transcribe_empty_chain_marks_interview_failed(
+    db: AsyncSession, killswitch_off, monkeypatch
+):
+    """HRP-1005 (F3b): an empty transcription chain — no BYOK key and no
+    processor the tenant's list allows on the platform key — must fail the
+    interview with a clear reason instead of crashing or silently no-op'ing."""
+    interview, tenant = await _make_demo_setup(db, is_demo=False)
+    interview.transcription_status = "pending"
+    await db.commit()
+    await _attach_media(db, interview, tenant.id)
+
+    monkeypatch.setattr(
+        "app.modules.recruitment.transcription_service.get_transcription_chain_sync",
+        lambda db, tenant_id: [],
+    )
+
+    result = transcribe_interview_task.run(str(interview.id), str(tenant.id))
+    assert result["status"] == "failed"
+
+    refreshed = (
+        await db.execute(
+            select(Interview)
+            .where(Interview.id == interview.id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert refreshed.transcription_status == "failed"
+    assert refreshed.transcription_error
+
+
+@pytest.mark.asyncio
 async def test_real_path_chains_the_analysis_and_consumes_the_flag(
     db: AsyncSession, killswitch_off, monkeypatch
 ):

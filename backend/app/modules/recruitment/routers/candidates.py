@@ -18,14 +18,15 @@ from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.modules.auth.dependencies import require_role
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     service,
 )
 from app.modules.recruitment.routers.common import (
-    RECRUITMENT_VIEWER_ROLES,
+    evaluates,
     resolve_page_params,
+    runs_hiring,
 )
 from app.modules.recruitment.schemas import (
     BatchFinalizeRequest,
@@ -64,7 +65,7 @@ router = APIRouter(tags=["recruitment"])
 async def create_candidate(
     data: CandidateCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.create_candidate(
         db, current_user.tenant_id, current_user.id, data
@@ -80,7 +81,7 @@ async def list_candidates(
     q: str | None = None,
     vacancy_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     scope_filter: ColumnElement[bool] | None = Depends(list_scope_filter),
     _query_scope: None = Depends(vacancy_query_scope),
 ):
@@ -108,7 +109,7 @@ async def list_candidates(
 async def get_candidate(
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(candidate_scope),
 ):
     return await service.get_candidate(db, current_user.tenant_id, candidate_id)
@@ -119,7 +120,7 @@ async def update_candidate(
     candidate_id: uuid.UUID,
     data: CandidateUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.update_candidate(
         db, current_user.tenant_id, candidate_id, data
@@ -130,7 +131,7 @@ async def update_candidate(
 async def list_candidate_resumes(
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(candidate_scope),
 ):
     return await service.list_candidate_resumes(
@@ -143,7 +144,7 @@ async def update_resume_parsed_data(
     resume_id: uuid.UUID,
     payload: dict,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.update_resume_parsed_data(
         db, current_user.tenant_id, resume_id, payload
@@ -155,7 +156,7 @@ async def get_resume_download_url(
     resume_id: uuid.UUID,
     disposition: Literal["inline", "attachment"] = Query(default="inline"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(resume_scope),
 ):
     return await service.get_resume_download_url(
@@ -167,7 +168,7 @@ async def get_resume_download_url(
 async def list_candidate_vacancies(
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(candidate_scope),
     scope_filter: ColumnElement[bool] | None = Depends(list_scope_filter),
 ):
@@ -190,7 +191,7 @@ async def list_candidate_vacancies(
 async def attach_candidate(
     data: CandidateVacancyCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.attach_candidate(
         db, current_user.tenant_id, current_user.id, data
@@ -205,7 +206,7 @@ async def change_candidate_status(
     cv_id: uuid.UUID,
     data: CandidateVacancyStatusUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(cv_scope),
 ):
     return await service.change_candidate_status(
@@ -220,7 +221,7 @@ async def change_candidate_status(
 async def get_candidate_vacancy(
     cv_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(cv_scope),
 ):
     return await service.get_candidate_vacancy(db, current_user.tenant_id, cv_id)
@@ -232,7 +233,7 @@ async def list_vacancy_candidates(
     skip: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     items, total = await service.list_vacancy_candidates(
@@ -252,7 +253,7 @@ async def add_candidate_manual(
     vacancy_id: uuid.UUID,
     data: CandidateManualCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.add_candidate_to_vacancy_manual(
         db, current_user.tenant_id, current_user.id, vacancy_id, data
@@ -267,7 +268,7 @@ async def finalize_candidates_from_parsed(
     vacancy_id: uuid.UUID,
     data: BatchFinalizeRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.finalize_candidates_from_parsed(
         db, current_user.tenant_id, current_user.id, vacancy_id, data
@@ -286,7 +287,7 @@ async def bulk_upload_resumes(
     vacancy_id: uuid.UUID,
     files: list[UploadFile] = File(default_factory=list),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     """Bulk resume upload — up to 50 files × 10 MB PDF/DOCX per batch.
 
@@ -308,7 +309,7 @@ async def get_resumes_parsing_status(
     vacancy_id: uuid.UUID,
     file_ids: list[uuid.UUID] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     return await service.get_resumes_parsing_status(
@@ -328,7 +329,7 @@ async def get_resumes_dedup_preview(
     vacancy_id: uuid.UUID,
     file_ids: list[uuid.UUID] = Query(default_factory=list),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     return await service.get_resumes_dedup_preview(
@@ -347,10 +348,10 @@ async def list_vacancy_candidates_enriched(
     db: AsyncSession = Depends(get_db),
     # HRP-267: rationale identical to GET /assessment-matrix —
     # candidate / invited-evaluator tokens must not be able to enumerate
-    # the full roster's AI scores and per-cell divergence previews.
-    current_user: User = Depends(
-        require_role("admin", "recruiter", "hr", "hiring_manager")
-    ),
+    # the full roster's AI scores and per-cell divergence previews. HRP-830:
+    # like that matrix, ``view`` in scope reads it - the role list left the
+    # manager role out, and the vacancy's candidate table came up empty.
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     items, _total = await service.list_vacancy_candidates_enriched(
@@ -368,7 +369,7 @@ async def patch_candidate_vacancy(
     data: CandidateVacancyPatch,
     response: Response,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     if_match: str | None = Header(default=None, alias="If-Match"),
     _scope: None = Depends(cv_scope),
 ):
@@ -392,7 +393,7 @@ async def patch_candidate_vacancy(
 async def delete_candidate_vacancy(
     cv_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     """HRP-181 REDO: drop the candidate from a vacancy funnel."""
     await service.delete_candidate_vacancy(db, current_user.tenant_id, cv_id)
@@ -407,7 +408,7 @@ async def get_candidate_full_card(
     candidate_id: uuid.UUID,
     response: Response,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(candidate_scope),
     scope_filter: ColumnElement[bool] | None = Depends(list_scope_filter),
 ):
@@ -432,7 +433,7 @@ async def patch_candidate(
     data: CandidateCanonicalPatch,
     response: Response,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ):
     payload = await service.patch_candidate(
@@ -455,7 +456,7 @@ async def patch_candidate(
 async def archive_candidate(
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     await service.archive_candidate(db, current_user.tenant_id, candidate_id)
     return Response(status_code=204)

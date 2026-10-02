@@ -10,11 +10,14 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 
+from app.core import sections
 from app.core.errors import AppError, exception_summary
+from app.core.sections import ROLE_CODES, SECTIONS, SECTIONS_BY_CODE, Level
 from app.core.url_guard import PinnedPublicIPTransport, ip_is_public
 from app.modules.auth.models import Invitation, Role, User, user_roles
 from app.modules.auth.roles import ensure_baseline_employee_role
@@ -23,6 +26,9 @@ from app.modules.company.models import (
     Division,
     SpecializationDivision,
     Tenant,
+    TenantSectionAccess,
+    TenantSectionAccessLog,
+    TenantSectionSetting,
 )
 from app.modules.company.schemas import (
     CompanyProfileUpdate,
@@ -30,6 +36,7 @@ from app.modules.company.schemas import (
     DivisionTree,
     DivisionUpdate,
     OnboardingStatusRead,
+    SectionAccessUpdate,
     SpecializationDivisionCreate,
     TenantUpdate,
 )
@@ -428,6 +435,12 @@ async def update_division(
         parent = await db.get(Division, updates["parent_id"])
         if not parent or parent.tenant_id != tenant_id:
             raise AppError("invalid_parent_division", status.HTTP_400_BAD_REQUEST)
+        # Under one of its own descendants the chain closes into a loop with
+        # no root, and the org chart drops the whole subtree.
+        if updates["parent_id"] in await get_division_subtree_ids(
+            db, tenant_id, [division_id]
+        ):
+            raise AppError("division_parent_cycle", status.HTTP_400_BAD_REQUEST)
 
     if "manager_id" in updates:
         await _validate_manager(db, tenant_id, updates["manager_id"])
@@ -1022,3 +1035,145 @@ async def complete_onboarding(db: AsyncSession, tenant_id: uuid.UUID) -> Tenant:
     await db.commit()
     await db.refresh(tenant)
     return tenant
+
+
+# --- Section access (HRP-820) ---
+
+
+def _section_override_queries(tenant_id: uuid.UUID) -> tuple[Select, Select]:
+    return (
+        select(TenantSectionAccess.section, TenantSectionAccess.role_code, TenantSectionAccess.level).where(
+            TenantSectionAccess.tenant_id == tenant_id
+        ),
+        select(TenantSectionSetting.section).where(
+            TenantSectionSetting.tenant_id == tenant_id, TenantSectionSetting.hidden.is_(True)
+        ),
+    )
+
+
+def _section_overrides_from(rows, hidden) -> tuple[dict[tuple[str, str], Level], set[str]]:
+    # A row the registry's flags now forbid (stored before a section became
+    # never_hidden / admin_locked) is dropped like an unknown code: honoured
+    # it would hide or lower what the registry pins, and the matrix screen
+    # would send back state its own save refuses.
+    overrides: dict[tuple[str, str], Level] = {
+        (section, role): level  # type: ignore[misc]
+        for section, role, level in rows
+        if section in SECTIONS_BY_CODE
+        and role in ROLE_CODES
+        and level in sections.LEVELS
+        and not (role == "admin" and SECTIONS_BY_CODE[section].admin_locked)
+    }
+    return overrides, {
+        s
+        for s in hidden
+        if s in SECTIONS_BY_CODE
+        and not (SECTIONS_BY_CODE[s].never_hidden or SECTIONS_BY_CODE[s].admin_locked)
+    }
+
+
+async def get_section_overrides(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> tuple[dict[tuple[str, str], Level], set[str]]:
+    """The tenant's deviations from the defaults: ``{(section, role): level}``
+    and the hidden sections. Codes the registry no longer knows are dropped."""
+    access, hidden = _section_override_queries(tenant_id)
+    return _section_overrides_from((await db.execute(access)).all(), (await db.scalars(hidden)).all())
+
+
+def get_section_overrides_sync(
+    db: Session, tenant_id: uuid.UUID
+) -> tuple[dict[tuple[str, str], Level], set[str]]:
+    """``get_section_overrides`` for the Celery side (HRP-830)."""
+    access, hidden = _section_override_queries(tenant_id)
+    return _section_overrides_from(db.execute(access).all(), db.scalars(hidden).all())
+
+
+def _matrix(overrides: dict[tuple[str, str], Level], hidden: set[str]) -> dict:
+    return {
+        "roles": list(ROLE_CODES),
+        "sections": [
+            {
+                "code": s.code,
+                "hidden": s.code in hidden,
+                "admin_locked": s.admin_locked,
+                "never_hidden": s.never_hidden,
+                "defaults": dict(s.defaults),
+                "levels": {r: overrides.get((s.code, r), s.defaults[r]) for r in ROLE_CODES},
+            }
+            for s in SECTIONS
+        ],
+    }
+
+
+async def get_section_access(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
+    return _matrix(*await get_section_overrides(db, tenant_id))
+
+
+def _section_diff(
+    old_overrides: dict[tuple[str, str], Level],
+    old_hidden: set[str],
+    new_overrides: dict[tuple[str, str], Level],
+    new_hidden: set[str],
+) -> dict:
+    diff: dict = {}
+    for s in SECTIONS:
+        entry: dict = {}
+        if (s.code in old_hidden) != (s.code in new_hidden):
+            entry["hidden"] = [s.code in old_hidden, s.code in new_hidden]
+        roles = {}
+        for r in ROLE_CODES:
+            before = old_overrides.get((s.code, r), s.defaults[r])
+            after = new_overrides.get((s.code, r), s.defaults[r])
+            if before != after:
+                roles[r] = [before, after]
+        if roles:
+            entry["roles"] = roles
+        if entry:
+            diff[s.code] = entry
+    return diff
+
+
+async def update_section_access(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    changed_by_id: uuid.UUID,
+    data: SectionAccessUpdate,
+) -> dict:
+    """Replace the matrix. Only deviations from the defaults are stored and
+    one log row carries the diff."""
+    sent = {row.code: row for row in data.sections}
+    unknown = set(sent) - set(SECTIONS_BY_CODE)
+    unknown |= {r for row in data.sections for r in row.levels if r not in ROLE_CODES}
+    if unknown:
+        raise AppError("section_access_unknown_section", status.HTTP_400_BAD_REQUEST)
+
+    new_overrides: dict[tuple[str, str], Level] = {}
+    new_hidden: set[str] = set()
+    for s in SECTIONS:
+        row = sent.get(s.code)
+        if row is None:
+            continue  # absent = defaults
+        if row.hidden:
+            if s.never_hidden:
+                raise AppError("section_access_cannot_hide", status.HTTP_400_BAD_REQUEST)
+            new_hidden.add(s.code)
+        for role, level in row.levels.items():
+            if s.admin_locked and role == "admin" and level != "manage":
+                raise AppError("section_access_admin_locked", status.HTTP_400_BAD_REQUEST)
+            if level != s.defaults[role]:
+                new_overrides[(s.code, role)] = level
+
+    old_overrides, old_hidden = await get_section_overrides(db, tenant_id)
+    diff = _section_diff(old_overrides, old_hidden, new_overrides, new_hidden)
+    if diff:
+        await db.execute(delete(TenantSectionAccess).where(TenantSectionAccess.tenant_id == tenant_id))
+        await db.execute(delete(TenantSectionSetting).where(TenantSectionSetting.tenant_id == tenant_id))
+        db.add_all(
+            TenantSectionAccess(tenant_id=tenant_id, section=sec, role_code=role, level=level)
+            for (sec, role), level in new_overrides.items()
+        )
+        db.add_all(TenantSectionSetting(tenant_id=tenant_id, section=sec, hidden=True) for sec in new_hidden)
+        db.add(TenantSectionAccessLog(tenant_id=tenant_id, changed_by_id=changed_by_id, diff=diff))
+        await db.commit()
+    return _matrix(new_overrides, new_hidden)

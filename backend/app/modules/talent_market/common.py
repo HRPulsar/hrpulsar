@@ -40,17 +40,23 @@ def assert_card_not_terminal(card: TalentCard) -> None:
         )
 
 
-async def resolve_manager_user(db: AsyncSession, emp: Employee | None) -> User | None:
-    """The user who manages this employee's division, if there is one.
+async def resolve_manager_user(
+    db: AsyncSession, emp: Employee | None, card_id: uuid.UUID
+) -> User | None:
+    """The user who manages this employee's division, if there is one - the
+    one the card's letters about the employee go to.
 
-    Was written out twice — inside the lifecycle dispatch below and again
-    in ``react_to_card`` — and HRP-714 needs it a third time, so it lives
-    here once. Returns None whenever any link in
-    employee → division → manager → user is missing.
+    Returns None whenever any link in employee → division → manager → user
+    is missing, and when that manager competes on the card themselves
+    (HRP-971): the fence keeps them off the rivals' rows, so no letter
+    names a rival or their outcome to them either. A head of their own
+    division is still returned - every caller skips the self case on its
+    own, and the plan request answers it with its own message.
     """
     if emp is None or emp.division_id is None:
         return None
     from app.modules.company.models import Division
+    from app.modules.talent_market.scope import competes_on_card
 
     div = await db.get(Division, emp.division_id)
     if div is None or div.manager_id is None:
@@ -58,7 +64,18 @@ async def resolve_manager_user(db: AsyncSession, emp: Employee | None) -> User |
     mgr_emp = await db.get(Employee, div.manager_id)
     if mgr_emp is None or mgr_emp.user_id is None:
         return None
-    return await db.get(User, mgr_emp.user_id)
+    mgr = (
+        await db.execute(
+            select(User)
+            .options(selectinload(User.roles))
+            .where(User.id == mgr_emp.user_id)
+        )
+    ).scalar_one_or_none()
+    if mgr is None or (
+        mgr.id != emp.user_id and await competes_on_card(db, mgr, card_id)
+    ):
+        return None
+    return mgr
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +218,7 @@ async def _dispatch_lifecycle_emails(
     async def _resolve_manager_user(
         emp: Employee | None,
     ) -> User | None:
-        return await resolve_manager_user(db, emp)
+        return await resolve_manager_user(db, emp, card.id)
 
     if event in {"published", "candidate_added"}:
         for cand in candidates:

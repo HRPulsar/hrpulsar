@@ -1,8 +1,11 @@
 """AI workforce registry REST (AR3), headless: no dashboard UI in the MVP.
 
-Rights: admin and hr manage the registry, manager reads it, any signed-in
-user may request an agent for themselves. ``require_role`` rather than
-``require_admin``: this is tenant data, not a platform surface.
+Rights come from the tenant's section access matrix (HRP-821): the registry
+is the Coverage section's, so ``manage`` on ``coverage`` runs it - the
+agents, the workflows and everyone's assignments - while anyone the section
+is open to may ask for an agent for themselves and read what they asked
+for. The gate (``section_gate``) has already closed the section for
+``none``; these dependencies answer for the rest.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.client_ip import client_ip
+from app.core.sections import matrix_levels, require_section
 from app.database import get_db
 from app.modules.ai_workforce import service
 from app.modules.ai_workforce.schemas import (
@@ -41,14 +45,13 @@ from app.modules.ai_workforce.schemas import (
     WorkflowRead,
     WorkflowUpdate,
 )
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 
 router = APIRouter(prefix="/ai-workforce", tags=["ai-workforce"])
 
-_READ_ROLES = frozenset({"admin", "hr", "manager"})
-_manage = require_role("admin", "hr")
-_read = require_role(*sorted(_READ_ROLES))
+_SECTION = "coverage"
+_manage = require_section(_SECTION, "manage")
 
 
 def _audit_meta(request: Request) -> dict[str, str | None]:
@@ -83,7 +86,7 @@ async def list_agents(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_read),
+    current_user: User = Depends(_manage),
 ):
     items, total = await service.list_agents(
         db,
@@ -118,7 +121,7 @@ async def create_agent(
 async def get_agent(
     agent_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_read),
+    current_user: User = Depends(_manage),
 ):
     return await service.get_agent(db, current_user.tenant_id, agent_id)
 
@@ -188,7 +191,7 @@ async def list_assignments(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_read),
+    current_user: User = Depends(_manage),
 ):
     items, total = await service.list_assignments(
         db,
@@ -207,7 +210,7 @@ async def list_assignments(
 async def list_expiring_assignments(
     days: int = Query(service.EXPIRY_WINDOW_DAYS, ge=0, le=366),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_read),
+    current_user: User = Depends(_manage),
 ):
     return await service.list_expiring_assignments(
         db, current_user.tenant_id, days_ahead=days
@@ -253,14 +256,14 @@ async def get_assignment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Registry roles read any row; anyone else only what they requested
-    for themselves."""
-    roles = {r.code for r in current_user.roles}
+    """The section's managers read any row; anyone else only what they
+    requested for themselves."""
+    level = (await matrix_levels(db, current_user))[_SECTION]
     return await service.get_assignment(
         db,
         current_user.tenant_id,
         assignment_id,
-        requester_user_id=None if roles & _READ_ROLES else current_user.id,
+        requester_user_id=None if level == "manage" else current_user.id,
     )
 
 
@@ -367,7 +370,7 @@ async def list_workflows(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_read),
+    current_user: User = Depends(_manage),
 ):
     items, total = await service.list_workflows(
         db,
@@ -401,7 +404,7 @@ async def create_workflow(
 async def get_workflow(
     workflow_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_read),
+    current_user: User = Depends(_manage),
 ):
     return await service.get_workflow(db, current_user.tenant_id, workflow_id)
 

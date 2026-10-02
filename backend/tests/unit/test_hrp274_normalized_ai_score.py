@@ -255,7 +255,9 @@ class TestFullModeFinalizerMirrorsScores:
                 assert cv.ai_score_normalized == pytest.approx(4.5)
                 assert cv.ai_verdict == "recommended"
                 assert cv.ai_analysis_mode == "full"
-                assert cv.ai_readiness == "resume_and_transcript"
+                # HRP-685: this candidate never had a resume, and the
+                # mirror must not claim otherwise after a full run.
+                assert cv.ai_readiness == "transcript_only"
 
                 run = (
                     sync_db.query(AIAnalysisRun)

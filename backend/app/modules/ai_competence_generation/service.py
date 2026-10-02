@@ -414,6 +414,9 @@ async def _snapshot_tree(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str, An
         select(Competence).where(
             (Competence.tenant_id == tenant_id) | Competence.tenant_id.is_(None),
             Competence.is_active.is_(True),
+            # HRP-632: other people's unpublished drafts are no catalogue
+            # entries - neither for the model nor in the context it shows.
+            Competence.draft_owner_id.is_(None),
         )
     )
     all_comps = list(comps_q.scalars().all())
@@ -639,6 +642,9 @@ async def _fetch_group_descendants(
         select(Competence).where(
             (Competence.tenant_id == tenant_id) | Competence.tenant_id.is_(None),
             Competence.is_active.is_(True),
+            # HRP-632: other people's unpublished drafts are no catalogue
+            # entries - neither for the model nor in the context it shows.
+            Competence.draft_owner_id.is_(None),
         )
     )
     all_comps = list(comps_q.scalars().all())

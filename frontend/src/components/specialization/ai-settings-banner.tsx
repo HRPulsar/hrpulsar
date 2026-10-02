@@ -4,9 +4,12 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { aiSettingsApi, type AISettings } from "@/lib/api/ai-settings";
+import { usePermissions } from "@/hooks/use-permissions";
 
 export function AISettingsBanner() {
   const t = useTranslations("company");
+  // HRP-831: the link leads into the AI settings section.
+  const canOpenAiSettings = usePermissions().canViewSection("ai-settings");
   const [settings, setSettings] = useState<AISettings | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,13 +78,15 @@ export function AISettingsBanner() {
           ),
         })}
       </span>
-      <Link
-        href="/settings/ai"
-        data-testid="ai-settings-banner-link"
-        className="text-primary hover:underline"
-      >
-        {t("adjustAiSettings")}
-      </Link>
+      {canOpenAiSettings && (
+        <Link
+          href="/settings/ai"
+          data-testid="ai-settings-banner-link"
+          className="text-primary hover:underline"
+        >
+          {t("adjustAiSettings")}
+        </Link>
+      )}
     </div>
   );
 }

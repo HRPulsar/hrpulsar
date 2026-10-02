@@ -176,9 +176,19 @@ async def test_card_full_mode_does_not_answer_with_a_cache_hit(
 
     monkeypatch.setattr(router_mod.service, "enqueue_analyze_or_cached", _boom)
 
+    from app.modules.auth.models import User
+
+    recruiter = User(
+        email=f"recruiter-{uuid.uuid4().hex[:8]}@test.com",
+        password_hash="x", first_name="Rec", last_name="Ruiter",
+        tenant_id=tenant.id,
+    )
+    db.add(recruiter)
+    await db.commit()
+
     class _User:
         tenant_id = tenant.id
-        id = uuid.uuid4()
+        id = recruiter.id
 
     res = await router_mod.enqueue_ai_analysis(
         interview.candidate_vacancy_id,
@@ -191,6 +201,8 @@ async def test_card_full_mode_does_not_answer_with_a_cache_hit(
     assert res.run_id is not None
     runs = await _runs_for(db, interview)
     assert [r.status for r in runs] == ["pending"]
+    # The worker binds the run's creator as the AI calls' user (HRP-964).
+    assert runs[0].created_by_id == recruiter.id
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +436,45 @@ async def test_worker_adopts_the_run_of_its_own_interview(
     runs = await _fresh_runs(db, interview_a.candidate_vacancy_id)
     assert runs[run_a.id].status == "processing"
     assert runs[run_b.id].status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_topup_run_calls_are_attributed_to_the_topup_action(
+    db: AsyncSession, worker_db, monkeypatch
+):
+    """HRP-964: a run stamped by ``enqueue_topup_to_full`` (it supersedes a
+    resume-only run) is billed as the top-up, so its model calls are too."""
+    from app.core import ai_usage_hooks
+    from app.modules.recruitment.tasks import analyze_interview_task
+
+    interview, tenant, profile = await _setup(db)
+    prior = AIAnalysisRun(
+        tenant_id=tenant.id,
+        candidate_vacancy_id=interview.candidate_vacancy_id,
+        mode="resume_only",
+        status="completed",
+        vacancy_profile_id=profile.id,
+        analysis_data={},
+    )
+    db.add(prior)
+    await db.commit()
+    run = await _pending_row(db, tenant, interview, profile)
+    run.supersedes_id = prior.id
+    await db.commit()
+
+    seen: list[str | None] = []
+
+    def _stop(*args, **kwargs):
+        ctx = ai_usage_hooks.current()
+        seen.append(ctx.action if ctx else None)
+        raise RuntimeError("stop at the LLM — attribution is what is under test")
+
+    monkeypatch.setattr("app.modules.ai.llm_client.generate_json", _stop)
+
+    with pytest.raises(RuntimeError):
+        analyze_interview_task.run(str(interview.id), str(tenant.id))
+
+    assert seen == ["recruitment.analyze_topup_to_full"]
 
 
 @pytest.mark.asyncio

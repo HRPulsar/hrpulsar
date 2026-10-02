@@ -94,6 +94,21 @@ class ContainerUpdate(BaseModel):
     gap_default_label: GapLabel | None = None
 
 
+class AccessOwnerRead(BaseModel):
+    """The owner of a process the way the shared employee line shows a
+    person (HRP-810): name, position and status. ``active`` is False once
+    the owner left - the account is off or the card is not active; on leave
+    is still with the company."""
+
+    user_id: uuid.UUID
+    name: str
+    position_title: str | None = None
+    # The employee card's status; an account with no card reads by the
+    # account alone - ``active``, or ``inactive`` once it is switched off.
+    status: str = "active"
+    active: bool
+
+
 class ContainerRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -113,6 +128,9 @@ class ContainerRead(BaseModel):
     # HRP-810: what the caller may do with it - filled by the router, which
     # knows the caller; the service returns rows.
     my_access: AccessLevel | None = None
+    # HRP-810 REDO: the owner as the list's Owner column shows them; filled
+    # by the router next to ``my_access``.
+    owner: AccessOwnerRead | None = None
     # HRP-862: ``coverage.summary_of`` as last computed - ``hours``, ``shares``
     # and ``automated_share``; null until the coverage was opened once. Left
     # untyped on purpose: it is a stored cache, and a row written by an older
@@ -139,13 +157,6 @@ class AccessRuleRef(BaseModel):
 class AccessRuleRead(AccessRuleRef):
     # A position's title or an employee's name; a role is labelled by the SPA.
     label: str | None = None
-
-
-class AccessOwnerRead(BaseModel):
-    user_id: uuid.UUID
-    name: str
-    # False once the owner left: the account is off or the card is not active.
-    active: bool
 
 
 class AccessLogRead(BaseModel):
@@ -422,6 +433,9 @@ class CoverageHuman(BaseModel):
     # The matching is by capability, not by role; the title lets the
     # reader see when a product manager covers a controller's sign-off.
     position: str | None
+    # HRP-959: an assigned person stays on the step when they go on leave or
+    # leave the company; the row labels the status. A match is always active.
+    status: str = "active"
     label: HumanLabel
     # The step's cognitive codes the person does not hold; only an assigned
     # executor can have any.
@@ -437,6 +451,7 @@ class CoveragePerson(BaseModel):
     employee_id: uuid.UUID
     name: str
     position: str | None
+    status: str = "active"
 
 
 SkillStatus = Literal["none", "generating", "ready", "failed"]

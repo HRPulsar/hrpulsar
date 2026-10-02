@@ -102,7 +102,10 @@ class TestEmployeeRolesDoNotAddQueriesPerRow:
 
         def _on_execute(conn, clauseelement, *args, **kwargs):  # noqa: ANN001
             text = str(clauseelement)
-            if "FROM roles" in text:
+            # The selectin load of ``User.roles`` joins ``roles`` through
+            # ``user_roles``. Until HRP-832 this matched ``FROM roles`` - the
+            # permissions load each role dragged along, not the roles load.
+            if "JOIN roles" in text or "FROM roles" in text:
                 role_queries.append(text)
 
         bind = db.bind

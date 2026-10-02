@@ -108,7 +108,69 @@ class TestSetEmployeeRole:
         )
 
         assert result["changed"] is True
-        assert await _user_codes(db, u.id) == {"manager"}
+        # HRP-832: the tier changes, the baseline stays.
+        assert await _user_codes(db, u.id) == {"manager", "employee"}
+
+    async def test_a_roleless_account_set_to_employee_gets_the_baseline(
+        self, db: AsyncSession, tenant, user, employee_role
+    ):
+        # Review 01.10: "no tenant role" read as already holding the
+        # baseline, so the call answered unchanged and left none.
+        u = await _user_with(db, tenant, employee_role)
+        await db.execute(user_roles.delete().where(user_roles.c.user_id == u.id))
+        await db.commit()
+        emp = await _make_emp(db, tenant, u)
+
+        result = await employee_service.set_employee_role(
+            db, tenant.id, emp.id, "employee", user
+        )
+
+        assert result["changed"] is True
+        assert await _user_codes(db, u.id) == {"employee"}
+
+    async def test_downgrade_strips_the_tier_and_keeps_the_baseline(
+        self, db: AsyncSession, tenant, user, manager_role, employee_role
+    ):
+        # The common case since HRP-832: manager plus the baseline.
+        u = await _user_with(db, tenant, manager_role)
+        await db.execute(user_roles.insert().values(user_id=u.id, role_id=employee_role.id))
+        await db.commit()
+        emp = await _make_emp(db, tenant, u)
+
+        result = await employee_service.set_employee_role(
+            db, tenant.id, emp.id, "employee", user
+        )
+
+        assert result["changed"] is True
+        assert await _user_codes(db, u.id) == {"employee"}
+        event = (
+            await db.execute(
+                select(EmployeeEvent).where(
+                    EmployeeEvent.employee_id == emp.id,
+                    EmployeeEvent.event_type == "role_changed",
+                )
+            )
+        ).scalar_one()
+        assert event.old_value == {"roles": ["manager"]}
+        assert event.new_value == {"roles": ["employee"]}
+
+    async def test_promotion_swaps_the_tier_beside_the_baseline(
+        self, db: AsyncSession, tenant, user, admin_role, employee_role
+    ):
+        await _system_role(db, "hr", "HR")
+        other_admin = await _user_with(db, tenant, admin_role)
+        await db.execute(
+            user_roles.insert().values(user_id=other_admin.id, role_id=employee_role.id)
+        )
+        await db.commit()
+        emp = await _make_emp(db, tenant, other_admin)
+
+        result = await employee_service.set_employee_role(
+            db, tenant.id, emp.id, "hr", user
+        )
+
+        assert result["changed"] is True
+        assert await _user_codes(db, other_admin.id) == {"hr", "employee"}
 
     async def test_strips_manager_when_no_division_is_left(
         self, db: AsyncSession, tenant, user, manager_role, employee_role
@@ -258,7 +320,7 @@ class TestSetEmployeeRole:
         )
 
         assert result["changed"] is True
-        assert await _user_codes(db, u.id) == {"hr"}
+        assert await _user_codes(db, u.id) == {"hr", "employee"}
 
     async def test_rejects_an_unknown_role_code(
         self, db: AsyncSession, tenant, user, employee_role

@@ -17,7 +17,8 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 import pytest
-from app.modules.demo.seed_data_competences import MATERIALS
+from app.modules.demo.seed_data_assessments import PDPS
+from app.modules.demo.seed_data_competences import GRADE_COMPETENCE_LINKS, MATERIALS
 
 # The product's own site is never a learning resource for the demo
 # company: a "course" that opens our documentation is the reported bug.
@@ -90,3 +91,58 @@ def test_link_matches_the_declared_format(material: dict):
             f"{material['title']!r} is a book pointing at an encyclopedia "
             f"article ({material['link']}) rather than the book"
         )
+
+
+# HRP-767 REDO: the product owner wants every plan in progress on the demo to
+# show what a plan can carry -- a book, a course, an article and a video, each
+# opening. The seed attaches a competence's materials up to the plan grade's
+# rung on the ladder (``_seed_assessments_and_pdps``), so this recomputes that
+# selection from the fixtures alone and asks the four kinds of it.
+_ALL_KINDS = {"book", "course", "article", "video"}
+
+
+def _rung(skill_level_key: str) -> int:
+    """``sl-l3`` -> 3: the seeded ladder keys carry their sort order."""
+    return int(skill_level_key.rsplit("-l", 1)[1])
+
+
+def _materials_of_in_progress_plan(plan: dict) -> list[dict]:
+    ladder = {
+        (link["grade_key"], link["specialization_key"], link["competence_key"]): (
+            _rung(link["skill_level_key"])
+        )
+        for link in GRADE_COMPETENCE_LINKS
+    }
+    out: list[dict] = []
+    for item in plan["items"]:
+        competence_key = item.get("competence_key")
+        if not competence_key:
+            continue
+        cap = ladder.get(
+            (plan["grade_key"], plan["specialization_key"], competence_key)
+        )
+        out.extend(
+            m
+            for m in MATERIALS
+            if m["competence_key"] == competence_key
+            and (cap is None or _rung(m["skill_level_key"]) <= cap)
+        )
+    return out
+
+
+_IN_PROGRESS = [p for p in PDPS if p["status"] == "in_progress"]
+
+
+def test_the_demo_still_has_plans_in_progress():
+    assert len(_IN_PROGRESS) >= 3, "the demo lost its in-progress plans"
+
+
+@pytest.mark.parametrize("plan", _IN_PROGRESS, ids=lambda p: p["title"][:40])
+def test_every_in_progress_demo_plan_offers_all_four_kinds_with_a_link(plan: dict):
+    linked_kinds = {
+        m["format"] for m in _materials_of_in_progress_plan(plan) if m["link"]
+    }
+    assert linked_kinds >= _ALL_KINDS, (
+        f"{plan['title']!r} opens without a linked "
+        f"{sorted(_ALL_KINDS - linked_kinds)} among its materials"
+    )

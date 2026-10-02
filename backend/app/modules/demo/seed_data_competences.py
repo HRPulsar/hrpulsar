@@ -1312,6 +1312,12 @@ INDICATORS: list[dict] = [
 #   pointing at an encyclopedia entry about its author is the same bug in
 #   a quieter form, so book links never resolve to Wikipedia.
 #
+# * HRP-767 REDO: every demo plan in progress opens on all four kinds of
+#   material with a link — a book, a course, an article and a video — so
+#   the demo shows what a plan can carry, not only what this company wrote
+#   itself. The ladder caps a senior plan at level 2, so the mix is arranged
+#   on the rungs those plans actually see (``test_demo_seed_materials``).
+#
 # Every URL here answered 200 when it landed. Titles are translated per
 # locale but ``link`` is not a TRANSLATABLE_KEY, so one link serves all
 # three catalogs — which is why they are documentation, publisher and
@@ -1360,7 +1366,11 @@ _MATERIAL_LINKS: dict[tuple[str, str], str] = {
     ),
     ("c-async", "sl-l2"): "https://basecamp.com/books/remote",
     ("c-cross-fn", "sl-l1"): "https://www.crucialconversations.com/",
-    ("c-mentoring", "sl-l1"): "https://openlibrary.org/works/OL19860807W",
+    ("c-mentoring", "sl-l1"): "https://www.youtube.com/watch?v=wtl5UrrgU8c",
+    ("c-mentoring", "sl-l2"): (
+        "https://www.coursera.org/specializations/coaching-skills-manager"
+    ),
+    ("c-mentoring", "sl-l3"): "https://openlibrary.org/works/OL19860807W",
     ("c-hiring", "sl-l2"): "https://ghsmart.com/who-the-a-method-for-hiring/",
     ("c-conflict", "sl-l1"): "https://www.difficultconversationsbook.com/",
     ("c-conflict", "sl-l2"): "https://en.wikipedia.org/wiki/Conflict_resolution",
@@ -1374,9 +1384,11 @@ _MATERIAL_LINKS: dict[tuple[str, str], str] = {
     ),
     ("c-customer-discovery", "sl-l1"): "https://www.momtestbook.com/",
     ("c-customer-discovery", "sl-l2"): (
-        "https://www.producttalk.org/continuous-discovery-habits/"
+        "https://www.producttalk.org/opportunity-solution-tree/"
     ),
-    ("c-okrs", "sl-l1"): "https://openlibrary.org/works/OL19746884W",
+    ("c-okrs", "sl-l1"): "https://www.youtube.com/watch?v=mJB83EZtAjc",
+    ("c-okrs", "sl-l2"): "https://rework.withgoogle.com/en/guides/set-goals-with-okrs",
+    ("c-okrs", "sl-l3"): "https://openlibrary.org/works/OL19746884W",
     ("c-sales-discovery", "sl-l2"): "https://openlibrary.org/works/OL1990870W",
     # HRP-713's on-stage beat needs one openable material inside the plan
     # the presenter builds from Will Gapp's card, and his junior grade caps
@@ -1537,19 +1549,28 @@ def _build_materials() -> list[dict]:
                 180,
             ),
         ),
+        # HRP-767 REDO: the senior plans cap at level 2, and every in-progress
+        # demo plan has to open on a linked book, course, article AND video —
+        # so the two mentoring rungs those plans see are the video and the
+        # course, and the book moves up to the rung only higher grades reach.
         "c-mentoring": (
+            (
+                "The secret to giving great feedback — LeeAnn Renninger (TED)",
+                "video",
+                "external",
+                15,
+            ),
+            (
+                "Coaching Skills for Managers — UC Davis on Coursera",
+                "course",
+                "external",
+                600,
+            ),
             (
                 "The Manager's Path — Camille Fournier (mentoring chapters)",
                 "book",
                 "external",
                 240,
-            ),
-            ("Onboarding playbook — first 30/60/90 days", "article", "internal", 90),
-            (
-                "Coaching framework — GROW model in practice",
-                "workshop",
-                "internal",
-                180,
             ),
         ),
         "c-hiring": (
@@ -1617,20 +1638,23 @@ def _build_materials() -> list[dict]:
                 240,
             ),
         ),
+        # HRP-767 REDO: Kate's plan sees only these two competences at levels
+        # 1–2, so between them they carry a book, an article, a video and a
+        # course.
         "c-customer-discovery": (
             ("The Mom Test — Rob Fitzpatrick", "book", "external", 240),
-            ("Continuous Discovery Habits — Teresa Torres", "book", "external", 360),
+            ("Opportunity Solution Trees — Teresa Torres", "article", "external", 60),
             ("Cross-segment discovery program design", "workshop", "internal", 180),
         ),
         "c-okrs": (
-            ("Measure What Matters — John Doerr", "book", "external", 360),
             (
-                "Quarterly OKR rituals — check-ins and re-baselining",
-                "article",
-                "internal",
-                90,
+                "How Google sets goals: OKRs — Rick Klau, Startup Lab",
+                "video",
+                "external",
+                80,
             ),
-            ("Designing a function-wide OKR program", "workshop", "internal", 180),
+            ("Set goals with OKRs — Google re:Work guide", "course", "external", 120),
+            ("Measure What Matters — John Doerr", "book", "external", 360),
         ),
         "c-sales-discovery": (
             ("MEDDIC and MEDDPICC — qualification primer", "article", "internal", 90),

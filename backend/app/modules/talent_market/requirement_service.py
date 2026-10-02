@@ -400,7 +400,8 @@ async def add_required_competences(
     for item in data.items:
         # Validate competence + skill level exist within tenant scope.
         comp = await db.get(Competence, item.competence_id)
-        if not comp or comp.tenant_id != tenant_id:
+        # HRP-632: nor a personal draft - it is attached nowhere until published.
+        if not comp or comp.tenant_id != tenant_id or comp.draft_owner_id is not None:
             raise AppError(
                 "tm_competence_id_not_found",
                 status.HTTP_422_UNPROCESSABLE_ENTITY,

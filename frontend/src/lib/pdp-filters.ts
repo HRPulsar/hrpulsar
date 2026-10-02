@@ -26,6 +26,18 @@ export interface PdpFilters {
   searchQuery: string;
   filterStatuses: readonly string[];
   filterFlags?: readonly string[];
+  // HRP-724: the dashboard's period tiles link here with the window they
+  // counted (``?finished_days=90``), so "3 plans in 90 days" opens exactly
+  // those three rows rather than every plan ever finished.
+  finishedDays?: number;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The ``finished_days`` URL value: a positive whole number of days, else nothing. */
+export function parseFinishedDays(raw: string | null): number | undefined {
+  const days = Number(raw);
+  return Number.isInteger(days) && days > 0 ? days : undefined;
 }
 
 function isOverdue(pdp: PDP): boolean {
@@ -43,7 +55,7 @@ function isStuckInReview(pdp: PDP, now: number): boolean {
   if (!STUCK_STATUSES.includes(pdp.status)) return false;
   const touched = Date.parse(pdp.updated_at ?? pdp.created_at);
   if (!Number.isFinite(touched)) return false;
-  return now - touched > STUCK_REVIEW_DAYS * 24 * 60 * 60 * 1000;
+  return now - touched > STUCK_REVIEW_DAYS * DAY_MS;
 }
 
 export function matchesPdpFilters(
@@ -70,6 +82,12 @@ export function matchesPdpFilters(
     );
     if (!hit) return false;
   }
+  if (filters.finishedDays !== undefined) {
+    if (!pdp.finished_at) return false;
+    const finished = Date.parse(pdp.finished_at);
+    if (!Number.isFinite(finished)) return false;
+    if (now - finished > filters.finishedDays * DAY_MS) return false;
+  }
   return true;
 }
 
@@ -77,7 +95,8 @@ export function hasActivePdpFilters(filters: PdpFilters): boolean {
   return (
     filters.searchQuery.length > 0 ||
     filters.filterStatuses.length > 0 ||
-    (filters.filterFlags?.length ?? 0) > 0
+    (filters.filterFlags?.length ?? 0) > 0 ||
+    filters.finishedDays !== undefined
   );
 }
 

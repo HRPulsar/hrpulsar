@@ -1,12 +1,26 @@
+"""Talent market REST.
+
+One menu entry, two audiences, and the tenant's ``talent-market`` row of
+the section access matrix tells them apart (HRP-824). ``manage`` authors
+the board: every writing route below asks the matrix for it and then
+``scope.py`` for whose card it is. ``view`` is the candidate's half - the
+search, one card, one's own match breakdown, the reaction and the plan
+request - which the global gate closes on ``none`` and otherwise leaves
+to the routes (the section is self-guarded: three of those are POSTs).
+"""
+
 import uuid
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.sections import require_section
 from app.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.assessment.scope import assert_assessee_in_scope
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.talent_market import service
+from app.modules.talent_market.models import TalentCandidate
 from app.modules.talent_market.schemas import (
     CandidateAdd,
     CandidateBreakdown,
@@ -38,12 +52,18 @@ from app.modules.talent_market.scope import (
 
 router = APIRouter(tags=["talent-market"])
 
+# HRP-824: running the board is ``manage`` on the tenant's section access
+# matrix, and it is the level alone - the org-structure fence stays with
+# ``card_scope`` / ``assert_division_in_scope``: an admin-level role
+# reaches every card, anyone else their managed subtree and their own.
+_manage = require_section("talent-market", "manage")
+
 
 @router.post("/talent-market", response_model=TalentCardRead, status_code=201)
 async def create_card(
     data: TalentCardCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     scope: TalentScope = Depends(talent_scope),
 ):
     assert_division_in_scope(scope, data.division_id)
@@ -57,8 +77,6 @@ async def search_cards(
     current_user: User = Depends(get_current_user),
     scope: TalentScope = Depends(talent_scope),
 ):
-    from app.core.access_scope import is_employee_only
-
     # HRP-209: employees see only cards they're a candidate on (and the
     # backend filters Draft to appointed-only inside the service).
     # HRP-639: everyone else below admin / hr now has a scope too — the
@@ -68,14 +86,15 @@ async def search_cards(
     # HRP-765: no ``employee_id is not None`` arm — a role-employee user
     # without an Employee row used to fall through to the board's
     # published cards while the detail route refused them the same card.
-    candidate_only = is_employee_only(current_user) and not scope.division_ids
+    # HRP-824: which of the two is decided by the scope, which read the
+    # section level - a role raised to ``manage`` reads what it authored.
     items, total = await service.search_cards(
         db,
         current_user.tenant_id,
         data,
         scope=scope,
         assignee_employee_id=scope.employee_id,
-        candidate_only=candidate_only,
+        candidate_only=scope.candidate_only,
         # HRP-213: every viewer that carries an Employee row gets per-card
         # `reacted_by_me` so the Reacted chip can render on previews even
         # for admins (admins are sometimes employees too).
@@ -102,7 +121,7 @@ async def update_card(
     card_id: uuid.UUID,
     data: TalentCardUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
     scope: TalentScope = Depends(talent_scope),
 ):
@@ -114,8 +133,13 @@ async def update_card(
 async def delete_card(
     card_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(_manage),
+    _scope: None = Depends(card_scope),
 ):
+    """HRP-824: ``manage`` plus whose card it is, like every other write
+    here. Stood on an admin-only role guard with no scope before, while
+    the list's action menu already offered Delete to a division head on
+    their own cards - and answered 403."""
     await service.delete_card(db, current_user.tenant_id, card_id)
 
 
@@ -123,7 +147,7 @@ async def delete_card(
 async def publish_card(
     card_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     return await service.publish_card(db, current_user.tenant_id, card_id)
@@ -133,7 +157,7 @@ async def publish_card(
 async def complete_card(
     card_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     """HRP-150: terminal transition Published → Completed."""
@@ -144,7 +168,7 @@ async def complete_card(
 async def cancel_card(
     card_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     """HRP-150: terminal transition Draft|Published → Cancelled."""
@@ -160,7 +184,7 @@ async def add_requirement(
     card_id: uuid.UUID,
     data: RequirementCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     return await service.add_requirement(db, current_user.tenant_id, card_id, data)
@@ -178,7 +202,7 @@ async def add_required_specialization(
     card_id: uuid.UUID,
     data: RequiredSpecializationCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     return await service.add_required_specialization(
@@ -195,7 +219,7 @@ async def update_required_specialization(
     link_id: uuid.UUID,
     data: RequiredSpecializationUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     return await service.update_required_specialization(
@@ -211,7 +235,7 @@ async def delete_required_specialization(
     card_id: uuid.UUID,
     link_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     await service.delete_required_specialization(
@@ -231,7 +255,7 @@ async def add_required_competences(
     card_id: uuid.UUID,
     data: RequiredCompetenceBulkCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     return await service.add_required_competences(
@@ -248,7 +272,7 @@ async def update_required_competence(
     link_id: uuid.UUID,
     data: RequiredCompetenceUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     return await service.update_required_competence(
@@ -264,7 +288,7 @@ async def delete_required_competence(
     card_id: uuid.UUID,
     link_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     await service.delete_required_competence(
@@ -280,7 +304,7 @@ async def list_candidate_pool(
     card_id: uuid.UUID,
     include_attached: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     """HRP-95: feed the Add/Change candidate picker dialog.
@@ -304,6 +328,7 @@ async def get_candidate_breakdown(
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    scope: TalentScope = Depends(talent_scope),
 ):
     """HRP-172: per-competence + per-spec match breakdown for the Sheet
     drawer rendered from the Match cell in the Candidates list and the
@@ -315,22 +340,48 @@ async def get_candidate_breakdown(
     HRP-765: and only on a card they may read at all. "Is this row mine"
     was the whole check, so an employee could pass their own id with any
     card id and read that card's requirements, levels, specializations and
-    threshold — a draft they were never a candidate on included."""
+    threshold — a draft they were never a candidate on included.
+
+    HRP-824: "employee" here is whoever does not run the board - no
+    admin-level role and below ``manage`` - rather than a role list. Not
+    ``candidate_only``: a managed division widens the search and the card,
+    never this drawer (review: it would have opened any card's breakdown
+    to a division head holding only the employee role)."""
     from fastapi import status as _status
 
-    from app.core.access_scope import (
-        get_current_employee,
-        is_employee_only,
-    )
     from app.core.errors import AppError
 
-    if is_employee_only(current_user):
-        emp = await get_current_employee(db, current_user)
-        if emp is None or emp.id != employee_id:
+    # HRP-971: a card the caller competes on opens only their own row, even
+    # to a division head at ``manage``.
+    if not scope.unrestricted and (not scope.manages or scope.competes_on(card_id)):
+        if scope.employee_id is None or scope.employee_id != employee_id:
             raise AppError("tm_insufficient_permissions", _status.HTTP_403_FORBIDDEN)
         await assert_employee_card_visible(
-            db, current_user.tenant_id, card_id, emp.id
+            db, current_user.tenant_id, card_id, scope.employee_id
         )
+    elif not scope.unrestricted:
+        # A board runner below the admin level opens the cards they run -
+        # anyone in the Add / Change picker - and, on a card they only
+        # read, its candidates' rows; never another division's draft or an
+        # arbitrary employee's results by id.
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        from app.modules.talent_market.models import TalentCard
+
+        card = await db.scalar(
+            select(TalentCard)
+            .options(selectinload(TalentCard.candidates))
+            .where(
+                TalentCard.id == card_id,
+                TalentCard.tenant_id == current_user.tenant_id,
+            )
+        )
+        if card is not None and not scope.writable(card) and not (
+            scope.readable(card)
+            and any(ca.employee_id == employee_id for ca in card.candidates)
+        ):
+            raise AppError("tm_insufficient_permissions", _status.HTTP_403_FORBIDDEN)
     return await service.get_candidate_breakdown(
         db, current_user.tenant_id, card_id, employee_id
     )
@@ -343,7 +394,7 @@ async def add_candidate(
     card_id: uuid.UUID,
     data: CandidateAdd,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     return await service.add_candidate(db, current_user.tenant_id, card_id, data)
@@ -358,7 +409,7 @@ async def add_candidates_bulk(
     card_id: uuid.UUID,
     data: CandidateBulkAdd,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     """HRP-95: attach a batch of employees from the picker dialog in one call."""
@@ -373,7 +424,7 @@ async def appoint_candidate(
     card_id: uuid.UUID,
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     return await service.appoint_candidate(
@@ -385,13 +436,17 @@ async def appoint_candidate(
     "/talent-market/{card_id}/candidates/{candidate_id}/development-plan",
     response_model=CandidateRead,
     status_code=201,
+    # HRP-824: the plan is a development-section record, so the caller
+    # runs that section too - not only the board (the rule HRP-821 set
+    # for a Coverage gap raising a vacancy).
+    dependencies=[Depends(require_section("development", "manage"))],
 )
 async def create_candidate_development_plan(
     card_id: uuid.UUID,
     candidate_id: uuid.UUID,
     data: CandidateDevelopmentPlanCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     """HRP-665: create a development plan from the candidate's competence gaps.
@@ -400,6 +455,13 @@ async def create_candidate_development_plan(
     (required vs current), not the whole grade matrix. The new plan id
     lands on ``TalentCandidate.pdp_id`` so the Candidates row can link it.
     """
+    # HRP-856: the plan is written into this employee's record, so they
+    # have to be the author's - the rule ``POST /pdp`` applies. The pool is
+    # workspace-wide; without this a division head planned for someone
+    # elsewhere and then got 403 on their own plan.
+    candidate = await db.get(TalentCandidate, candidate_id)
+    if candidate is not None and candidate.card_id == card_id:
+        await assert_assessee_in_scope(db, current_user, candidate.employee_id)
     return await service.create_candidate_development_plan(
         db, current_user.tenant_id, card_id, candidate_id, current_user.id, data
     )
@@ -413,7 +475,7 @@ async def delete_candidate(
     card_id: uuid.UUID,
     employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     """HRP-95: remove a TalentCandidate row from the card. Called by the
@@ -425,7 +487,7 @@ async def delete_candidate(
 async def recompute_card(
     card_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
     _scope: None = Depends(card_scope),
 ):
     """HRP-242: rerun the Candidates auto-pool for the card.

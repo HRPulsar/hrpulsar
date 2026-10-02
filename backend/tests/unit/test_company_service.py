@@ -67,6 +67,26 @@ class TestDivisions:
         assert len(root.children) == 1
         assert root.children[0].name == "Child"
 
+    async def test_a_division_never_moves_under_its_own_subtree(
+        self, db: AsyncSession, tenant
+    ):
+        # Review 01.10: only parent == self was refused; a move under a
+        # descendant made a cycle with no root, and get_division_tree then
+        # dropped the whole subtree for everyone.
+        root = await service.create_division(db, tenant.id, DivisionCreate(name="A"))
+        child = await service.create_division(
+            db, tenant.id, DivisionCreate(name="B", parent_id=root["id"])
+        )
+        grandchild = await service.create_division(
+            db, tenant.id, DivisionCreate(name="C", parent_id=child["id"])
+        )
+        for target in (child, grandchild):
+            with pytest.raises(HTTPException) as exc:
+                await service.update_division(
+                    db, tenant.id, root["id"], DivisionUpdate(parent_id=target["id"])
+                )
+            assert exc.value.status_code == 400
+
     async def test_update_division(self, db: AsyncSession, tenant):
         div = await service.create_division(db, tenant.id, DivisionCreate(name="Old"))
         result = await service.update_division(

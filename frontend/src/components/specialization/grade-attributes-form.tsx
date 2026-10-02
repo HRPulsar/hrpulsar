@@ -26,7 +26,10 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
   // HRP-637: salary bands are compensation — admin / hr / manager only. The
   // API drops them for everyone else, so the fields would render empty and a
   // save would post those blanks back over a band the form never showed.
-  const { canViewHrData } = usePermissions();
+  const { canViewHrData, isAdmin } = usePermissions();
+  // HRP-828: the attributes live on the grade chain, and
+  // PUT /grade-system/chains/{id} is the admin role's - everyone else reads.
+  const readOnly = !isAdmin;
   const [description, setDescription] = useState(grade.description ?? "");
   const [requirements, setRequirements] = useState(grade.requirements ?? "");
   const [salaryMin, setSalaryMin] = useState(
@@ -101,6 +104,7 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
         <Textarea
           id={`desc-${grade.id}`}
           data-testid={`specialization-grade-form-${grade.id}-description`}
+          readOnly={readOnly}
           rows={3}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
@@ -113,6 +117,7 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
         <Textarea
           id={`req-${grade.id}`}
           data-testid={`specialization-grade-form-${grade.id}-requirements`}
+          readOnly={readOnly}
           rows={4}
           value={requirements}
           onChange={(e) => setRequirements(e.target.value)}
@@ -127,6 +132,7 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
             <Input
               id={`smin-${grade.id}`}
               data-testid={`specialization-grade-form-${grade.id}-salary-min`}
+              readOnly={readOnly}
               type="number"
               min={0}
               value={salaryMin}
@@ -138,6 +144,7 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
             <Input
               id={`smax-${grade.id}`}
               data-testid={`specialization-grade-form-${grade.id}-salary-max`}
+              readOnly={readOnly}
               type="number"
               min={0}
               value={salaryMax}
@@ -149,6 +156,7 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
             <Input
               id={`scur-${grade.id}`}
               data-testid={`specialization-grade-form-${grade.id}-salary-currency`}
+              readOnly={readOnly}
               maxLength={3}
               value={salaryCurrency}
               onChange={(e) =>
@@ -171,14 +179,16 @@ export function GradeAttributesForm({ grade, specId, onSaved }: Props) {
         ) : (
           <span />
         )}
-        <Button
-          data-testid={`specialization-grade-form-${grade.id}-btn-save`}
-          size="sm"
-          onClick={handleSave}
-          disabled={saving}
-        >
-          {saving ? t("saving") : t("save")}
-        </Button>
+        {readOnly ? null : (
+          <Button
+            data-testid={`specialization-grade-form-${grade.id}-btn-save`}
+            size="sm"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving ? t("saving") : t("save")}
+          </Button>
+        )}
       </div>
     </div>
   );

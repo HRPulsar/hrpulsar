@@ -338,8 +338,9 @@ class TestRegenerate:
 
         Regeneration rewrites the set in place, so ``created_at`` stays
         pinned to the first run forever — the block kept advertising a
-        date the questions no longer came from. ``updated_at`` is the
-        one the write moves, and nothing else writes to the row.
+        date the questions no longer came from. ``generated_at`` is
+        stamped when questions land; status-only writes (HRP-471's
+        regenerating, settle, cancel) move ``updated_at`` but not it.
         """
         ctx = await _bootstrap(db, tenant, user)
 
@@ -356,8 +357,7 @@ class TestRegenerate:
                 current_user_id=user.id,
             )
 
-        # A first generation has nothing to inherit: both stamps agree.
-        assert first["updated_at"] == first["created_at"]
+        assert first["generated_at"] is not None
 
         with patch(
             "app.modules.recruitment.question_service._call_llm",
@@ -377,7 +377,19 @@ class TestRegenerate:
         # Same row — the set was rewritten, not replaced.
         assert regenerated["id"] == first["id"]
         assert regenerated["created_at"] == first["created_at"]
-        assert regenerated["updated_at"] > first["updated_at"]
+        assert regenerated["generated_at"] > first["generated_at"]
+
+        # A status-only write (a regeneration started and cancelled) leaves
+        # the generation date where the questions put it.
+        from app.modules.recruitment.models import QuestionSet
+
+        row = await db.get(QuestionSet, uuid.UUID(str(first["id"])))
+        row.status = "regenerating"
+        await db.commit()
+        row.status = "ready"
+        await db.commit()
+        await db.refresh(row)
+        assert row.generated_at == regenerated["generated_at"]
 
 
 class TestDynamicNextScope:
@@ -825,6 +837,52 @@ class TestNewSetFlow:
                     db, tenant.id, cv_id, req, current_user_id=user.id
                 )
         assert exc.value.status_code == 409
+
+    async def test_a_failed_attempt_does_not_hold_the_round(
+        self, db: AsyncSession, tenant, user
+    ):
+        # Review 01.10 (HRP-471): a placeholder whose generation failed kept
+        # its round, so the retry answered 409 and the only way left was a
+        # Regenerate that reads no transcripts. The retry takes the round
+        # over and the empty placeholder leaves the tab bar.
+        from app.modules.recruitment import manager_assessment_service
+        from app.modules.recruitment.manager_assessment_schemas import RoundCreate
+        from app.modules.recruitment.models import QuestionSet
+
+        ctx = await _bootstrap(db, tenant, user)
+        cv_id = uuid.UUID(str(ctx["cv"]["id"]))
+        iv = await _add_interview(db, tenant, cv_id)
+        rd = await manager_assessment_service.create_round(
+            db, tenant.id, user.id, cv_id, RoundCreate(type="interview")
+        )
+        failed = QuestionSet(
+            tenant_id=tenant.id,
+            candidate_vacancy_id=cv_id,
+            assessment_round_id=uuid.UUID(str(rd["id"])),
+            set_type="dynamic_next",
+            name="Interview 1",
+            status="failed",
+            generation_mode="dynamic_next",
+        )
+        db.add(failed)
+        await db.commit()
+
+        req = GenerateQuestionSetRequest(
+            mode="dynamic_next",
+            source_round_ids=[iv.id],
+            assessment_round_id=uuid.UUID(str(rd["id"])),
+        )
+        with patch(
+            "app.modules.recruitment.question_service._call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = _gen_questions(10)
+            out = await question_service.generate_question_set(
+                db, tenant.id, cv_id, req, current_user_id=user.id
+            )
+        assert str(out["assessment_round_id"]) == str(rd["id"])
+        await db.refresh(failed)
+        assert failed.archived_at is not None
 
     async def test_rejects_a_round_from_another_candidate_vacancy(
         self, db: AsyncSession, tenant, user

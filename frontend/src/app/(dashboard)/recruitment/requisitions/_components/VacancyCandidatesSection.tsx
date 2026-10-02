@@ -17,6 +17,7 @@ import {
   VacancyCandidatesTable,
   VacancyStagesDrawer,
 } from "@/components/recruitment";
+import { usePermissions } from "@/hooks/use-permissions";
 
 interface VacancyCandidatesSectionProps {
   vacancyId: string;
@@ -37,6 +38,9 @@ export function VacancyCandidatesSection({
   const [stagesOpen, setStagesOpen] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [currentCount, setCurrentCount] = useState(count);
+  // HRP-830: the funnel and the candidate list are `manage` on
+  // recruitment; a `view` holder reads the table.
+  const canManage = usePermissions().canManageSection("recruitment");
 
   const triggerReload = useCallback(() => {
     setReloadToken((n) => n + 1);
@@ -51,23 +55,25 @@ export function VacancyCandidatesSection({
             ({currentCount})
           </span>
         </CardTitle>
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setStagesOpen(true)}
-            data-testid="vacancy-stage-manage-btn"
-          >
-            <Settings2 className="mr-1 size-4" /> {t("vacancyManageStages")}
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => setOpen(true)}
-            data-testid="vacancy-section-candidates-add-btn"
-          >
-            <UserPlus className="mr-1 size-4" /> {t("candidateAddButton")}
-          </Button>
-        </div>
+        {canManage && (
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setStagesOpen(true)}
+              data-testid="vacancy-stage-manage-btn"
+            >
+              <Settings2 className="mr-1 size-4" /> {t("vacancyManageStages")}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => setOpen(true)}
+              data-testid="vacancy-section-candidates-add-btn"
+            >
+              <UserPlus className="mr-1 size-4" /> {t("candidateAddButton")}
+            </Button>
+          </div>
+        )}
       </CardHeader>
       <CardContent>
         {/* HRP-667: the internal shortlist sits above the external one —
@@ -90,7 +96,9 @@ export function VacancyCandidatesSection({
         onOpenChange={setOpen}
         onCandidatesChanged={triggerReload}
         onManualCreated={(candidateId) =>
-          router.push(`/recruitment/candidates/${candidateId}`)
+          router.push(
+            `/recruitment/candidates/${candidateId}?vacancyId=${vacancyId}`,
+          )
         }
       />
       <VacancyStagesDrawer

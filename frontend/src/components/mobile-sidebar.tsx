@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Sidebar } from "@/components/sidebar";
 
-export function MobileSidebar() {
+/** Hamburger + slide-in panel below `lg`. Renders the app sidebar unless
+ * another one is passed (the platform admin passes its own). */
+export function MobileSidebar({ children }: { children?: ReactNode }) {
   const t = useTranslations("common");
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
@@ -50,8 +52,8 @@ export function MobileSidebar() {
             onClick={() => setOpen(false)}
           />
           {/* Sidebar panel */}
-          <div className="fixed inset-y-0 left-0 z-50 w-[232px] lg:hidden">
-            <Sidebar />
+          <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
+            {children ?? <Sidebar />}
           </div>
         </>
       )}

@@ -45,10 +45,25 @@ describe("Divergence badge tooltip (HRP-507)", () => {
     expect(TABLE).not.toContain("title={tooltipText}");
   });
 
-  it("links into Canvas with the divergences filter applied", () => {
+  it("shows N divergent of M profile competences on a chip that is not a link", () => {
+    expect(TABLE).toContain("const ratio = total > 0 ? `${count}/${total}` : String(count);");
+    expect(TABLE).toContain("const total = row.profile_competence_count ?? 0;");
+    // The badge sits directly under the trigger; no Link wraps it any more.
     expect(TABLE).toContain(
-      "href={`/recruitment/requisitions/${vacancyId}/canvas?filter=divergences`}",
+      "data-testid={`vacancy-candidates-row-${row.id}-divergence-trigger`} > <Badge",
     );
+    // The trigger is reachable from the keyboard and names the ratio.
+    expect(TABLE).toContain(
+      '<span className="inline-flex" tabIndex={0} aria-label={t("candidatesTableDivergenceAria", { count, total })} />',
+    );
+  });
+
+  it("links into the full-screen canvas from the tooltip, filtered to divergences and to this candidate", () => {
+    expect(TABLE).toContain(
+      "const canvasHref = `/recruitment/requisitions/${vacancyId}/assessments/canvas?filter=divergences&candidates=${row.id}`;",
+    );
+    expect(TABLE).toContain("-divergence-canvas-link`}");
+    expect(TABLE).toContain('<Link href={canvasHref}');
   });
 
   it("summarises the competences beyond the previewed five", () => {
@@ -79,6 +94,13 @@ describe("Divergence badge tooltip (HRP-507)", () => {
     expect(CANVAS).toContain("const searchParams = useSearchParams();");
     expect(CANVAS).toContain(
       'useState( () => searchParams.get("filter") === "divergences", )',
+    );
+  });
+
+  it("makes Canvas honour ?candidates= once the matrix has landed", () => {
+    expect(CANVAS).toContain('searchParams.get("candidates")');
+    expect(CANVAS).toContain(
+      ".filter((c) => !wanted.has(c.candidate_vacancy_id))",
     );
   });
 });

@@ -10,6 +10,7 @@ import { formatDate } from "@/lib/date-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LoadErrorState } from "@/components/load-error-state";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -53,8 +54,14 @@ export default function VacancyListPage() {
   const [loadError, setLoadError] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
+  // HRP-417: archived vacancies stay out of the list until asked for.
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivedCount, setArchivedCount] = useState(0);
 
-  const { canManage } = usePermissions();
+  // HRP-830: creating and the row actions are `manage` on recruitment -
+  // `canManage` (admin/manager) showed them to a manager who got 403 and
+  // hid them from the recruiter who runs hiring.
+  const canManage = usePermissions().canManageSection("recruitment");
 
   const isArchivedView = filterStatus === "__archived__";
 
@@ -65,22 +72,23 @@ export default function VacancyListPage() {
       params.set("page_size", String(PAGE_SIZE));
       if (filterStatus === "__archived__") {
         params.set("archived", "only");
-      } else if (filterStatus) {
-        params.set("status", filterStatus);
       } else {
-        // HRP-363: "All statuses" must include archived vacancies too.
-        params.set("archived", "include");
+        if (filterStatus) params.set("status", filterStatus);
+        // HRP-417: archived rows are hidden until "Show archived (N)" is on
+        // (supersedes HRP-363, which folded them into "All statuses").
+        params.set("archived", showArchived ? "include" : "exclude");
       }
       const data = await api.get<VacancyList>(`/recruitment/vacancies?${params}`);
       setVacancies(data.items);
       setTotal(data.total);
+      setArchivedCount(data.archived_count ?? 0);
       setLoadError(false);
     } catch {
       setLoadError(true);
     } finally {
       setLoading(false);
     }
-  }, [page, filterStatus]);
+  }, [page, filterStatus, showArchived]);
 
   useEffect(() => {
     loadVacancies();
@@ -94,10 +102,11 @@ export default function VacancyListPage() {
   function clearFilters() {
     setSearchQuery("");
     setFilterStatus("");
+    setShowArchived(false);
     setPage(1);
   }
 
-  const hasFilters = searchQuery || filterStatus;
+  const hasFilters = searchQuery || filterStatus || showArchived;
 
   const filtered = searchQuery
     ? vacancies.filter(
@@ -191,6 +200,21 @@ export default function VacancyListPage() {
             <SelectItem value="__archived__">{t("statusArchived")}</SelectItem>
           </SelectContent>
         </Select>
+        {!isArchivedView && (
+          <label
+            className="flex items-center gap-2 text-sm"
+            data-testid="recruitment-vacancies-show-archived"
+          >
+            <Checkbox
+              checked={showArchived}
+              onCheckedChange={(checked) => {
+                setShowArchived(!!checked);
+                setPage(1);
+              }}
+            />
+            {t("vacanciesShowArchived", { count: archivedCount })}
+          </label>
+        )}
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="mr-1 h-3 w-3" />

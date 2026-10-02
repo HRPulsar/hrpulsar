@@ -55,15 +55,28 @@ def normalize_competence_id(value: str | uuid.UUID | None) -> uuid.UUID | None:
 # ---------------------------------------------------------------------------
 
 
-async def _publish_event(event: str, payload: dict) -> None:
+async def _publish_event(
+    event: str, payload: dict, *, db: AsyncSession | None = None
+) -> None:
     """Best-effort event publish. Swallow errors so notifications never
     block business mutations — the same invariant the audit hook enforces.
+
+    ``db``: deliver in that session rather than over the in-process bus,
+    which has no subscribers inside a Celery worker. Code that may run in
+    a worker passes it (``notifications.publish_in_session``).
     """
     try:
+        if db is not None:
+            from app.modules.recruitment.notifications import publish_in_session
+
+            await publish_in_session(db, event, payload)
+            return
         from app.core.events import publish
 
         await publish(event, payload)
     except Exception:  # noqa: BLE001
+        if db is not None:
+            await db.rollback()
         import logging
 
         logging.getLogger(__name__).exception(
@@ -171,23 +184,21 @@ def candidate_display_name(
     return name or fallback
 
 
-def resolve_user_role(user) -> str | None:
-    """Pick the highest-privilege recruitment role code for ``user``.
+def resolve_user_role(user, *, full: bool) -> str | None:
+    """The audience ``user`` reads the AI payload as (R3a).
 
-    ``User`` has a many-to-many ``roles`` relation, not a scalar ``role``
-    field. Read paths in the recruitment services accept a single role
-    string; this
-    helper centralises the "which role wins" decision so admin/recruiter/
-    hr land on the full payload before hiring_manager is checked.
-    Returns ``None`` for users with none of the recruitment roles — the
-    role filter then strips the AI payload (defence in depth on top of
-    ``require_role``).
+    Read paths in the recruitment services accept a single role string
+    and filter the AI payload by it. ``full`` is the caller's unrestricted
+    ``RecruitmentScope`` - an admin-level role or ``manage`` on recruitment
+    (HRP-830), the ones who see the whole hiring surface - and reads the
+    full payload; that used to be the admin/recruiter/hr role list. The
+    ``hiring_manager`` role gets its slice, anyone else ``None``, which
+    strips the AI payload (defence in depth on top of the section gate).
     """
 
+    if full:
+        return "recruiter"  # any member of _FULL_ROLES
     codes = {r.code for r in (getattr(user, "roles", None) or [])}
-    for full_role in ("admin", "recruiter", "hr"):
-        if full_role in codes:
-            return full_role
     if "hiring_manager" in codes:
         return "hiring_manager"
     return None

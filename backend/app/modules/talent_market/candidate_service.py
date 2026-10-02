@@ -1087,47 +1087,38 @@ async def react_to_card(
         render_talent_market_reacted_manager_email,
     )
     from app.core.i18n import resolve_locale
-    from app.modules.company.models import Division, Tenant
+    from app.modules.company.models import Tenant
 
-    if emp.division_id is not None:
-        div = await db.get(Division, emp.division_id)
-        if div is not None and div.manager_id is not None:
-            mgr_emp = await db.get(Employee, div.manager_id)
-            if mgr_emp is not None and mgr_emp.user_id is not None:
-                mgr_user = await db.get(User, mgr_emp.user_id)
-                if mgr_user is not None and mgr_user.id != user.id and mgr_user.email:
-                    emp_name = (
-                        f"{user.first_name} {user.last_name}".strip()
-                        if user.first_name or user.last_name
-                        else None
-                    )
-                    # i18n F4: the letter is rendered for the manager, not
-                    # for the reacting employee — Manager.language first,
-                    # then the card's tenant default.
-                    tenant = (
-                        await db.get(Tenant, card.tenant_id)
-                        if card.tenant_id is not None
-                        else None
-                    )
-                    subject, body = render_talent_market_reacted_manager_email(
-                        card.title,
-                        emp_name,
-                        str(card.id),
-                        locale=resolve_locale(
-                            user_language=mgr_user.language,
-                            tenant_default=(
-                                tenant.default_locale if tenant is not None else None
-                            ),
-                        ),
-                    )
-                    with _cl.suppress(Exception):
-                        enqueue_email(
-                            mgr_user.email,
-                            subject,
-                            body,
-                            tenant_id=str(card.tenant_id) if card.tenant_id else None,
-                            template_code="talent_market.lifecycle",
-                        )
+    mgr_user = await common.resolve_manager_user(db, emp, card.id)
+    if mgr_user is not None and mgr_user.id != user.id and mgr_user.email:
+        emp_name = (
+            f"{user.first_name} {user.last_name}".strip()
+            if user.first_name or user.last_name
+            else None
+        )
+        # i18n F4: the letter is rendered for the manager, not for the
+        # reacting employee — Manager.language first, then the card's
+        # tenant default.
+        tenant = (
+            await db.get(Tenant, card.tenant_id) if card.tenant_id is not None else None
+        )
+        subject, body = render_talent_market_reacted_manager_email(
+            card.title,
+            emp_name,
+            str(card.id),
+            locale=resolve_locale(
+                user_language=mgr_user.language,
+                tenant_default=(tenant.default_locale if tenant is not None else None),
+            ),
+        )
+        with _cl.suppress(Exception):
+            enqueue_email(
+                mgr_user.email,
+                subject,
+                body,
+                tenant_id=str(card.tenant_id) if card.tenant_id else None,
+                template_code="talent_market.lifecycle",
+            )
 
     # HRP-714: the soft auto-reply. A reaction from someone below the
     # card's bar used to be answered by silence, which reads as a
@@ -1159,16 +1150,23 @@ _GAP_REPLY_CARD_TYPES = ("vacancy", "project")
 
 async def _live_verdict(
     db: AsyncSession, card: TalentCard, row: TalentCandidate
-) -> tuple[list[str] | None, list[str]]:
-    """What the card page says about this row, and the competences it names.
+) -> tuple[bool, list[str]]:
+    """Whether the row is short on required competences, and which ones.
 
     Judged live on every call, the way the Candidates table is (HRP-734):
     the stored ``match_score`` is refreshed only by a pool recompute, so
     answering off it told people who had since closed the gap that they
     still had one — and named no competence, because the live list was
-    empty. Returns the row's ``blocked_by`` codes (``[]`` for nothing in
-    the way or an appointed row, ``None`` for a card with no requirements)
-    and the titles of the required competences the employee is short on.
+    empty.
+
+    Only the competence axis counts (HRP-739). The row's status also knows
+    an experience axis — specialization years the employee does not have —
+    but that is not what the reply talks about and no development plan
+    closes it: a re-assessed candidate whose row already read "Competencies
+    met, no experience" was still told their skills differed. Returns the
+    flag (``False`` for an appointed row and for a card with no
+    requirements) and the titles of the required competences the employee
+    is short on.
     """
     breakdown = await get_candidate_breakdown(
         db, card.tenant_id, card.id, row.employee_id
@@ -1183,7 +1181,7 @@ async def _live_verdict(
     gaps = [
         c["competence_title"] for c in breakdown["competences"] if not c["qualifies"]
     ]
-    return blocked_by, gaps
+    return "competences" in (blocked_by or []), gaps
 
 
 async def _reply_context(
@@ -1245,12 +1243,12 @@ async def _send_reaction_gap_reply(
     """In-app + email answer to a reaction that will not clear the bar.
 
     Sent exactly when the card page shows the request-a-plan CTA the
-    letter points at: the row's live ``blocked_by`` is non-empty.
+    letter points at: the row is short on required competences, live.
     """
     if card.card_type not in _GAP_REPLY_CARD_TYPES:
         return
-    blocked_by, gaps = await _live_verdict(db, card, row)
-    if not blocked_by:
+    short_on_competences, gaps = await _live_verdict(db, card, row)
+    if not short_on_competences:
         return
 
     link = f"/talent-market/{card.id}"
@@ -1324,11 +1322,11 @@ async def request_development_plan(
     # The CTA is hidden when the live verdict has nothing blocking the row
     # (HRP-734) — an appointed candidate included — so the server refuses
     # the same cases rather than asking a manager to plan for zero gaps.
-    blocked_by, _ = await _live_verdict(db, card, row)
-    if not blocked_by:
+    short_on_competences, _ = await _live_verdict(db, card, row)
+    if not short_on_competences:
         raise AppError("tm_plan_request_no_gap", status.HTTP_409_CONFLICT)
 
-    manager = await common.resolve_manager_user(db, emp)
+    manager = await common.resolve_manager_user(db, emp, card.id)
     if manager is not None and manager.id == user.id:
         # The division head asking themselves. Distinct from "nobody
         # manages this division" — the answer the employee needs is

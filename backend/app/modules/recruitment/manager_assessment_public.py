@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
 from app.modules.recruitment import audit_service
@@ -41,6 +42,7 @@ from app.modules.recruitment.models import (
     CandidateVacancy,
     Vacancy,
 )
+from app.modules.recruitment.scope import email_fenced_off, fenced_off_vacancy
 
 log = logging.getLogger(__name__)
 
@@ -175,6 +177,19 @@ async def resolve_invite_by_token(
             invite.status = "expired"
             await db.commit()
         raise AppError("invitation_expired", status.HTTP_410_GONE)
+    # HRP-971: the fence is asked when a link is sent, resent or extended;
+    # one already out when its addressee applied to the vacancy dies with
+    # that application, like a revoked one - it opens a rival's sheet past
+    # the matrix.
+    vacancy_id = await db.scalar(
+        select(CandidateVacancy.vacancy_id).where(
+            CandidateVacancy.id == invite.candidate_vacancy_id
+        )
+    )
+    if vacancy_id is not None and await email_fenced_off(
+        db, invite.tenant_id, vacancy_id, invite.email
+    ):
+        raise AppError("invitation_revoked", status.HTTP_410_GONE)
     return invite
 
 
@@ -256,20 +271,31 @@ def _mark_in_progress(invite: AssessmentInvite) -> None:
         invite.status = "in_progress"
 
 
-def _notified_owner_id(
-    vacancy: Vacancy | None, invite: AssessmentInvite
+async def _notified_owner_id(
+    db: AsyncSession, vacancy: Vacancy | None, invite: AssessmentInvite
 ) -> uuid.UUID | None:
     """Who hears about this evaluation (HRP-379).
 
     The vacancy's owner, then its hiring manager, then whoever sent the
     invitation — a vacancy that changed hands must not silence the
     notice. One definition so the banner's "{name} will be notified" and
-    the mail that follows it cannot name different people.
+    the mail that follows it cannot name different people. One the fence
+    keeps off the vacancy (HRP-971: a candidate on it) is passed over for
+    the next in line - the notice filter would drop them, and it reached
+    nobody.
     """
-    owner_id = None
-    if vacancy is not None:
-        owner_id = vacancy.owner_id or vacancy.hiring_manager_id
-    return owner_id or invite.invited_by
+    from app.modules.auth.models import User
+
+    chain = [vacancy.owner_id, vacancy.hiring_manager_id] if vacancy else []
+    for uid in dict.fromkeys(u for u in (*chain, invite.invited_by) if u):
+        if vacancy is None:
+            return uid
+        user = await db.scalar(
+            select(User).options(selectinload(User.roles)).where(User.id == uid)
+        )
+        if user is not None and not await fenced_off_vacancy(db, user, vacancy.id):
+            return uid
+    return None
 
 
 async def _live_candidate_vacancy(
@@ -414,7 +440,7 @@ async def public_get_context(
     # HRP-379: the banner says "{name} will be notified" — that has to be
     # the person the email actually goes to.
     owner_name = None
-    owner_id = _notified_owner_id(vacancy, invite)
+    owner_id = await _notified_owner_id(db, vacancy, invite)
     if owner_id is not None:
         owner = (
             recruiter
@@ -837,7 +863,7 @@ async def _notify_evaluator_submitted(
 
     candidate = await db.get(Candidate, cv.candidate_id)
     vacancy = await db.get(Vacancy, cv.vacancy_id)
-    owner_id = _notified_owner_id(vacancy, invite)
+    owner_id = await _notified_owner_id(db, vacancy, invite)
     if owner_id is None:
         return
     rd = (
@@ -850,6 +876,7 @@ async def _notify_evaluator_submitted(
             "recruitment.assessment.evaluator_submitted",
             {
                 "tenant_id": str(invite.tenant_id),
+                "vacancy_id": str(cv.vacancy_id),
                 "owner_user_id": str(owner_id),
                 "evaluator_name": invite.evaluator_name or invite.email,
                 "candidate_name": candidate_display_name(candidate, fallback=""),
@@ -858,9 +885,15 @@ async def _notify_evaluator_submitted(
                 # prose and belongs in the per-locale template (HRP-373).
                 "round_type": rd.type if rd else None,
                 "round_number": rd.round_number if rd else None,
+                # HRP-379 REDO: ``round`` opens the very round tab the
+                # evaluation landed in — the block already consumes it for
+                # the evaluator invitation (HRP-373); the fragment alone only
+                # names the block and opens nothing.
                 "link": (
                     f"/recruitment/candidates/{cv.candidate_id}"
-                    f"?vacancyId={cv.vacancy_id}#manager-assessments"
+                    f"?vacancyId={cv.vacancy_id}"
+                    + (f"&round={invite.round_id}" if invite.round_id else "")
+                    + "#manager-assessments"
                 ),
             },
         )

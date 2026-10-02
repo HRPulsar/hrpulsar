@@ -40,6 +40,7 @@ from app.config import settings
 # (test_recruitment_notifications) re-register handlers against a patched
 # session factory themselves. A ValueError here means the import-time
 # registration in app.main changed — update this block alongside it.
+from app.core import ai_usage_hooks
 from app.core import events as _events
 from app.core.celery_app import celery as _celery
 from app.core.event_notifications import (
@@ -212,6 +213,13 @@ async def session_factory(db: AsyncSession):
 
 
 @pytest.fixture(autouse=True)
+def _pin_database_url_to_test_db(monkeypatch):
+    """Engines built from settings inside tests (Celery-style sync engines,
+    the HRP-964 call-log writer) must hit hrpulsar_test, never the dev DB."""
+    monkeypatch.setattr(settings, "database_url", TEST_DB_URL)
+
+
+@pytest.fixture(autouse=True)
 def _disable_auth_rate_limit():
     """Neutralise the per-IP auth throttle for the bulk of the suite.
 
@@ -227,6 +235,15 @@ def _disable_auth_rate_limit():
     auth_limiter.reset()
     yield
     auth_limiter.enabled = previous
+
+
+@pytest.fixture(autouse=True)
+def _clear_ai_call_context():
+    """Celery-style code binds the AI call context without unbinding
+    (prerun/postrun pairs, task bodies); a test that stops half-way must
+    not leak that context into the next test."""
+    yield
+    ai_usage_hooks._context.set(None)
 
 
 @pytest.fixture(autouse=True, scope="session")

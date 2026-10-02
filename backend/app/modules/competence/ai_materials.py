@@ -381,6 +381,7 @@ async def generate_materials(
     include_company_description: bool = True,
     refinement: str | None = None,
     count_per_level: int = 3,
+    user_id: uuid.UUID | None = None,  # read by the billing wrapper: the charge's "Who"
 ) -> list[GeneratedMaterialItem]:
     """Build the prompt, call the LLM, return the parsed material list.
 

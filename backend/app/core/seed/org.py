@@ -80,6 +80,8 @@ async def seed_people(ctx: SeedContext) -> None:
             else emp_role
         )
         await ctx.db.execute(user_roles.insert().values(user_id=u.id, role_id=role.id))
+        if role is not emp_role:
+            await ctx.db.execute(user_roles.insert().values(user_id=u.id, role_id=emp_role.id))
 
         hire_days_ago = random.randint(90, 1200)
         emp = Employee(

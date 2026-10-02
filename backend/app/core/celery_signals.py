@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
+from contextvars import Token
 from typing import Any
 
 import redis
-from celery.signals import task_failure, task_postrun, task_prerun
+from celery.signals import before_task_publish, task_failure, task_postrun, task_prerun
 
 from app.config import settings
+from app.core import ai_usage_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +40,38 @@ def _get_publisher() -> redis.Redis:
     if _PUBLISHER is None:
         _PUBLISHER = redis.Redis.from_url(settings.redis_url)
     return _PUBLISHER
+
+
+# HRP-964: prerun binds the inherited work unit (or an empty context) and
+# postrun resets that token, which also undoes every bind the task body
+# made on top — nothing leaks into the next task of a prefork process.
+_WORK_UNIT_TOKENS: dict[str, Token[ai_usage_hooks.CallContext | None]] = {}
+
+
+@before_task_publish.connect
+def on_before_task_publish(headers: dict[str, Any] | None = None, **_: Any) -> None:
+    """A task enqueued from inside a billed request inherits its work unit."""
+    ctx = ai_usage_hooks.current()
+    if headers is None or ctx is None or ctx.work_unit_id is None:
+        return
+    headers.setdefault(ai_usage_hooks.WORK_UNIT_HEADER, str(ctx.work_unit_id))
+
+
+def _bind_work_unit(task_id: str, headers: dict[str, Any]) -> None:
+    raw = headers.get(ai_usage_hooks.WORK_UNIT_HEADER)
+    work_unit_id: uuid.UUID | None = None
+    if raw:
+        try:
+            work_unit_id = uuid.UUID(str(raw))
+        except ValueError:
+            logger.warning("celery_signals: bad %s header on %s", ai_usage_hooks.WORK_UNIT_HEADER, task_id)
+    _WORK_UNIT_TOKENS[task_id] = ai_usage_hooks.bind(work_unit_id=work_unit_id)
+
+
+def _unbind_work_unit(task_id: str) -> None:
+    token = _WORK_UNIT_TOKENS.pop(task_id, None)
+    if token is not None:
+        ai_usage_hooks.unbind(token)
 
 
 def _user_channel(tenant_id: str, user_id: str) -> str:
@@ -123,6 +158,7 @@ def on_task_prerun(
     if not task_id:
         return
     headers = _read_headers(sender, task_id)
+    _bind_work_unit(task_id, headers)
     payload = _build_payload(task_id, "STARTED", headers)
     _publish(payload, headers)
 
@@ -137,6 +173,7 @@ def on_task_postrun(
 ) -> None:
     if not task_id:
         return
+    _unbind_work_unit(task_id)
     # `task_postrun` fires for both SUCCESS and FAILURE. We only emit the
     # SUCCESS variant here; FAILURE is handled by `task_failure` because it
     # has the exception object attached.

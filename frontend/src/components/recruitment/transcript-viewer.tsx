@@ -158,7 +158,7 @@ export function TranscriptViewer({
               </div>
               {!isEditing ? (
                 // No change callback = the caller may not edit segments
-                // (PUT .../segments/{id} is admin/recruiter) — no pencil.
+                // (PUT .../segments/{id} is `manage` on recruitment) — no pencil.
                 onSegmentChange && (
                   <Button
                     variant="ghost"

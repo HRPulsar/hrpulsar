@@ -285,6 +285,16 @@ async def update(
                 model=data["llm_model"],
             )
 
+        from app.modules.ai import processors
+
+        pinned = data["llm_model"]
+        if await processors.substitute_model(db, tenant_id, pinned) != pinned:
+            raise AppError(
+                "ai_model_processor_not_allowed",
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                model=pinned,
+            )
+
     custom_overrides = {"temperature", "max_retries", "llm_model"}
     explicit_override = any(
         field in data and data[field] is not None for field in custom_overrides
@@ -374,6 +384,17 @@ def get_effective_model(row: TenantAISettings) -> str:
 
 
 async def get_effective_model_async(db: AsyncSession, row: TenantAISettings) -> str:
+    """Effective model: the catalog kill-switch, then the tenant's processor
+    list (HRP-1005). Billing reads its multiplier off this model, so it must
+    be the one dispatch really sends; with no usable provider the model
+    stands and dispatch refuses the call."""
+    from app.modules.ai import processors
+
+    model = await _catalog_checked_model(db, row)
+    return await processors.substitute_model(db, row.tenant_id, model) or model
+
+
+async def _catalog_checked_model(db: AsyncSession, row: TenantAISettings) -> str:
     """Effective model, checked against the catalog kill-switch.
 
     HRP-500 (review #12): disabling a catalog row blocked *picking* the
@@ -577,6 +598,7 @@ def to_read_dict(
     """Read projection. ``effective_model``/``credit_multiplier`` come from
     the catalog-aware async resolvers when the caller has a session —
     without them this falls back to the registry-only values."""
+    effective = effective_model or get_effective_model(row)
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
@@ -593,8 +615,10 @@ def to_read_dict(
         "temperature": row.temperature,
         "max_retries": row.max_retries,
         "company_context": row.company_context,
-        "effective_model": effective_model or get_effective_model(row),
-        "effective_provider": get_effective_provider(row),
+        "effective_model": effective,
+        # HRP-1005: a substituted model belongs to another provider.
+        "effective_provider": providers.classify_model(effective)
+        or get_effective_provider(row),
         "effective_temperature": get_effective_temperature(row),
         "effective_max_retries": get_effective_max_retries(row),
         "effective_credit_multiplier": (

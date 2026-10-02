@@ -45,8 +45,10 @@ class ScaleConfigRead(BaseModel):
 
 # ─── LLM provider config ────────────────────────────────────────────
 
+# "jev" is the decision provider's BYOK row (HRP-936), not a generation
+# target: ``ai.providers`` does not know it, so generation skips the row.
 LLMProviderName = Literal[
-    "anthropic", "openai", "gemini", "azure", "yandex", "gigachat"
+    "anthropic", "openai", "gemini", "azure", "yandex", "gigachat", "jev"
 ]
 
 

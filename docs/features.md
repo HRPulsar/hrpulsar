@@ -15,11 +15,11 @@ A central record for every person in the company: position, division, hire date,
 - The profile header shows five summary tiles: Status, Tenure, Assessments, Goals progress, and Last assessment. Tile counts respect role visibility, so employees never see drafts hidden from them
 - Goals progress averages completion across the employee's open development plans; a hint next to the tile explains the formula
 - Last assessment counts completed assessments only, dated by their completion — the same rule the "no recent assessment" badge uses, so the header and the badge cannot contradict each other. An employee with nothing completed but an assessment under way reads "Assessment running" rather than "no records", and a running one alongside a completed one shows as a compact "+N running" marker
-- Edit rights follow the role matrix: admins and HR edit any record, division managers edit only employees in their own subtree, the employee role is read-only
+- Who runs employee records - adding people, editing and moving them, their timeline, work history and pay - is the section access setting; admins and division managers unless you change it. The org structure still fences it: admins - and HR once given the section - reach everyone, anyone else the departments they head, and a new or moved person lands inside those departments. Below admin nobody edits their own record here beyond education and courses, nor an admin's or HR's record. Deleting someone and changing roles stay with admins, and the employee pickers across the product keep working whatever the setting says
 - Assigning someone as a division manager or deputy upgrades their role automatically; removing the assignment asks for confirmation before the downgrade
 - The card header repeats the same issue badges the directory shows for that person, so opening a profile says what is wrong before any tab is clicked
 - Each issue badge carries the date its problem is scheduled to resolve — the open plan's deadline or the open assessment's due date — so the card answers "there is a problem, when does it close?" in one line
-- A Development dynamics tile reports what the last quarter changed for this person: development plans finished and competences scoring higher than before the period started
+- A Development dynamics tile reports what the last quarter changed for this person: development plans finished and the competences they raised — scored higher in an assessment completed after the plan than in the one before it
 - An actions menu on the header starts anything that is about this person — a development plan, an assessment, a career event — on the screen that owns the flow, with the employee already filled in
 
 ### Employee Directory
@@ -54,6 +54,7 @@ Formal education records: universities, colleges, degrees.
 
 - Institution, degree type, and field of study, with start and end dates (ongoing education supported)
 - Degree types: Secondary, Vocational, Bachelor, Master, PhD, Doctorate
+- Everyone keeps their own education and courses current; on a colleague's card they belong to whoever runs employee records
 
 ### Courses & Certifications
 
@@ -70,7 +71,7 @@ Compensation history per employee: salaries, bonuses, and allowances.
 - Amounts are stored in minor units with an ISO currency code
 - Effective date plus an optional end date for time-bound records, with free-text notes
 - Every change writes an employee event automatically
-- Admins and HR see all records; division managers see records inside their own subtree only
+- Whoever runs employee records sees and edits pay - admins everyone's, division managers their own subtree's - and nobody below admin sees or sets their own. Pay changes in the timeline and in the payroll analytics follow the same rule; the person themselves still sees and is emailed their own changes
 - Compensation analytics: average salary by division and totals by type
 
 ### Competence Snapshot
@@ -95,6 +96,13 @@ A snapshot of the employee's competence profile in two blocks.
 - Activity fields (business sectors) picked from a configurable dictionary
 - The logo and profile appear on the public company page
 
+### Section Access
+
+- Admins choose which menu sections each role opens - none, view or manage per section and role - or hide a section from everyone
+- The defaults are exactly today's access, so switching the screen on changes nothing until you do
+- The admin surfaces and the company profile always stay open to admins, so nobody locks themselves out; every save is logged with what changed
+- Who opens data import, invitations, roles and AI settings is the section access setting too - admins by default, plus HR and division managers for invitations. Invitations follow the org structure: HR sees and sends across the workspace, a division manager only into the departments they head; who may hand out which role stays the inviter hierarchy, and changing the role of a sent invitation stays with admins
+
 ### Divisions
 
 Hierarchical organizational units: departments, teams, offices.
@@ -105,6 +113,7 @@ Hierarchical organizational units: departments, teams, offices.
 - The division page shows specializations with employee counts per plate, plus an employee list with combinable filters by specialization, position, and grade. Plates cover both the specializations mapped to the division and the ones its people actually hold, mappings from the departments below it included — a child department that is mapped but not yet staffed still shows up on the parent
 - Divisions with children report on their whole subtree by default — plates, filters and the employee list include nested departments, and an "Include sub-divisions" switch narrows everything back to the division itself
 - An "Add employee" dialog attaches existing employees or creates new ones without leaving the page, with a confirmation step when someone is pulled from another division
+- Who shapes the org chart - adding, editing and moving divisions and mapping their specializations - is the section access setting; admins and division managers unless you change it. The org structure still fences it: admins and HR reach the whole tree, anyone else the departments they head. Deleting a division stays with admins, and the division tree every other page picks from stays readable whatever the setting says
 
 ### Positions
 
@@ -115,6 +124,7 @@ Structured job positions linked to grades, specializations, and divisions.
 - The position page shows the resolved competence matrix as a compact tree with required skill levels, plus a deep link to configure the matrix
 - Positions can be generated with AI from a text brief, with a mandatory draft review before anything is saved
 - A dedicated admin view lists employees without a position for bulk assignment
+- Who authors positions - creating, editing, changing their status, approving AI drafts - is the section access setting; admins and division managers unless you change it, each position still fenced by the org structure. Deleting stays with admins, and the position pickers across the product keep working whatever the setting says
 - The catalogue is readable workspace-wide, but a rank-and-file employee sees it without the grade, specialization, matrix and salary columns — the page hides them rather than showing a column of dashes, and it decides from the viewer's role and the workspace switch, not from whatever rows the current page happens to hold
 
 ### Specializations
@@ -125,6 +135,7 @@ Each specialization is a full profile, not just a dictionary entry.
 - Per grade: description, requirements, and a salary range in the installation currency (`BILLING_CURRENCY`, USD by default), shown to admins, HR and managers
 - The competence matrix editor is a competence-by-grade table with per-cell skill levels, a heat-map tint by level, indicator tooltips, and warnings on competences that lack indicators or materials
 - Matrix consistency is guaranteed: a higher grade never requires a lower level than the grade below it, both in the editor and on the server
+- The grade ladder and the matrices are edited by admins and HR; the grade system behind them stays with admins
 - A matrix can be generated with AI from a structured brief (responsibilities, tasks, KPIs, requirements) plus uploaded files (PDF, DOCX, XLSX, RTF, TXT). The result opens in a review screen where every suggestion can be edited or dropped before saving
 
 ### Competency Framework
@@ -140,6 +151,8 @@ The competence library: groups, competences, indicators, and learning materials.
 - Drag-and-drop reorganization of the tree with referential integrity checks
 - A per-competence audit log records every publish, move, activation, and deletion with actor and timestamp
 - The competence page groups indicators and materials by skill level, with editable indicator weights and drag-and-drop ordering
+- Who edits the library is the section access setting; admins and HR unless you change it. Deleting from it, the skill levels and the AI generation of the tree stay with admins. Everyone else reads it, and the competence tree every assessment, vacancy and profile picks from stays readable even for a role whose Competences section is closed
+- Division heads add their own competence drafts to an existing group, rename and delete them; a draft is seen only by its author, HR and admins, is offered in no picker, and joins the library once HR or an admin publishes it
 
 ### Grade System
 
@@ -156,10 +169,18 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Built-in and custom entries with sort ordering and active/inactive status
 - Built-in entries can be switched on or off per workspace; their titles stay fixed
 - Deleting a custom entry that is referenced elsewhere is blocked with a clear message
+- Who edits dictionaries is the section access setting, admins by default; every form keeps reading them whatever the setting says
 
 ---
 
 ## Recruitment
+
+### Who Works in Hiring
+
+- Who runs hiring - vacancies, candidates, interviews, AI analyses, consents, reports and hiring rounds - is the section access setting; admins, HR and recruiters unless you change it, and they see every vacancy in the company
+- Everyone else the section is open to reads the vacancies they own, are the hiring manager of, or whose division they manage - never a vacancy they applied to themselves, which stays out of their reach for good together with its candidates, interviews and scores. Hiring managers keep evaluating candidates there - questions, scores, moving a candidate through the funnel - and division managers keep running hiring rounds, as long as the section is open to them
+- Recruitment settings stay with admins; GDPR requests and the audit log with admins and HR
+- The notifications that go to the hiring team when nobody else is named on them reach whoever the setting lets run hiring
 
 ### First Hiring Cycle
 
@@ -172,7 +193,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Selects cascade from the company library — position constrains specializations, specializations constrain grades — and both the competence profile and the salary range prefill from the matching grade matrix
 - The salary range follows the library on every surface that edits it — create, the edit page, and the inline edit of the vacancy overview: changing position, specializations or grades refills it from the picked pairs, and a range typed by hand stands until the next such change. Pairs priced in different currencies fill nothing rather than adding up sums that do not compare
 - Every vacancy has a hiring manager, defaulting to the creator; any active member of the company can be named, whatever role they hold
-- Lifecycle: edit, archive with a 90-day retention window, restore, or permanently delete a draft without candidates
+- Lifecycle: edit, archive with a 90-day retention window, restore, or permanently delete a draft without candidates; archived vacancies stay out of the list until "Show archived (N)" is ticked
 - Parallel edits are protected: a stale save is rejected instead of silently overwriting someone else's change
 - Per-vacancy attachments (documents, spreadsheets, presentations, images; 25 MB each, up to 10) feed context into AI generation
 
@@ -189,13 +210,13 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Duplicate emails are caught before import with a link-or-create choice per file
 - The candidate page carries contact details, the parsed resume with per-section inline editing, files, and every vacancy application with its scores
 - Funnel stages ship with a 9-stage default (new through hired, rejected, withdrew) and can be customized per workspace or per vacancy; stage changes into a terminal state ask for confirmation
-- The vacancy table shows last position, experience, current stage, and the two assessments side by side: how much of the vacancy profile the manager scored and how much the AI scored, each as a percentage so the two are directly comparable. The AI verdict comes with the reason for it in the row itself, not only behind a popover
+- The vacancy table shows last position, experience, current stage, and the two assessments side by side: how much of the vacancy profile the manager scored and how much the AI scored, each as a percentage so the two are directly comparable. The AI verdict comes with the reason for it in the row itself, not only behind a popover. The Divergence column reads "N/M" — competences where the manager and the AI disagree out of all in the profile — and its hover card lists them and links into the full-screen canvas filtered to that candidate's divergent cells
 - A candidate nobody has assessed yet says so — "not assessed yet", with the reason in a tooltip — instead of an unexplained dash. Rows where the manager and the AI disagree carry a count of the competences they disagree on, and one definition of "disagree" is used everywhere: the workspace divergence threshold, applied per competence
 - Candidates who already work here are marked as such wherever candidates are read — the global list, the vacancy table (with the row tinted), and the candidate page — so an internal applicant is never mistaken for an outside one
 
 ### Internal Candidates
 
-- Before hiring outside, the vacancy offers to look inside: one action posts the requisition to the internal talent market as a vacancy card, carrying its required competences across
+- Before hiring outside, the vacancy offers to look inside: one action posts the requisition to the internal talent market as a vacancy card, carrying its required competences across - provided the talent market is open to the poster in the section access setting
 - The talent market's own competence matcher then fills the shortlist, and the vacancy shows those employees with their percentage match next to the external pipeline. There is no second matcher and no second copy of the requirements — the card is the vacancy's twin, and the link leads to it
 - Posting needs required competences picked from the company library: the AI-generated profile describes a candidate in prose, while the internal match is scored against library competences and assessment results
 - The card is created as a draft, so nothing is announced to employees until someone publishes it from the talent market
@@ -207,6 +228,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 ### Interview Questions
 
 - Question sets per candidate and vacancy, generated from the resume and the competence profile, with manual editing throughout
+- Generation runs in the background: the set shows a progress bar and a Cancel button while it is being written, and the other sets stay available meanwhile
 - Questions can be added two ways: a custom question written by hand, or generated from the vacancy's competency indicators — pick competences from a searchable tree and each becomes a question carrying the competence's indicators, follow-up questions, and rationale
 - Every question shows its goal, priority, and the profile competence it probes, so coverage gaps are visible at a glance
 - Sets evolve across rounds: covered topics are marked (by hand or from the transcript) so the next round skips answered ground, and blind spots from prior analyses become probes
@@ -219,13 +241,14 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Workspace-defined assessment scales (2–10 weighted levels); each vacancy freezes its scale on the first score. Each scale carries its own divergence threshold, readable and adjustable on the scale itself after it was created
 - Assessment rounds per candidate (pre-interview, numbered interviews, final) with a separate sheet per evaluator, always listed in hiring order
 - Several colleagues can score the same round: add an evaluator and they get their own sheet plus an email invitation with a direct link. Each writes only their own row, and a colleague's sheet stays hidden until you submit yours, so nobody anchors on someone else's answers. Pre-interview rounds keep a single evaluator
-- Round lifecycle from the tab menu: complete, reopen, archive, restore. Completing or archiving a round freezes it — sheets turn read-only for the hiring team and for external evaluators alike, and the outstanding invitation links are revoked. An archived round keeps every score but drops out of the candidate's average and is marked as excluded. An evaluator who already submitted can still open their sheet and sees why it is read-only
+- Round lifecycle from the tab menu: complete, reopen, archive, restore. Completing or archiving a round freezes it — sheets turn read-only for the hiring team and for external evaluators alike, and the outstanding invitation links are revoked. An archived round keeps every score but drops out of the candidate's average and is marked as excluded. An evaluator who already submitted can still open their sheet and sees why it is read-only; once the round is reopened, a sheet whose invitation allows re-editing takes edits again until the link expires
 - The candidate's Manager score for a vacancy comes from a single round — the last completed one in hiring order (pre-interview, interviews, final), regardless of when it was closed, falling back to the last scored round while none is complete and skipping archived rounds entirely. Both the candidate page and the vacancy table name that round in the score's tooltip
-- Indicator-level and competence-level scoring with autosave and a completion marker. Scoring a competence's indicators derives its overall score; setting the overall by hand instead clears the indicator answers, so the two never contradict each other
-- The round header carries the round's average score — the mean across every evaluator and competence, alongside its position on the scale's weights — and shows an em dash until the first score lands. While you are still scoring the round yourself, it counts only the sheets you may already read, so the header cannot hand you a colleague's number before you submit
-- Each competence shows its own cross-evaluator average with a tooltip listing what every evaluator gave it, and turns into a warning when they differ by the scale's divergence threshold or more. External evaluators count toward these averages once they submit; a sheet whose invitation is revoked or declined stops counting
+- Indicator-level and competence-level scoring with autosave and a completion marker. Every saved score, round action and revoked invitation also refreshes the Manager score shown in the candidate page's Vacancy applications block, without reloading the page. Scoring a competence's indicators derives its overall score; setting the overall by hand instead clears the indicator answers, so the two never contradict each other
+- The round header carries the round's average score — the mean across every evaluator and competence, alongside its percent of scale — and shows an em dash until the first score lands. While you are still scoring the round yourself, it counts only the sheets you may already read, so the header cannot hand you a colleague's number before you submit
+- Percent of scale is one number everywhere: a level is worth the weight the scale gives it, an average sits proportionally between its two neighbouring levels, and the round header, the vacancy table's % match, the assessment matrix and canvas, its Percent toggle and its export all use that one conversion, and the vacancy report workbook converts the percentages it prints with it too. On the standard 1–4 scale a 3 is 66 %, never 75 %
+- Each competence shows its own cross-evaluator average with a tooltip listing every evaluator by full name with their score, headed by "Evaluators disagree" when they differ by the scale's divergence threshold or more — the icon then turns into a warning. External evaluators count toward these averages once they submit; a sheet whose invitation is revoked or declined stops counting
 - External evaluators join through secure token links with expiry, no account needed. The public evaluation page shows the resume and question list next to the scoring sheet and keeps the platform itself closed off. PDF resumes render inline; Word and text resumes are shown as an extracted preview, and the file is only downloaded when the evaluator asks for it. A candidate entered by hand has no file at all — their resume is shown as its summary, experience, education and skills. A link that can no longer be used says which reason applies: declined, expired, revoked, or a candidate or vacancy that is no longer available
-- The vacancy owner is emailed as soon as an external evaluator submits, with a link straight to the candidate's manager assessments; corrections to an already submitted sheet do not send it again
+- The vacancy owner is emailed as soon as an external evaluator submits, with a link that opens the candidate's manager assessments on the very round that was evaluated; corrections to an already submitted sheet do not send it again
 - Recruiters track invite status (pending, opened, in progress, submitted, expired) and act on each invitation from its own menu — resend the same link, revoke it, or read the submitted evaluation in a read-only panel — revoking an invitation that was already filled in keeps that evaluation readable and marks it as no longer counted toward the round score. Resending the same invitation is throttled for a few minutes, and every invitation email counts against an hourly ceiling per recipient address, so neither a repeated click nor a stream of new invitations can flood an evaluator's inbox. Both limits are deployment-tunable
 - The vacancy's Assessments tab expands into a full-screen canvas: a candidates-by-competences matrix with manager and AI scores side by side, view and round switches, divergence-only and no-score filters, a cell-details footer, per-candidate totals, and XLSX/CSV export of exactly the rows and columns left on screen
 
@@ -282,7 +305,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 ### Assessment Types
 
 - Self, 180-degree, and 360-degree assessments
-- The create dialogs explain what each format is for: 180° and 360° carry staffing decisions, self assessment feeds development tracks
+- The create dialogs explain what each format is for: self-assessment is the employee's own view and suits development tracks, independence and initiative; 180° and 360° add managers, colleagues and subordinates and form the basis for personnel decisions
 - Participant roles: self, manager, peer, subordinate
 - Competence-based evaluation with configurable indicators and weighted answer scales
 
@@ -317,6 +340,7 @@ What to evaluate is chosen in a dedicated panel, on single and mass assessments 
 - Each employee can have at most 3 active assessments. Mass launches skip employees at the cap and report how many were created
 - Started from an employee card, the assessment arrives configured: a title naming the employee, 180° when they have a division manager and self-assessment when they do not, and — filled in the same transaction as the assessment itself — the "current positions" criteria plus the tenant's default rating scale. Only the deadline and Send are left. The dialog says so when the employee has no position, and creation still succeeds with the criteria left to pick by hand
 - Participants get an email when the assessment goes live, when it completes, and when it is cancelled after launch
+- Who runs assessments - creating single and mass assessments, sending and calibrating them, inviting external reviewers, reading the detailed results and running CPA cycles - is the section access setting; admins and division managers unless you change it. The setting opens the buttons, the org structure still says whose assessment it is: admins and HR see every assessment, a division head their own department's. Everyone the section is open to answers the assessments they take part in, and closing the section for a role closes it for the people in it. Answer scales stay with admins and HR
 
 ### Results & Calibration
 
@@ -390,6 +414,7 @@ Structured growth plans tied to assessment results.
 - During review the employee sees a frozen snapshot of the items while the reviewer keeps editing live
 - Past-due deadlines are highlighted in red in the list and on the plan page
 - The assigned employee gets an email when the plan is sent; deadline reminders follow
+- Who authors plans - creating, editing, restoring a version, drafting with AI and moving a plan through every status - is the section access setting; admins and division managers unless you change it. HR moves plans through every status as well, whatever the setting. The setting opens the buttons, the org structure still says whose plan it is: admins and HR reach every plan, a division head their own department's. Everyone the section is open to keeps their own side of their plan, and closing the section for a role closes the plans of the people in it too
 
 ### Plan Items & Materials
 
@@ -420,6 +445,7 @@ Knowledge testing with configurable questions and pass criteria.
 - Questions are editable while the exam is in Draft and lock at launch
 - Status flow mirrors assessments: Draft → Sent → In progress → Completed, with Cancelled available until the exam terminates
 - Launch validates at least one question, at least one assigned employee, and a future deadline
+- Who runs the exams - writing them, assigning them, reading everyone's results - is the section access setting; admins and division managers unless you change it. An exam already assigned stays open to the person taking it whatever the setting says, so a closed section never strands an invitation
 
 ### Assigning & Taking Exams
 
@@ -468,12 +494,13 @@ An internal job board for open positions and project opportunities.
 - The status says why, not only whether. A card can gate on competences, on experience, or on both, so the row names the axis that is short — "Competencies met, no experience" once a re-assessment has closed the competence gaps but the card also asks for years the candidate does not have, or "Competencies and experience short" when neither is there. Without it a bare "not matched" next to a freshly raised percentage reads as stale data when it is in fact correct
 - The match percentage and the breakdown are recomputed on every open, so a finished assessment shows up without any action; the composition of the pool — who is on the list at all — changes on an explicit Recompute
 - Employees on a published card can react to express interest; their manager gets an email, and reactions break ties in the ranking
-- When the person reacting is below the card's match bar on a vacancy or a project, they get an answer instead of silence: the reaction stands, they keep their place on the candidate list, and the message points at closing the gaps rather than at a rejection. From there they can ask their manager for a development plan — employees cannot create one themselves — and the manager's notification opens the very breakdown the plan is built from
+- When the person reacting is short on a vacancy's or a project's required competences — judged live, not from the stored score, and only on competences: missing years of experience alone draw no reply, since a plan cannot close them — they get an answer instead of silence: the reaction stands, they keep their place on the candidate list, and the message points at closing the gaps rather than at a rejection. From there they can ask their manager for a development plan — employees cannot create one themselves — and the manager's notification names who asks and for which card, and opens the very breakdown the plan is built from
 - A development plan can be built straight from the breakdown: its items are exactly the required competences the candidate is short on, with the learning materials for each, and the plan is linked from the candidate row. Appointment and the plan are independent — a candidate can be appointed and then work the plan, or finish the plan and be appointed afterwards
 - Appointment asks for confirmation, so a stray click cannot pin a candidate
 - Emails go out on every lifecycle event: publish, being added to a live card, appointment, completion, cancellation, and removal from a published card
 - The section is open to regular employees, narrowed to the cards their own name is on: a card they are a candidate on once it is published, plus a card of any status they have been appointed to before it goes out. They read their own row and their own match breakdown — not the shortlist they are ranked in — and every write control stays hidden
 - A vacancy card can also come from recruitment: posting a requisition to the talent market creates one with the vacancy's required competences already on it (see Recruitment → Internal Candidates)
+- Who authors the board - creating, publishing, staffing and deleting cards - is the section access setting; admins and division managers unless you change it. The setting opens the buttons, the org structure still says whose card it is: admins and HR reach every card, a division head their own department's and the ones they created. Everyone the section is open to keeps the cards their own name is on, and closing the section for a role closes those too
 
 ---
 
@@ -487,7 +514,8 @@ Break a process or a project down into steps, see who covers each step - an AI a
 - Every step carries who answers for it (nobody, reputational, formal, regulatory), whether it produces a draft or changes the outside world, an optional reversibility, and the model's estimate of hours per run and runs per year, which you correct in place
 - The first breakdown of a container applies itself: there is nothing to replace, so you land on the coverage with a number instead of on a button. A regeneration still asks, and shows the current and the proposed step lists side by side before you decide
 - Long generations show a progress strip with the phase and a running clock
-- The list of processes and projects counts both under its title, is searched by title and filtered by type and status like every other list, and its title hint says what a process and a project are
+- The same text gives the same breakdown: a description your company broke down before - with the same model, prompt and content language - is answered from the stored result at once, for thirty days; spacing and compatibility forms of characters do not count as a different text, capitalisation does
+- The list of processes and projects counts both under its title, is searched by title and filtered by type and status like every other list, and its title hint says what a process and a project are; each row names the owner with their position and status
 - Edit the draft in place: rename, reorder by drag-and-drop, add or delete steps, change any capability chip; accept the whole breakdown when it matches reality
 - Step attributes fold away behind a Details disclosure: who answers for the step, what it produces, and the hours estimate you can correct
 - Capability chips show the model's confidence and the fragment of your description it relied on; a doubtful chip is marked as a suggestion until you confirm or remove it
@@ -527,17 +555,17 @@ Everything the breakdown leaves unclosed, in two sections.
 
 Not every process is for the whole company - payroll, severance or compensation work often is not.
 
-- Admins and HR see and edit every process. Besides them, a process is seen by its owner and by the people assigned to its steps
+- Whoever the section access setting gives Coverage management - admins and HR unless you change it - sees and edits every process. Besides them, a process is seen by its owner and by the people assigned to its steps
 - Each process is visible either to the whole company or only to the roles, positions and employees you name. A new process starts restricted, with its creator as the owner
-- The owner edits the process - steps, AI runs, acceptance and who sees it - but does not delete it or hand it to another owner; that stays with admins and HR, so a process never depends on one person staying with the company
-- An owner who has left is marked as such, and admins or HR name a new one - an archived process included
+- The owner edits the process - steps, AI runs, acceptance and who sees it - but does not delete it or hand it to another owner; that stays with the section's managers, so a process never depends on one person staying with the company
+- An owner who has left is marked as such, and the section's managers name a new one - an archived process included
 - A colleague who only reads a process sees every verdict and who is assigned to a step, but not which colleague a match found or what an assignee lacks: both come from assessments. A manager sees them for the people in their own divisions, and everyone sees their own
 - Changes to the owner, the visibility and the rules are kept in the process's history
-- The Coverage menu entry appears for anyone who can see at least one process; a process you cannot see answers as if it did not exist
+- The Coverage menu entry appears for whoever manages the section and for anyone who can see at least one process; a process you cannot see answers as if it did not exist
 
 ### Agent Skills
 
-- For any step an agent can perform, generate a `SKILL.md` for it: the pack's skeleton filled with your company's competence indicators, the step's attributes and its acceptance point
+- For any step an agent can perform, generate a `SKILL.md` for it: the pack's skeleton filled with your company's competence indicators, the step's attributes and its acceptance point. The generation starts only after a confirmation
 - Generation runs in the background with a progress strip and a running clock, so a closed tab never loses a file that was in fact written
 - Preview the file, download it, or register the agent you already use for that step
 - An agent setup guide on the Coverage tab answers what the per-step verdicts do not: how many agent types this work needs, which steps stand behind each, how many hours a year it takes over, whether you have registered an agent of that type and how many of its skill files are ready - largest hours first, so you start where it pays most
@@ -547,11 +575,11 @@ Not every process is for the whole company - payroll, severance or compensation 
 
 ### Agent registry
 
-The registry behind the Coverage verdicts, as an API (`/api/ai-workforce/*`); a screen for it is on the roadmap.
+The registry behind the Coverage verdicts, as an API (`/api/ai-workforce/*`); a screen for it is on the roadmap. It belongs to the Coverage section: the roles the section access setting gives management run it, while everyone the section is open to asks for an agent for themselves and reads what they asked for.
 
 - Nine built-in agent packs name what an agent type can do in catalog capabilities; a pack can be switched off for the company
 - Register the agents the company actually runs - vendor, category, cost, contract renewal, data classification, security review, EU AI Act risk level - each on a pack, with capabilities added or removed for that one agent
-- Assign an agent to an employee with its allowed use cases, a supervision level and an accountable owner; an employee requests an assignment, an admin or HR approves, rejects or revokes it, and expiring assignments are listed
+- Assign an agent to an employee with its allowed use cases, a supervision level and an accountable owner; an employee requests an assignment, a Coverage manager approves, rejects or revokes it, and expiring assignments are listed
 - Describe multi-agent workflows step by step, and read every change in an audit feed filtered by actor, target and period
 
 ## AI Features
@@ -579,6 +607,11 @@ Per-workspace configuration that applies to every AI call.
 - Supported providers: Anthropic, OpenAI, Google Gemini, YandexGPT (Yandex Foundation Models), and any OpenAI-compatible server (Ollama, vLLM, LM Studio) via a custom endpoint URL
 - The provider selector offers only providers with working credentials: a platform-wide key, a workspace key (bring your own key), or a configured local endpoint — workspace credentials take priority over platform keys in every AI call
 - The model list refreshes itself: a daily background sweep asks each configured provider for its current models, so newly released model versions appear without a redeploy; models a provider retires are never silently removed
+- **AI processors.** The instance lists which outside AI companies tenant data may reach on
+  the platform's keys (`AI_PROCESSORS_DEFAULT`; empty = all). Settings → AI shows the
+  workspace the processors its data reaches; providers outside the list appear as not
+  enabled, and a pinned model of such a provider is replaced by a same-tier model of an
+  allowed one. The workspace's own keys are never restricted.
 
 ---
 
@@ -599,9 +632,9 @@ Per-workspace configuration that applies to every AI call.
 - Who may invite whom follows the same ladder: admins invite any role, HR everything below admin, managers only employees
 - The same scope rules apply across every list in the product: admins see the workspace, managers see their subtree, employees see their own records
 - The sidebar only offers what the role can actually open: hiring stays out of a rank-and-file employee's menu, and the controls on the company page appear for the roles the API accepts
-- A read-only **Roles** page in the Admin area lists every role of the workspace with what it can actually do and how many people hold it — the descriptions follow the gates the product enforces, not a permission table nothing reads. The count opens the employee list filtered by that role
-- The Admin area (dictionaries, invitations, data import, roles, AI settings) is reserved for admins: the whole sidebar group is hidden for everyone else, and opening one of its links directly shows an error and returns the user to the dashboard
-- Every action in the Admin area is admin-only on the API too, so a hidden section is never merely hidden (reference data stays readable across the product, as the rest of the app depends on it)
+- A read-only **Roles** page in the Admin area lists every role of the workspace with what it can actually do and how many people hold it — the descriptions follow the gates the product enforces. The count opens the employee list filtered by that role
+- The Admin area (dictionaries, invitations, data import, roles, AI settings) follows the section access setting - admins by default, plus HR and division managers for invitations: the sidebar group shows only the entries open to the role, and opening a closed one directly shows an error and returns the user to the dashboard
+- Every action in the Admin area is gated the same way on the API, so a hidden section is never merely hidden (reference data stays readable across the product, as the rest of the app depends on it)
 - Reading is scoped as tightly as writing: hiring data (candidates, resumes, interviews, reports) is reserved for the roles that do hiring, and the sections under an employee card — competences, timeline, education, employment history, compensation — open only for the person themselves, their division manager, and admins
 - Everyone can still look a colleague up: the employee list is a company directory for rank-and-file staff, showing name, job title and department with no HR data attached. Grades appear there only if the workspace switches them on
 - The positions catalogue answers to the same switch: a rank-and-file employee browses positions, divisions and headcounts, but a position's grade and specialization arrive only when the workspace has switched grades on — otherwise the directory and the catalogue together would rebuild the grade the directory withholds. Filtering by grade or specialization is closed for them too, since a filter answers the same question the column would
@@ -696,7 +729,7 @@ A first-login wizard for newly registered organizations.
 - Invite colleagues by email with a pre-assigned role, division, and position; accepting creates the user account and the employee card in one step
 - Invitation links expire after 7 days; an inviter can never grant a role above their own
 - Bulk invite up to 100 people at once; the response lists every address that could not be invited together with the reason
-- A management page tracks all invitations with status filters (pending, accepted, cancelled, expired), resend and cancel actions, and inline editing of pending invites; the page and the registry API behind it are admin-only
+- A management page tracks all invitations with status filters (pending, accepted, cancelled, expired), resend and cancel actions, and inline editing of pending invites; the page and the registry API behind it follow the section access setting, and below admin they show the caller's own departments. Re-addressing an invitation counts as sending it, so a pending invite is edited only by someone who could have sent it
 - Changing the email on a pending invite issues a fresh link, resets the expiry, and disables the old link
 - The accept page introduces itself from the invitation: the invited address is shown read-only and the name entered by the inviter is split into first and last name, both still editable
 
@@ -736,19 +769,19 @@ A first-login wizard for newly registered organizations.
 
 ## Analytics & Dashboards
 
-- A management dashboard built around the development loop — assess, find gaps, develop, close: four clickable stages show assessment coverage, employees scoring below their grade bar, open development plans, and gaps confirmed closed by a re-assessment in the last quarter
+- A management dashboard built around the development loop — assess, find gaps, develop, close: four clickable stages show assessment coverage, employees scoring below their grade bar, open development plans, and plans finished in the chosen period — 30, 90 or 365 days — with how many of them met their deadline
 - An action queue that turns detected problems into next steps: employees below the bar with no development plan, overdue plans, plans stuck in review, and falling assessment coverage — each row deep-links into the module that fixes it
 - Every tile and queue row opens the list already filtered to the people it counted, so the number on the dashboard and the rows on the page always match; the names listed under a finding link straight to the person's card
 - Queue rows name the worst cases first: the people under a finding are ranked by how bad the problem is — how many competences sit below the bar and how far, how long a plan is overdue or stuck, how long since the last assessment — and the employee list the row opens keeps the same order, with an explicit fallback to the newest-first ordering
 - The gaps stage only turns red when nobody is working on the gap — gaps that already have an open development plan read as amber, and a red chip on the tile counts the ones still without a plan
 - The assessed stage carries a red chip counting the people with no recent assessment, and the matching queue row's button names the same number, so "nobody assessed them" reads as a task rather than a statistic
 - Every stage of the loop, the action queue and the assessment-cycle card carry a question mark that explains exactly what the number counts, including the time windows and the passing bar behind it
-- A development-dynamics tile on both dashboards counts plans completed and competences raised over a period the reader picks — 30, 90 or 365 days — where any rise counts, not only a gap crossing the passing bar
+- A development-dynamics tile on both dashboards counts plans completed over a period the reader picks — 30, 90 or 365 days — and the competences those plans raised: scored higher in an assessment completed after the plan than in the one before it. The tile, like Completed, opens the plans finished in that period
 - Dashboard figures follow the reader's scope: a division manager sees their own subtree, not the whole company
 - A personal dashboard for employees: my loop stages (latest assessment, my gaps, my active plan, confirmed closures), a personal to-do queue (pending surveys, returned or overdue plans, gaps without a plan), strengths with rare-skill highlights, growth direction to the next grade, and an assessment-score sparkline
 - An on-demand AI summary of the loop state — one click explains what is going on and what to do first; employees get a coach-style personal summary on their own dashboard (cached per data state)
 - HR metrics over a chosen period — 30, 90 or 365 days — shown as "was → now": plans closed, people at risk, grade changes, turnover, time between grade changes, average talent-market match and engagement. Each metric states how solid it is: the ones reconstructed from data that gets rewritten are marked as estimates and explain their formula, and metrics this workspace has no signal for are named rather than quietly left out
-- Analytics is open to admins, HR and division managers, with a manager's figures covering their own subtree
+- Who opens Analytics is the section access setting - admins, HR and division managers unless you change it. Read access shows the charts; management adds the assessment exports and the AI summary of the loop. The level opens the page, it does not widen the figures: admins and HR see the workspace, a division head sees their own department - the division headcount matrix included. Salary figures keep the audience they have on an employee's card, admins and the person's own division head
 - Active assessment cycle progress at a glance
 - Reports: assessment score distributions, competence heatmaps, and division comparisons
 - Assessment export to XLSX, generated in the background with a download link when ready

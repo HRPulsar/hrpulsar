@@ -43,6 +43,20 @@ def _version_from_file() -> str:
     return "dev"
 
 
+# HRP-1005: every outside company an AI call can hand tenant data to on a
+# platform key. AI_PROCESSORS_DEFAULT narrows it per instance; the platform
+# admin adjusts it per tenant (tenants.ai_processor_overrides).
+AI_PROCESSOR_NAMES: tuple[str, ...] = (
+    "anthropic",
+    "openai",
+    "gemini",
+    "yandex",
+    "jev",
+    "deepgram",
+    "assemblyai",
+)
+
+
 class Settings(BaseSettings):
     # App
     # APP_VERSION build-arg overrides when set; empty → read version.py
@@ -108,11 +122,21 @@ class Settings(BaseSettings):
     # gpt://<folder>/<model> URIs (HRP-599).
     yandex_folder_id: str = ""
     llm_provider: str = "claude"  # claude, openai, gemini, yandex
+    # HRP-936: optional decision provider (Jev by TypeSafe AI). Empty key =
+    # feature off: every caller keeps its LLM path. A tenant BYOK row
+    # (LLMProviderConfig, provider "jev") wins over this key. The base URL
+    # is overridable for a regional endpoint or an egress proxy.
+    jev_api_key: str = ""
+    jev_base_url: str = "https://api.typesafe.ai"
     # HRP-505: operator escape hatch for the saas SSRF guard on
     # tenant-supplied AI base_url values — comma-separated hostnames that
     # skip validation and IP pinning (e.g. a vetted corporate gateway).
     # Operator-only; never exposed to tenants.
     ai_base_url_allowed_hosts: str = ""
+    # HRP-1005: processors every tenant may use on platform keys, comma-separated
+    # names from AI_PROCESSOR_NAMES. Empty = all of them, the behaviour before
+    # the list existed; the platform admin adjusts it per tenant.
+    ai_processors_default: str = ""
     # HRP-71 phase 4: per-item delay for the synthetic indicator-stream so the
     # UI counter animates 1/N → N/N. Set to 0 to disable for matrices that
     # produce thousands of indicators.
@@ -300,7 +324,52 @@ class Settings(BaseSettings):
     # Domain-specific ceilings (resume, interview attachment) stay stricter.
     max_upload_mb: int = 10
 
+    # Public process check "AI or Human?" (epic HRP-918, HRP-920): the free
+    # check served on its own host. Off by default — an on-prem install has
+    # no public surface; SaaS enables it and names the host
+    # (check.hrpulsar.com). While on, the host joins CORS_ORIGINS (see
+    # ``_public_check_host_into_cors``) and ``public_check_cookie_domain``
+    # names the parent domain for the check's cookies when the host sits
+    # under the same domain as the app. Ingress is the Caddyfile block keyed
+    # on PUBLIC_CHECK_HOST (deploy/Caddyfile, docs/ops/PUBLIC_CHECK_SUBDOMAIN.md).
+    public_check_enabled: bool = False
+    public_check_host: str = ""
+
     model_config = {"env_file": "../.env", "extra": "ignore"}
+
+    @property
+    def public_check_origin(self) -> str:
+        """Origin of the public check host; "" while the check is off."""
+        host = self.public_check_host.strip().rstrip("/")
+        if not self.public_check_enabled or not host:
+            return ""
+        return host if "://" in host else f"https://{host}"
+
+    # ponytail: read by nobody until the public check pages set a cookie (HRP-924/925); delete if they never do.
+    @property
+    def public_check_cookie_domain(self) -> str:
+        """Parent domain for the check's cookies; "" keeps them host-scoped.
+
+        Set only when the check host is a subdomain of a domain the app
+        itself lives under (FRONTEND_URL or a CORS origin): check.hrpulsar.com
+        next to app.hrpulsar.com gives "hrpulsar.com", so a cookie set by
+        the check is readable on the app after the visitor signs up. A check
+        host on a foreign domain, or an app on localhost, gives "" — the
+        cookie then stays on the check host.
+        """
+        host = urlsplit(self.public_check_origin).hostname or ""
+        parent = host.partition(".")[2]
+        if "." not in parent:
+            return ""
+        app_hosts = {
+            urlsplit(o.strip()).hostname or ""
+            for o in (self.frontend_url, *self.cors_origins.split(","))
+            if o.strip()
+        }
+        app_hosts.discard(host)
+        if any(h == parent or h.endswith(f".{parent}") for h in app_hosts):
+            return parent
+        return ""
 
     @property
     def available_locales_list(self) -> list[str]:
@@ -365,6 +434,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DEMO_ENABLED=true requires DEPLOYMENT_MODE=saas — the "
                 "public demo sandbox is an enterprise-only feature."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _known_ai_processors(self) -> "Settings":
+        """HRP-1005: a typo must not silently switch a processor off for
+        every tenant — refuse to start instead."""
+        names = {
+            name.strip().lower()
+            for name in self.ai_processors_default.split(",")
+            if name.strip()
+        }
+        unknown = sorted(names - set(AI_PROCESSOR_NAMES))
+        if unknown:
+            raise ValueError(
+                f"AI_PROCESSORS_DEFAULT has unknown processors {unknown}; "
+                f"known: {', '.join(AI_PROCESSOR_NAMES)}"
             )
         return self
 
@@ -633,6 +719,26 @@ class Settings(BaseSettings):
                 "to a branded logo image URL.",
                 self.brand_name,
             )
+        return self
+
+    @model_validator(mode="after")
+    def _public_check_host_into_cors(self) -> "Settings":
+        """PUBLIC_CHECK_HOST joins CORS_ORIGINS while the check is on (HRP-920).
+
+        ``app.main`` builds the CORS allowlist from ``cors_origins`` alone,
+        so the origin is appended here — at the end, so the first-origin
+        fallbacks (share links, email deep links) keep pointing at the app.
+        Enabled without a host is a misconfiguration, not a silent no-op.
+        """
+        if not self.public_check_enabled:
+            return self
+        if not self.public_check_host.strip():
+            raise ValueError(
+                "PUBLIC_CHECK_HOST is required when PUBLIC_CHECK_ENABLED=true"
+            )
+        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        if self.public_check_origin not in origins:
+            self.cors_origins = ",".join([*origins, self.public_check_origin])
         return self
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import AnyHttpUrl, BaseModel, Field
 
@@ -183,3 +184,34 @@ class OnboardingStatusRead(BaseModel):
     employee_count: int
     division_count: int
     has_invitations: bool
+
+
+# --- Section access (HRP-820) ---
+
+SectionLevel = Literal["none", "view", "manage"]
+
+
+class SectionAccessRow(BaseModel):
+    code: str
+    hidden: bool = False
+    levels: dict[str, SectionLevel] = {}
+
+
+class SectionAccessUpdate(BaseModel):
+    """The whole matrix as the screen shows it; a section left out resets."""
+
+    sections: list[SectionAccessRow]
+
+
+class SectionAccessSectionRead(BaseModel):
+    code: str
+    hidden: bool
+    admin_locked: bool
+    never_hidden: bool
+    defaults: dict[str, SectionLevel]
+    levels: dict[str, SectionLevel]
+
+
+class SectionAccessRead(BaseModel):
+    roles: list[str]
+    sections: list[SectionAccessSectionRead]

@@ -314,7 +314,7 @@ class TestLLMClientSchemaParam:
 
         async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             captured["system"] = system
-            return json.dumps({"groups": []})
+            return json.dumps({"groups": []}), llm_client._Usage()
 
         with patch.object(llm_client, "_generate_anthropic", new=fake_anthropic):
             result = await llm_client.generate_json(
@@ -332,7 +332,7 @@ class TestLLMClientSchemaParam:
         from pydantic import ValidationError
 
         async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
-            return json.dumps({"groups": [{"foo": "bar"}]})  # bad shape
+            return json.dumps({"groups": [{"foo": "bar"}]}), llm_client._Usage()  # bad shape
 
         with (
             patch.object(llm_client, "_generate_anthropic", new=fake_anthropic),
@@ -348,7 +348,7 @@ class TestLLMClientSchemaParam:
         async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
             return json.dumps(
                 {"indicators": [{"title": "Knows the spec", "skill_level": "basic"}]}
-            )
+            ), llm_client._Usage()
 
         with patch.object(llm_client, "_generate_anthropic", new=fake_anthropic):
             result = await llm_client.generate_json(
@@ -361,7 +361,7 @@ class TestLLMClientSchemaParam:
 
     async def test_no_schema_returns_raw_dict(self) -> None:
         async def fake_anthropic(prompt, system, model, temperature, max_tokens, **kwargs):
-            return json.dumps([{"a": 1}])
+            return json.dumps([{"a": 1}]), llm_client._Usage()
 
         with patch.object(llm_client, "_generate_anthropic", new=fake_anthropic):
             result = await llm_client.generate_json("test", model="claude-sonnet-5")

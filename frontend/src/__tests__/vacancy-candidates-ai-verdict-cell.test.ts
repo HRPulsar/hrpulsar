@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { aiVerdictCellState } from "@/lib/recruitment-types";
+import { aiAnalysisBasis, aiVerdictCellState } from "@/lib/recruitment-types";
 import type { AiReadiness, AiVerdict } from "@/lib/recruitment-types";
 
 // HRP-493 (task 2) — the AI DATA / AI VERDICT matrix from the ticket.
@@ -75,5 +75,30 @@ describe("AI VERDICT cell state", () => {
     // candidate card's application list) must not fall into the
     // "no resume" branch on missing data.
     expect(aiVerdictCellState({ verdict: "pending" })).toBe("verdict");
+  });
+});
+
+// HRP-685 — the sub-badge next to the verdict names the data the run was
+// based on. The mode names the prompt; only a full run can have been made
+// without a resume, so readiness is consulted for full runs alone.
+describe("AI analysis basis chip", () => {
+  it("is nothing before any run", () => {
+    expect(aiAnalysisBasis(null, "resume_only")).toBeNull();
+    expect(aiAnalysisBasis(undefined, undefined)).toBeNull();
+  });
+
+  it("stays resume only whatever inputs exist now", () => {
+    expect(aiAnalysisBasis("resume_only", "resume_and_transcript")).toBe(
+      "resume_only",
+    );
+  });
+
+  it("calls a full run without a resume transcript only", () => {
+    expect(aiAnalysisBasis("full", "transcript_only")).toBe("transcript_only");
+  });
+
+  it("calls a full run with both inputs full", () => {
+    expect(aiAnalysisBasis("full", "resume_and_transcript")).toBe("full");
+    expect(aiAnalysisBasis("full", undefined)).toBe("full");
   });
 });

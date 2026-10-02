@@ -166,18 +166,23 @@ class TestRoleHierarchy:
             )
         assert exc.value.status_code == 403
 
-    async def test_employee_cannot_invite(
-        self, db: AsyncSession, tenant, user, employee_role
+    async def test_employee_invites_employees_only(
+        self, db: AsyncSession, tenant, user, employee_role, manager_role
     ):
+        # HRP-831: ``employee`` is the floor of every inviter - a role the
+        # table has no row for hands out what a manager hands out. Whether
+        # such a caller invites at all is the section's question, not this
+        # table's (``require_section("invitations", "manage")``).
+        result = await auth_service.create_invitation(
+            db, tenant.id, user.id, _payload("employee"), inviter_role_codes=["employee"]
+        )
+        assert result["role_code"] == "employee"
         with pytest.raises(HTTPException) as exc:
             await auth_service.create_invitation(
-                db,
-                tenant.id,
-                user.id,
-                _payload("employee"),
-                inviter_role_codes=["employee"],
+                db, tenant.id, user.id, _payload("manager"), inviter_role_codes=["employee"]
             )
         assert exc.value.status_code == 403
+        assert exc.value.detail["error_code"] == "role_above_inviter"
 
     # NOTE: the "platform_admin invites anything" case moved to
     # tests/unit/ee/test_rbac_extension.py — the platform-admin invite tier

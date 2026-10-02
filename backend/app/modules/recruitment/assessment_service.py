@@ -9,11 +9,12 @@ the delegating namespace.
 
 import logging
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from fastapi import Request, status
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,6 +39,7 @@ from app.modules.recruitment.models import (
     HumanAssessment,
     Interview,
     RecruitmentAuditLog,
+    ScaleConfig,
     Vacancy,
     VacancyProfile,
 )
@@ -48,7 +50,12 @@ from app.modules.recruitment.schemas import (
     QuestionCreate,
     QuestionUpdate,
 )
-from app.modules.recruitment.score_normalization import compute_normalized_ai_score
+from app.modules.recruitment.scope import refuse_fenced_assignees
+from app.modules.recruitment.score_normalization import (
+    compute_normalized_ai_score,
+    scale_percent,
+    weighted_levels,
+)
 from app.modules.storage.models import File
 
 logger = logging.getLogger(__name__)
@@ -106,14 +113,21 @@ async def list_questions(
     tenant_id: uuid.UUID,
     candidate_id: uuid.UUID,
     vacancy_id: uuid.UUID | None = None,
+    scope_filter: ColumnElement[bool] | None = None,
 ) -> list[dict]:
-    """List questions for a candidate, optionally filtered by vacancy."""
+    """List questions for a candidate, optionally filtered by vacancy.
+
+    ``scope_filter`` keeps only the questions of vacancies in the caller's
+    scope (HRP-629, HRP-971), the way the candidate's applications are kept.
+    """
     query = select(CandidateQuestion).where(
         CandidateQuestion.candidate_id == candidate_id,
         CandidateQuestion.tenant_id == tenant_id,
     )
     if vacancy_id:
         query = query.where(CandidateQuestion.vacancy_id == vacancy_id)
+    if scope_filter is not None:
+        query = query.join(Vacancy, Vacancy.id == CandidateQuestion.vacancy_id).where(scope_filter)
 
     result = await db.execute(query.order_by(CandidateQuestion.sort_order))
     return [_question_to_read(q) for q in result.scalars().all()]
@@ -411,9 +425,15 @@ async def update_human_assessment(
     *,
     if_match: str | None = None,
     initiator_id: uuid.UUID | None = None,
+    own_cell_only: bool = False,
     request: Request | None = None,
 ) -> dict:
     """Update an existing human assessment score (PATCH per cell).
+
+    ``own_cell_only`` (HRP-830): a caller below ``manage`` on recruitment
+    - the hiring manager - edits their own column only; the check runs
+    before the version check so a refused cell does not report its
+    version.
 
     ``initiator_id`` is the actor performing the edit (admin / recruiter
     overriding someone else's score); when missing the audit row falls
@@ -438,6 +458,8 @@ async def update_human_assessment(
     ha = result.scalar_one_or_none()
     if not ha:
         raise AppError("assessment_not_found", status.HTTP_404_NOT_FOUND)
+    if own_cell_only and ha.evaluator_id != initiator_id:
+        raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
 
     expected_version = parse_assessment_if_match(if_match)
     if expected_version is not None and expected_version != ha.version:
@@ -843,6 +865,7 @@ async def create_assessment_invite(
     cv = result.scalar_one_or_none()
     if not cv:
         raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
+    await refuse_fenced_assignees(db, tenant_id, cv.vacancy_id, emails={data.email})
 
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)
@@ -1445,6 +1468,10 @@ class _MatrixScale(NamedTuple):
     # 1-5 tenant with a 1-4 vacancy a stored 5 would otherwise render
     # above the matrix maximum.
     legacy_ratio: float
+    # HRP-774: the scale's ``(value, weight)`` pairs — what a level is worth
+    # in percent, read through ``scale_percent`` for every cell and total.
+    # A scale without weights of its own is the two points (min, 0), (max, 100).
+    levels: tuple[tuple[float, float], ...]
 
 
 def _ai_score_on_scale(
@@ -1513,72 +1540,89 @@ async def _matrix_scale(
     )
 
     active_scale = await settings_service.get_active_scale(db, tenant_id)
-    tenant_max = float(active_scale.max_value) if active_scale else 5.0
+    snapshot = vacancy.assessment_scale_snapshot or {}
+    frozen = _matrix_scale_from(
+        active_scale, snapshot.get("name"), snapshot.get("levels") or []
+    )
+    if frozen is not None:
+        return frozen
 
-    name: str | None = None
-    min_score: float | None = None
-    max_score: float | None = None
-
-    snapshot = vacancy.assessment_scale_snapshot
-    if snapshot:
-        values = [
-            float(level["value"])
-            for level in (snapshot.get("levels") or [])
-            if isinstance(level, dict) and level.get("value") is not None
-        ]
-        if values:
-            name, min_score, max_score = snapshot.get("name"), min(values), max(values)
-
-    if max_score is None:
-        scale: AssessmentScale | None = None
-        if vacancy.assessment_scale_id is not None:
-            scale = await db.get(AssessmentScale, vacancy.assessment_scale_id)
-        if scale is None:
-            # ``ensure_default_scale`` writes; a GET must not. Reading the
-            # default directly leaves the freeze to the first score write.
-            scale = (
-                (
-                    await db.execute(
-                        select(AssessmentScale).where(
-                            AssessmentScale.tenant_id == tenant_id,
-                            AssessmentScale.is_default.is_(True),
-                            AssessmentScale.archived_at.is_(None),
-                        )
+    scale: AssessmentScale | None = None
+    if vacancy.assessment_scale_id is not None:
+        scale = await db.get(AssessmentScale, vacancy.assessment_scale_id)
+    if scale is None:
+        # ``ensure_default_scale`` writes; a GET must not. Reading the
+        # default directly leaves the freeze to the first score write.
+        scale = (
+            (
+                await db.execute(
+                    select(AssessmentScale).where(
+                        AssessmentScale.tenant_id == tenant_id,
+                        AssessmentScale.is_default.is_(True),
+                        AssessmentScale.archived_at.is_(None),
                     )
                 )
-                .scalars()
-                .first()
             )
-        if scale is not None:
-            values = list(
-                (
-                    await db.execute(
-                        select(AssessmentScaleLevel.value).where(
-                            AssessmentScaleLevel.scale_id == scale.id
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            if values:
-                name = scale.name
-                min_score, max_score = float(min(values)), float(max(values))
-
-    if min_score is None or max_score is None:
-        # No Assessment scale anywhere — the tenant ScaleConfig is the
-        # only statement of units left, and it starts at its own minimum.
-        return _MatrixScale(
-            name=(active_scale.name if active_scale else None),
-            min_score=float(active_scale.min_value) if active_scale else 0.0,
-            max_score=tenant_max,
-            legacy_ratio=1.0,
+            .scalars()
+            .first()
         )
+    if scale is not None:
+        rows = (
+            await db.execute(
+                select(AssessmentScaleLevel.value, AssessmentScaleLevel.weight).where(
+                    AssessmentScaleLevel.scale_id == scale.id
+                )
+            )
+        ).all()
+        bound = _matrix_scale_from(
+            active_scale,
+            scale.name,
+            [{"value": value, "weight": weight} for value, weight in rows],
+        )
+        if bound is not None:
+            return bound
+    return _legacy_matrix_scale(active_scale)
+
+
+def _matrix_scale_from(
+    active_scale: ScaleConfig | None, name: str | None, levels: Iterable[Any]
+) -> _MatrixScale | None:
+    """The rules half of :func:`_matrix_scale`, with no I/O.
+
+    ``levels`` are scale-level dicts (``value`` / ``weight``) — the frozen
+    snapshot's or the bound scale's rows. ``None`` when no level carries a
+    value, so the caller moves on to its next source. HRP-774: the sync
+    vacancy report task resolves its units through this too, so the
+    workbook prints the same "% of scale" as the matrix.
+    """
+    level_dicts = [lvl for lvl in levels if isinstance(lvl, dict)]
+    values = [
+        float(lvl["value"]) for lvl in level_dicts if lvl.get("value") is not None
+    ]
+    if not values:
+        return None
+    tenant_max = float(active_scale.max_value) if active_scale else 5.0
+    max_score = max(values)
     return _MatrixScale(
         name=name,
-        min_score=min_score,
+        min_score=min(values),
         max_score=max_score,
         legacy_ratio=(max_score / tenant_max if tenant_max > 0 else 1.0),
+        levels=tuple(weighted_levels(level_dicts)),
+    )
+
+
+def _legacy_matrix_scale(active_scale: ScaleConfig | None) -> _MatrixScale:
+    """No Assessment scale anywhere — the tenant ScaleConfig is the only
+    statement of units left, and it starts at its own minimum."""
+    legacy_min = float(active_scale.min_value) if active_scale else 0.0
+    tenant_max = float(active_scale.max_value) if active_scale else 5.0
+    return _MatrixScale(
+        name=(active_scale.name if active_scale else None),
+        min_score=legacy_min,
+        max_score=tenant_max,
+        legacy_ratio=1.0,
+        levels=((legacy_min, 0.0), (tenant_max, 100.0)),
     )
 
 
@@ -1968,6 +2012,7 @@ async def get_assessment_matrix(
     scale_name = matrix_scale.name
     min_score, max_score = matrix_scale.min_score, matrix_scale.max_score
     legacy_ratio = matrix_scale.legacy_ratio
+    scale_levels = matrix_scale.levels
     # Manager vs AI is the tenant matrix setting (HRP-265). The vacancy
     # scale's own ``divergence_threshold`` is a different question —
     # evaluator vs evaluator on a round sheet — and must not be read here.
@@ -2302,9 +2347,12 @@ async def get_assessment_matrix(
         name = candidate_display_name(cv.candidate, fallback="")
 
         cells: list[dict] = []
-        manager_score_sum: float = 0.0
+        # HRP-774: the sums are percents of scale, not raw levels — each
+        # cell's level is converted by ``scale_percent`` (the scale's level
+        # weights), the same conversion the round header shows.
+        manager_percent_sum: float = 0.0
         manager_scored_count: int = 0
-        ai_score_sum: float = 0.0
+        ai_percent_sum: float = 0.0
         ai_scored_count: int = 0
         ai_not_covered_count: int = 0
         divergence_count: int = 0
@@ -2312,15 +2360,18 @@ async def get_assessment_matrix(
         for comp_key in competence_keys:
             human_entries = human_index.get(cv.id, {}).get(comp_key, [])
             manager_score: float | None = None
+            manager_cell_percent: float | None = None
             if human_entries:
                 manager_score = round(
                     sum(e["score"] for e in human_entries) / len(human_entries), 2
                 )
-                manager_score_sum += manager_score
+                manager_cell_percent = scale_percent(manager_score, scale_levels)
+                manager_percent_sum += manager_cell_percent or 0.0
                 manager_scored_count += 1
 
             ai_entry = ai_index.get(cv.id, {}).get(comp_key)
             ai_score: float | None = None
+            ai_cell_percent: float | None = None
             ai_status = "missing"
             if ai_entry is not None:
                 ai_status = ai_entry["status"]
@@ -2337,7 +2388,8 @@ async def get_assessment_matrix(
                 )
                 if rebased is not None:
                     ai_score = round(rebased, 2)
-                    ai_score_sum += ai_score
+                    ai_cell_percent = scale_percent(ai_score, scale_levels)
+                    ai_percent_sum += ai_cell_percent or 0.0
                     ai_scored_count += 1
                 else:
                     # Anything that is not a numeric ``ready`` score must
@@ -2360,23 +2412,35 @@ async def get_assessment_matrix(
                     "ai_score": ai_score,
                     "ai_status": ai_status,
                     "divergence": divergence,
+                    # HRP-774: the cell in percent of scale, for the canvas
+                    # Percent toggle and the export — computed here so no
+                    # renderer keeps its own level → percent rule.
+                    "manager_percent": (
+                        None
+                        if manager_cell_percent is None
+                        else round(manager_cell_percent, 1)
+                    ),
+                    "ai_percent": (
+                        None if ai_cell_percent is None else round(ai_cell_percent, 1)
+                    ),
                 }
             )
 
-        # Manager denominator covers every competence in the profile (the
-        # spec treats no-score-yet as 0 of max for ranking purposes). AI
-        # denominator subtracts not_covered cells so a candidate skipped
-        # by the AI on a couple of competences is not unfairly diluted.
-        manager_denominator = max_score * total_competences
-        ai_denominator = max_score * max(total_competences - ai_not_covered_count, 0)
+        # % match is the mean cell percent. The manager denominator covers
+        # every competence in the profile (no-score-yet counts as 0, the
+        # coverage-aware figure the totals row pairs with "scored/total");
+        # the AI denominator drops not_covered cells so a candidate the AI
+        # skipped on a couple of competences is not unfairly diluted.
+        manager_denominator = 100.0 * total_competences
+        ai_denominator = 100.0 * max(total_competences - ai_not_covered_count, 0)
 
         manager_percent = (
-            _percent(manager_score_sum, manager_denominator)
+            _percent(manager_percent_sum, manager_denominator)
             if manager_scored_count > 0
             else None
         )
         ai_percent = (
-            _percent(ai_score_sum, ai_denominator) if ai_scored_count > 0 else None
+            _percent(ai_percent_sum, ai_denominator) if ai_scored_count > 0 else None
         )
 
         candidates_payload.append(

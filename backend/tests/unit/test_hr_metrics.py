@@ -487,18 +487,36 @@ def test_router_url_matches_the_one_the_page_calls():
     assert "/api/analytics/hr-metrics" in paths
 
 
-def test_analytics_page_endpoints_admit_hr():
-    """HRP-732: HR opens the analytics page, so its own endpoints must let HR in."""
+def _guard_of(route: str) -> str:
+    """The dependency the named GET route carries, read from the source."""
     import inspect
 
     from app.modules.analytics import router as analytics_router
 
     source = inspect.getsource(analytics_router)
-    for route in ("assessments", "pdp", "hr-metrics"):
-        marker = f'@router.get("/analytics/{route}")'
-        assert marker in source, route
-        # Everything from this decorator up to the next route definition.
-        rest = source[source.index(marker) + len(marker) :]
-        next_route = rest.find("@router.")
-        block = rest if next_route == -1 else rest[:next_route]
-        assert 'require_role("admin", "manager", "hr")' in block, route
+    marker = f'@router.get("/analytics/{route}")'
+    assert marker in source, route
+    # Everything from this decorator up to the next route definition.
+    rest = source[source.index(marker) + len(marker) :]
+    next_route = rest.find("@router.")
+    return rest if next_route == -1 else rest[:next_route]
+
+
+def test_analytics_page_endpoints_admit_hr():
+    """HRP-732: HR opens the analytics page, so its own endpoints must let
+    HR in. HRP-822: that is the tenant's ``analytics`` row now (``manage``
+    for HR by default), not a role list written into the route - so what is
+    pinned here is that the section is what they ask."""
+    for route in ("assessments", "hr-metrics"):
+        assert "Depends(_view)" in _guard_of(route), route
+
+
+def test_the_plan_chart_still_answers_to_its_own_section():
+    """``/analytics/pdp`` is the ``development`` section's (the registry's
+    longest prefix wins) and is read from the plan page by every role, so
+    translating analytics must not have moved it. HRP-825 translated that
+    section: the level opens the chart, the read scope sizes it."""
+    from app.core.sections import section_for_path
+
+    assert section_for_path("/api/analytics/pdp").code == "development"
+    assert "Depends(get_current_user)" in _guard_of("pdp")

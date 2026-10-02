@@ -37,6 +37,31 @@ class TestArchiveRestore:
         assert any(item["id"] == v["id"] for item in archived)
         assert all(item["archived_at"] is not None for item in archived)
 
+    async def test_archived_count_follows_the_list_filters(
+        self, db: AsyncSession, tenant, user
+    ):
+        """HRP-417: the "Show archived (N)" counter is scoped like the list."""
+        v = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data())
+        active = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data())
+        before = await service.count_archived_vacancies(db, tenant.id)
+        await service.archive_vacancy(db, tenant.id, user.id, v["id"])
+        assert await service.count_archived_vacancies(db, tenant.id) == before + 1
+        assert (
+            await service.count_archived_vacancies(db, tenant.id, search=v["title"])
+            == 1
+        )
+        assert (
+            await service.count_archived_vacancies(
+                db, tenant.id, search=active["title"]
+            )
+            == 0
+        )
+        # v is a draft — a different status filter excludes it.
+        assert (
+            await service.count_archived_vacancies(db, tenant.id, status="published")
+            == 0
+        )
+
     async def test_archive_idempotency_blocked(
         self, db: AsyncSession, tenant, user
     ):

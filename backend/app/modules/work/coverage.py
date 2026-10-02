@@ -320,13 +320,21 @@ async def _agent_layer(
 
 
 async def _human_layer(
-    db: AsyncSession, tenant_id: uuid.UUID, wanted_codes: set[str]
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    wanted_codes: set[str],
+    *,
+    also: Sequence[uuid.UUID] = (),
 ) -> tuple[list[dict[str, Any]], set[uuid.UUID]]:
     """Every active employee with ``{code: 'assessed' | 'expected'}``;
     people with nothing to their name are dropped. The second element is the
     competences the tenant actually references - what it was assessed on and
     what its grade matrices expect - which is also the only part of the
     origin library worth mapping for it.
+
+    ``also`` (HRP-959) names employees to resolve whatever their status - the
+    steps' assignees, whose ``missing_codes`` must not change when they go on
+    leave. Each person carries ``active``; the match only offers active ones.
 
     Only the codes this container's steps ask for are resolved: a match
     needs every required code, so a person holding none of them can never
@@ -340,13 +348,19 @@ async def _human_layer(
             select(
                 Employee.id,
                 Employee.position_id,
+                Employee.status,
                 User.first_name,
                 User.last_name,
                 Position.title,
             )
             .join(User, User.id == Employee.user_id)
             .outerjoin(Position, Position.id == Employee.position_id)
-            .where(Employee.tenant_id == tenant_id, Employee.status == "active")
+            .where(
+                Employee.tenant_id == tenant_id,
+                or_(Employee.status == "active", Employee.id.in_(list(also)))
+                if also
+                else Employee.status == "active",
+            )
             .order_by(User.last_name, User.first_name, Employee.id)
         )
     ).all()
@@ -489,6 +503,7 @@ async def _human_layer(
                     "id": person.id,
                     "name": f"{person.first_name} {person.last_name}".strip(),
                     "position": person.title,
+                    "active": person.status == "active",
                     "codes": codes,
                     "passing_score": threshold,
                     "grounds": grounds,
@@ -497,18 +512,24 @@ async def _human_layer(
     return out, competence_ids
 
 
-async def _assignees(
-    db: AsyncSession, tenant_id: uuid.UUID, steps: Sequence[WorkStep]
-) -> dict[uuid.UUID | None, dict[str, Any]]:
-    """The active employees the steps name as executor or accountable
-    (HRP-809). Read on their own rather than out of ``_human_layer``, which
-    drops a person with no capability - and an assignee without the skills
-    is exactly the case the assignment exists for. A terminated one is left
-    out, so the step reads as unassigned."""
+def _assignee_ids(steps: Sequence[WorkStep]) -> list[uuid.UUID]:
     ids = {s.executor_employee_id for s in steps} | {
         s.accountable_employee_id for s in steps
     }
-    ids.discard(None)
+    return [i for i in ids if i is not None]
+
+
+async def _assignees(
+    db: AsyncSession, tenant_id: uuid.UUID, steps: Sequence[WorkStep]
+) -> dict[uuid.UUID | None, dict[str, Any]]:
+    """The employees the steps name as executor or accountable (HRP-809).
+    Read on their own rather than out of ``_human_layer``, which drops a
+    person with no capability - and an assignee without the skills is
+    exactly the case the assignment exists for. Whatever their status
+    (HRP-959): the company's word stands until the company changes it, and
+    the row says the person is on leave or gone. A deleted one is nulled by
+    the FK."""
+    ids = _assignee_ids(steps)
     if not ids:
         return {}
     rows = await db.execute(
@@ -518,22 +539,20 @@ async def _assignees(
             User.last_name,
             # A free-text title has no Position row; the picker shows it too.
             func.coalesce(Position.title, Employee.position_title),
+            Employee.status,
         )
         .join(User, User.id == Employee.user_id)
         .outerjoin(Position, Position.id == Employee.position_id)
-        .where(
-            Employee.id.in_(list(ids)),
-            Employee.tenant_id == tenant_id,
-            Employee.status == "active",
-        )
+        .where(Employee.id.in_(ids), Employee.tenant_id == tenant_id)
     )
     return {
         employee_id: {
             "employee_id": employee_id,
             "name": f"{first_name} {last_name}".strip(),
             "position": title,
+            "status": status,
         }
-        for employee_id, first_name, last_name, title in rows.tuples().all()
+        for employee_id, first_name, last_name, title, status in rows.tuples().all()
     }
 
 
@@ -564,7 +583,12 @@ async def _unmapped_competences(
             CompetenceMappingState,
             CompetenceMappingState.competence_id == Competence.id,
         )
-        .where(scope, Competence.is_active.is_(True))
+        # HRP-632: nor is a personal draft mapped before it is published.
+        .where(
+            scope,
+            Competence.is_active.is_(True),
+            Competence.draft_owner_id.is_(None),
+        )
         .order_by(Competence.title, Competence.id)
     )
     return [
@@ -720,10 +744,18 @@ async def compute(
     steps = await _steps(db, container.id)
     packs, agents = await _agent_layer(db, tenant_id)
     people_layer, referenced = (
-        await _human_layer(db, tenant_id, {p.code for _step, ps in steps for p in ps})
+        await _human_layer(
+            db,
+            tenant_id,
+            {p.code for _step, ps in steps for p in ps},
+            also=_assignee_ids([s for s, _ in steps]),
+        )
         if people
         else ([], set())
     )
+    # HRP-959: an assignee on leave keeps their codes; the match offers only
+    # people who are here to take a step.
+    matchable = [p for p in people_layer if p["active"]]
     skill_status: dict[uuid.UUID, str] = {}
     skill_pack: dict[uuid.UUID, uuid.UUID | None] = {}
     unsure: set[uuid.UUID] = set()
@@ -795,7 +827,7 @@ async def compute(
                 # Cognitive codes only, like ``required_codes`` and an
                 # assignee's ``missing_codes``: a boundary code is why the
                 # step stays with people, not something an assessment holds.
-                human = _match_human(set(cognitive), people_layer)
+                human = _match_human(set(cognitive), matchable)
                 verdict = "agent" if agent else "human" if human else "gap"
         elif not codes and step.classified_at is None:
             # HRP-944: typed in with no codes and never classified - not a
@@ -1065,18 +1097,31 @@ def redact_people(
     nobody). A matched colleague outside it is dropped, the verdict stays;
     an assignee stays named - the company made that choice, no assessment
     did - but without the capabilities they lack."""
+    def outside(person: dict[str, Any]) -> bool:
+        return visible is None or person["employee_id"] not in visible
+
     for row in result["steps"]:
+        accountable = row.get("accountable")
+        if accountable is not None and outside(accountable):
+            row["accountable"] = _without_leave(accountable)
         human = row["human"]
-        if human is None:
-            continue
-        if visible is not None and human["employee_id"] in visible:
+        if human is None or not outside(human):
             continue
         if human["label"] == "assigned":
-            row["human"] = {**human, "missing_codes": []}
+            row["human"] = {**_without_leave(human), "missing_codes": []}
         else:
             row["human"] = None
             row["human_backup"] = False
     return result
+
+
+def _without_leave(person: dict[str, Any]) -> dict[str, Any]:
+    """Leave is HR data the directory withholds outside one's HR scope
+    (HRP-623): such a reader sees the assignee at work. Gone stays gone -
+    the step cannot be done by them either way."""
+    if person.get("status") == "on_leave":
+        return {**person, "status": "active"}
+    return person
 
 
 def gap_kind(row: dict[str, Any]) -> str | None:

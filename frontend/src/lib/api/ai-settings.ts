@@ -30,6 +30,14 @@ export interface ProviderStatus {
    * `decrypt_failed` → the row exists but its key is unreadable, so
    * generation falls back to the platform key. */
   key_status: "ok" | "decrypt_failed" | null;
+  /** HRP-1005: the platform has a key, but this workspace may not use the provider. */
+  blocked: boolean;
+}
+
+/** HRP-1005: an outside company this workspace's data reaches on platform keys. */
+export interface Processor {
+  name: string;
+  label: string;
 }
 
 export interface AISettings {
@@ -84,4 +92,5 @@ export const aiSettingsApi = {
   presets: () => api.get<EffortPreset[]>(`${BASE}/presets`),
   models: () => api.get<AllowedModel[]>(`${BASE}/models`),
   providers: () => api.get<ProviderStatus[]>(`${BASE}/providers`),
+  processors: () => api.get<Processor[]>(`${BASE}/processors`),
 };

@@ -411,8 +411,8 @@ async def get_ui_settings(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
 
     The flags live in the same ``tenant.recruitment_branding`` raw dict
     the settings hub already manages (written via the branding ``extra``
-    passthrough), but the branding endpoint itself is admin/recruiter/hr
-    only — hiring managers need this read-only slice to reorder their
+    passthrough), but the branding endpoint itself is ``manage`` on
+    recruitment only — hiring managers need this read-only slice to reorder their
     candidate-page sections.
     """
     tenant = await db.get(Tenant, tenant_id)

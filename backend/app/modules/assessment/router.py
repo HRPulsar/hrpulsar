@@ -5,7 +5,9 @@ from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access_scope import ADMIN_ROLE_CODES, authored_only
 from app.core.errors import AppError
+from app.core.sections import require_section
 from app.database import get_db
 from app.modules.assessment import group_analytics, pdp_service, service
 from app.modules.assessment.schemas import (
@@ -71,13 +73,24 @@ from app.modules.assessment.scope import (
     assert_assessees_in_scope,
     assessment_group_scope,
     assessment_scope,
+    cpa_scope,
     pdp_scope,
     pdp_status_scope,
+    runs_assessments,
+    runs_plans,
 )
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
 
 router = APIRouter(tags=["assessments"])
+
+# HRP-826: running assessments - single and mass, calibration, external
+# reviewers, detailed results, CPA - asks the tenant's ``assessments`` row
+# for ``manage`` in place of the admin/manager role list; whose assessment
+# it is stays ``assessment_scope``'s answer. Respondents answer at
+# ``view``, so the section guards itself and these routes carry the level.
+# The answer-scale catalogue keeps its admin/hr role gate (HRP-631).
+_manage_assessments = require_section("assessments", "manage")
 
 
 # --- Assessment CRUD ---
@@ -87,7 +100,7 @@ router = APIRouter(tags=["assessments"])
 async def create_assessment(
     data: AssessmentCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
 ):
     await assert_assessee_in_scope(db, current_user, data.employee_id)
     return await service.create_assessment(
@@ -103,9 +116,10 @@ async def list_assessments(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.core.access_scope import get_visible_employee_ids, is_employee_only
+    from app.core.access_scope import get_visible_employee_ids
 
     visible_ids = await get_visible_employee_ids(db, current_user)
+    respondent = not await runs_assessments(db, current_user)
     items, total = await service.list_assessments(
         db,
         current_user.tenant_id,
@@ -114,7 +128,7 @@ async def list_assessments(
         limit,
         visible_employee_ids=visible_ids,
         participant_user_id=current_user.id,
-        restrict_to_active=is_employee_only(current_user),
+        restrict_to_active=respondent,
     )
     return {"items": items, "total": total}
 
@@ -125,17 +139,18 @@ async def get_assessment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.core.access_scope import get_visible_employee_ids, is_employee_only
+    from app.core.access_scope import get_visible_employee_ids
 
     visible_ids = await get_visible_employee_ids(db, current_user)
+    respondent = not await runs_assessments(db, current_user)
     return await service.get_assessment_detail(
         db,
         current_user.tenant_id,
         assessment_id,
         visible_employee_ids=visible_ids,
         participant_user_id=current_user.id,
-        restrict_to_active=is_employee_only(current_user),
-        hide_results_for_employee=is_employee_only(current_user),
+        restrict_to_active=respondent,
+        hide_results_for_employee=respondent,
     )
 
 
@@ -144,7 +159,7 @@ async def change_status(
     assessment_id: uuid.UUID,
     data: StatusChange,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.change_status(
@@ -157,7 +172,7 @@ async def update_assessment(
     assessment_id: uuid.UUID,
     data: AssessmentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     # Honour PATCH semantics: only forward fields the client actually sent.
@@ -184,7 +199,7 @@ async def add_participant(
     assessment_id: uuid.UUID,
     data: ParticipantAdd,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.add_participant(
@@ -204,7 +219,7 @@ async def add_competences(
     assessment_id: uuid.UUID,
     data: _LegacyCompetenceIds,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.add_competences(
@@ -217,7 +232,7 @@ async def set_assessment_criteria(
     assessment_id: uuid.UUID,
     data: CriteriaUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.set_assessment_criteria(
@@ -232,7 +247,7 @@ async def set_group_criteria(
     group_id: uuid.UUID,
     data: CriteriaUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_group_scope),
 ):
     return await service.set_group_criteria(db, current_user.tenant_id, group_id, data)
@@ -245,7 +260,7 @@ async def set_group_criteria(
 async def list_criteria_specializations(
     include_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
 ):
     # HRP-292: include_id keeps a saved-but-deactivated specialization
     # selectable in the criteria sheet.
@@ -262,7 +277,7 @@ async def list_criteria_grades(
     specialization_id: uuid.UUID,
     include_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
 ):
     return await service.list_criteria_grades(
         db, current_user.tenant_id, specialization_id, include_id=include_id
@@ -310,17 +325,18 @@ async def get_results(
 ):
     # HRP-112: results inherit the same scope fence as `GET /assessments/{id}`.
     # Without this, a restricted caller can read calibrated scores via the URL.
-    from app.core.access_scope import get_visible_employee_ids, is_employee_only
+    from app.core.access_scope import get_visible_employee_ids
 
     visible_ids = await get_visible_employee_ids(db, current_user)
+    respondent = not await runs_assessments(db, current_user)
     return await service.get_results(
         db,
         current_user.tenant_id,
         assessment_id,
         visible_employee_ids=visible_ids,
         participant_user_id=current_user.id,
-        restrict_to_active=is_employee_only(current_user),
-        hide_results_for_employee=is_employee_only(current_user),
+        restrict_to_active=respondent,
+        hide_results_for_employee=respondent,
     )
 
 
@@ -331,13 +347,12 @@ async def get_results(
 async def get_detailed_results(
     assessment_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(
-        require_role("admin", "manager", "platform_admin")
-    ),
+    current_user: User = Depends(_manage_assessments),
 ):
     """HRP-154: per-competence/skill-level/indicator breakdown for the
-    Results page. RBAC matches the spec — Platform admin, Admin and
-    Manager only; Employees get 403 from ``require_role``. The
+    Results page. Whoever runs assessments (HRP-826: ``manage`` on the
+    section, which ``platform_admin`` always reaches); a respondent gets
+    403. The
     employee-id scope from ``get_results`` is reused so a manager
     can't peek at out-of-division assessments via the URL.
     """
@@ -359,7 +374,7 @@ async def calibrate(
     assessment_id: uuid.UUID,
     data: CalibrateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.calibrate(
@@ -377,7 +392,7 @@ async def calibrate(
 async def start_calibration(
     assessment_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.start_calibration(
@@ -393,7 +408,7 @@ async def save_calibration(
     assessment_id: uuid.UUID,
     data: CalibrateTotalsRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.save_calibration(
@@ -408,7 +423,7 @@ async def save_calibration(
 async def cancel_calibration(
     assessment_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.cancel_calibration(
@@ -469,7 +484,7 @@ async def set_assessment_scale(
     assessment_id: uuid.UUID,
     data: ScaleAssign,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.set_assessment_scale(
@@ -482,7 +497,7 @@ async def set_group_scale(
     group_id: uuid.UUID,
     data: ScaleAssign,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_group_scope),
 ):
     return await service.set_group_scale(
@@ -501,7 +516,7 @@ async def set_group_scale(
 async def create_mass_assessment(
     data: MassAssessmentCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
 ):
     await assert_assessees_in_scope(db, current_user, data.employee_ids)
     return await service.create_mass_assessment(
@@ -523,9 +538,10 @@ async def list_assessments_grouped(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.core.access_scope import get_visible_employee_ids, is_employee_only
+    from app.core.access_scope import get_visible_employee_ids
 
     visible_ids = await get_visible_employee_ids(db, current_user)
+    respondent = not await runs_assessments(db, current_user)
     items, total = await service.list_assessments_grouped(
         db,
         current_user.tenant_id,
@@ -533,7 +549,7 @@ async def list_assessments_grouped(
         limit,
         visible_employee_ids=visible_ids,
         participant_user_id=current_user.id,
-        restrict_to_active=is_employee_only(current_user),
+        restrict_to_active=respondent,
         search=search,
         type_codes=type,
         status_codes=status,
@@ -547,16 +563,17 @@ async def get_assessment_group(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.core.access_scope import get_visible_employee_ids, is_employee_only
+    from app.core.access_scope import get_visible_employee_ids
 
     visible_ids = await get_visible_employee_ids(db, current_user)
+    respondent = not await runs_assessments(db, current_user)
     return await service.get_assessment_group(
         db,
         current_user.tenant_id,
         group_id,
         visible_employee_ids=visible_ids,
         participant_user_id=current_user.id,
-        restrict_to_active=is_employee_only(current_user),
+        restrict_to_active=respondent,
     )
 
 
@@ -585,17 +602,18 @@ async def get_group_analytics(
     employee-only caller. Hence the same ``hide_results_for_employee`` gate as
     on the results route.
     """
-    from app.core.access_scope import get_visible_employee_ids, is_employee_only
+    from app.core.access_scope import get_visible_employee_ids
 
     visible_ids = await get_visible_employee_ids(db, current_user)
+    respondent = not await runs_assessments(db, current_user)
     return await group_analytics.get_group_analytics(
         db,
         current_user.tenant_id,
         group_id,
         visible_employee_ids=visible_ids,
         participant_user_id=current_user.id,
-        restrict_to_active=is_employee_only(current_user),
-        hide_results_for_employee=is_employee_only(current_user),
+        restrict_to_active=respondent,
+        hide_results_for_employee=respondent,
     )
 
 
@@ -607,7 +625,7 @@ async def update_assessment_group(
     group_id: uuid.UUID,
     data: AssessmentGroupUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_group_scope),
 ):
     return await service.update_assessment_group(
@@ -623,7 +641,7 @@ async def bulk_change_status(
     group_id: uuid.UUID,
     data: BulkStatusChange,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_group_scope),
 ):
     return await service.bulk_change_status(
@@ -638,7 +656,7 @@ async def bulk_change_status(
 async def create_cpa(
     data: CPACreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
 ):
     return await service.create_cpa(db, current_user.tenant_id, current_user.id, data)
 
@@ -646,16 +664,20 @@ async def create_cpa(
 @router.get("/cpa", response_model=list[CPARead])
 async def list_cpas(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
 ):
-    return await service.list_cpas(db, current_user.tenant_id)
+    # HRP-640: below the admin level one's own rounds only.
+    return await service.list_cpas(
+        db, current_user.tenant_id, author_id=authored_only(current_user)
+    )
 
 
 @router.get("/cpa/{cpa_id}", response_model=CPADetail)
 async def get_cpa_detail(
     cpa_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
+    _scope: None = Depends(cpa_scope),
 ):
     return await service.get_cpa_detail(db, current_user.tenant_id, cpa_id)
 
@@ -665,7 +687,8 @@ async def add_cpa_criteria(
     cpa_id: uuid.UUID,
     data: CPACriteriaCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
+    _scope: None = Depends(cpa_scope),
 ):
     return await service.add_cpa_criteria(db, current_user.tenant_id, cpa_id, data)
 
@@ -677,7 +700,8 @@ async def add_cpa_participant(
     cpa_id: uuid.UUID,
     data: CPAParticipantAdd,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
+    _scope: None = Depends(cpa_scope),
 ):
     return await service.add_cpa_participant(db, current_user.tenant_id, cpa_id, data)
 
@@ -686,7 +710,8 @@ async def add_cpa_participant(
 async def get_cpa_analytics(
     cpa_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
+    _scope: None = Depends(cpa_scope),
 ):
     from app.core.access_scope import get_visible_employee_ids
 
@@ -707,7 +732,8 @@ async def copy_cpa(
     cpa_id: uuid.UUID,
     data: CPACopyRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
+    _scope: None = Depends(cpa_scope),
 ):
     return await service.copy_cpa(
         db, current_user.tenant_id, current_user.id, cpa_id, data.title
@@ -728,7 +754,7 @@ async def create_external_reviewer(
     assessment_id: uuid.UUID,
     data: ExternalReviewerCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.create_external_reviewer(
@@ -743,7 +769,7 @@ async def create_external_reviewer(
 async def list_external_reviewers(
     assessment_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.list_external_reviewers(
@@ -759,7 +785,7 @@ async def delete_external_reviewer(
     assessment_id: uuid.UUID,
     reviewer_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_assessments),
     _scope: None = Depends(assessment_scope),
 ):
     return await service.delete_external_reviewer(
@@ -791,12 +817,20 @@ async def submit_external_answers(
 # PDP
 # ===================================================================
 
+# HRP-825: authoring a plan asks the tenant's ``development`` row for
+# ``manage`` in place of the admin/manager role list; whose plan it is
+# stays ``pdp_scope``'s answer. The owner and the reviewer drive their
+# half (status, item checkboxes, comments) at ``view`` - hence the
+# section guards itself and these routes carry the level.
+_manage_plans = require_section("development", "manage")
+
+
 
 @router.post("/pdp", response_model=PDPRead, status_code=201)
 async def create_pdp(
     data: PDPCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_plans),
 ):
     await assert_assessee_in_scope(db, current_user, data.employee_id)
     return await pdp_service.create_pdp(
@@ -810,21 +844,15 @@ async def list_pdps(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.core.access_scope import (
-        ADMIN_ROLE_CODES,
-        MANAGER_ROLE_CODES,
-        get_visible_employee_ids,
-    )
+    from app.core.access_scope import get_visible_employee_ids
 
     visible_ids = await get_visible_employee_ids(db, current_user)
     # HRP-19 + HRP-142: only the plan owner is hidden from drafts (their own
     # authoring queue is irrelevant to them). Admins/HR/platform_admin and
     # division managers (incl. deputies) see drafts inside their visibility
-    # scope so they can pick up Plans created for their team.
-    privileged = any(
-        r.code in (ADMIN_ROLE_CODES | MANAGER_ROLE_CODES)
-        for r in current_user.roles
-    )
+    # scope so they can pick up Plans created for their team. HRP-825: the
+    # manager role is the section's ``manage`` now.
+    privileged = await runs_plans(db, current_user)
     return await pdp_service.list_pdps(
         db,
         current_user.tenant_id,
@@ -839,6 +867,7 @@ async def get_pdp(
     pdp_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _scope: None = Depends(pdp_status_scope),
 ):
     return await pdp_service.get_pdp_detail(
         db,
@@ -853,7 +882,7 @@ async def update_pdp(
     pdp_id: uuid.UUID,
     data: PDPUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_plans),
     _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.update_pdp(db, current_user.tenant_id, pdp_id, data)
@@ -868,14 +897,11 @@ async def change_pdp_status(
     _scope: None = Depends(pdp_status_scope),
 ):
     # HRP-19: the plan owner needs a single transition path — submit for
-    # review — out of sent / in_progress / returned. Admins / managers keep
-    # the full transition graph as before. We do the role/owner split here
-    # rather than via two endpoints so the frontend keeps using one URL.
-    from app.core.access_scope import ADMIN_ROLE_CODES, MANAGER_ROLE_CODES
-
-    privileged = any(
-        r.code in (ADMIN_ROLE_CODES | MANAGER_ROLE_CODES) for r in current_user.roles
-    )
+    # review — out of sent / in_progress / returned. Whoever runs plans
+    # keeps the full transition graph (HRP-825: admin-level or ``manage``).
+    # We do the role/owner split here rather than via two endpoints so the
+    # frontend keeps using one URL.
+    privileged = await runs_plans(db, current_user)
     if not privileged:
         from fastapi import status as http_status
         from sqlalchemy import select
@@ -929,7 +955,7 @@ async def add_pdp_item(
     pdp_id: uuid.UUID,
     data: PDPItemCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_plans),
     _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.add_item(db, current_user.tenant_id, pdp_id, data)
@@ -941,7 +967,7 @@ async def update_pdp_item(
     item_id: uuid.UUID,
     data: PDPItemUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_plans),
     _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.update_item(
@@ -954,7 +980,7 @@ async def delete_pdp_item(
     pdp_id: uuid.UUID,
     item_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_plans),
     _scope: None = Depends(pdp_scope),
 ):
     await pdp_service.delete_item(db, current_user.tenant_id, pdp_id, item_id)
@@ -966,7 +992,7 @@ async def reorder_pdp_items(
     pdp_id: uuid.UUID,
     data: PDPItemReorder,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_plans),
     _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.reorder_items(
@@ -981,12 +1007,11 @@ async def mark_item_passed(
     data: PDPItemPassUpdate = Body(default=PDPItemPassUpdate()),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _scope: None = Depends(pdp_status_scope),
 ):
     # HRP-13/19/130: who can toggle depends on the plan status — owner while
     # the plan is in sent/in_progress/returned, admin or assigned reviewer
     # while it's under review. The service enforces both axes.
-    from app.core.access_scope import ADMIN_ROLE_CODES
-
     is_admin = any(r.code in ADMIN_ROLE_CODES for r in current_user.roles)
     return await pdp_service.mark_item_passed(
         db,
@@ -1009,7 +1034,7 @@ async def add_pdp_material(
     item_id: uuid.UUID,
     data: PDPMaterialCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_plans),
     _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.add_material(
@@ -1027,7 +1052,7 @@ async def update_pdp_material(
     material_id: uuid.UUID,
     data: PDPMaterialUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_plans),
     _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.update_material(
@@ -1044,7 +1069,7 @@ async def delete_pdp_material(
     item_id: uuid.UUID,
     material_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_plans),
     _scope: None = Depends(pdp_scope),
 ):
     await pdp_service.delete_material(
@@ -1095,7 +1120,7 @@ async def restore_pdp_version(
     pdp_id: uuid.UUID,
     version_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage_plans),
     _scope: None = Depends(pdp_scope),
 ):
     return await pdp_service.restore_version(

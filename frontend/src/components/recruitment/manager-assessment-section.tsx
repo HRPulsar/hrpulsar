@@ -11,6 +11,7 @@ import {
   sortRounds,
 } from "@/lib/manager-assessment-rounds";
 import { useAuth } from "@/context/auth-context";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   clearIndicatorsFor,
   upsertCompetenceComment,
@@ -197,6 +198,11 @@ interface Props {
   /** HRP-418 REDO: fired when a round is created, so the blocks that
    *  resolve round names from their own copy of the list can re-read it. */
   onRoundsChanged?: () => void;
+  /** HRP-812: fired after every write that can move the candidate's
+   *  Manager score (a score saved, a round completed / reopened / archived
+   *  / restored, an invitation revoked), so the Vacancy applications block
+   *  re-reads its Mgr value without F5. */
+  onScoresChanged?: () => void;
 }
 
 const AUTOSAVE_MS = 1500;
@@ -205,6 +211,7 @@ export function ManagerAssessmentSection({
   vacancies,
   initialVacancyId,
   onRoundsChanged,
+  onScoresChanged,
 }: Props) {
   const [activeCvId, setActiveCvId] = useState<string | null>(
     vacancies.find((v) => v.vacancy_id === initialVacancyId)?.id ??
@@ -222,6 +229,12 @@ export function ManagerAssessmentSection({
     activeRoundIdRef.current = roundId;
     setActiveRoundId(roundId);
   }, []);
+  // HRP-812: kept in a ref so the autosave closures (memoised once) always
+  // reach the parent's current callback.
+  const onScoresChangedRef = useRef(onScoresChanged);
+  useEffect(() => {
+    onScoresChangedRef.current = onScoresChanged;
+  }, [onScoresChanged]);
   const [sheet, setSheet] = useState<AssessmentSheet | null>(null);
   const [scaleLevels, setScaleLevels] = useState<ScaleLevel[]>([]);
   const [profileCompetences, setProfileCompetences] = useState<
@@ -241,6 +254,9 @@ export function ManagerAssessmentSection({
   const [loadingRounds, setLoadingRounds] = useState(false);
   const { user } = useAuth();
   const t = useTranslations("recruitment");
+  // HRP-830: rounds, their evaluators, scores and invites are `manage` on
+  // recruitment or the manager role; everyone else reads the round.
+  const { canRunHiringRounds: canRunRounds } = usePermissions();
 
   // HRP-373: the "you were added as an evaluator" email links here with
   // `?round=`. Consumed once — after that the user's tab clicks win, so a
@@ -249,6 +265,27 @@ export function ManagerAssessmentSection({
   const pendingDeepLinkRound = useRef<string | null>(
     searchParams.get("round"),
   );
+
+  // HRP-379 REDO: the "submitted assessment" email links here with
+  // ``?round=…#manager-assessments``. The page-level anchor jump (HRP-494)
+  // fires when the candidate card lands, while this block is still
+  // loading its rounds — the viewport ends up at an offset the finished
+  // block no longer occupies. Jump once the round tab is selected instead,
+  // which is the point the block shows what the email was about. Once per
+  // visit, so a later tab click is not yanked back.
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const anchorScrolled = useRef(false);
+  useEffect(() => {
+    if (!activeRoundId || anchorScrolled.current) return;
+    if (window.location.hash !== "#manager-assessments") return;
+    anchorScrolled.current = true;
+    sectionRef.current?.scrollIntoView({
+      block: "start",
+      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+  }, [activeRoundId]);
 
   // HRP-348 REDO: one debounce timer per score row — a shared timer would
   // silently drop the previous row's PATCH when the evaluator moves fast
@@ -298,6 +335,7 @@ export function ManagerAssessmentSection({
   // HRP-373: a pre-interview round holds exactly one evaluator (HRP-369),
   // and a completed or archived round takes no new ones at all (HRP-376).
   const canAddEvaluator =
+    canRunRounds &&
     activeRound !== null &&
     activeRound.type !== "pre_interview" &&
     !roundClosed;
@@ -378,8 +416,12 @@ export function ManagerAssessmentSection({
   }, [activeCvId, loadRounds, t]);
 
   // ── Load vacancy snapshot + profile ──────────────────────────────────
+  // Keyed on the vacancy id, not the option object: the parent rebuilds
+  // its options after every card re-read (HRP-812), and refetching the
+  // vacancy, scales and profile on each saved score was the price.
+  const activeVacancyId = activeVacancy?.vacancy_id;
   useEffect(() => {
-    if (!activeVacancy) return;
+    if (!activeVacancyId) return;
     let cancelled = false;
     async function load() {
       try {
@@ -389,12 +431,12 @@ export function ManagerAssessmentSection({
           api.get<{
             assessment_scale_id?: string | null;
             assessment_scale_snapshot?: { levels?: ScaleLevel[] } | null;
-          }>(`/recruitment/vacancies/${activeVacancy!.vacancy_id}`),
+          }>(`/recruitment/vacancies/${activeVacancyId}`),
           api
             .get<
               | { profile: null }
               | { profile_data?: { competences?: RawProfileCompetence[] } }
-            >(`/recruitment/vacancies/${activeVacancy!.vacancy_id}/profile`)
+            >(`/recruitment/vacancies/${activeVacancyId}/profile`)
             .catch(() => null),
         ]);
         if (cancelled) return;
@@ -437,7 +479,7 @@ export function ManagerAssessmentSection({
     return () => {
       cancelled = true;
     };
-  }, [activeVacancy]);
+  }, [activeVacancyId]);
 
   // ── Load active sheet ────────────────────────────────────────────────
   const ensureSheet = useCallback(
@@ -477,6 +519,11 @@ export function ManagerAssessmentSection({
   // submitted external evaluators.
   const loadAggregate = useCallback(async (roundId: string) => {
     let agg: RoundAggregate | null = null;
+    // The aggregate is read with the round's writes (HRP-830).
+    if (!canRunRounds) {
+      if (activeRoundIdRef.current === roundId) setAggregate(null);
+      return;
+    }
     try {
       agg = await api.get<RoundAggregate>(
         `/v1/assessment-rounds/${roundId}/aggregate`,
@@ -485,7 +532,7 @@ export function ManagerAssessmentSection({
       agg = null;
     }
     if (activeRoundIdRef.current === roundId) setAggregate(agg);
-  }, []);
+  }, [canRunRounds]);
 
   // Deliberately keyed on the round alone: `rounds` changes identity on
   // every reload and on every optimistic invite write, and re-running the
@@ -552,6 +599,9 @@ export function ManagerAssessmentSection({
         );
         setRounds((prev) => prev.map((x) => (x.id === r.id ? r : x)));
         toast.success(t(ROUND_ACTION_TOASTS[action]));
+        // HRP-812: every action can move which round feeds the Manager
+        // score — for a background tab too, so this goes before the guard.
+        onScoresChangedRef.current?.();
         // The kebab fires for any tab, so only the round on screen may
         // touch the visible sheet — refetching for a background round
         // would bind the form (and its autosave) to a foreign assessment.
@@ -663,6 +713,7 @@ export function ManagerAssessmentSection({
         { score_value: value, score_source: "manual" },
       );
       await loadAggregate(roundId);
+      onScoresChangedRef.current?.();
     });
   }
 
@@ -761,6 +812,7 @@ export function ManagerAssessmentSection({
         };
       });
       await loadAggregate(sheet.round_id);
+      onScoresChangedRef.current?.();
     });
   }
 
@@ -794,7 +846,11 @@ export function ManagerAssessmentSection({
     : undefined;
 
   return (
-    <Card data-testid="candidate-section-assessments">
+    <Card
+      id="manager-assessments"
+      ref={sectionRef}
+      data-testid="candidate-section-assessments"
+    >
       <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <CardTitle className="text-base">
           {t("managerAssessmentTitle")}
@@ -835,17 +891,19 @@ export function ManagerAssessmentSection({
                   hiring order whether or not those rounds exist. */}
               {roundStrip(rounds).map((slot) =>
                 slot.kind === "placeholder" ? (
-                  <Button
-                    key={`add-${slot.type}`}
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => createRound(slot.type)}
-                    data-testid={`assessment-round-add-${slot.type}`}
-                  >
-                    {slot.type === "pre_interview"
-                      ? t("managerAssessmentAddPreInterview")
-                      : t("managerAssessmentAddFinal")}
-                  </Button>
+                  canRunRounds && (
+                    <Button
+                      key={`add-${slot.type}`}
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => createRound(slot.type)}
+                      data-testid={`assessment-round-add-${slot.type}`}
+                    >
+                      {slot.type === "pre_interview"
+                        ? t("managerAssessmentAddPreInterview")
+                        : t("managerAssessmentAddFinal")}
+                    </Button>
+                  )
                 ) : (
                   <span
                     key={slot.round.id}
@@ -871,33 +929,37 @@ export function ManagerAssessmentSection({
                       )}
                     </button>
                     {/* HRP-376: Complete / Reopen / Archive / Restore. */}
-                    <RoundKebab
-                      round={slot.round}
-                      onAction={runRoundAction}
-                      // HRP-348: Complete obeys the same gate as the button.
-                      // `canComplete` is only knowable for the round whose
-                      // sheet is loaded, so any other tab has to be opened
-                      // first rather than completed blind from the strip.
-                      canComplete={
-                        slot.round.id === activeRoundId ? canComplete : false
-                      }
-                      completeHint={
-                        slot.round.id === activeRoundId
-                          ? completeHint
-                          : t("managerAssessmentRoundCompleteHintInactive")
-                      }
-                    />
+                    {canRunRounds && (
+                      <RoundKebab
+                        round={slot.round}
+                        onAction={runRoundAction}
+                        // HRP-348: Complete obeys the same gate as the button.
+                        // `canComplete` is only knowable for the round whose
+                        // sheet is loaded, so any other tab has to be opened
+                        // first rather than completed blind from the strip.
+                        canComplete={
+                          slot.round.id === activeRoundId ? canComplete : false
+                        }
+                        completeHint={
+                          slot.round.id === activeRoundId
+                            ? completeHint
+                            : t("managerAssessmentRoundCompleteHintInactive")
+                        }
+                      />
+                    )}
                   </span>
                 ),
               )}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setPendingNewRound(true)}
-                data-testid="assessment-round-new-btn"
-              >
-                <Plus className="size-3" /> {t("managerAssessmentNewRound")}
-              </Button>
+              {canRunRounds && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPendingNewRound(true)}
+                  data-testid="assessment-round-new-btn"
+                >
+                  <Plus className="size-3" /> {t("managerAssessmentNewRound")}
+                </Button>
+              )}
             </div>
 
             {/* Evaluators on this round (HRP-373) */}
@@ -906,7 +968,7 @@ export function ManagerAssessmentSection({
               data-testid="assessment-round-evaluators"
             >
               <div className="flex min-h-6 items-center gap-2">
-                {!sheet && !roundClosed && (
+                {!sheet && !roundClosed && canRunRounds && (
                   <AddSelfAsEvaluator
                     roundId={activeRoundId}
                     onAdded={(s) => {
@@ -1024,17 +1086,19 @@ export function ManagerAssessmentSection({
                   ) : (
                     // Disabled buttons swallow hover (pointer-events:none),
                     // so the explainer tooltip lives on the wrapper span.
-                    <span title={completeHint}>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={completeRound}
-                        disabled={!canComplete}
-                        data-testid="assessment-round-complete-btn"
-                      >
-                        {t("managerAssessmentMarkComplete")}
-                      </Button>
-                    </span>
+                    canRunRounds && (
+                      <span title={completeHint}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={completeRound}
+                          disabled={!canComplete}
+                          data-testid="assessment-round-complete-btn"
+                        >
+                          {t("managerAssessmentMarkComplete")}
+                        </Button>
+                      </span>
+                    )
                   )}
                   {activeRound?.status === "archived" && (
                     <span
@@ -1050,7 +1114,7 @@ export function ManagerAssessmentSection({
                   scaleLevels={scaleLevels}
                   competenceScores={sheet.competence_scores}
                   indicatorScores={sheet.indicator_scores}
-                  disabled={roundClosed}
+                  disabled={roundClosed || !canRunRounds}
                   emptyHint={t("managerAssessmentEmptyHint")}
                   aggregates={aggregatesByCompetence}
                   onCompetenceScore={(compId, value) =>
@@ -1072,18 +1136,20 @@ export function ManagerAssessmentSection({
                 <h4 className="text-xs font-semibold uppercase text-muted-foreground">
                   {t("managerAssessmentExternalEvaluators")}
                 </h4>
-                <InviteEvaluatorButton
-                  cvId={activeCvId}
-                  roundId={activeRoundId}
-                  roundClosed={roundClosed}
-                  hasProfileCompetences={profileCompetences.length > 0}
-                  onSent={(rows) =>
-                    patchRoundInvites(activeRoundId, (prev) => [
-                      ...prev,
-                      ...rows,
-                    ])
-                  }
-                />
+                {canRunRounds && (
+                  <InviteEvaluatorButton
+                    cvId={activeCvId}
+                    roundId={activeRoundId}
+                    roundClosed={roundClosed}
+                    hasProfileCompetences={profileCompetences.length > 0}
+                    onSent={(rows) =>
+                      patchRoundInvites(activeRoundId, (prev) => [
+                        ...prev,
+                        ...rows,
+                      ])
+                    }
+                  />
+                )}
               </div>
               {invites.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
@@ -1126,13 +1192,17 @@ export function ManagerAssessmentSection({
                           {/* HRP-377: Resend / Revoke / View submission. */}
                           <InviteKebab
                             invite={inv}
-                            onChanged={(updated) =>
+                            onChanged={(updated) => {
                               patchRoundInvites(activeRoundId, (prev) =>
                                 prev.map((x) =>
                                   x.id === updated.id ? updated : x,
                                 ),
-                              )
-                            }
+                              );
+                              // HRP-812: revoking a submitted sheet drops
+                              // it from the average and the Mgr score.
+                              if (activeRoundId) void loadAggregate(activeRoundId);
+                              onScoresChangedRef.current?.();
+                            }}
                             onViewSubmission={() => setViewingInvite(inv)}
                           />
                         </span>
@@ -1231,13 +1301,17 @@ function InviteKebab({
   const t = useTranslations("recruitment");
   const [busy, setBusy] = useState(false);
   const terminal = TERMINAL_INVITE_STATUSES.has(invite.status);
+  // HRP-830: resend and revoke are the round's writes; reading a
+  // submission is not.
+  const canWrite = usePermissions().canRunHiringRounds;
   // A bounce is worth retrying even once the evaluator has opened nothing:
   // the mail never arrived, so the lifecycle status is not the whole story.
   const canResend =
+    canWrite &&
     !terminal &&
     (invite.status === "pending" ||
       invite.delivery_status === "delivery_failed");
-  const canRevoke = !terminal;
+  const canRevoke = canWrite && !terminal;
   // HRP-577: revoking drops the sheet out of every aggregate, it does not
   // delete it. Keying `View submission` on the current status hid a
   // submitted evaluation the moment it was revoked; key it on the fact

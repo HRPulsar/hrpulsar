@@ -22,12 +22,14 @@ from app.modules.assessment.models import CPA, PDP, Assessment, AssessmentResult
 from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Division
 from app.modules.competence.models import Competence, CompetenceGroup
-from app.modules.employee.models import Employee
+from app.modules.employee.models import Compensation, Employee
 from httpx import AsyncClient
 from openpyxl import load_workbook
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+from tests.unit.test_section_gate import _save
 
 
 async def _user(db: AsyncSession, tenant, code: str) -> User:
@@ -126,6 +128,8 @@ async def reports(
         "lonely_user": lonely_user,
         "admin_user": admin_user,
         "cpa_id": cpa_id,
+        "mine_division": mine,
+        "theirs_division": theirs,
     }
     for key, division in (("mine", mine), ("theirs", theirs)):
         emp_user = await _user(db, tenant, "employee")
@@ -290,3 +294,177 @@ def test_the_ai_summary_cache_key_separates_scopes():
     assert _ai_summary_cache_key(
         tenant_id, "en", fingerprint, user_id=admin
     ) != _ai_summary_cache_key(tenant_id, "en", fingerprint, user_id=manager)
+
+
+@pytest_asyncio.fixture
+async def payroll(db: AsyncSession, reports) -> dict:
+    """A salary on each side of the fence: one inside the managed division,
+    one outside it."""
+    for key, amount in (("mine", 100000), ("theirs", 300000)):
+        employee = reports[f"{key}_employee"]
+        db.add(
+            Compensation(
+                employee_id=employee.id,
+                tenant_id=employee.tenant_id,
+                type="salary",
+                amount=amount,
+                currency="USD",
+                effective_date=date(2024, 1, 1),
+            )
+        )
+    await db.commit()
+    return reports
+
+
+class TestTheSectionSaysWhoReads:
+    """HRP-822: the tenant's ``analytics`` row, not a fixed role list."""
+
+    async def test_hr_reads_the_loop_the_old_role_list_kept_from_them(
+        self, client: AsyncClient, db: AsyncSession, tenant
+    ):
+        """``require_role("admin", "manager")`` refused HR here; the matrix
+        gives HR the whole section by default, so it does not."""
+        hr = await _user(db, tenant, "hr")
+        r = await client.get("/api/analytics/dev-loop", headers=_headers(hr))
+        assert r.status_code == 200, r.text
+
+    async def test_a_default_none_role_is_refused_until_the_admin_grants_it(
+        self, auth_client: AsyncClient, client: AsyncClient, db: AsyncSession, tenant
+    ):
+        recruiter = await _user(db, tenant, "recruiter")
+        h = _headers(recruiter)
+        assert (
+            await client.get("/api/analytics/assessments", headers=h)
+        ).status_code == 403
+
+        await _save(auth_client, levels={"analytics": {"recruiter": "view"}})
+        assert (
+            await client.get("/api/analytics/assessments", headers=h)
+        ).status_code == 200
+        # A translated section splits reading from writing by the method:
+        # the export is a POST, so ``view`` does not reach it.
+        assert (
+            await client.post("/api/analytics/export/assessments", headers=h)
+        ).status_code == 403
+
+        await _save(auth_client, levels={"analytics": {"recruiter": "manage"}})
+        assert (
+            await client.post("/api/analytics/export/assessments", headers=h)
+        ).status_code == 200
+
+    async def test_lowering_hr_to_view_keeps_the_charts_and_takes_the_exports(
+        self, auth_client: AsyncClient, client: AsyncClient, db: AsyncSession, tenant
+    ):
+        hr = await _user(db, tenant, "hr")
+        h = _headers(hr)
+        await _save(auth_client, levels={"analytics": {"hr": "view"}})
+        assert (await client.get("/api/analytics/hr-metrics", headers=h)).status_code == 200
+        assert (
+            await client.post("/api/analytics/export/assessments/async", headers=h)
+        ).status_code == 403
+        assert (
+            await client.post("/api/analytics/dev-loop/ai-summary", headers=h)
+        ).status_code == 403
+
+    async def test_the_personal_loop_is_outside_the_matrix(
+        self, auth_client: AsyncClient, client: AsyncClient, db: AsyncSession, tenant
+    ):
+        """Closing the section must not take somebody's own dashboard."""
+        hr = await _user(db, tenant, "hr")
+        h = _headers(hr)
+        await _save(auth_client, levels={"analytics": {"hr": "none"}})
+        assert (await client.get("/api/analytics/dev-loop", headers=h)).status_code == 403
+        assert (await client.get("/api/analytics/my-loop", headers=h)).status_code != 403
+
+
+class TestTheFiguresStayScopedWhoeverIsHandedTheSection:
+    """HRP-822: the level opens the page, the read scope sizes the figures.
+    The two payloads that had no scope at all are the ones a role guard was
+    standing in for."""
+
+    async def test_compensation_follows_the_subtree(
+        self, client: AsyncClient, payroll
+    ):
+        mine = (
+            await client.get(
+                "/api/analytics/compensation", headers=_headers(payroll["mgr_user"])
+            )
+        ).json()
+        assert (mine["total_records"], mine["total_amount"]) == (1, 100000)
+        assert [d["division_name"] for d in mine["by_division"]] == [
+            payroll["mine_division"].name
+        ]
+
+        whole = (
+            await client.get(
+                "/api/analytics/compensation", headers=_headers(payroll["admin_user"])
+            )
+        ).json()
+        assert (whole["total_records"], whole["total_amount"]) == (2, 400000)
+
+    async def test_the_benchmark_follows_the_subtree(
+        self, client: AsyncClient, payroll
+    ):
+        """A manager of nobody reads their own pay and nothing else - here,
+        no pay at all - rather than the company's bands. Their scope is
+        ``{own id}``, not the empty set, so this pins the filter and not the
+        ``if not visible_ids`` shortcut; the matrix case below pins that."""
+        lonely = (
+            await client.get(
+                "/api/analytics/compensation/benchmark",
+                headers=_headers(payroll["lonely_user"]),
+            )
+        ).json()
+        assert lonely == {"by_grade": [], "by_specialization": []}
+
+    async def test_hr_does_not_read_payroll_however_the_matrix_is_set(
+        self, auth_client: AsyncClient, client: AsyncClient, db: AsyncSession, tenant
+    ):
+        """Pay is a data class, not a level: an average over a one-person
+        division is that person's salary, and HR is kept off the employee
+        card's compensation rows too (HRP-221). The section opening must not
+        be what opens payroll."""
+        hr = await _user(db, tenant, "hr")
+        h = _headers(hr)
+        # `manage` on analytics by default, and it still does not reach pay.
+        assert (await client.get("/api/analytics/hr-metrics", headers=h)).status_code == 200
+        assert (await client.get("/api/analytics/compensation", headers=h)).status_code == 403
+        assert (
+            await client.get("/api/analytics/compensation/benchmark", headers=h)
+        ).status_code == 403
+
+        # Nor does raising the row above the default reach it.
+        await _save(auth_client, levels={"analytics": {"hr": "manage"}})
+        assert (await client.get("/api/analytics/compensation", headers=h)).status_code == 403
+
+    async def test_the_division_matrix_holds_the_divisions_the_caller_manages(
+        self, client: AsyncClient, reports
+    ):
+        mine = (
+            await client.get(
+                "/api/analytics/division-matrix", headers=_headers(reports["mgr_user"])
+            )
+        ).json()
+        assert [d["name"] for d in mine["divisions"]] == [
+            reports["mine_division"].name
+        ]
+
+        whole = (
+            await client.get(
+                "/api/analytics/division-matrix",
+                headers=_headers(reports["admin_user"]),
+            )
+        ).json()
+        names = {d["name"] for d in whole["divisions"]}
+        assert {reports["mine_division"].name, reports["theirs_division"].name} <= names
+
+    async def test_a_manager_of_no_division_gets_an_empty_matrix_not_the_company(
+        self, client: AsyncClient, reports
+    ):
+        r = (
+            await client.get(
+                "/api/analytics/division-matrix",
+                headers=_headers(reports["lonely_user"]),
+            )
+        ).json()
+        assert r["divisions"] == [] and r["cells"] == []

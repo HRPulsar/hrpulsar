@@ -104,6 +104,7 @@ import { useAuth } from "@/context/auth-context";
 import { usePermissions } from "@/hooks/use-permissions";
 import {
   ASSIGNABLE_ROLE_CODES,
+  holdsAdminLevel,
   resolveAssignableRoleCode,
   resolveRoleLabel,
 } from "@/lib/user-role-label";
@@ -174,7 +175,8 @@ export default function EmployeeDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { user: currentUser } = useAuth();
-  const { canManage, canAssignRoles, canInvite } = usePermissions();
+  const { canAssignRoles, canViewSection, canManageSection, isAdminLevel } =
+    usePermissions();
   const [employee, setEmployee] = useState<Employee | null>(null);
   // HRP-66: employee role keeps write access to the Education tab on their
   // own profile but loses every other write button (Edit profile, Add
@@ -191,13 +193,21 @@ export default function EmployeeDetailPage() {
   const isDirectoryCard = !!employee && employee.hire_date === undefined;
   // A trimmed card means the caller is outside the write scope too — the
   // dialog would open prefilled with blanks and the PUT would answer 403
-  // outside_division_scope.
-  const canEditProfile = canManage && !isDirectoryCard;
-  const canEditOtherSections = canManage;
+  // outside_division_scope. HRP-829: running the record is `manage` on
+  // employees, and below the admin level never on an admin-level
+  // colleague's card. One's own card is then education and courses only -
+  // the profile, the history and the pay go through /auth/me or an admin,
+  // so they share the `canEditProfile` gate.
+  const canEditOtherSections =
+    canManageSection("employees") &&
+    !isDirectoryCard &&
+    (isAdminLevel || !holdsAdminLevel(employee?.roles));
+  const canEditProfile = canEditOtherSections && (isAdminLevel || !isOwnProfile);
   const [events, setEvents] = useState<EmployeeEvent[]>([]);
   const [assessments, setAssessments] = useState<Assessment[]>([]);
   const [pdps, setPdps] = useState<PDP[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
+  const [scopeIds, setScopeIds] = useState<Set<string>>(new Set());
   const [competenceOverview, setCompetenceOverview] =
     useState<EmployeeCompetenceOverview | null>(null);
   // HRP-724: the same dynamics the employee sees on their own dashboard,
@@ -306,7 +316,7 @@ export default function EmployeeDetailPage() {
   const load = useCallback(
     async function load() {
       try {
-        const [emp, evts, asmts, pdpList, divs, we, pe, edu, crs, comp, overview] =
+        const [emp, evts, asmts, pdpList, divs, we, pe, edu, crs, comp, overview, scope] =
           await Promise.allSettled([
             api.get<Employee>(`/employees/${id}`),
             api.get<EmployeeEvent[]>(`/employees/${id}/events`),
@@ -321,12 +331,14 @@ export default function EmployeeDetailPage() {
             api.get<EmployeeCompetenceOverview>(
               `/employees/${id}/competences`,
             ),
+            api.get<{ id: string }[]>("/divisions/scope"),
           ]);
         if (emp.status === "fulfilled") setEmployee(emp.value);
         if (evts.status === "fulfilled") setEvents(evts.value);
         if (asmts.status === "fulfilled") setAssessments(asmts.value.items);
         if (pdpList.status === "fulfilled") setPdps(pdpList.value);
         if (divs.status === "fulfilled") setDivisions(divs.value);
+        if (scope.status === "fulfilled") setScopeIds(new Set(scope.value.map((d) => d.id)));
         if (we.status === "fulfilled") setWorkExperiences(we.value);
         if (pe.status === "fulfilled") setPrevEmployments(pe.value);
         if (edu.status === "fulfilled") setEducationRecords(edu.value);
@@ -366,6 +378,24 @@ export default function EmployeeDetailPage() {
     };
   }, [employeeId]);
 
+  // HRP-999: the backend words a role change in English; the codes it keeps
+  // beside the words read in the viewer's language.
+  function eventDescription(event: EmployeeEvent): string | null {
+    const from = event.old_value?.roles;
+    const to = event.new_value?.roles;
+    if (
+      event.event_type === "role_changed" &&
+      Array.isArray(from) &&
+      Array.isArray(to)
+    ) {
+      return t("eventRoleChanged", {
+        from: resolveRoleLabel(from, tRole),
+        to: resolveRoleLabel(to, tRole),
+      });
+    }
+    return event.description;
+  }
+
   async function changeRole(roleCode: string) {
     if (!employee || roleCode === resolveAssignableRoleCode(employee.roles))
       return;
@@ -397,6 +427,11 @@ export default function EmployeeDetailPage() {
   }
 
   const flatDivisions = flattenTree(divisions);
+  // HRP-829: a transfer lands in the caller's subtree, and no division at
+  // all is the admin level's - the API answers outside_division_scope.
+  const writableDivisions = isAdminLevel
+    ? flatDivisions
+    : flatDivisions.filter((d) => scopeIds.has(d.id));
 
   function openEdit() {
     if (!employee) return;
@@ -1002,6 +1037,8 @@ export default function EmployeeDetailPage() {
       key: "tenure",
       label: t("kpiTenure"),
       value: tenureYears,
+      // HRP-724 (d): a number with a unit, not a word to title-case.
+      valuePlain: true,
       // HRP-246: TENURE measures how long the employee has been
       // *using the system* — anchored on first auth, not hire date.
       sub: t("kpiJoined", { date: formatDate(tenureAnchorIso) }),
@@ -1041,6 +1078,8 @@ export default function EmployeeDetailPage() {
             }),
             sub: t("kpiDevDynamicsSub", { days: devDynamics.days }),
             info: t("kpiDevDynamicsInfo", { days: devDynamics.days }),
+            // HRP-724 (c): "1 plan · 4 competences" keeps its lower case.
+            valuePlain: true,
           },
         ]
       : []),
@@ -1072,6 +1111,14 @@ export default function EmployeeDetailPage() {
   const pdpActionReason = pdpLimitReached
     ? t("developmentPlanLimitReason", { limit: MAX_ACTIVE_PDPS_PER_EMPLOYEE })
     : null;
+  // The set-password link sits behind `require_admin()`, like the role.
+  const canResendLink =
+    canAssignRoles && !!employee.set_password_link_available && !currentUser?.tenant_is_demo;
+  const hasActions =
+    canManageSection("development") ||
+    canManageSection("assessments") ||
+    canEditProfile ||
+    canResendLink;
 
   return (
     <div className="flex flex-col gap-4">
@@ -1151,16 +1198,20 @@ export default function EmployeeDetailPage() {
               </p>
             </div>
           </div>
-          {canEditProfile && (
+          {!isDirectoryCard && (canEditProfile || hasActions) && (
             <div className="flex items-center gap-2">
+              {canEditProfile && (
               <Button variant="outline" size="sm" onClick={openEdit} data-testid="employee-btn-edit">
                 <Pencil className="h-3.5 w-3.5" />
                 {t("editProfile")}
               </Button>
+              )}
               {/* HRP-660: one menu for everything you can start about this
-                  person. Same gate as Edit profile — every entry below is
-                  admin/manager on the API, and a manager outside their
-                  subtree only ever sees the directory card. */}
+                  person — a manager outside their subtree only ever sees the
+                  directory card. HRP-829: each entry reads its own row of
+                  the matrix, so the menu no longer hides behind Edit
+                  profile's. */}
+              {hasActions && (
               <DropdownMenu>
                 <DropdownMenuTrigger
                   data-testid="employee-btn-actions"
@@ -1171,31 +1222,39 @@ export default function EmployeeDetailPage() {
                   <MoreHorizontal className="h-3.5 w-3.5" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-60">
-                  <DropdownMenuItem
-                    data-testid="employee-action-development-plan"
-                    onClick={() => router.push(pdpActionHref)}
-                  >
-                    {pdpLimitReached ? (
-                      <ExternalLink className="mr-2 h-4 w-4" />
-                    ) : (
-                      <Plus className="mr-2 h-4 w-4" />
-                    )}
-                    <span className="flex flex-col items-start">
-                      <span>{pdpActionLabel}</span>
-                      {pdpActionReason && (
-                        <span className="text-xs text-muted-foreground">
-                          {pdpActionReason}
-                        </span>
+                  {/* HRP-826: each entry is its own section's record, so
+                      that section's level decides - Edit profile's gate
+                      above is the employees section's. */}
+                  {canManageSection("development") && (
+                    <DropdownMenuItem
+                      data-testid="employee-action-development-plan"
+                      onClick={() => router.push(pdpActionHref)}
+                    >
+                      {pdpLimitReached ? (
+                        <ExternalLink className="mr-2 h-4 w-4" />
+                      ) : (
+                        <Plus className="mr-2 h-4 w-4" />
                       )}
-                    </span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    data-testid="employee-action-create-assessment"
-                    onClick={() => router.push(createAssessmentHref(id))}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    {tAssessments("createAssessment")}
-                  </DropdownMenuItem>
+                      <span className="flex flex-col items-start">
+                        <span>{pdpActionLabel}</span>
+                        {pdpActionReason && (
+                          <span className="text-xs text-muted-foreground">
+                            {pdpActionReason}
+                          </span>
+                        )}
+                      </span>
+                    </DropdownMenuItem>
+                  )}
+                  {canManageSection("assessments") && (
+                    <DropdownMenuItem
+                      data-testid="employee-action-create-assessment"
+                      onClick={() => router.push(createAssessmentHref(id))}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      {tAssessments("createAssessment")}
+                    </DropdownMenuItem>
+                  )}
+                  {canEditProfile && (
                   <DropdownMenuItem
                     data-testid="employee-action-add-event"
                     onClick={() => setEventOpen(true)}
@@ -1203,10 +1262,9 @@ export default function EmployeeDetailPage() {
                     <Plus className="mr-2 h-4 w-4" />
                     {t("addEvent")}
                   </DropdownMenuItem>
+                  )}
                   {/* HRP-806: a demo never resends — the backend refuses. */}
-                  {canInvite &&
-                    employee.set_password_link_available &&
-                    !currentUser?.tenant_is_demo && (
+                  {canResendLink && (
                       <DropdownMenuItem
                         data-testid="employee-action-resend-set-password-link"
                         onClick={resendSetPasswordLink}
@@ -1217,6 +1275,7 @@ export default function EmployeeDetailPage() {
                     )}
                 </DropdownMenuContent>
               </DropdownMenu>
+              )}
             </div>
           )}
         </div>
@@ -1309,9 +1368,17 @@ export default function EmployeeDetailPage() {
           <TabsTrigger value="events" data-testid="employee-tab-events" className="shrink-0">{t("tabEvents")}</TabsTrigger>
           <TabsTrigger value="experience" data-testid="employee-tab-experience" className="shrink-0">{t("tabExperience")}</TabsTrigger>
           <TabsTrigger value="education" data-testid="employee-tab-education" className="shrink-0">{t("tabEducation")}</TabsTrigger>
-          <TabsTrigger value="compensation" data-testid="employee-tab-compensation" className="shrink-0">{t("tabCompensation")}</TabsTrigger>
-          <TabsTrigger value="assessments" data-testid="employee-tab-assessments" className="shrink-0">{t("assessments")}</TabsTrigger>
-          <TabsTrigger value="development" data-testid="employee-tab-development" className="shrink-0">{t("tabDevelopment")}</TabsTrigger>
+          {canEditProfile && (
+            <TabsTrigger value="compensation" data-testid="employee-tab-compensation" className="shrink-0">{t("tabCompensation")}</TabsTrigger>
+          )}
+          {/* HRP-826: closed, the assessments list answers 403. */}
+          {canViewSection("assessments") && (
+            <TabsTrigger value="assessments" data-testid="employee-tab-assessments" className="shrink-0">{t("assessments")}</TabsTrigger>
+          )}
+          {/* HRP-825: the plans come from the development section - closed, the list answers 403. */}
+          {canViewSection("development") && (
+            <TabsTrigger value="development" data-testid="employee-tab-development" className="shrink-0">{t("tabDevelopment")}</TabsTrigger>
+          )}
           <TabsTrigger value="competences" data-testid="employee-tab-competences" className="shrink-0">{t("tabCompetences")}</TabsTrigger>
         </TabsList>
 
@@ -1320,7 +1387,7 @@ export default function EmployeeDetailPage() {
           <Card>
             <CardHeader className="flex-row items-center justify-between">
               <CardTitle className="text-base">{t("tabEvents")}</CardTitle>
-              {canEditOtherSections && (
+              {canEditProfile && (
               <Button
                 size="sm"
                 variant="outline"
@@ -1355,16 +1422,16 @@ export default function EmployeeDetailPage() {
                         </div>
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium capitalize">
+                            <span className="text-sm font-medium">
                               {eventTypeLabel(t, event.event_type)}
                             </span>
                             <span className="text-xs text-muted-foreground">
                               {event.event_date}
                             </span>
                           </div>
-                          {event.description && (
+                          {eventDescription(event) && (
                             <p className="mt-0.5 text-sm text-muted-foreground">
-                              {event.description}
+                              {eventDescription(event)}
                             </p>
                           )}
                         </div>
@@ -1386,7 +1453,7 @@ export default function EmployeeDetailPage() {
                 <CardTitle className="text-base">
                   {t("currentEmployment")}
                 </CardTitle>
-                {canEditOtherSections && (
+                {canEditProfile && (
                   <Button size="sm" variant="outline" onClick={openWeAdd} data-testid="employee-experience-btn-add">
                     <Plus className="mr-1 h-4 w-4" />
                     {t("add")}
@@ -1454,7 +1521,7 @@ export default function EmployeeDetailPage() {
                               </div>
                             )}
                           </div>
-                          {canEditOtherSections && (
+                          {canEditProfile && (
                             <div className="flex gap-1">
                               <Button
                                 variant="ghost"
@@ -1488,7 +1555,7 @@ export default function EmployeeDetailPage() {
                 <CardTitle className="text-base">
                   {t("previousEmployment")}
                 </CardTitle>
-                {canEditOtherSections && (
+                {canEditProfile && (
                   <Button size="sm" variant="outline" onClick={openPeAdd} data-testid="employee-prev-employment-btn-add">
                     <Plus className="mr-1 h-4 w-4" />
                     {t("add")}
@@ -1523,7 +1590,7 @@ export default function EmployeeDetailPage() {
                             </p>
                           )}
                         </div>
-                        {canEditOtherSections && (
+                        {canEditProfile && (
                           <div className="flex gap-1">
                             <Button
                               variant="ghost"
@@ -1737,7 +1804,7 @@ export default function EmployeeDetailPage() {
               <CardTitle className="text-base">
                 {t("compensationHistory")}
               </CardTitle>
-              {canEditOtherSections && (
+              {canEditProfile && (
                 <Button size="sm" variant="outline" onClick={openCompAdd} data-testid="employee-compensation-btn-add">
                   <Plus className="mr-1 h-4 w-4" />
                   {t("add")}
@@ -1787,7 +1854,7 @@ export default function EmployeeDetailPage() {
                                 <p className="mt-1 text-sm text-muted-foreground">{item.notes}</p>
                               )}
                             </div>
-                            {canEditOtherSections && (
+                            {canEditProfile && (
                               <div className="flex gap-1">
                                 <Button variant="ghost" size="icon-sm" onClick={() => openCompEdit(item)} data-testid={`employee-compensation-btn-edit-${item.id}`}>
                                   <Pencil className="h-3.5 w-3.5" />
@@ -1969,8 +2036,9 @@ export default function EmployeeDetailPage() {
                 </CardTitle>
                 {/* HRP-660: start the plan where the gaps are visible. The
                     dialog itself stays on /development — this only hands it
-                    the employee. */}
-                {canEditOtherSections && (
+                    the employee. HRP-825: the plan is the development
+                    section's record, so its level decides. */}
+                {canManageSection("development") && (
                   <div className="flex items-center gap-1.5">
                     <Button
                       size="sm"
@@ -2122,6 +2190,7 @@ export default function EmployeeDetailPage() {
             <div className="space-y-2">
               <Label>{t("position")}</Label>
               <PositionCombobox
+                seat
                 value={editForm.position_id || null}
                 onValueChange={(id) =>
                   setEditForm({ ...editForm, position_id: id || "" })
@@ -2142,8 +2211,8 @@ export default function EmployeeDetailPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">{t("noDivision")}</SelectItem>
-                  {flatDivisions.map((d) => (
+                  {isAdminLevel && <SelectItem value="">{t("noDivision")}</SelectItem>}
+                  {writableDivisions.map((d) => (
                     <SelectItem key={d.id} value={d.id}>
                       {"—".repeat(d.depth)} {d.name}
                     </SelectItem>

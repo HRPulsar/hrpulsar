@@ -314,7 +314,7 @@ class TestMutationScope:
             assert not _refused(resp), f"{method} {path} -> {resp.text}"
 
     async def test_admin_is_not_scoped(self, client: AsyncClient, hiring):
-        """``admin`` is in ``FULL_RECRUITMENT_ROLES`` — the whole tenant
+        """``admin`` is admin-level (HRP-830: ``resolve_recruitment_scope``) — the whole tenant
         stays reachable, including the division nobody made them head of."""
         h = _headers(hiring["admin_user"])
         for method, path, body in _routes(hiring["theirs"]):

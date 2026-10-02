@@ -1863,10 +1863,16 @@ async def test_seeded_tenant_answers_each_period_differently(
     # HRP-766 asks the shortest and the longest period to disagree; assert
     # the whole block so a future seed cannot quietly flatten one of them.
     assert by_period[30]["stages"] != by_period[365]["stages"]
-    # A competence raised is measured against a reading taken before the
-    # window opened, so the year-old baseline has to survive: without it
-    # the longest period reports the least progress.
-    assert by_period[365]["dynamics"]["competences_improved"] >= 1
+    # HRP-724 REDO: a competence counts as raised only when an assessment
+    # completed after a finished plan scores it above the one before the
+    # plan. Anna's Q3 plan (a week back) sits inside every window, her Q2
+    # review precedes it and her Q4 review follows it, so each period has
+    # something to show -- and the same two competences in all three.
+    raised = {
+        days: payload["dynamics"]["competences_improved"]
+        for days, payload in by_period.items()
+    }
+    assert all(n >= 1 for n in raised.values()), raised
 
 
 @pytest.mark.asyncio

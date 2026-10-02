@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { History, Loader2, Save, Undo2 } from "lucide-react";
 import { toast } from "sonner";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ScoreCell } from "./score-cell";
 import { cellKey, useCanvasState } from "./use-canvas-state";
 import { CanvasVersionsSheet } from "./canvas-versions-sheet";
@@ -162,7 +163,7 @@ export function CanvasGrid({
     error,
     pendingCells,
     dirtyCells,
-    selfEvaluatorId,
+    selfEvaluatorId: ownEvaluatorId,
     setScore,
     flush,
     reload,
@@ -171,6 +172,12 @@ export function CanvasGrid({
     conflicts,
     resolveConflict,
   } = useCanvasState({ vacancyId, candidateVacancyId, inviteToken });
+  // HRP-830: scoring is evaluation - `manage` on recruitment or the hiring
+  // manager (an invite token scores its own column). Everyone else reads
+  // the grid without a column of their own.
+  const { canEvaluateCandidates, canManageSection } = usePermissions();
+  const canScore = Boolean(inviteToken) || canEvaluateCandidates;
+  const selfEvaluatorId = canScore ? ownEvaluatorId : null;
 
   // Cell-aware arrow navigation: ↑/↓/←/→ move focus between cells.
   // We rely on data-row/data-col attributes set on each cell wrapper below.
@@ -410,6 +417,18 @@ export function CanvasGrid({
         onOpenChange={setVersionsOpen}
         vacancyId={vacancyId}
         candidateVacancyId={candidateVacancyId}
+        // Below `manage` a scorer reverts their own events only; until their
+        // evaluator id is known nothing is revertable - null would read as
+        // "every event", each answering 403.
+        canRevert={
+          canScore &&
+          (Boolean(inviteToken) ||
+            canManageSection("recruitment") ||
+            selfEvaluatorId !== null)
+        }
+        revertOnlyEvaluatorId={
+          inviteToken || canManageSection("recruitment") ? null : selfEvaluatorId
+        }
         onReverted={() => {
           void reload();
         }}

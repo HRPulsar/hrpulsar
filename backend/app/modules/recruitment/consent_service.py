@@ -7,14 +7,16 @@ hooks target this module; ``service.py`` re-exports via module
 
 from __future__ import annotations
 
+import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import billing_hooks
 from app.core.errors import AppError
 from app.modules.recruitment import audit_service
 from app.modules.recruitment.common import (
@@ -176,8 +178,6 @@ async def send_consent_request(
     """Issue a magic-link consent request and email it to the candidate."""
 
     import logging
-    import secrets
-    from datetime import timedelta
 
     logger = logging.getLogger(__name__)
 
@@ -208,9 +208,6 @@ async def send_consent_request(
             status.HTTP_409_CONFLICT,
         )
 
-    token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)
-
     # Mark previous pending requests for this candidate as superseded so a
     # candidate cannot accidentally sign an old token.
     pending = (
@@ -229,17 +226,13 @@ async def send_consent_request(
     for prev in pending:
         prev.status = "superseded"
 
-    now = datetime.now(timezone.utc)
-    request = ConsentRequest(
+    request = _issue_consent_request(
         tenant_id=tenant_id,
         candidate_id=candidate_id,
-        template_id=template.id,
-        token=token,
+        template=template,
         email=data.email,
-        expires_at=expires_at,
-        status="pending",
-        requested_by=user_id,
-        last_sent_at=now,
+        expires_in_days=data.expires_in_days,
+        user_id=user_id,
     )
     db.add(request)
     await db.commit()
@@ -256,6 +249,39 @@ async def send_consent_request(
     )
 
     return _consent_request_to_read(request)
+
+
+def _issue_consent_request(
+    *,
+    tenant_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    template: ConsentTemplate,
+    email: str,
+    expires_in_days: int,
+    user_id: uuid.UUID,
+) -> ConsentRequest:
+    """A fresh pending request with its own token.
+
+    Shared by the first send and by HRP-684's reissue of an expired link,
+    so both mint the token and the lifetime the same way.
+    """
+    now = datetime.now(timezone.utc)
+    return ConsentRequest(
+        tenant_id=tenant_id,
+        candidate_id=candidate_id,
+        template_id=template.id,
+        token=secrets.token_urlsafe(32),
+        email=email,
+        expires_at=now + timedelta(days=expires_in_days),
+        status="pending",
+        requested_by=user_id,
+        last_sent_at=now,
+    )
+
+
+def _utc(value: datetime) -> datetime:
+    """Postgres may hand a timestamp back naive; compare everything in UTC."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 async def _deliver_consent_email(
@@ -282,14 +308,15 @@ async def _deliver_consent_email(
         from app.core.i18n import resolve_locale, translate
         from app.modules.company.models import Tenant
 
-        # i18n F4: the candidate has no account. ConsentTemplate.language
-        # is a free-form tag (String(10), defaults to "en") naming the
-        # language of the consent body, so the wrapper email follows it
-        # when it names a supported interface locale and otherwise falls
-        # through to the tenant default.
+        # HRP-834: the letter is in the recipient's language. The candidate
+        # has no account, so the company's locale stands in for it — the
+        # same rule every other candidate-facing letter of this module
+        # applies. ``ConsentTemplate.language`` describes the consent
+        # body, not the reader: it defaults to "en" and used to win here,
+        # so a Russian company mailed an English wrapper on both the first
+        # send and Resend.
         tenant = await db.get(Tenant, tenant_id)
         locale = resolve_locale(
-            user_language=template.language,
             tenant_default=tenant.default_locale if tenant else None,
         )
         candidate_name = candidate_display_name(
@@ -319,13 +346,21 @@ async def _deliver_consent_email(
 async def resend_consent_request(
     db: AsyncSession,
     tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
     candidate_id: uuid.UUID,
 ) -> dict:
-    """HRP-684: email the pending consent link again.
+    """HRP-684: email the consent link again.
 
-    Deliberately reuses the existing token and expiry instead of issuing a
-    new request: a candidate who still has the first email must not find a
-    dead link because someone pressed Resend. Only ``last_sent_at`` moves.
+    (a) The letter goes to the candidate's *current* email, re-read from
+    the card at send time — the address stored on the request is where
+    the first letter went and may have been corrected since.
+    (b) A link that is still valid is re-sent as is: token and expiry
+    survive, so the first email keeps working and only ``last_sent_at``
+    moves. An expired link is replaced instead of refused: the old request
+    is marked expired and a new token goes out, with the lifetime the
+    original was issued for - charged like a send.
+    (c) A live link whose address was corrected is superseded by a new
+    token with the same expiry: the first letter went to someone else.
     """
 
     import logging
@@ -349,23 +384,60 @@ async def resend_consent_request(
     if request is None:
         raise AppError("no_pending_consent_request", status.HTTP_404_NOT_FOUND)
 
-    now = datetime.now(timezone.utc)
-    expires_at = request.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at <= now:
-        raise AppError("consent_link_expired", status.HTTP_409_CONFLICT)
-
     template = await db.get(ConsentTemplate, request.template_id)
     if template is None:
         raise AppError("consent_template_not_found", status.HTTP_404_NOT_FOUND)
 
-    request.last_sent_at = now
+    email = candidate.email or request.email
+    now = datetime.now(timezone.utc)
+    expires_at = _utc(request.expires_at)
+    if expires_at <= now:
+        issued_for = max(
+            1,
+            round((expires_at - _utc(request.created_at)).total_seconds() / 86400),
+        )
+        # A new link with a full lifetime is a new issuance, charged like
+        # the send it replaces - only re-mailing a live link is free.
+        await billing_hooks.precheck_action(
+            db, tenant_id, "recruitment.send_consent_request"
+        )
+        request.status = "expired"
+        request = _issue_consent_request(
+            tenant_id=tenant_id,
+            candidate_id=candidate_id,
+            template=template,
+            email=email,
+            expires_in_days=issued_for,
+            user_id=user_id,
+        )
+        db.add(request)
+        await billing_hooks.consume_action(
+            db, tenant_id, user_id, "recruitment.send_consent_request"
+        )
+        remaining = issued_for
+    elif (request.email or "").lower() != (email or "").lower():
+        # The address was corrected: whoever got the first, mis-addressed
+        # letter must not keep a token that signs for the candidate. The new
+        # link keeps the old one's expiry, so this stays a free re-send.
+        request.status = "superseded"
+        request = _issue_consent_request(
+            tenant_id=tenant_id,
+            candidate_id=candidate_id,
+            template=template,
+            email=email,
+            expires_in_days=1,
+            user_id=user_id,
+        )
+        request.expires_at = expires_at
+        db.add(request)
+        remaining = max(1, (expires_at - now).days)
+    else:
+        request.last_sent_at = now
+        # Remaining lifetime, so the letter never promises days that are gone.
+        remaining = max(1, (expires_at - now).days)
     await db.commit()
     await db.refresh(request)
 
-    # Remaining lifetime, so the letter never promises days that are gone.
-    remaining = max(1, (expires_at - now).days)
     await _deliver_consent_email(
         db,
         tenant_id,
@@ -442,9 +514,13 @@ async def sign_consent(
         raise AppError("consent_link_not_found", status.HTTP_404_NOT_FOUND)
     if request.status == "signed":
         return {"signed_at": request.signed_at, "status": "signed"}
-    if request.status == "expired" or request.expires_at < datetime.now(timezone.utc):
-        request.status = "expired"
-        await db.commit()
+    # Only a pending request signs: a superseded one (a newer send, or a
+    # resend to a corrected address) is as dead as an expired one - its
+    # letter may have gone to someone else.
+    if request.status != "pending" or request.expires_at < datetime.now(timezone.utc):
+        if request.status == "pending":
+            request.status = "expired"
+            await db.commit()
         raise AppError("consent_link_expired", status.HTTP_410_GONE)
 
     now = datetime.now(timezone.utc)

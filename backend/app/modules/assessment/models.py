@@ -10,6 +10,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -325,7 +326,18 @@ class ExternalReviewer(BaseModel, TenantMixin):
 
 
 class AssessmentAnswer(BaseModel):
+    """One row per participant and question. HRP-910: the unique constraint
+    is what ``record_answer``'s upsert conflicts on - two saves racing past
+    a SELECT used to leave two rows and the next save failed on them."""
+
     __tablename__ = "assessment_answers"
+    __table_args__ = (
+        UniqueConstraint(
+            "participant_id",
+            "indicator_id",
+            name="uq_assessment_answers_participant_indicator",
+        ),
+    )
 
     assessment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

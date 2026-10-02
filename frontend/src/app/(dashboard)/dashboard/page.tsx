@@ -16,6 +16,7 @@ import { LoadErrorState } from "@/components/load-error-state";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
 import { useAuth } from "@/context/auth-context";
+import { usePermissions } from "@/hooks/use-permissions";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { dictionaryItemLabel } from "@/lib/reference-labels";
@@ -44,6 +45,9 @@ interface DevLoopStages {
   closed: {
     window_days: number;
     gaps_closed: number;
+    // HRP-766: the tile leads with the plans finished in the window and
+    // sub-lines the on-time subset of the same plans.
+    plans_completed: number;
     plans_done_on_time: number;
   };
 }
@@ -71,6 +75,16 @@ interface LoopDynamics {
 }
 
 const DYNAMICS_PERIODS = [30, 90, 365] as const;
+
+// HRP-766: the Completed bar is the on-time share of the plans it counts.
+function onTimeShare(closed: {
+  plans_completed: number;
+  plans_done_on_time: number;
+}): number {
+  return closed.plans_completed > 0
+    ? Math.round((closed.plans_done_on_time / closed.plans_completed) * 100)
+    : 0;
+}
 
 interface DevLoop {
   stages: DevLoopStages;
@@ -113,7 +127,12 @@ interface MyLoop {
         deadline: string | null;
       } | null;
     };
-    closed: { window_days: number; gaps_closed: number };
+    closed: {
+      window_days: number;
+      gaps_closed: number;
+      plans_completed: number;
+      plans_done_on_time: number;
+    };
   };
   findings: { code: string; severity: "alert" | "warn" | "info"; count: number; href: string }[];
   strengths: { top: MyCompetence[]; rare_skills: MyCompetence[] };
@@ -270,22 +289,20 @@ export function buildStages(
     },
     {
       key: "closed",
-      href: "/development?status=done",
-      value: String(stages.closed.gaps_closed),
+      // HRP-724: the list opens on the plans this tile counted — Done,
+      // finished inside the same window.
+      href: `/development?status=done&finished_days=${stages.closed.window_days}`,
+      // HRP-766: headline and sub-line come from one set — plans finished
+      // inside the window, of which the on-time ones are a subset. Leading
+      // with closed competence gaps over a sub-line about plans read as
+      // "Completed 1 / 2 plans completed on time".
+      value: String(stages.closed.plans_completed),
       sub: t("stageClosedSub", {
         count: stages.closed.plans_done_on_time,
         days: stages.closed.window_days,
       }),
-      tone: stages.closed.gaps_closed > 0 ? "positive" : undefined,
-      // Closure rate: closed gaps against everything still below the bar.
-      progress:
-        stages.closed.gaps_closed + stages.gaps.competences > 0
-          ? Math.round(
-              (stages.closed.gaps_closed /
-                (stages.closed.gaps_closed + stages.gaps.competences)) *
-                100,
-            )
-          : 0,
+      tone: stages.closed.plans_completed > 0 ? "positive" : undefined,
+      progress: onTimeShare(stages.closed),
       hint: t("hintStageClosed", { days: stages.closed.window_days }),
     },
     // HRP-724: the loop's own result over a period the reader picks —
@@ -294,7 +311,7 @@ export function buildStages(
     {
       key: "dynamics",
       testid: "dashboard-loop-dynamics",
-      href: "/development?status=done",
+      href: `/development?status=done&finished_days=${dynamics.days}`,
       value: t("stageDynamicsValue", { count: dynamics.plans_completed }),
       sub: t("stageDynamicsSub", {
         count: dynamics.competences_improved,
@@ -555,6 +572,10 @@ function ActionQueue({
   dataVersion: string;
 }) {
   const t = useTranslations("dashboard");
+  // HRP-822: the summary is a POST on the analytics section, so a caller
+  // the matrix leaves at `view` reads the loop without the button that
+  // would answer 403.
+  const { canManageSection } = usePermissions();
   const [ai, setAi] = useState<AiState>({ status: "idle" });
 
   async function explain() {
@@ -581,7 +602,7 @@ function ActionQueue({
             {t("queueCount", { count: findings.length })}
           </span>
         </div>
-        {ai.status !== "done" && (
+        {ai.status !== "done" && canManageSection("analytics") && (
           <Button
             size="sm"
             variant="ghost"
@@ -710,10 +731,16 @@ export function buildMyStages(
     },
     {
       key: "closed",
-      href: "/development?status=done",
-      value: String(closed.gaps_closed),
-      sub: t("myStageClosedSub", { days: closed.window_days }),
-      tone: closed.gaps_closed > 0 ? "positive" : undefined,
+      href: `/development?status=done&finished_days=${closed.window_days}`,
+      // HRP-766: same rule as the company hero — my finished plans, and
+      // how many of those met their deadline.
+      value: String(closed.plans_completed),
+      sub: t("stageClosedSub", {
+        count: closed.plans_done_on_time,
+        days: closed.window_days,
+      }),
+      tone: closed.plans_completed > 0 ? "positive" : undefined,
+      progress: onTimeShare(closed),
       hint: t("hintMyStageClosed", { days: closed.window_days }),
     },
     // HRP-724: the same period question on the personal hero — my plans
@@ -721,7 +748,7 @@ export function buildMyStages(
     {
       key: "dynamics",
       testid: "dashboard-my-dynamics",
-      href: "/development?status=done",
+      href: `/development?status=done&finished_days=${loop.dynamics.days}`,
       value: t("stageDynamicsValue", {
         count: loop.dynamics.plans_completed,
       }),
@@ -1142,6 +1169,11 @@ export default function DashboardPage() {
   const tCommon = useTranslations("common");
   const tSections = useTranslations("sections");
   const { user } = useAuth();
+  // HRP-820: primitives, not the `sections` object itself, so the load
+  // effect below re-runs only when an answer actually flips - not on every
+  // `/auth/me` re-fetch that leaves both sections exactly where they were.
+  const opensAssessments = Boolean(user?.sections?.assessments);
+  const opensAnalytics = Boolean(user?.sections?.analytics);
   const [data, setData] = useState<DashboardData>(EMPTY_DATA);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -1172,21 +1204,33 @@ export default function DashboardPage() {
       setFailed(false);
       try {
         if (!user?.is_platform_admin) {
+          // A shared read every role passes (HRP-828, core/sections.py), so
+          // a failure here is a real one: it reaches the retry state below
+          // rather than skipping the onboarding redirect without a word.
           const onboarding = await api.get<OnboardingStatus>("/onboarding/status");
           if (onboarding.needs_onboarding) {
             router.replace("/onboarding");
             return;
           }
         }
+        // HRP-820: a section the matrix closed is not asked for - /auth/me
+        // already said so, and a 403 toast is not how a closed tile looks.
         const [t, asmts, loop] = await Promise.allSettled([
           api.get<Tenant>("/company"),
-          api.get<AssessmentList>("/assessments?limit=100"),
-          api.get<DevLoop>("/analytics/dev-loop"),
+          opensAssessments
+            ? api.get<AssessmentList>("/assessments?limit=100")
+            : Promise.resolve<AssessmentList | null>(null),
+          opensAnalytics
+            ? api.get<DevLoop>("/analytics/dev-loop")
+            : Promise.reject(new ApiError(403, "section closed")),
         ]);
         // Company loop is admin/manager-only; a 403 (role denied) falls
         // back to the personal loop. Other failures (network, 500) keep
         // both null so a transient error doesn't flip an admin into the
         // employee view (404 on my-loop = no employee profile → neither).
+        // A matrix-closed `analytics` section lands here too - it is the
+        // locally built `ApiError(403, "section closed")` above, not a
+        // real response, so a reader of `loop.reason` is not misled (HRP-820).
         let myLoop: MyLoop | null = null;
         if (
           loop.status === "rejected" &&
@@ -1203,9 +1247,13 @@ export default function DashboardPage() {
         });
         // Everything down (backend unreachable, expired session mid-race)
         // must not render as an eerily empty-but-healthy dashboard.
+        // A section the matrix closed never touched the network, so its
+        // slot is neutral here, not a vote for "everything is down": a
+        // skipped /assessments must not, by itself, make `failed` any
+        // easier to reach, nor any harder to reach.
         setFailed(
           t.status === "rejected" &&
-            asmts.status === "rejected" &&
+            (!opensAssessments || asmts.status === "rejected") &&
             loop.status === "rejected" &&
             myLoop === null,
         );
@@ -1216,7 +1264,7 @@ export default function DashboardPage() {
       }
     }
     load();
-  }, [router, user?.is_platform_admin, attempt]);
+  }, [router, user?.is_platform_admin, opensAssessments, opensAnalytics, attempt]);
 
   const cycleStats = useMemo<CycleStats>(() => {
     const items = data.assessments?.items ?? [];

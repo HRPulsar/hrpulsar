@@ -97,6 +97,9 @@ export interface CandidateVacancyEnrichedRow {
   manager_percent?: number | null;
   ai_percent?: number | null;
   divergence_count?: number;
+  // HRP-507 REDO — the M in the Divergence chip's "N/M": competences in
+  // the vacancy profile.
+  profile_competence_count?: number;
   divergence_top?: DivergentCompetencePreview[];
   ai_readiness: AiReadiness;
   ai_verdict: AiVerdict;
@@ -613,6 +616,32 @@ export interface AiAnalysisRun {
   // run was enqueued. Resume-only mode only; legacy rows without a
   // stamped snapshot hash and full-mode runs stay False.
   resume_outdated: boolean;
+  // HRP-685: the data the run was based on, derived server-side through
+  // the same rule as the candidates table's AI DATA column. A full run
+  // made without a resume reads ``transcript_only`` here while ``mode``
+  // still says ``full``.
+  readiness?: AiReadiness;
+}
+
+/** HRP-685 — what the chip next to a verdict says the analysis was based on. */
+export type AiAnalysisBasis = "resume_only" | "transcript_only" | "full";
+
+/**
+ * ``mode`` alone overstates a full run made without a resume as "full"
+ * (its tooltip promises "resume and interview transcript"). The mode
+ * names the prompt that ran; ``readiness`` names the inputs it had.
+ * Resume-only runs had a resume by definition, so readiness is only
+ * consulted for full runs.
+ */
+export function aiAnalysisBasis(
+  mode: AiAnalysisMode | null | undefined,
+  readiness: AiReadiness | null | undefined,
+): AiAnalysisBasis | null {
+  if (mode === "resume_only") return "resume_only";
+  if (mode === "full") {
+    return readiness === "transcript_only" ? "transcript_only" : "full";
+  }
+  return null;
 }
 
 // HRP-271: trivial accessor kept for symmetry with the prior shape and

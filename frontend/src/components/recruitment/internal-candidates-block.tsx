@@ -40,11 +40,17 @@ export function InternalCandidatesBlock({
   onAdded?: () => void;
 }) {
   const t = useTranslations("recruitment");
-  // HRP-667: POST /talent-card is require_role("admin", "recruiter") — the
-  // rest of RECRUITMENT_VIEWER_ROLES sees this block. They keep the button,
-  // greyed out and with the reason next to it, rather than a 403 toast.
-  const { isAdmin, isRecruiter } = usePermissions();
-  const canPost = isAdmin || isRecruiter;
+  // HRP-667: POST /talent-card is `manage` on recruitment (HRP-830) — every
+  // `view` holder sees this block. They keep the button, greyed out and
+  // with the reason next to it, rather than a 403 toast.
+  const { canManageSection, canViewSection } = usePermissions();
+  const canAct = canManageSection("recruitment");
+  // HRP-824: posting also needs the market open to the caller at all - the
+  // API refuses a posting into a section the tenant closed for their role.
+  // Adding someone off the shortlist (HRP-711) is recruitment's own write
+  // and does not ask the market.
+  const marketOpen = canViewSection("talent-market");
+  const canPost = canAct && marketOpen;
   const [data, setData] = useState<VacancyInternalCandidates | null>(null);
   const [busy, setBusy] = useState(false);
   // Per-row, not shared: two Add clicks in a row are a normal thing to do
@@ -135,9 +141,11 @@ export function InternalCandidatesBlock({
               {/* HRP-678: the switch is a third reason the button can be
                   dead, and it is the one the recruiter set themselves —
                   so say which of the three it is. */}
-              {!canPost
+              {!canAct
                 ? t("internalCandidatesOfferNoPermission")
-                : !data.internal_search_allowed
+                : !marketOpen
+                  ? t("internalCandidatesOfferMarketClosed")
+                  : !data.internal_search_allowed
                   ? t("internalCandidatesOfferSearchDisabled")
                   : data.has_library_competences
                     ? t("internalCandidatesOfferHint")
@@ -173,14 +181,18 @@ export function InternalCandidatesBlock({
           <Building2 className="size-4" aria-hidden />
           {t("internalCandidatesTitle", { count: data.items.length })}
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          render={<Link href={`/talent-market/${data.talent_card_id}`} />}
-          data-testid="vacancy-internal-candidates-card-link"
-        >
-          {t("internalCandidatesOpenCard")}
-        </Button>
+        {/* HRP-824: the card's page bounces a caller whose market row the
+            tenant closed, so the link is not offered to them. */}
+        {marketOpen && (
+          <Button
+            size="sm"
+            variant="outline"
+            render={<Link href={`/talent-market/${data.talent_card_id}`} />}
+            data-testid="vacancy-internal-candidates-card-link"
+          >
+            {t("internalCandidatesOpenCard")}
+          </Button>
+        )}
       </div>
       {data.items.length === 0 ? (
         <p
@@ -264,7 +276,7 @@ export function InternalCandidatesBlock({
                     variant="ghost"
                     render={
                       <Link
-                        href={`/recruitment/candidates/${item.candidate_id}`}
+                        href={`/recruitment/candidates/${item.candidate_id}?vacancyId=${vacancyId}`}
                       />
                     }
                     data-testid={`vacancy-internal-candidate-${item.employee_id}-added-link`}
@@ -272,7 +284,7 @@ export function InternalCandidatesBlock({
                     {t("internalCandidatesInCandidates")}
                   </Button>
                 ) : (
-                  canPost && (
+                  canAct && (
                     <Button
                       size="sm"
                       variant="outline"

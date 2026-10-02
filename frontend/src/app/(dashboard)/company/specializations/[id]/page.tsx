@@ -130,10 +130,22 @@ export default function SpecializationDetailPage() {
   );
   // HRP-631: the grade ladder and matrices are workspace-wide (see
   // the specializations list).
-  const { canManageCatalogues: canManage, canViewHrData } = usePermissions();
+  const {
+    canManageCatalogues: canManage,
+    canViewHrData,
+    canManageSection,
+    canAdministerCompetences,
+  } = usePermissions();
+  // HRP-827: deleting the specialization deletes a dictionary item; the AI
+  // matrix and its history are the competence generation, the admin role
+  // on top of `manage` on competences.
+  const canDelete = canManageSection("dictionaries");
 
   const queryTab = searchParams?.get("tab");
-  const tab: Tab = isTab(queryTab) ? queryTab : "grades";
+  const tab: Tab =
+    isTab(queryTab) && (queryTab !== "ai-history" || canAdministerCompetences)
+      ? queryTab
+      : "grades";
 
   const setTab = useCallback(
     (next: Tab) => {
@@ -416,7 +428,7 @@ export default function SpecializationDetailPage() {
               {t("addGrades")}
             </button>
           )}
-          {canManage && (
+          {canAdministerCompetences && (
             <Link
               href={`/company/specializations/${id}/ai-generate`}
               data-testid="specialization-ai-generate-link"
@@ -425,7 +437,7 @@ export default function SpecializationDetailPage() {
               {t("aiGenerateMatrix")}
             </Link>
           )}
-          {canManage && (
+          {canDelete && (
             <button
               type="button"
               data-testid="specialization-detail-delete-btn"
@@ -446,7 +458,9 @@ export default function SpecializationDetailPage() {
         aria-label={t("specSectionsAria")}
         className="flex gap-1 border-b"
       >
-        {TABS.map((entry) => {
+        {TABS.filter(
+          (entry) => entry.key !== "ai-history" || canAdministerCompetences,
+        ).map((entry) => {
           const active = tab === entry.key;
           return (
             <button
@@ -489,12 +503,14 @@ export default function SpecializationDetailPage() {
               >
                 {t("addGrades")}
               </button>
-              <Link
-                href={`/company/specializations/${id}/ai-generate`}
-                className="rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-              >
-                {t("aiGenerateMatrix")}
-              </Link>
+              {canAdministerCompetences && (
+                <Link
+                  href={`/company/specializations/${id}/ai-generate`}
+                  className="rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                >
+                  {t("aiGenerateMatrix")}
+                </Link>
+              )}
             </div>
           </div>
         ) : (
@@ -610,7 +626,7 @@ export default function SpecializationDetailPage() {
         )
       ) : null}
 
-      {tab === "ai-history" && id ? <AiHistoryTab specializationId={id} /> : null}
+      {tab === "ai-history" && canAdministerCompetences && id ? <AiHistoryTab specializationId={id} /> : null}
 
       {id ? (
         <AddGradesModal

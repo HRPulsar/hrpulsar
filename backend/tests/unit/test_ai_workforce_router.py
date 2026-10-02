@@ -17,6 +17,8 @@ from app.modules.primitives import catalog_data
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit.test_section_gate import _save
+
 
 async def _setup(db: AsyncSession) -> dict[str, uuid.UUID]:
     await db.execute(catalog_data.seed_insert())
@@ -131,21 +133,27 @@ class TestAgents:
         assert packs.status_code == 200
         assert len(packs.json()) == 9
 
-    async def test_role_gates(self, client, auth_client, db, tenant, agent_body):
+    async def test_the_registry_belongs_to_the_section_managers(
+        self, client, auth_client, db, tenant, agent_body
+    ):
+        """HRP-821: the registry is Coverage's, so ``manage`` on the section
+        runs it - the roles that hold it are the tenant's to choose."""
         _, employee_token, _ = await _user_with_role(db, tenant, "employee")
         _, manager_token, _ = await _user_with_role(db, tenant, "manager")
         _, hr_token, _ = await _user_with_role(db, tenant, "hr")
+        admin = client.headers["Authorization"]  # the same client object
 
         client.headers["Authorization"] = f"Bearer {employee_token}"
         assert (
             await client.post("/api/ai-workforce/agents", json=agent_body)
         ).status_code == 403
         assert (await client.get("/api/ai-workforce/agents")).status_code == 403
-        # Reference data stays open to every role.
+        # Reference data stays open to everyone the section is open to.
         assert (await client.get("/api/ai-workforce/packs")).status_code == 200
 
+        # A manager reads the section by default, not the registry.
         client.headers["Authorization"] = f"Bearer {manager_token}"
-        assert (await client.get("/api/ai-workforce/agents")).status_code == 200
+        assert (await client.get("/api/ai-workforce/agents")).status_code == 403
         assert (
             await client.post("/api/ai-workforce/agents", json=agent_body)
         ).status_code == 403
@@ -155,6 +163,23 @@ class TestAgents:
         created = await client.post("/api/ai-workforce/agents", json=agent_body)
         assert created.status_code == 201
         assert (await client.get("/api/ai-workforce/audit")).status_code == 200
+
+        # Hand Coverage to the managers and the registry follows.
+        client.headers["Authorization"] = admin
+        await _save(auth_client, levels={"coverage": {"manager": "manage"}})
+        client.headers["Authorization"] = f"Bearer {manager_token}"
+        assert (await client.get("/api/ai-workforce/agents")).status_code == 200
+        assert (
+            await client.post(
+                "/api/ai-workforce/agents", json={**agent_body, "name": "Copilot"}
+            )
+        ).status_code == 201
+
+        # Take it away from hr and the registry closes.
+        client.headers["Authorization"] = admin
+        await _save(auth_client, levels={"coverage": {"hr": "view"}})
+        client.headers["Authorization"] = f"Bearer {hr_token}"
+        assert (await client.get("/api/ai-workforce/agents")).status_code == 403
 
     async def test_other_tenant_cannot_see_the_agent(
         self, auth_client, client, db, agent_body

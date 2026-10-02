@@ -34,6 +34,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   emptyCertificate,
   emptyEducation,
@@ -489,6 +490,8 @@ function SectionHeader({
 }: SectionHeaderProps) {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  // HRP-830: the resume is the candidate record - `manage` on recruitment.
+  const canEdit = usePermissions().canManageSection("recruitment");
   // HRP-271 (review): keep the heading element for screen-reader
   // outline navigation. The disclosure button lives inside the <h3>
   // (standard ARIA disclosure pattern) so "H" jumps still land on
@@ -534,14 +537,16 @@ function SectionHeader({
           </Button>
         </div>
       ) : (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onEdit}
-          data-testid={`${testId}-edit`}
-        >
-          {t("actionEdit")}
-        </Button>
+        canEdit && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onEdit}
+            data-testid={`${testId}-edit`}
+          >
+            {t("actionEdit")}
+          </Button>
+        )
       )}
     </div>
   );

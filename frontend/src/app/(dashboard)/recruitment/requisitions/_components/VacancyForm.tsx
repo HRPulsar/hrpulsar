@@ -298,6 +298,13 @@ export function VacancyForm({
       ? t("vacancySelectSpecializationsFirst")
       : t("selectPlaceholder");
 
+  // HRP-838: a select is sized to its cell, never to its value — a long
+  // value is cut with an ellipsis and shown in full on hover.
+  const positionLabel = selectedPosition?.title ?? t("selectPlaceholder");
+  const divisionLabel =
+    divisions.find((d) => d.id === values.division_id)?.name ??
+    t("selectPlaceholder");
+
   return (
     <div data-testid={testId} className="space-y-6">
       {heading}
@@ -325,10 +332,13 @@ export function VacancyForm({
               >
                 <SelectTrigger
                   id="position"
+                  className="w-full"
                   data-testid="recruitment-vacancy-select-position"
                 >
                   <SelectValue placeholder={t("selectPlaceholder")}>
-                    {selectedPosition?.title ?? t("selectPlaceholder")}
+                    <span className="truncate" title={positionLabel}>
+                      {positionLabel}
+                    </span>
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
@@ -338,7 +348,12 @@ export function VacancyForm({
                     </div>
                   ) : (
                     positionOptions.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
+                      <SelectItem
+                        key={opt.value}
+                        value={opt.value}
+                        className="[&>span:first-child]:block [&>span:first-child]:truncate"
+                        title={opt.label}
+                      >
                         {opt.label}
                       </SelectItem>
                     ))
@@ -357,11 +372,13 @@ export function VacancyForm({
               >
                 <SelectTrigger
                   id="division"
+                  className="w-full"
                   data-testid="recruitment-vacancy-select-division"
                 >
                   <SelectValue placeholder={t("selectPlaceholder")}>
-                    {divisions.find((d) => d.id === values.division_id)?.name ??
-                      t("selectPlaceholder")}
+                    <span className="truncate" title={divisionLabel}>
+                      {divisionLabel}
+                    </span>
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
@@ -371,7 +388,12 @@ export function VacancyForm({
                     </div>
                   ) : (
                     divisionOptions.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
+                      <SelectItem
+                        key={opt.value}
+                        value={opt.value}
+                        className="[&>span:first-child]:block [&>span:first-child]:truncate"
+                        title={opt.label}
+                      >
                         {opt.label}
                       </SelectItem>
                     ))
@@ -405,6 +427,7 @@ export function VacancyForm({
                 onChange={handleSpecializationsChange}
                 placeholder={specsPlaceholder}
                 disabled={disabled || specsDisabled}
+                className="w-full"
                 data-testid="recruitment-vacancy-select-specializations"
               />
             </div>
@@ -416,6 +439,7 @@ export function VacancyForm({
                 onChange={handleGradesChange}
                 placeholder={gradesPlaceholder}
                 disabled={disabled || gradesDisabled}
+                className="w-full"
                 data-testid="recruitment-vacancy-select-grades"
               />
             </div>
@@ -489,6 +513,7 @@ export function VacancyForm({
               >
                 <SelectTrigger
                   id="employment_type"
+                  className="w-full"
                   data-testid="recruitment-vacancy-select-employment"
                 >
                   <SelectValue placeholder={t("vacancySelectType")}>
@@ -574,16 +599,26 @@ export function VacancyForm({
               team has not been told about needs a way out. */}
           <div className="space-y-1">
             <div className="flex items-center gap-2">
+              {/* HRP-667: a locked box is grey, not a dimmed accent — the
+                  user should read it as "not yours to change". */}
               <Checkbox
                 id="internal_search_allowed"
                 data-testid="recruitment-vacancy-input-internal-search"
                 checked={internalSearchLocked || values.internal_search_allowed}
                 disabled={disabled || internalSearchLocked}
+                className={
+                  internalSearchLocked
+                    ? "data-checked:border-muted-foreground data-checked:bg-muted-foreground"
+                    : undefined
+                }
                 onCheckedChange={(checked) =>
                   updateField("internal_search_allowed", !!checked)
                 }
               />
-              <Label htmlFor="internal_search_allowed">
+              <Label
+                htmlFor="internal_search_allowed"
+                className={internalSearchLocked ? "text-muted-foreground" : undefined}
+              >
                 {t("vacancyFieldInternalSearch")}
               </Label>
             </div>

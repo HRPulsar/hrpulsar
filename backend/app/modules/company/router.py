@@ -3,7 +3,12 @@ import uuid
 from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access_scope import (
+    assert_division_heads_in_scope,
+    assert_division_write_scope,
+)
 from app.core.errors import AppError
+from app.core.sections import require_section
 from app.core.upload_validation import assert_declared_size_within_limit
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
@@ -21,6 +26,8 @@ from app.modules.company.schemas import (
     DivisionUpdate,
     LogoUrlIn,
     OnboardingStatusRead,
+    SectionAccessRead,
+    SectionAccessUpdate,
     SpecializationDivisionCreate,
     SpecializationDivisionRead,
     TenantRead,
@@ -28,6 +35,10 @@ from app.modules.company.schemas import (
 )
 
 router = APIRouter(tags=["company"])
+
+# HRP-828: shaping the org chart is ``manage`` on ``company``; the subtree
+# a caller may shape stays ``assert_division_write_scope``'s answer.
+_manage = require_section("company", "manage")
 
 
 # --- GF10 Improve: Public company profile ---
@@ -118,6 +129,26 @@ async def delete_logo(
     return await service.delete_logo(db, current_user.tenant_id)
 
 
+# --- Section access (HRP-820) ---
+
+
+@router.get("/settings/section-access", response_model=SectionAccessRead)
+async def get_section_access(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    return await service.get_section_access(db, current_user.tenant_id)
+
+
+@router.put("/settings/section-access", response_model=SectionAccessRead)
+async def update_section_access(
+    data: SectionAccessUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    return await service.update_section_access(db, current_user.tenant_id, current_user.id, data)
+
+
 @router.post(
     "/settings/company-profile/activity-fields",
     response_model=ActivityFieldRead,
@@ -173,8 +204,12 @@ async def complete_onboarding(
 async def create_division(
     data: DivisionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
+    await assert_division_write_scope(db, current_user, data.parent_id)
+    await assert_division_heads_in_scope(
+        db, current_user, data.manager_id, data.deputy_manager_id
+    )
     return await service.create_division(db, current_user.tenant_id, data)
 
 
@@ -230,8 +265,33 @@ async def update_division(
     division_id: uuid.UUID,
     data: DivisionUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
+    # HRP-819: the division itself and, when it moves, its destination must
+    # both be the caller's. The parent it already has is not — the edit form
+    # sends it back unchanged.
+    await assert_division_write_scope(db, current_user, division_id)
+    sent = data.model_fields_set
+    if sent & {"parent_id", "manager_id", "deputy_manager_id"}:
+        current = await service.get_division(db, current_user.tenant_id, division_id)
+        if "parent_id" in sent and data.parent_id != current["parent_id"]:
+            await assert_division_write_scope(db, current_user, data.parent_id)
+        # HRP-857: a head the form sends back unchanged is not a new
+        # appointment - an admin may have named someone from elsewhere. A
+        # changed seat is judged on both sides: the seat grants the manager
+        # role and leaving it may take the role away, so neither the new nor
+        # the outgoing holder may be from elsewhere.
+        changed = [
+            f
+            for f in ("manager_id", "deputy_manager_id")
+            if f in sent and getattr(data, f) != current[f]
+        ]
+        await assert_division_heads_in_scope(
+            db,
+            current_user,
+            *(getattr(data, f) for f in changed),
+            *(current[f] for f in changed),
+        )
     return await service.update_division(db, current_user.tenant_id, division_id, data)
 
 
@@ -277,8 +337,9 @@ async def add_division_specialization(
     division_id: uuid.UUID,
     data: SpecializationDivisionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
+    await assert_division_write_scope(db, current_user, division_id)
     return await service.add_division_specialization(
         db, current_user.tenant_id, division_id, data
     )
@@ -292,8 +353,9 @@ async def remove_division_specialization(
     division_id: uuid.UUID,
     specialization_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "manager")),
+    current_user: User = Depends(_manage),
 ):
+    await assert_division_write_scope(db, current_user, division_id)
     return await service.remove_division_specialization(
         db, current_user.tenant_id, division_id, specialization_id
     )

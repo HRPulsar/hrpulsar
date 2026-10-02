@@ -28,6 +28,7 @@ from openpyxl import Workbook
 from sqlalchemy import ColumnElement, Row, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import ai_usage_hooks
 from app.core.errors import AppError, exception_summary
 from app.core.i18n import translate
 from app.core.redis import redis_client
@@ -38,6 +39,7 @@ from app.modules.assessment.models import (
     AssessmentParticipant,
     AssessmentResult,
     AssessmentStatus,
+    PDPItem,
     PDPVersion,
 )
 from app.modules.assessment.pdp_service import PDP_FINALIZED_STATUSES
@@ -66,6 +68,18 @@ def _assessee_scope(
     if visible_employee_ids is None:
         return []
     return [Assessment.employee_id.in_(visible_employee_ids)]
+
+
+def _employee_scope(
+    visible_employee_ids: set[uuid.UUID] | None,
+) -> list[ColumnElement[bool]]:
+    """The same predicate for a query that reaches ``Employee`` directly
+    (HRP-822: the compensation figures). Same contract as
+    ``_assessee_scope`` - ``None`` is the workspace, an empty set is
+    nobody - and the same reason for the list."""
+    if visible_employee_ids is None:
+        return []
+    return [Employee.id.in_(visible_employee_ids)]
 
 
 async def assessment_stats(
@@ -105,12 +119,15 @@ async def pdp_stats(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     visible_employee_ids: set[uuid.UUID] | None,
+    hide_drafts: bool = False,
 ) -> dict:
-    scope = (
+    scope: list[ColumnElement[bool]] = (
         []
         if visible_employee_ids is None
         else [PDP.employee_id.in_(visible_employee_ids)]
     )
+    if hide_drafts:  # the same drafts ``GET /pdp`` leaves out (HRP-825)
+        scope.append(PDP.status != "draft")
     result = await db.execute(
         select(PDP.status, func.count(PDP.id))
         .where(PDP.tenant_id == tenant_id, *scope)
@@ -130,8 +147,17 @@ async def pdp_stats(
     }
 
 
-async def compensation_stats(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
-    """Compensation analytics: avg salary by division, by grade, totals by type."""
+async def compensation_stats(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    visible_employee_ids: set[uuid.UUID] | None,
+) -> dict:
+    """Compensation analytics: avg salary by division, by grade, totals by type.
+
+    HRP-822: read-scoped like the rest of the page now that the section,
+    not ``require_role("admin")``, says who opens it.
+    """
+    scope = _employee_scope(visible_employee_ids)
 
     # Total compensation by type
     type_result = await db.execute(
@@ -142,7 +168,7 @@ async def compensation_stats(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
             func.count(Compensation.id),
         )
         .join(Employee, Employee.id == Compensation.employee_id)
-        .where(Employee.tenant_id == tenant_id, Compensation.end_date.is_(None))
+        .where(Employee.tenant_id == tenant_id, Compensation.end_date.is_(None), *scope)
         .group_by(Compensation.type)
     )
     by_type = {}
@@ -167,6 +193,7 @@ async def compensation_stats(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
             Employee.tenant_id == tenant_id,
             Compensation.type == "salary",
             Compensation.end_date.is_(None),
+            *scope,
         )
         .group_by(Division.id, Division.name)
     )
@@ -188,7 +215,7 @@ async def compensation_stats(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
             func.avg(Compensation.amount),
         )
         .join(Employee, Employee.id == Compensation.employee_id)
-        .where(Employee.tenant_id == tenant_id, Compensation.end_date.is_(None))
+        .where(Employee.tenant_id == tenant_id, Compensation.end_date.is_(None), *scope)
     )
     row = overall.one()
     total_count = int(row[0] or 0)
@@ -249,8 +276,14 @@ async def export_assessments_xlsx(
 # ---------------------------------------------------------------------------
 
 
-async def compensation_benchmark(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
-    """Avg salary by grade and by specialization for benchmarking."""
+async def compensation_benchmark(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    visible_employee_ids: set[uuid.UUID] | None,
+) -> dict:
+    """Avg salary by grade and by specialization for benchmarking (HRP-822:
+    read-scoped, see ``compensation_stats``)."""
+    scope = _employee_scope(visible_employee_ids)
     # By grade
     grade_result = await db.execute(
         select(
@@ -267,6 +300,7 @@ async def compensation_benchmark(db: AsyncSession, tenant_id: uuid.UUID) -> dict
             Compensation.type == "salary",
             Compensation.end_date.is_(None),
             Assessment.grade_id.isnot(None),
+            *scope,
         )
         .group_by(DictionaryItem.id, DictionaryItem.title)
     )
@@ -296,6 +330,7 @@ async def compensation_benchmark(db: AsyncSession, tenant_id: uuid.UUID) -> dict
             Compensation.type == "salary",
             Compensation.end_date.is_(None),
             Assessment.specialization_id.isnot(None),
+            *scope,
         )
         .group_by(DictionaryItem.id, DictionaryItem.title)
     )
@@ -318,12 +353,29 @@ async def compensation_benchmark(db: AsyncSession, tenant_id: uuid.UUID) -> dict
 
 
 async def division_specialization_matrix(
-    db: AsyncSession, tenant_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    visible_division_ids: list[uuid.UUID] | None,
 ) -> dict:
-    """Matrix of divisions × specializations with employee headcounts."""
+    """Matrix of divisions × specializations with employee headcounts.
+
+    HRP-822: scoped by the managed subtree. ``None`` is the workspace (an
+    admin-level role), an empty list is "manages no division" and gets an
+    empty matrix - the route carried no guard of its own until the section
+    gate closed it, so this is the only fence it has.
+    """
+
+    def scope(column) -> list[ColumnElement[bool]]:
+        """Three queries reach the subtree through three different columns."""
+        if visible_division_ids is None:
+            return []
+        return [column.in_(visible_division_ids)]
+
     # Get all divisions
     div_result = await db.execute(
-        select(Division.id, Division.name).where(Division.tenant_id == tenant_id)
+        select(Division.id, Division.name).where(
+            Division.tenant_id == tenant_id, *scope(Division.id)
+        )
     )
     divisions = [{"id": str(d_id), "name": name} for d_id, name in div_result.all()]
 
@@ -338,7 +390,10 @@ async def division_specialization_matrix(
             DictionaryItem,
             DictionaryItem.id == SpecializationDivision.specialization_id,
         )
-        .where(SpecializationDivision.tenant_id == tenant_id)
+        .where(
+            SpecializationDivision.tenant_id == tenant_id,
+            *scope(SpecializationDivision.division_id),
+        )
     )
     mappings = sd_result.all()
 
@@ -351,7 +406,11 @@ async def division_specialization_matrix(
     # Get employee counts per division
     emp_result = await db.execute(
         select(Employee.division_id, func.count(Employee.id))
-        .where(Employee.tenant_id == tenant_id, Employee.status == "active")
+        .where(
+            Employee.tenant_id == tenant_id,
+            Employee.status == "active",
+            *scope(Employee.division_id),
+        )
         .group_by(Employee.division_id)
     )
     emp_counts: dict[str, int] = {
@@ -398,8 +457,10 @@ async def compare_cpa_rounds(
     """Compare two CPA rounds: per-employee score changes.
 
     HRP-641: the comparison is a per-employee score table, so it is scoped
-    by assessee like every other assessment read. Who owns the CPA round
-    itself is a separate, still-open question (HRP-640).
+    by assessee like every other assessment read. It is the assessment
+    page's view of one's own people across rounds, so it stays on that
+    scope rather than the round's author (HRP-640 fences the round's own
+    routes, ``cpa_scope``).
     """
     scope = _assessee_scope(visible_employee_ids)
 
@@ -595,7 +656,12 @@ async def dev_loop(
     reading choice made on the dashboard.
     """
     facts = await issues.collect_issue_facts(
-        db, tenant_id, visible_employee_ids=visible_employee_ids
+        db,
+        tenant_id,
+        visible_employee_ids=visible_employee_ids,
+        # HRP-724: the dynamics tile is the one reader of the plan-competence
+        # map, so only the loop pays for that query.
+        with_plan_competences=True,
     )
     cohorts = issues.issue_cohorts(facts)
     total_active = facts.total_active
@@ -882,12 +948,19 @@ async def generate_dev_loop_summary(
         )
     )
     try:
-        summary = await llm_client.generate(
-            prompt,
-            system=prompts.build_system_dev_loop(tenant_settings),
-            tenant_settings=tenant_settings,
-            db=db,
-        )
+        with ai_usage_hooks.call_context(
+            tenant_id=tenant_id,
+            action="analytics.dev_loop_summary",
+            work_unit_id=uuid.uuid4(),
+        ):
+            summary = await llm_client.generate(
+                prompt,
+                system=prompts.build_system_dev_loop(tenant_settings),
+                tenant_settings=tenant_settings,
+                db=db,
+            )
+    except AppError:
+        raise
     except Exception as e:
         logger.exception("Failed to generate dev-loop summary")
         raise AppError(
@@ -951,7 +1024,8 @@ async def dev_loop_ai_summary(
         return {"summary": cached, "cached": True, "data_version": fingerprint}
 
     await _consume_ai_summary_budget(db, tenant_id, user_id)
-    summary = await generate_dev_loop_summary(db, tenant_id, payload)
+    with ai_usage_hooks.call_context(user_id=user_id):
+        summary = await generate_dev_loop_summary(db, tenant_id, payload)
     await _summary_cache_put(key, summary, "dev-loop")
     return {"summary": summary, "cached": False, "data_version": fingerprint}
 
@@ -1403,20 +1477,43 @@ async def my_loop(
         json.dumps(payload, sort_keys=True, default=str).encode()
     ).hexdigest()[:16]
     # HRP-724 / HRP-766: outside the fingerprint — see the note in ``dev_loop``.
-    payload["stages"]["closed"] = {"window_days": days, "gaps_closed": gaps_closed}
     window_start = now - timedelta(days=days)
-    inside, before = issues.split_by_window(my_done, window_start)
+    # HRP-766: one set for every plan number on the personal hero too —
+    # the Completed tile's headline, its on-time sub-line and the dynamics
+    # tile's plan count are all read off this list.
+    finished = [
+        p
+        for p in my_pdps
+        if p.status == "done"
+        and p.finished_at is not None
+        and p.finished_at >= window_start
+    ]
+    payload["stages"]["closed"] = {
+        "window_days": days,
+        "gaps_closed": gaps_closed,
+        "plans_completed": len(finished),
+        "plans_done_on_time": issues.plans_on_time(finished),
+    }
+    # HRP-724: a competence counts as raised only when an assessment
+    # completed after one of these plans scores it above the one before —
+    # and only for the competences the plan's items were about.
+    plan_competences: dict[uuid.UUID, set[uuid.UUID]] = {}
+    if finished:
+        item_rows = await db.execute(
+            select(PDPItem.pdp_id, PDPItem.competence_id).where(
+                PDPItem.pdp_id.in_([p.id for p in finished]),
+                PDPItem.competence_id.is_not(None),
+            )
+        )
+        for pdp_id, competence_id in item_rows.all():
+            plan_competences.setdefault(pdp_id, set()).add(competence_id)
     payload["dynamics"] = {
         "days": days,
-        "plans_completed": sum(
-            1
-            for p in my_pdps
-            if p.status == "done"
-            and p.finished_at is not None
-            and p.finished_at >= window_start
-        ),
+        "plans_completed": len(finished),
         "competences_improved": len(
-            issues.improved_against_previous(inside, before, my_results)
+            issues.raised_after_plans(
+                finished, plan_competences, {employee.id: list(my_done)}, my_results
+            )
         ),
     }
     return payload
@@ -1458,12 +1555,19 @@ async def generate_my_loop_summary(
         )
     )
     try:
-        summary = await llm_client.generate(
-            prompt,
-            system=prompts.build_system_my_loop(tenant_settings),
-            tenant_settings=tenant_settings,
-            db=db,
-        )
+        with ai_usage_hooks.call_context(
+            tenant_id=tenant_id,
+            action="analytics.my_loop_summary",
+            work_unit_id=uuid.uuid4(),
+        ):
+            summary = await llm_client.generate(
+                prompt,
+                system=prompts.build_system_my_loop(tenant_settings),
+                tenant_settings=tenant_settings,
+                db=db,
+            )
+    except AppError:
+        raise
     except Exception as e:
         logger.exception("Failed to generate my-loop summary")
         raise AppError(
@@ -1507,6 +1611,7 @@ async def my_loop_ai_summary(
         return {"summary": cached, "cached": True, "data_version": fingerprint}
 
     await _consume_ai_summary_budget(db, tenant_id, user_id)
-    summary = await generate_my_loop_summary(db, tenant_id, payload)
+    with ai_usage_hooks.call_context(user_id=user_id):
+        summary = await generate_my_loop_summary(db, tenant_id, payload)
     await _summary_cache_put(key, summary, "my-loop")
     return {"summary": summary, "cached": False, "data_version": fingerprint}

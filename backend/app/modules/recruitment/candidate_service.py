@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import UploadFile, status
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,10 +38,17 @@ from app.modules.recruitment.common import (
     _stage_to_read_dict,
     candidate_display_name,
 )
+from app.modules.recruitment.manager_assessment_models import AssessmentRound
 from app.modules.recruitment.models import (
+    AIAnalysisRun,
+    AssessmentInvite,
     Candidate,
     CandidateFile,
+    CandidateQuestion,
     CandidateVacancy,
+    HumanAssessment,
+    Interview,
+    QuestionSet,
     Vacancy,
     VacancyStage,
 )
@@ -474,6 +481,11 @@ async def change_candidate_status(
     cv = result.scalar_one_or_none()
     if not cv:
         raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
+    # HRP-830: the same check as the sibling PATCH - a stage of another
+    # vacancy's funnel (or no stage at all) is refused, not written.
+    applicable = await _get_applicable_stages(db, tenant_id, cv.vacancy_id)
+    if not any(s.id == data.stage_id for s in applicable):
+        raise AppError("stage_not_found_for_vacancy", status.HTTP_404_NOT_FOUND)
 
     old_stage_id = cv.stage_id
 
@@ -915,6 +927,7 @@ def _candidate_vacancy_enriched_dict(cv: CandidateVacancy) -> dict:
         "manager_percent": None,
         "ai_percent": None,
         "divergence_count": 0,
+        "profile_competence_count": 0,
         "divergence_top": [],
         "ai_readiness": cv.ai_readiness,
         "ai_verdict": cv.ai_verdict,
@@ -977,6 +990,9 @@ async def apply_matrix_aggregates(
         payload["manager_percent"] = cand["manager_percent"]
         payload["ai_percent"] = cand["ai_percent"]
         payload["divergence_count"] = cand["divergence_count"]
+        # HRP-507 REDO: the chip reads "N/M" — N divergent out of the M
+        # competences the vacancy profile asks about.
+        payload["profile_competence_count"] = matrix["total_competences"]
         # HRP-662: the row flag and the row count are now one statement.
         payload["score_divergence"] = cand["divergence_count"] > 0
         # Build the tooltip preview from the divergent cells only. The
@@ -1971,14 +1987,45 @@ async def delete_candidate_vacancy(
     """
     cv = (
         await db.execute(
-            select(CandidateVacancy).where(
+            select(CandidateVacancy)
+            .where(
                 CandidateVacancy.id == cv_id,
                 CandidateVacancy.tenant_id == tenant_id,
             )
+            # A child row inserted meanwhile takes a key-share lock on the
+            # link and waits, so the check below cannot miss it.
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if cv is None:
         raise AppError("candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND)
+    # HRP-1004: the link carries the candidacy's history - dropping it cascades its
+    # interviews, scores, analyses, invites, question sets and rounds away,
+    # and lifts the HRP-971 fence it holds. A candidacy with any of that is
+    # closed by stage (Rejected / Withdrew); only a bare link goes.
+    history = (
+        Interview,
+        HumanAssessment,
+        AIAnalysisRun,
+        AssessmentInvite,
+        QuestionSet,
+        AssessmentRound,
+    )
+    # The legacy answer keys (CandidateQuestion) hang off candidate and
+    # vacancy rather than the link, so no FK names them - they count too.
+    legacy_questions = exists().where(
+        CandidateQuestion.candidate_id == cv.candidate_id,
+        CandidateQuestion.vacancy_id == cv.vacancy_id,
+    )
+    if await db.scalar(
+        select(
+            or_(
+                legacy_questions,
+                *(exists().where(m.candidate_vacancy_id == cv.id) for m in history),
+            )
+        )
+    ):
+        raise AppError("candidate_vacancy_has_history", status.HTTP_409_CONFLICT)
     await db.delete(cv)
     await db.commit()
 

@@ -552,6 +552,7 @@ async def approve_signup(
     Slack user id, the admin path the platform admin's user id.
     """
     from app.modules.auth.models import Role, User, user_roles
+    from app.modules.auth.roles import ensure_baseline_employee_role
     from app.modules.company.models import Tenant
 
     row = await _get_pending_for_moderation(db, signup_request_id)
@@ -647,6 +648,7 @@ async def approve_signup(
         await db.execute(
             user_roles.insert().values(user_id=user.id, role_id=admin_role.id)
         )
+    await ensure_baseline_employee_role(db, user.id)
 
     # ── Mark signup approved -------------------------------------------
     now = datetime.now(timezone.utc)

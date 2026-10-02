@@ -1056,3 +1056,45 @@ class TestUploadSwitchesInterviewType:
                     kind="text_transcript",
                 )
         assert exc.value.status_code == 413
+
+
+class TestTranscribeWithoutProvider:
+    async def test_no_provider_refuses_before_the_charge(
+        self, db, tenant, user, monkeypatch
+    ):
+        # Review 01.10 (HRP-1005): the billing wrapper charges the minutes
+        # once enqueue_transcribe returns; a workspace whose processor list
+        # leaves no transcription provider paid for a job the worker could
+        # only fail. Refused here, the wrapper never charges.
+        from app.modules.recruitment import transcription_service
+        from app.modules.storage.models import File
+
+        monkeypatch.setattr(
+            transcription_service, "get_transcription_chain_sync", lambda *_a: []
+        )
+        ctx = await _setup_cv(db, tenant, user)
+        first = await _scheduled_interview(db, tenant, user, ctx["cv"])
+        file_row = File(
+            tenant_id=tenant.id,
+            name="upload",
+            original_name="rec.mp3",
+            path=f"{tenant.id}/interviews/{first['id']}/upload",
+            size=1024,
+            mime_type="audio/mpeg",
+            uploaded_by=user.id,
+            entity_type="interview",
+            entity_id=first["id"],
+        )
+        db.add(file_row)
+        await db.commit()
+        row = (
+            await db.execute(select(Interview).where(Interview.id == first["id"]))
+        ).scalar_one()
+        row.audio_file_id = file_row.id
+        await db.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            await service.enqueue_transcribe(db, tenant.id, first["id"])
+        assert exc.value.status_code == 409
+        await db.refresh(row)
+        assert row.transcription_status != "processing"

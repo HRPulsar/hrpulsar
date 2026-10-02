@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { usePermissions } from "@/hooks/use-permissions";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -51,6 +52,9 @@ export function IndicatorsEditor({
   const t = useTranslations("competences");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
+  // HRP-827: deleting an indicator and generating them with AI stay the
+  // admin role's on top of the section's `manage`.
+  const { canAdministerCompetences } = usePermissions();
   const [detail, setDetail] = useState<CompetenceDetail | null>(null);
   const [skillLevels, setSkillLevels] = useState<SkillLevel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -211,7 +215,7 @@ export function IndicatorsEditor({
           <Plus className="mr-1 h-3.5 w-3.5" />
           {t("addIndicator")}
         </Button>
-        {disabledReason ? (
+        {!canAdministerCompetences ? null : disabledReason ? (
           <Tooltip>
             <TooltipTrigger
               render={<span tabIndex={-1} className="inline-flex" />}
@@ -290,15 +294,17 @@ export function IndicatorsEditor({
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
-                    <Button
-                      size="icon-xs"
-                      variant="ghost"
-                      onClick={() => openDelete(ind)}
-                      data-testid={`indicators-editor-item-${ind.id}-delete`}
-                      aria-label={t("deleteIndicator")}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    {canAdministerCompetences && (
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        onClick={() => openDelete(ind)}
+                        data-testid={`indicators-editor-item-${ind.id}-delete`}
+                        aria-label={t("deleteIndicator")}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
                   </li>
                 ))}
               </ul>

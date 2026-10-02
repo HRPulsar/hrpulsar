@@ -7,7 +7,8 @@ import type { ImportJob, ImportJobList } from "@/lib/types";
 import { formatDate } from "@/lib/date-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { RequireRole } from "@/components/require-role";
+import { RequireSection } from "@/components/require-section";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   Card,
   CardContent,
@@ -209,6 +210,8 @@ export default function ImportPage() {
   const tc = useTranslations("common");
   const { user } = useAuth();
   const isDemo = !!user?.tenant_is_demo;
+  // HRP-831: `view` reads the history, `manage` uploads.
+  const canImport = usePermissions().canImport;
   const [jobs, setJobs] = useState<ImportJob[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -365,7 +368,7 @@ export default function ImportPage() {
   const hasPreviewTable = previewHeaders.length > 0;
 
   return (
-    <RequireRole admin>
+    <RequireSection code="import">
     <div className="space-y-6">
       <div>
         <div className="flex items-center gap-2">
@@ -380,7 +383,8 @@ export default function ImportPage() {
         <p className="text-sm text-muted-foreground">{t("importSubtitle")}</p>
       </div>
 
-      {/* Upload section */}
+      {/* Upload section - `manage` on the import section (HRP-831) */}
+      {canImport && (
       <Card>
         <CardHeader>
           <CardTitle>{t("importUploadTitle")}</CardTitle>
@@ -495,6 +499,7 @@ export default function ImportPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* GF9: Preview section */}
       {previewFile && (
@@ -722,6 +727,6 @@ export default function ImportPage() {
         </DialogContent>
       </Dialog>
     </div>
-    </RequireRole>
+    </RequireSection>
   );
 }

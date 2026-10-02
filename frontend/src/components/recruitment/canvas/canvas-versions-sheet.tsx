@@ -39,6 +39,11 @@ interface CanvasVersionsSheetProps {
   /** Triggered after every successful revert so the parent grid can
    * refetch matrix aggregates and clear local optimistic state. */
   onReverted?: () => void;
+  /** HRP-830: reverting is evaluation; the timeline itself is a read. */
+  canRevert?: boolean;
+  /** HRP-830: below `manage` the hiring manager reverts their own column
+   *  only - another evaluator's cell is `manage`'s. */
+  revertOnlyEvaluatorId?: string | null;
 }
 
 interface FilterState {
@@ -83,6 +88,8 @@ export function CanvasVersionsSheet({
   candidateVacancyId,
   evaluatorId,
   onReverted,
+  canRevert = true,
+  revertOnlyEvaluatorId,
 }: CanvasVersionsSheetProps) {
   const t = useTranslations("recruitment");
   const [filters, setFilters] = useState<FilterState>(() =>
@@ -317,7 +324,11 @@ export function CanvasVersionsSheet({
                     <Badge variant="outline" className="font-mono text-[9px]">
                       {event.action}
                     </Badge>
-                    {event.evaluator_id && event.operation !== "revert" && (
+                    {canRevert &&
+                      event.evaluator_id &&
+                      (!revertOnlyEvaluatorId ||
+                        event.evaluator_id === revertOnlyEvaluatorId) &&
+                      event.operation !== "revert" && (
                       <Button
                         size="sm"
                         variant="ghost"

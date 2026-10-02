@@ -155,9 +155,9 @@ async def get_group_analytics(
     """Aggregated analytics for one assessment group. Read-only.
 
     ``hide_results_for_employee`` is the same flag ``service.get_results``
-    takes: with it set, only assessees inside ``visible_employee_ids``
-    contribute, so an employee-only caller never reads the numbers of a
-    colleague whose questionnaire they merely answered.
+    takes: with it set, only the caller's own assessment contributes, so a
+    respondent never reads the numbers of a colleague whose questionnaire
+    they merely answered, nor of their subtree.
     """
     group = await db.get(AssessmentGroup, group_id)
     if not group or group.tenant_id != tenant_id:
@@ -191,20 +191,24 @@ async def get_group_analytics(
     # colleague's 360 questionnaire — it must not also hand them that
     # colleague's numbers. ``get_results`` refuses exactly this case (employee
     # sees results only for their own, closed assessment), so the aggregation
-    # here drops every child the caller reaches only as a respondent: nothing
-    # but assessees inside their own scope survives. The "closed" half of the
+    # here drops every child but the caller's own. The "closed" half of the
     # ``get_results`` gate is already covered — only ``done`` children are
-    # aggregated at all.
+    # aggregated at all. HRP-826: own, not "inside the caller's scope" - a
+    # respondent heading a division (a manager lowered to ``view``) reads no
+    # subordinate's results on the detail or ``/results``, and must not read
+    # them here either.
     #
     # Dropping the rows before anything else is computed keeps ``done_count`` /
     # ``excluded_count`` and every derived list (competences, grades,
     # divisions, highlights) from re-exposing what the employee row hides.
-    # ``visible_employee_ids is None`` means "no scope restriction", which only
-    # happens for admin/HR — callers that never set this flag; treating it as
-    # "nothing visible" keeps the fallback on the safe side.
     if hide_results_for_employee:
-        allowed_employee_ids = visible_employee_ids or set()
-        children = [a for a in children if a.employee_id in allowed_employee_ids]
+        children = [
+            a
+            for a in children
+            if participant_user_id is not None
+            and a.employee is not None
+            and a.employee.user_id == participant_user_id
+        ]
 
     done = [a for a in children if a.status is not None and a.status.code == "done"]
     is_all_grades = group.criteria_type == "target_position" and group.grade_id is None

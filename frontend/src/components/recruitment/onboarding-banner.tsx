@@ -6,6 +6,7 @@ import { Loader2, Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
+import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -69,8 +70,17 @@ export function RecruitmentOnboardingBanner() {
   const [state, setState] = useState<RecruitmentOnboardingState | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // HRP-830: the first-cycle banner is the hiring team's - its checklist
+  // and demo data are `manage` on recruitment, so a `view` holder skips
+  // the call rather than drawing a 403 on every page.
+  const canManage = usePermissions().canManageSection("recruitment");
 
   const load = useCallback(async () => {
+    if (!canManage) {
+      setState(null);
+      setLoading(false);
+      return;
+    }
     try {
       const res = await api.get<RecruitmentOnboardingState>(
         "/recruitment/onboarding",
@@ -81,7 +91,7 @@ export function RecruitmentOnboardingBanner() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canManage]);
 
   useEffect(() => {
     void load();

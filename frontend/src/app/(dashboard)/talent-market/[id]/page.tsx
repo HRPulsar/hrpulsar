@@ -503,16 +503,16 @@ export default function TalentCardDetailPage() {
   const [card, setCard] = useState<TalentCardDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [divisionName, setDivisionName] = useState<string | null>(null);
-  // HRP-209: role gates the Match pencil, Appoint button, picker
-  // affordances and drawer arrows for the Employee role. The viewer
-  // can manage when they're admin / manager (full read+write); plain
-  // employees only see the Candidates table without write controls.
-  const { canManage: canManageByRole } = usePermissions();
-  // HRP-639: the role is only half the answer. A division head reaches
+  // HRP-209: gates the Match pencil, Appoint button, picker affordances
+  // and drawer arrows. HRP-824: the level is the tenant's matrix - `manage`
+  // on the talent market - rather than the admin / manager role; below it
+  // the viewer sees the Candidates table without write controls.
+  const { canManageSection, isAdminLevel } = usePermissions();
+  // HRP-639: the level is only half the answer. A division head reaches
   // another department's card when it is published — the board is meant to
   // be readable — but every write on it 403s, so the buttons come off the
-  // card's own `can_manage` rather than the role alone.
-  const canManage = canManageByRole && card?.can_manage !== false;
+  // card's own `can_manage` rather than the level alone.
+  const canManage = canManageSection("talent-market") && card?.can_manage !== false;
 
   // Dictionaries used by both Requirement blocks. Loaded once on mount.
   const [specializations, setSpecializations] = useState<DictionaryItem[]>([]);
@@ -1257,9 +1257,9 @@ export default function TalentCardDetailPage() {
                   data-testid="talent-market-detail-match"
                 >
                   <span>{card.match_percent}%</span>
-                  {/* HRP-209: Match% pencil hidden for Employee — the
-                      backend already rejects edits via require_role,
-                      so dropping the icon keeps the UI honest. */}
+                  {/* HRP-209: Match% pencil hidden below manage — the
+                      backend already rejects edits there, so dropping
+                      the icon keeps the UI honest. */}
                   {card.status === "draft" && canManage && (
                     <Button
                       size="icon-sm"
@@ -1558,8 +1558,10 @@ export default function TalentCardDetailPage() {
                           {/* HRP-665: same gate as Appoint and the Match
                               trigger below — a plain candidate has no read
                               access to a colleague's plan, so the badge
-                              would only advertise it and 403 on click. */}
-                          {c.pdp_id && (canManage || c.is_me) && (
+                              would only advertise it and 403 on click.
+                              HRP-856: so does a manager's for a candidate
+                              outside their scope. */}
+                          {c.pdp_id && c.can_view_profile && (canManage || c.is_me) && (
                             <Link
                               href={`/development/${c.pdp_id}`}
                               data-testid="talent-market-candidate-plan"
@@ -1642,9 +1644,10 @@ export default function TalentCardDetailPage() {
                             (a) the card is Published, (b) they're not
                             yet appointed, and (c) they haven't already
                             reacted. The chip in the Status column
-                            covers the "already reacted" state. */}
-                        {!canManage &&
-                          c.is_me &&
+                            covers the "already reacted" state. Whoever
+                            runs the card may react too (HRP-971): the
+                            confirmation says the card is theirs no more. */}
+                        {c.is_me &&
                           card.status === "published" &&
                           c.status !== "appointed" &&
                           !c.response_at && (
@@ -1664,10 +1667,11 @@ export default function TalentCardDetailPage() {
                             do not clear and have no plan yet — a `talent`
                             card is a reserve pool with no bar to miss.
                             "Do not clear" is the live `blocked_by` the
-                            status badge reads (`comp_qualifies` is false
-                            for every card with no required competences),
-                            and an appointed row has nothing left to ask
-                            for — the backend answers 409 for both. */}
+                            status badge reads, and only its competence
+                            axis (HRP-739): a plan closes skills gaps, not
+                            missing years of experience. An appointed row
+                            has nothing left to ask for — the backend
+                            answers 409 for both. */}
                         {!canManage &&
                           c.is_me &&
                           card.status === "published" &&
@@ -1676,7 +1680,7 @@ export default function TalentCardDetailPage() {
                           !!c.response_at &&
                           c.status !== "appointed" &&
                           Array.isArray(c.blocked_by) &&
-                          c.blocked_by.length > 0 &&
+                          c.blocked_by.includes("competences") &&
                           !c.pdp_id && (
                             <Button
                               size="sm"
@@ -1896,7 +1900,15 @@ export default function TalentCardDetailPage() {
         candidateId={drawerCandidateId}
         pdpId={drawerPdpId}
         // HRP-665: the gap plan is a write — same gate as Appoint.
-        canCreatePlan={canManage && !isTerminal}
+        // HRP-824: the plan is a development-section record, and the API
+        // asks that section for manage as well - so does the button.
+        canCreatePlan={canManage && canManageSection("development") && !isTerminal}
+        // HRP-856: the pool is workspace-wide, but a plan is written into
+        // the employee's record - outside the viewer's scope it is theirs
+        // to raise, not this viewer's (the API answers 403).
+        outOfScope={
+          card.candidates.find((c) => c.id === drawerCandidateId)?.can_view_profile === false
+        }
         cardTitle={card.title}
         onPlanCreated={(pdpId) => {
           setDrawerPdpId(pdpId);
@@ -1937,7 +1949,13 @@ export default function TalentCardDetailPage() {
         open={reactConfirmOpen}
         onOpenChange={(o) => setReactConfirmOpen(o)}
         title={t("sendReactionTitle")}
-        description={t("sendReactionConfirm", { title: card.title })}
+        description={
+          // HRP-971: below the admin level a reaction fences its author
+          // off the card - one who ran it runs it no more.
+          canManage && !isAdminLevel
+            ? t("sendReactionConfirmRunner", { title: card.title })
+            : t("sendReactionConfirm", { title: card.title })
+        }
         confirmLabel={t("send")}
         loadingLabel={t("sending")}
         confirmVariant="default"

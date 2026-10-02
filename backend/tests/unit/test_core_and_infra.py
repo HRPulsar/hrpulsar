@@ -1185,7 +1185,7 @@ class TestAIServiceGeneratePositions:
 
 
 class TestAIServiceCreateEmbedding:
-    async def test_create_embedding_new(self, db: AsyncSession):
+    async def test_create_embedding_new(self, db: AsyncSession, tenant):
         from app.modules.ai import service as ai_svc
 
         entity_id = uuid.uuid4()
@@ -1197,14 +1197,14 @@ class TestAIServiceCreateEmbedding:
             return_value=fake_vector,
         ):
             result = await ai_svc.create_embedding(
-                db, "competence", entity_id, "Leadership skills"
+                db, tenant.id, "competence", entity_id, "Leadership skills"
             )
 
         assert result["entity_type"] == "competence"
         assert result["entity_id"] == str(entity_id)
         assert result["status"] == "stored"
 
-    async def test_create_embedding_upsert(self, db: AsyncSession):
+    async def test_create_embedding_upsert(self, db: AsyncSession, tenant):
         from app.modules.ai import service as ai_svc
         from app.modules.ai.models import Embedding
 
@@ -1213,6 +1213,7 @@ class TestAIServiceCreateEmbedding:
 
         # Create initial embedding
         emb = Embedding(
+            tenant_id=tenant.id,
             entity_type="competence",
             entity_id=entity_id,
             text_content="Old text",
@@ -1228,7 +1229,7 @@ class TestAIServiceCreateEmbedding:
             return_value=new_vector,
         ):
             result = await ai_svc.create_embedding(
-                db, "competence", entity_id, "Updated text"
+                db, tenant.id, "competence", entity_id, "Updated text"
             )
 
         assert result["status"] == "stored"
@@ -1236,11 +1237,15 @@ class TestAIServiceCreateEmbedding:
         # Verify it was updated, not duplicated
         from sqlalchemy import select
 
+        # HRP-954: the upsert is a Core statement, so the ``emb`` instance
+        # this session still holds is stale - re-read the row, not the map.
         rows = await db.execute(
-            select(Embedding).where(
+            select(Embedding)
+            .where(
                 Embedding.entity_type == "competence",
                 Embedding.entity_id == entity_id,
             )
+            .execution_options(populate_existing=True)
         )
         all_embs = rows.scalars().all()
         assert len(all_embs) == 1

@@ -204,7 +204,10 @@ export default function TalentMarketPage() {
 
   const [saving, setSaving] = useState(false);
 
-  const { canManage } = usePermissions();
+  const { canManageSection } = usePermissions();
+  // HRP-824: the tenant's matrix, not the role, says who authors the board;
+  // each card's own `can_manage` then says whose card it is.
+  const canManage = canManageSection("talent-market");
 
   async function load() {
     try {

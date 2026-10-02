@@ -126,11 +126,13 @@ export default function PositionsPage() {
     setDrilldownOpen(true);
   }
 
-  const { canManage, canViewJobProfile } = usePermissions();
-  // HRP-631: creating is a role question — a manager files the new position
-  // under one of their own divisions. Editing an existing one is a row
-  // question: outside the managed subtree it 403s, so the controls follow
-  // the row's `can_manage` rather than the role alone.
+  const { canManageSection, canViewJobProfile, isAdmin } = usePermissions();
+  // HRP-631: creating is a section question (HRP-828: `manage` on company,
+  // it used to be the admin/manager role) — a division head files the new
+  // position under one of their own divisions. Editing an existing one is a
+  // row question: outside the managed subtree it 403s, so the controls
+  // follow the row's `can_manage` rather than the level alone.
+  const canManage = canManageSection("company");
   const canEdit = (pos: Position) => canManage && pos.can_manage !== false;
   const router = useRouter();
   // HRP-33 REDO: highlight rows whose specialization currently has an
@@ -264,8 +266,10 @@ export default function PositionsPage() {
   }
 
   async function handleBulkAction(action: "approve" | "reject") {
+    // HRP-828: only the drafts the caller may approve - the API refuses a
+    // batch with a single draft outside the caller's subtree.
     const draftIds = positions
-      .filter((p) => p.source === "ai_draft")
+      .filter((p) => p.source === "ai_draft" && canEdit(p))
       .map((p) => p.id);
     if (draftIds.length === 0) return;
     setActionLoading(true);
@@ -417,6 +421,7 @@ export default function PositionsPage() {
             <CardTitle className="text-base">
               {t("draftsAwaitingReview", { count: drafts.length })}
             </CardTitle>
+            {drafts.some(canEdit) && (
             <div className="flex gap-2">
               <Button
                 data-testid="positions-btn-approve-all"
@@ -439,6 +444,7 @@ export default function PositionsPage() {
                 {t("rejectAllDrafts")}
               </Button>
             </div>
+            )}
           </CardHeader>
           <CardContent>
             <div className="overflow-hidden rounded-lg border">
@@ -480,6 +486,7 @@ export default function PositionsPage() {
                         {pos.headcount != null ? `0/${pos.headcount}` : "—"}
                       </TableCell>
                       <TableCell>
+                        {canEdit(pos) && (
                         <div className="flex gap-1">
                           <Button
                             data-testid={`positions-row-${pos.id}-btn-approve`}
@@ -513,6 +520,7 @@ export default function PositionsPage() {
                             <Pencil className="h-4 w-4" />
                           </Button>
                         </div>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -841,7 +849,8 @@ export default function PositionsPage() {
                           </DropdownMenuItem>
                         ),
                       )}
-                      {pos.employee_count === 0 && (
+                      {/* DELETE /positions/{id} is the admin role's. */}
+                      {isAdmin && pos.employee_count === 0 && (
                         <DropdownMenuItem
                           variant="destructive"
                           onClick={() => openDelete(pos)}

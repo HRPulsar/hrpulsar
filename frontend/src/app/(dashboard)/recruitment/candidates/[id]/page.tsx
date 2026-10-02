@@ -26,6 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { ApiError, api } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import { formatDate } from "@/lib/date-format";
 import { cn } from "@/lib/utils";
 import { BADGE_OUTLINE } from "@/lib/badge-tones";
@@ -104,15 +105,16 @@ export default function CandidateDetailPage() {
   const router = useRouter();
   // HRP-181 REDO: candidate cards are reached from a vacancy funnel.
   // ``vacancyId`` query param keeps the breadcrumb anchored to that
-  // vacancy so Back lands on the vacancy detail, not the legacy
-  // standalone candidates list.
+  // vacancy so Back lands on the vacancy detail. HRP-840: without it the
+  // card was opened from the Candidates list (or search), so Back goes
+  // there — never to the vacancies list, which is not where the user was.
   const vacancyContextId = searchParams.get("vacancyId");
   // HRP-460: the "Interview questions ready" email links straight to
   // the generated set.
   const questionSetContextId = searchParams.get("questionSet");
   const backHref = vacancyContextId
     ? `/recruitment/requisitions/${vacancyContextId}`
-    : "/recruitment/requisitions";
+    : "/recruitment/candidates";
   const [card, setCard] = useState<CandidateCanonicalCard | null>(null);
   // HRP-418 REDO: bumped when Manager assessments creates a round, so the
   // Interviews block re-reads the round list it renders names from.
@@ -171,13 +173,12 @@ export default function CandidateDetailPage() {
     [card?.vacancy_applications, hasResume, t],
   );
 
-  // Mirrors backend resolve_user_role: full-payload roles win before the
+  // Mirrors backend resolve_user_role: whoever sees all of hiring
+  // (admin-level or `manage`, HRP-830) reads the full payload before the
   // hiring_manager slice (see recruitment/common.py).
+  const { canManageSection, seesAllHiring } = usePermissions();
   const isHiringManager =
-    (user?.roles ?? []).includes("hiring_manager") &&
-    !(user?.roles ?? []).some((r) =>
-      ["admin", "recruiter", "hr"].includes(r),
-    );
+    (user?.roles ?? []).includes("hiring_manager") && !seesAllHiring;
 
   useEffect(() => {
     // Only hiring managers can be affected by the flag — skip the round
@@ -197,15 +198,22 @@ export default function CandidateDetailPage() {
     };
   }, [isHiringManager]);
 
+  // A re-read (after a score write) and a local save can cross: only the
+  // newest lands, or an older card and its ETag overwrite the saved ones
+  // and the next save answers 412. A save bumps the counter too.
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       setLoading(true);
       const { data, headers } = await api.getWithMeta<CandidateCanonicalCard>(
         `/recruitment/candidates/${id}/card`,
       );
+      if (seq !== loadSeq.current) return;
       setCard(data);
       setEtag(headers.get("ETag"));
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       setError(err instanceof Error ? err.message : t("candidateLoadFailed"));
     } finally {
       setLoading(false);
@@ -232,6 +240,9 @@ export default function CandidateDetailPage() {
     // request has landed — its height here is a loading placeholder, so
     // jumping now leaves the reader above the finished block.
     if (anchorId === "interview-questions") return;
+    // HRP-379 REDO: same for Manager assessments — it scrolls itself once
+    // the round the email named is selected.
+    if (anchorId === "manager-assessments") return;
     deepLinkHandled.current = true;
     document.getElementById(anchorId)?.scrollIntoView({
       block: "start",
@@ -276,6 +287,7 @@ export default function CandidateDetailPage() {
             card={card}
             etag={etag}
             onSaved={(c, newEtag) => {
+              loadSeq.current += 1;
               setCard((prev) =>
                 prev
                   ? {
@@ -307,6 +319,7 @@ export default function CandidateDetailPage() {
                 etag={etag}
                 excerpts={resumeExcerpts}
                 onSaved={(c, newEtag) => {
+                  loadSeq.current += 1;
                   setCard((prev) =>
                     prev
                       ? {
@@ -319,7 +332,10 @@ export default function CandidateDetailPage() {
                 }}
               />
             );
-            const insightsSection = (
+            // HRP-830: the analysis runs and their history are `manage` on
+            // recruitment end to end - a `view` holder gets no block
+            // rather than an error toast on every open.
+            const insightsSection = canManageSection("recruitment") && (
               <AiInsightsSection
                 key="ai-insights"
                 candidateId={card.id}
@@ -369,6 +385,11 @@ export default function CandidateDetailPage() {
             vacancies={assessmentVacancies}
             initialVacancyId={vacancyContextId ?? undefined}
             onRoundsChanged={() => setRoundsVersion((v) => v + 1)}
+            // HRP-812: the Mgr value in Vacancy applications comes from the
+            // card, so re-read it after any write that can move the score.
+            // ``card`` stays mounted meanwhile — only the first load gates
+            // the page on ``loading``.
+            onScoresChanged={() => void load()}
           />
         </div>
       </div>
@@ -454,6 +475,8 @@ interface PersonalCardProps {
 function PersonalCard({ card, etag, onSaved }: PersonalCardProps) {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  // HRP-830: editing the candidate is `manage` on recruitment.
+  const canEdit = usePermissions().canManageSection("recruitment");
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<PersonalEditState>(() => toEditState(card));
   const [busy, setBusy] = useState(false);
@@ -514,14 +537,16 @@ function PersonalCard({ card, etag, onSaved }: PersonalCardProps) {
       <CardHeader className="flex flex-row items-center justify-between gap-2">
         <CardTitle className="text-sm">{t("candidatePersonalInfo")}</CardTitle>
         {!editing ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setEditing(true)}
-            data-testid="candidate-card-edit-personal-btn"
-          >
-            {t("actionEdit")}
-          </Button>
+          canEdit && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setEditing(true)}
+              data-testid="candidate-card-edit-personal-btn"
+            >
+              {t("actionEdit")}
+            </Button>
+          )
         ) : (
           <div className="flex gap-1">
             <Button

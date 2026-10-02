@@ -33,6 +33,7 @@ import { ApiError, api } from "@/lib/api";
 import {
   AI_ANALYSIS_PRICING,
   AI_ANALYSIS_STAGES,
+  aiAnalysisBasis,
   aiAnalysisStageLabel,
   aiNextStepLabel,
   aiVerdictLabel,
@@ -42,6 +43,7 @@ import {
 } from "@/lib/recruitment-types";
 import { ALERT_TONE, BADGE_COLOR } from "@/lib/badge-tones";
 import type {
+  AiAnalysisBasis,
   AiAnalysisRun,
   AiAnalysisStage,
   AnalysisStalenessKind,
@@ -690,7 +692,7 @@ function ActiveRunCard({
         {/* HRP-489/492: the ``data: {completeness}`` chip is gone — it
             restated the mode chip next to it without adding a decision
             the recruiter could act on. */}
-        <ModeBadge mode={run.mode} />
+        <ModeBadge run={run} />
         <span className="ml-auto text-xs text-muted-foreground">
           {new Date(run.created_at).toLocaleDateString(locale)}
         </span>
@@ -1246,28 +1248,41 @@ function VerdictPill({
   );
 }
 
-function ModeBadge({ mode }: { mode: AiAnalysisRun["mode"] }) {
+// HRP-685: the chip names the data the run was based on, not the prompt
+// that produced it — a full run made without a resume is "transcript
+// only", never "full" (see ``aiAnalysisBasis``).
+const MODE_BADGE_KEYS: Record<AiAnalysisBasis, { text: string; title: string }> =
+  {
+    resume_only: {
+      text: "aiInsightsModeBadgeResumeOnly",
+      title: "aiInsightsModeBadgeResumeOnlyTitle",
+    },
+    transcript_only: {
+      text: "aiInsightsModeBadgeTranscriptOnly",
+      title: "aiInsightsModeBadgeTranscriptOnlyTitle",
+    },
+    full: {
+      text: "aiInsightsModeBadgeFull",
+      title: "aiInsightsModeBadgeFullTitle",
+    },
+  };
+
+function ModeBadge({ run }: { run: Pick<AiAnalysisRun, "mode" | "readiness"> }) {
   const t = useTranslations("recruitment");
-  const isResumeOnly = mode === "resume_only";
+  const basis = aiAnalysisBasis(run.mode, run.readiness) ?? "full";
   return (
     <Badge
       variant="outline"
       className={cn(
         "text-[10px] uppercase tracking-wide",
-        isResumeOnly
-          ? "border-amber-300 text-amber-800"
-          : "border-emerald-300 text-emerald-800",
+        basis === "full"
+          ? "border-emerald-300 text-emerald-800"
+          : "border-amber-300 text-amber-800",
       )}
-      data-testid={`ai-analysis-mode-badge-${mode}`}
-      title={
-        isResumeOnly
-          ? t("aiInsightsModeBadgeResumeOnlyTitle")
-          : t("aiInsightsModeBadgeFullTitle")
-      }
+      data-testid={`ai-analysis-mode-badge-${basis}`}
+      title={t(MODE_BADGE_KEYS[basis].title)}
     >
-      {isResumeOnly
-        ? t("aiInsightsModeBadgeResumeOnly")
-        : t("aiInsightsModeBadgeFull")}
+      {t(MODE_BADGE_KEYS[basis].text)}
     </Badge>
   );
 }
@@ -1427,7 +1442,7 @@ function HistoryDialog({
               data-testid={`ai-analysis-history-entry-${r.id}`}
             >
               <div className="flex items-center gap-2">
-                <ModeBadge mode={r.mode} />
+                <ModeBadge run={r} />
                 {/* HRP-550: history showed the raw verdict code. */}
                 <span className="font-medium">
                   {r.verdict ? aiVerdictLabel(t, r.verdict) : "—"}

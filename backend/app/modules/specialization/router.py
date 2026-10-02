@@ -17,6 +17,7 @@ from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
+from app.modules.competence.dependencies import hide_anothers_draft
 from app.modules.employee.schemas import EmployeeDirectoryRead
 from app.modules.position.schemas import PositionEmployeeRead
 from app.modules.specialization import service
@@ -288,6 +289,7 @@ async def list_competence_indicators_by_level(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await hide_anothers_draft(db, current_user, competence_id)
     return await service.get_competence_indicators_by_level(
         db, current_user.tenant_id, competence_id
     )

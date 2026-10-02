@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
@@ -6,10 +7,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
+from app.core.sections import matrix_levels
 from app.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.competence import ai_materials, material_overrides, service
+from app.modules.competence.dependencies import (
+    admin_manages_competences,
+    hide_anothers_draft,
+    manage_competences,
+    writes_personal_drafts,
+)
 from app.modules.competence.models import CompetenceTreeAuditLog
 from app.modules.competence.schemas import (
     CompetenceBulkCreate,
@@ -44,16 +52,34 @@ from app.modules.competence.usage import (
 
 router = APIRouter(tags=["competences"])
 
+# HRP-827: authoring the catalogue asks the tenant's ``competences`` row for
+# ``manage`` in place of the admin/hr role list; deleting and the skill-level
+# ladder add the admin role on top (``competence/dependencies.py``).
+
 
 # --- Tree ---
 
 
 @router.get("/competence-tree", response_model=list[CompetenceGroupTree])
 async def get_competence_tree(
+    drafts: bool = Query(
+        False,
+        description=(
+            "HRP-632: include personal drafts - the caller's own, or every "
+            "one at ``manage``. The pickers leave it off: a draft is "
+            "attached nowhere until published."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await service.get_competence_tree(db, current_user.tenant_id)
+    mode: Literal["none", "own", "all"] = "none"
+    if drafts:
+        manages = (await matrix_levels(db, current_user))["competences"] == "manage"
+        mode = "all" if manages else "own"
+    return await service.get_competence_tree(
+        db, current_user.tenant_id, drafts=mode, viewer_id=current_user.id
+    )
 
 
 # --- Groups: CRUD ---
@@ -63,7 +89,7 @@ async def get_competence_tree(
 async def create_group(
     data: CompetenceGroupCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await service.create_group(
         db, current_user.tenant_id, data, actor_id=current_user.id
@@ -75,7 +101,7 @@ async def update_group(
     group_id: uuid.UUID,
     data: CompetenceGroupUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await service.update_group(
         db, current_user.tenant_id, group_id, data, actor_id=current_user.id
@@ -86,7 +112,7 @@ async def update_group(
 async def delete_group(
     group_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     await service.delete_group(
         db, current_user.tenant_id, group_id, actor_id=current_user.id
@@ -100,8 +126,13 @@ async def delete_group(
 async def get_group_usage(
     group_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    from app.modules.competence.models import CompetenceGroup
+
+    group = await db.get(CompetenceGroup, group_id)
+    if group is None or group.tenant_id not in (None, current_user.tenant_id):
+        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
     usage = await check_group_usage(db, group_id)
     return {
         "matrix": usage.matrix,
@@ -119,7 +150,7 @@ async def get_group_usage(
 async def activate_group(
     group_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await service.activate_group(
         db, current_user.tenant_id, group_id, actor_id=current_user.id
@@ -132,7 +163,7 @@ async def activate_group(
 async def deactivate_group(
     group_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await service.deactivate_group(
         db, current_user.tenant_id, group_id, actor_id=current_user.id
@@ -145,7 +176,7 @@ async def move_group(
     new_parent_id: uuid.UUID | None = Body(None),
     new_sort_index: int = Body(0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await service.move_group(
         db,
@@ -164,10 +195,15 @@ async def move_group(
 async def create_competence(
     data: CompetenceCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(get_current_user),
 ):
+    personal = await writes_personal_drafts(db, current_user)
     return await service.create_competence(
-        db, current_user.tenant_id, data, actor_id=current_user.id
+        db,
+        current_user.tenant_id,
+        data,
+        actor_id=current_user.id,
+        draft_owner_id=current_user.id if personal else None,
     )
 
 
@@ -180,11 +216,18 @@ async def bulk_create_competences(
     group_id: uuid.UUID,
     data: CompetenceBulkCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(get_current_user),
 ):
-    """HRP-108: add several competences to a group in one shot."""
+    """HRP-108: add several competences to a group in one shot. A division
+    head's land as their personal drafts (HRP-632)."""
+    personal = await writes_personal_drafts(db, current_user)
     return await service.bulk_create_competences(
-        db, current_user.tenant_id, group_id, data, actor_id=current_user.id
+        db,
+        current_user.tenant_id,
+        group_id,
+        data,
+        actor_id=current_user.id,
+        draft_owner_id=current_user.id if personal else None,
     )
 
 
@@ -202,11 +245,9 @@ async def get_competence(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await hide_anothers_draft(db, current_user, competence_id)
     return await service.get_competence_detail(
-        db,
-        current_user.tenant_id,
-        competence_id,
-        skill_level_id=skill_level_id,
+        db, current_user.tenant_id, competence_id, skill_level_id=skill_level_id
     )
 
 
@@ -215,10 +256,16 @@ async def update_competence(
     competence_id: uuid.UUID,
     data: CompetenceUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(get_current_user),
 ):
+    personal = await writes_personal_drafts(db, current_user)
     return await service.update_competence(
-        db, current_user.tenant_id, competence_id, data, actor_id=current_user.id
+        db,
+        current_user.tenant_id,
+        competence_id,
+        data,
+        actor_id=current_user.id,
+        draft_owner_id=current_user.id if personal else None,
     )
 
 
@@ -226,10 +273,19 @@ async def update_competence(
 async def delete_competence(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(get_current_user),
 ):
+    # Deleting from the catalogue is ``manage`` plus the admin role; a
+    # division head deletes their own personal draft (HRP-632).
+    personal = await writes_personal_drafts(db, current_user)
+    if not personal and not any(r.code == "admin" for r in current_user.roles):
+        raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
     await service.delete_competence(
-        db, current_user.tenant_id, competence_id, actor_id=current_user.id
+        db,
+        current_user.tenant_id,
+        competence_id,
+        actor_id=current_user.id,
+        draft_owner_id=current_user.id if personal else None,
     )
 
 
@@ -240,8 +296,9 @@ async def delete_competence(
 async def get_competence_usage(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    await hide_anothers_draft(db, current_user, competence_id)
     usage = await check_competence_usage(db, competence_id)
     return {
         "matrix": usage.matrix,
@@ -257,7 +314,7 @@ async def get_competence_usage(
 async def publish_competence(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await service.publish_competence(
         db, current_user.tenant_id, competence_id, actor_id=current_user.id
@@ -268,7 +325,7 @@ async def publish_competence(
 async def unpublish_competence(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await service.unpublish_competence(
         db, current_user.tenant_id, competence_id, actor_id=current_user.id
@@ -279,7 +336,7 @@ async def unpublish_competence(
 async def activate_competence(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await service.activate_competence(
         db, current_user.tenant_id, competence_id, actor_id=current_user.id
@@ -290,7 +347,7 @@ async def activate_competence(
 async def deactivate_competence(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await service.deactivate_competence(
         db, current_user.tenant_id, competence_id, actor_id=current_user.id
@@ -303,7 +360,7 @@ async def move_competence(
     new_group_id: uuid.UUID = Body(..., embed=True),
     new_sort_index: int = Body(0, embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await service.move_competence(
         db,
@@ -330,7 +387,7 @@ async def list_skill_levels(
 async def create_skill_level(
     data: SkillLevelCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     return await service.create_skill_level(
         db,
@@ -346,7 +403,7 @@ async def update_skill_level(
     skill_level_id: uuid.UUID,
     data: SkillLevelUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     return await service.update_skill_level(
         db,
@@ -363,7 +420,7 @@ async def update_skill_level(
 async def delete_skill_level(
     skill_level_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     await service.delete_skill_level(
         db, current_user.tenant_id, skill_level_id, actor_id=current_user.id
@@ -402,7 +459,7 @@ async def create_indicator(
     competence_id: uuid.UUID,
     data: IndicatorCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     ind = await service.create_indicator(
         db, current_user.tenant_id, competence_id, data, actor_id=current_user.id
@@ -429,7 +486,7 @@ async def bulk_create_indicators(
     competence_id: uuid.UUID,
     body: IndicatorBulkCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     """HRP-49: persist multiple indicators in one call."""
     created = await service.create_indicators_bulk(
@@ -447,7 +504,7 @@ async def update_indicator(
     indicator_id: uuid.UUID,
     data: IndicatorUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     ind = await service.update_indicator(
         db, current_user.tenant_id, indicator_id, data, actor_id=current_user.id
@@ -459,7 +516,7 @@ async def update_indicator(
 async def delete_indicator(
     indicator_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     await service.delete_indicator(
         db, current_user.tenant_id, indicator_id, actor_id=current_user.id
@@ -470,13 +527,15 @@ async def delete_indicator(
 async def get_indicator_usage(
     indicator_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     from app.modules.competence.models import Indicator
 
     ind = await db.get(Indicator, indicator_id)
-    if ind is None:
+    if ind is None or ind.tenant_id not in (None, current_user.tenant_id):
         raise AppError("indicator_not_found", status.HTTP_404_NOT_FOUND)
+    # HRP-632: a read hanging off another's draft answers the card's 404.
+    await hide_anothers_draft(db, current_user, ind.competence_id)
     usage = await check_indicator_usage(db, ind)
     return {
         "assessment": usage.assessment,
@@ -489,7 +548,7 @@ async def get_indicator_usage(
 async def activate_indicator(
     indicator_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     ind = await service.activate_indicator(
         db, current_user.tenant_id, indicator_id, actor_id=current_user.id
@@ -501,7 +560,7 @@ async def activate_indicator(
 async def deactivate_indicator(
     indicator_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     ind = await service.deactivate_indicator(
         db, current_user.tenant_id, indicator_id, actor_id=current_user.id
@@ -515,7 +574,7 @@ async def move_indicator(
     new_skill_level_id: uuid.UUID = Body(..., embed=True),
     new_sort_index: int = Body(0, embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     ind = await service.move_indicator(
         db,
@@ -564,7 +623,7 @@ async def create_material(
     competence_id: uuid.UUID,
     data: MaterialCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     mat = await service.create_material(
         db, current_user.tenant_id, competence_id, data, actor_id=current_user.id
@@ -591,7 +650,7 @@ async def bulk_create_materials(
     competence_id: uuid.UUID,
     body: MaterialBulkCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     """HRP-51: persist multiple materials in one call (AI-review confirm).
 
@@ -649,7 +708,7 @@ class MaterialAIGenerateRequest(BaseModel):
 async def materials_context_options(
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     """HRP-51 review: drives the materials Generate dialog's context picker.
 
@@ -678,7 +737,7 @@ async def ai_generate_materials(
     competence_id: uuid.UUID,
     body: MaterialAIGenerateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     """HRP-51: generate learning-material suggestions per skill level via LLM.
 
@@ -698,6 +757,7 @@ async def ai_generate_materials(
             include_company_description=body.include_company_description,
             refinement=body.refinement,
             count_per_level=body.count_per_level,
+            user_id=current_user.id,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -710,7 +770,7 @@ async def update_material(
     material_id: uuid.UUID,
     data: MaterialUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     mat = await service.update_material(
         db, current_user.tenant_id, material_id, data, actor_id=current_user.id
@@ -722,7 +782,7 @@ async def update_material(
 async def delete_material(
     material_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     await service.delete_material(
         db, current_user.tenant_id, material_id, actor_id=current_user.id
@@ -733,8 +793,15 @@ async def delete_material(
 async def get_material_usage(
     material_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    from app.modules.competence.models import Material
+
+    material = await db.get(Material, material_id)
+    if material is None or material.tenant_id not in (None, current_user.tenant_id):
+        raise AppError("material_not_found", status.HTTP_404_NOT_FOUND)
+    # HRP-632: a read hanging off another's draft answers the card's 404.
+    await hide_anothers_draft(db, current_user, material.competence_id)
     usage = await check_material_usage(db, material_id)
     return {"idp": usage.idp, "is_used": usage.is_used}
 
@@ -743,7 +810,7 @@ async def get_material_usage(
 async def activate_material(
     material_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     mat = await service.activate_material(
         db, current_user.tenant_id, material_id, actor_id=current_user.id
@@ -755,7 +822,7 @@ async def activate_material(
 async def deactivate_material(
     material_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     mat = await service.deactivate_material(
         db, current_user.tenant_id, material_id, actor_id=current_user.id
@@ -769,7 +836,7 @@ async def move_material(
     new_skill_level_id: uuid.UUID = Body(..., embed=True),
     new_sort_index: int = Body(0, embed=True),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     mat = await service.move_material(
         db,
@@ -816,6 +883,7 @@ async def list_competence_materials(
     current_user: User = Depends(get_current_user),
 ):
     """List materials with override applied for `specialization_id` if given."""
+    await hide_anothers_draft(db, current_user, competence_id)
     visible = await material_overrides.get_materials_for_specialization(
         db, current_user.tenant_id, competence_id, specialization_id
     )
@@ -846,6 +914,7 @@ async def list_material_overrides(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await hide_anothers_draft(db, current_user, competence_id)
     return await material_overrides.list_overrides(
         db,
         current_user.tenant_id,
@@ -863,7 +932,7 @@ async def create_material_override(
     competence_id: uuid.UUID,
     data: MaterialOverrideCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     return await material_overrides.add_material_override(
         db,
@@ -883,7 +952,7 @@ async def delete_material_override(
     competence_id: uuid.UUID,
     override_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     await material_overrides.remove_material_override(
         db, current_user.tenant_id, competence_id, override_id
@@ -901,7 +970,7 @@ async def get_competence_audit_log(
     competence_id: uuid.UUID,
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "hr")),
+    current_user: User = Depends(manage_competences),
 ):
     """Recent audit-log entries that touched this competence directly."""
     result = await db.execute(

@@ -3,8 +3,9 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.sections import require_section
 from app.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.dictionary import service
 from app.modules.dictionary.schemas import (
@@ -15,6 +16,11 @@ from app.modules.dictionary.schemas import (
 )
 
 router = APIRouter(tags=["dictionaries"])
+
+# HRP-827: editing the dictionaries asks the tenant's ``dictionaries`` row
+# for ``manage`` - the admin row is locked there, other roles get it only
+# from the matrix. The two reads stay open (``SHARED_READS``).
+manage_dictionaries = require_section("dictionaries", "manage")
 
 
 @router.get("/dictionaries/{item_type}", response_model=list[DictionaryItemRead])
@@ -35,7 +41,7 @@ async def create_item(
     item_type: str,
     data: DictionaryItemCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(manage_dictionaries),
 ):
     return await service.create_item(db, current_user.tenant_id, item_type, data)
 
@@ -54,7 +60,7 @@ async def update_item(
     item_id: uuid.UUID,
     data: DictionaryItemUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(manage_dictionaries),
 ):
     return await service.update_item(db, current_user.tenant_id, item_id, data)
 
@@ -63,7 +69,7 @@ async def update_item(
 async def delete_item(
     item_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(manage_dictionaries),
 ):
     await service.delete_item(db, current_user.tenant_id, item_id)
 
@@ -75,12 +81,12 @@ async def delete_item(
 async def get_item_usage(
     item_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(manage_dictionaries),
 ):
     """HRP-103 redo: preview the live references that block delete so the
     confirm dialog can enumerate them before the operator commits.
 
-    HRP-637: ``admin``, matching the DELETE this preview exists to warn
+    HRP-637: ``admin`` (HRP-827: ``manage``), matching the DELETE this preview exists to warn
     about. On bare authentication it was the shortest way around every
     guard this ticket added: ``GET /dictionaries/grade`` hands out every
     grade id, and one call per id answered the exact list of positions

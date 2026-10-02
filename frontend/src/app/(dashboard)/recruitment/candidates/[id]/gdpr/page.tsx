@@ -3,6 +3,7 @@
 import { use, useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   Card,
   CardContent,
@@ -41,6 +42,10 @@ export default function CandidateGDPRPage({
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [erasing, setErasing] = useState(false);
+  // HRP-830: GDPR export and erasure stay the admin and hr roles' whatever
+  // the matrix says (`require_role("admin", "hr")`).
+  const { isAdmin, isHr } = usePermissions();
+  const canComply = isAdmin || isHr;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -135,7 +140,7 @@ export default function CandidateGDPRPage({
             </p>
             <Button
               onClick={handleExport}
-              disabled={exporting}
+              disabled={exporting || !canComply}
               data-testid="gdpr-btn-export"
             >
               {exporting ? (
@@ -166,7 +171,7 @@ export default function CandidateGDPRPage({
             <Button
               variant="destructive"
               onClick={handleErase}
-              disabled={erasing}
+              disabled={erasing || !canComply}
               data-testid="gdpr-btn-erase"
             >
               {erasing ? (

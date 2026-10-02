@@ -31,11 +31,12 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.i18n import resolve_locale
+from app.core.sections import ROLE_CODES, SECTIONS_BY_CODE, Level, role_level
 from app.modules.auth.models import Role, User, user_roles
 from app.modules.company.models import Tenant
 from app.modules.notification.models import (
@@ -44,6 +45,8 @@ from app.modules.notification.models import (
     NotificationTemplate,
 )
 from app.modules.notification.service import render_db_template
+from app.modules.recruitment.models import CandidateVacancy, Interview
+from app.modules.recruitment.scope import fenced_off_vacancy, fenced_off_vacancy_sync
 
 log = logging.getLogger(__name__)
 
@@ -93,10 +96,17 @@ EVENT_TEMPLATE: dict[str, str] = {
     ),
 }
 
-# Roles that receive fan-out notifications for events without an explicit
-# user recipient (e.g. consent signed when the requester is gone, AI task
-# failures that need admin attention).
-_ADMIN_ROLES = ("admin", "recruiter", "hr")
+_RECRUITMENT = SECTIONS_BY_CODE["recruitment"]
+
+
+def _hiring_roles(overrides: dict[tuple[str, str], Level], hidden: set[str]) -> list[str]:
+    """Roles that receive fan-out notifications for events without an
+    explicit user recipient (e.g. consent signed when the requester is
+    gone, AI task failures that need attention): the ones the tenant's
+    matrix gives ``manage`` on recruitment (HRP-830) - admin, hr and
+    recruiter by default, the list this used to be - so a role the tenant
+    closes the section for stops receiving candidate names."""
+    return [r for r in ROLE_CODES if role_level(_RECRUITMENT, r, overrides, hidden) == "manage"]
 
 
 def _coerce_uuid(value: Any) -> uuid.UUID | None:
@@ -167,6 +177,9 @@ async def _async_resolve_users_by_ids(
 
 
 async def _async_resolve_admins(db: AsyncSession, tenant_id: uuid.UUID) -> list[User]:
+    from app.modules.company.service import get_section_overrides
+
+    roles = _hiring_roles(*await get_section_overrides(db, tenant_id))
     rows = (
         (
             await db.execute(
@@ -176,7 +189,7 @@ async def _async_resolve_admins(db: AsyncSession, tenant_id: uuid.UUID) -> list[
                 .where(
                     User.tenant_id == tenant_id,
                     User.is_active.is_(True),
-                    Role.code.in_(_ADMIN_ROLES),
+                    Role.code.in_(roles),
                 )
                 .distinct()
             )
@@ -334,10 +347,26 @@ async def _async_dispatch(
     return written
 
 
+def _vacancy_of_interview(data: dict[str, Any]) -> Select:
+    """The vacancy an interview event is about, for events whose payload
+    names the interview only (HRP-971). Selects nothing without one."""
+    return (
+        select(CandidateVacancy.vacancy_id)
+        .join(Interview, Interview.candidate_vacancy_id == CandidateVacancy.id)
+        .where(Interview.id == _coerce_uuid(data.get("interview_id")))
+    )
+
+
 async def _async_handle(
-    event: str, data: dict[str, Any], *, resolve_recipients
+    event: str,
+    data: dict[str, Any],
+    *,
+    resolve_recipients,
+    db: AsyncSession | None = None,
 ) -> None:
-    """Top-level helper used by each per-event handler."""
+    """Top-level helper used by each per-event handler. ``db`` delivers in
+    the caller's session (``publish_in_session``); without it the handler
+    opens its own, as the event bus calls it."""
     tenant_id = _coerce_uuid(data.get("tenant_id"))
     if tenant_id is None:
         log.debug("recruitment notification missing tenant_id: %s", event)
@@ -348,26 +377,49 @@ async def _async_handle(
         log.warning("no template mapping for event %s", event)
         return
 
+    if db is None:
+        from app.database import async_session
+
+        async with async_session() as own:
+            await _handle_in(own, event, template_code, tenant_id, data, resolve_recipients)
+        return
+    await _handle_in(db, event, template_code, tenant_id, data, resolve_recipients)
+
+
+async def _handle_in(
+    db: AsyncSession,
+    event: str,
+    template_code: str,
+    tenant_id: uuid.UUID,
+    data: dict[str, Any],
+    resolve_recipients,
+) -> None:
     event_type = event  # used for per-user channel preferences
-
-    from app.database import async_session
-
-    async with async_session() as db:
-        try:
-            recipients = await resolve_recipients(db, tenant_id, data)
-        except Exception:
-            log.exception("recruitment notification recipient lookup failed: %s", event)
-            return
-        if not recipients:
-            return
-        await _async_dispatch(
-            db,
-            tenant_id=tenant_id,
-            template_code=template_code,
-            event_type=event_type,
-            recipients=recipients,
-            context=dict(data),
-        )
+    try:
+        recipients = await resolve_recipients(db, tenant_id, data)
+    except Exception:
+        log.exception("recruitment notification recipient lookup failed: %s", event)
+        return
+    # HRP-971: a vacancy the recipient is a candidate on is out of their
+    # reach, and so is its mail - the owner who applied to their own
+    # vacancy does not hear about their rivals.
+    vacancy_id = _coerce_uuid(data.get("vacancy_id"))
+    if vacancy_id is None and data.get("interview_id"):
+        vacancy_id = await db.scalar(_vacancy_of_interview(data))
+    if vacancy_id is not None:
+        recipients = [
+            u for u in recipients if not await fenced_off_vacancy(db, u, vacancy_id)
+        ]
+    if not recipients:
+        return
+    await _async_dispatch(
+        db,
+        tenant_id=tenant_id,
+        template_code=template_code,
+        event_type=event_type,
+        recipients=recipients,
+        context=dict(data),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -539,133 +591,150 @@ async def _resolve_question_set_user(
 # ---------------------------------------------------------------------------
 
 
-async def on_vacancy_assigned(data: dict[str, Any]) -> None:
+async def on_vacancy_assigned(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.vacancy.assigned",
         data,
         resolve_recipients=_resolve_vacancy_assigned,
+        db=db,
     )
 
 
-async def on_candidate_attached(data: dict[str, Any]) -> None:
+async def on_candidate_attached(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.candidate.attached",
         data,
         resolve_recipients=_resolve_candidate_attached,
+        db=db,
     )
 
 
-async def on_candidate_stage_changed(data: dict[str, Any]) -> None:
+async def on_candidate_stage_changed(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.candidate.stage_changed",
         data,
         resolve_recipients=_resolve_candidate_stage,
+        db=db,
     )
 
 
-async def on_interview_scheduled(data: dict[str, Any]) -> None:
+async def on_interview_scheduled(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.interview.scheduled",
         data,
         resolve_recipients=_resolve_interview_scheduled,
+        db=db,
     )
 
 
-async def on_interview_rescheduled(data: dict[str, Any]) -> None:
+async def on_interview_rescheduled(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.interview.rescheduled",
         data,
         resolve_recipients=_resolve_interview_attendees,
+        db=db,
     )
 
 
-async def on_interview_interviewer_removed(data: dict[str, Any]) -> None:
+async def on_interview_interviewer_removed(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.interview.interviewer_removed",
         data,
         resolve_recipients=_resolve_interview_attendees,
+        db=db,
     )
 
 
-async def on_interview_cancelled(data: dict[str, Any]) -> None:
+async def on_interview_cancelled(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.interview.cancelled",
         data,
         resolve_recipients=_resolve_interview_attendees,
+        db=db,
     )
 
 
-async def on_interview_transcript_ready(data: dict[str, Any]) -> None:
+async def on_interview_transcript_ready(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.interview.transcript_ready",
         data,
         resolve_recipients=_resolve_interview_user,
+        db=db,
     )
 
 
-async def on_interview_analysis_ready(data: dict[str, Any]) -> None:
+async def on_interview_analysis_ready(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.interview.analysis_ready",
         data,
         resolve_recipients=_resolve_interview_user,
+        db=db,
     )
 
 
-async def on_report_generated(data: dict[str, Any]) -> None:
+async def on_report_generated(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
-        "recruitment.report.generated", data, resolve_recipients=_resolve_report_user
+        "recruitment.report.generated", data, resolve_recipients=_resolve_report_user,
+        db=db,
     )
 
 
-async def on_consent_signed(data: dict[str, Any]) -> None:
+async def on_consent_signed(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
-        "recruitment.consent.signed", data, resolve_recipients=_resolve_consent_signed
+        "recruitment.consent.signed", data, resolve_recipients=_resolve_consent_signed,
+        db=db,
     )
 
 
-async def on_invite_completed(data: dict[str, Any]) -> None:
+async def on_invite_completed(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.invite.completed",
         data,
         resolve_recipients=_resolve_invite_completed,
+        db=db,
     )
 
 
-async def on_ai_task_failed(data: dict[str, Any]) -> None:
+async def on_ai_task_failed(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
-        "recruitment.ai.task_failed", data, resolve_recipients=_resolve_ai_failed
+        "recruitment.ai.task_failed", data, resolve_recipients=_resolve_ai_failed,
+        db=db,
     )
 
 
-async def on_question_set_ready(data: dict[str, Any]) -> None:
+async def on_question_set_ready(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.question_set.ready",
         data,
         resolve_recipients=_resolve_question_set_user,
+        db=db,
     )
 
 
-async def on_assessment_evaluator_invited(data: dict[str, Any]) -> None:
+async def on_assessment_evaluator_invited(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.assessment.evaluator_invited",
         data,
         resolve_recipients=_resolve_assessment_evaluator,
+        db=db,
     )
 
 
-async def on_assessment_evaluator_submitted(data: dict[str, Any]) -> None:
+async def on_assessment_evaluator_submitted(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.assessment.evaluator_submitted",
         data,
         resolve_recipients=_resolve_assessment_submitted,
+        db=db,
     )
 
 
-async def on_question_set_failed(data: dict[str, Any]) -> None:
+async def on_question_set_failed(data: dict[str, Any], db: AsyncSession | None = None) -> None:
     await _async_handle(
         "recruitment.question_set.failed",
         data,
         resolve_recipients=_resolve_question_set_user,
+        db=db,
     )
 
 
@@ -703,12 +772,29 @@ def register() -> None:
         subscribe(event, handler)
 
 
+async def publish_in_session(db: AsyncSession, event: str, data: dict[str, Any]) -> None:
+    """Deliver a recruitment event in ``db`` instead of over the event bus.
+
+    The bus has subscribers only in the API process (``register`` runs from
+    ``app.main``); inside a Celery worker ``publish`` reaches nobody, so
+    code that may run there hands its own session in. Not ``register()`` in
+    the worker: the handlers' own sessions come from the global engine,
+    which each task's ``asyncio.run`` loop would reuse across loops.
+    """
+    handler = HANDLERS.get(event)
+    if handler is not None:
+        await handler(data, db=db)
+
+
 # ---------------------------------------------------------------------------
 # Sync path — used by Celery tasks
 # ---------------------------------------------------------------------------
 
 
 def _sync_resolve_admins(db: Session, tenant_id: uuid.UUID) -> list[User]:
+    from app.modules.company.service import get_section_overrides_sync
+
+    roles = _hiring_roles(*get_section_overrides_sync(db, tenant_id))
     rows = (
         (
             db.execute(
@@ -718,7 +804,7 @@ def _sync_resolve_admins(db: Session, tenant_id: uuid.UUID) -> list[User]:
                 .where(
                     User.tenant_id == tenant_id,
                     User.is_active.is_(True),
-                    Role.code.in_(_ADMIN_ROLES),
+                    Role.code.in_(roles),
                 )
                 .distinct()
             )
@@ -783,7 +869,7 @@ def notify_sync(
     in-app rows written.
 
     When ``fallback_admins`` is True and no recipients are supplied, the
-    tenant's admin/recruiter/hr users receive the notification —
+    tenant's hiring users (``manage`` on recruitment) receive it —
     used for AI-task-failed events without a known initiator.
     """
     template_code = EVENT_TEMPLATE.get(event)
@@ -793,6 +879,15 @@ def notify_sync(
 
     ids = _dedupe(recipient_ids or [])
     recipients = _sync_resolve_users(db, tenant_id, ids)
+    # HRP-971: same fence as ``_async_handle``; a recipient it drops leaves
+    # the notice to the hiring users when the event falls back to them.
+    vacancy_id = _coerce_uuid(context.get("vacancy_id"))
+    if vacancy_id is None and context.get("interview_id"):
+        vacancy_id = db.scalar(_vacancy_of_interview(context))
+    if vacancy_id is not None:
+        recipients = [
+            u for u in recipients if not fenced_off_vacancy_sync(db, u, vacancy_id)
+        ]
     if not recipients and fallback_admins:
         recipients = _sync_resolve_admins(db, tenant_id)
 

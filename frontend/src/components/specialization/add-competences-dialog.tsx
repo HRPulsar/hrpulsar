@@ -34,6 +34,7 @@ import {
   toggleGroupCompetences,
   visiblePickerNodes,
 } from "@/lib/matrix-add-tree";
+import { usePermissions } from "@/hooks/use-permissions";
 import type { CompetenceGroupTree } from "@/lib/types";
 
 interface Props {
@@ -57,6 +58,8 @@ export function AddCompetencesDialog({
   onConfirm,
 }: Props) {
   const t = useTranslations("company");
+  // HRP-827: creating a competence is `manage` on competences.
+  const { canManageSection } = usePermissions();
   const tc = useTranslations("common");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
@@ -319,17 +322,19 @@ export function AddCompetencesDialog({
             >
               {t("newSelectedCount", { count: newSelectionCount })}
             </span>
-            <Link
-              href="/competences"
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid="matrix-add-competences-create-link"
-              className="inline-flex items-center gap-1 text-primary hover:underline"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              {t("createNewInCompetences")}
-              <ExternalLink className="h-3 w-3" />
-            </Link>
+            {canManageSection("competences") && (
+              <Link
+                href="/competences"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="matrix-add-competences-create-link"
+                className="inline-flex items-center gap-1 text-primary hover:underline"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {t("createNewInCompetences")}
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+            )}
           </div>
         </div>
 

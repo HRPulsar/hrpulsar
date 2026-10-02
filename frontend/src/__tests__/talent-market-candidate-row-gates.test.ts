@@ -27,7 +27,11 @@ const SOURCE = readFileSync(
 
 describe("Development plan badge is gated (HRP-665)", () => {
   it("renders only for a manager or the candidate themselves", () => {
-    expect(SOURCE).toMatch(/\{c\.pdp_id && \(canManage \|\| c\.is_me\) && \(/);
+    // HRP-856: and only when the viewer may open the plan - a manager's
+    // badge for a candidate outside their scope would 403 on click.
+    expect(SOURCE).toMatch(
+      /\{c\.pdp_id && c\.can_view_profile && \(canManage \|\| c\.is_me\) && \(/,
+    );
   });
 
   it("never renders the plan link on pdp_id alone", () => {
@@ -101,9 +105,10 @@ describe("Request development plan CTA reads the live gap (HRP-714)", () => {
     SOURCE.indexOf('data-testid="talent-market-candidate-request-plan"'),
   );
 
-  it("is hidden when blocked_by is null or empty", () => {
+  it("is hidden unless the live verdict names a competence gap (HRP-739)", () => {
+    // Experience alone does not earn the button: a plan cannot close it.
     expect(cta).toMatch(
-      /Array\.isArray\(c\.blocked_by\) &&\s*c\.blocked_by\.length > 0 &&/,
+      /Array\.isArray\(c\.blocked_by\) &&\s*c\.blocked_by\.includes\("competences"\) &&/,
     );
     expect(cta).not.toContain("!c.comp_qualifies");
   });
@@ -133,6 +138,21 @@ describe("Stored status wins over the live verdict (HRP-734)", () => {
   it("is what the page's badge helper consults, after the no-verdict case", () => {
     expect(SOURCE).toMatch(
       /if \(blockedBy == null \|\| storedCandidateStatusWins\(status\)\)/,
+    );
+  });
+});
+
+describe("React is open to whoever runs the card (HRP-971)", () => {
+  it("shows the button on one's own row whatever the level", () => {
+    // The brace right before `c.is_me`: a `!canManage &&` put back fails it.
+    expect(SOURCE).toMatch(/\{c\.is_me &&\s+card\.status === "published" &&/);
+  });
+
+  it("tells a runner below the admin level the card is theirs no more", () => {
+    // The reaction fences them off the card they ran; admins and HR are
+    // never fenced, so they get the plain confirmation.
+    expect(SOURCE).toMatch(
+      /canManage && !isAdminLevel\s+\? t\("sendReactionConfirmRunner"/,
     );
   });
 });

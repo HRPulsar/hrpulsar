@@ -522,6 +522,8 @@ async def _validate_visible_competences_levels(
             select(Competence.id).where(
                 Competence.id.in_(competence_ids),
                 (Competence.tenant_id == tenant_id) | (Competence.tenant_id.is_(None)),
+                # HRP-632: a personal draft goes into no grade matrix.
+                Competence.draft_owner_id.is_(None),
             )
         )
         valid = {row[0] for row in comps_q.all()}

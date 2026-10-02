@@ -28,6 +28,17 @@ const ROLE_PRECEDENCE = [
 
 export const FALLBACK_ROLE_CODE = "employee";
 
+/**
+ * HRP-828/829: mirrors ADMIN_ROLE_CODES in backend/app/core/access_scope.py -
+ * the roles whose scope is the whole workspace, and whose own record nobody
+ * below them writes.
+ */
+const ADMIN_LEVEL_ROLE_CODES: readonly string[] = ["admin", "hr", "platform_admin"];
+
+export function holdsAdminLevel(roles: readonly string[] | null | undefined): boolean {
+  return (roles ?? []).some((code) => ADMIN_LEVEL_ROLE_CODES.includes(code));
+}
+
 /** System RBAC codes localize via the catalog (namespace `sidebar`). */
 export const SYSTEM_ROLE_KEYS: Record<string, string> = {
   platform_admin: "rolePlatformAdmin",

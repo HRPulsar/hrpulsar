@@ -4,7 +4,7 @@ import os
 import re
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -13,6 +13,7 @@ from starlette.routing import Route
 
 from app.config import settings
 from app.core.logging import setup_logging
+from app.core.sections import section_gate
 from app.core.sentry import init_sentry
 
 setup_logging(level="DEBUG" if settings.debug else "INFO")
@@ -92,6 +93,8 @@ app = FastAPI(
     docs_url=_docs_url(),
     openapi_url="/api/openapi.json",
     redoc_url=None,
+    # HRP-820: the tenant's section access matrix, one gate for every route.
+    dependencies=[Depends(section_gate)],
 )
 
 # Rate limiting

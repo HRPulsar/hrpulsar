@@ -11,21 +11,25 @@ from fastapi import (
     Header,
     Query,
     Request,
+    status,
 )
 from fastapi.responses import Response
+from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.database import get_db
-from app.modules.auth.dependencies import require_role
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     question_service,
     service,
 )
 from app.modules.recruitment.routers.common import (
-    RECRUITMENT_VIEWER_ROLES,
+    evaluates,
     recruitment_public_limiter,
+    runs_hiring,
+    runs_hiring_level,
 )
 from app.modules.recruitment.schemas import (
     AssessmentRevertRequest,
@@ -53,6 +57,7 @@ from app.modules.recruitment.scope import (
     candidate_vacancy_scope,
     cv_scope,
     human_assessment_scope,
+    list_scope_filter,
     question_scope,
     question_set_scope,
     vacancy_query_scope,
@@ -73,12 +78,15 @@ async def list_questions(
     candidate_id: uuid.UUID,
     vacancy_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(candidate_scope),
     _query_scope: None = Depends(vacancy_query_scope),
+    scope_filter: ColumnElement[bool] | None = Depends(list_scope_filter),
 ):
+    # HRP-971: reaching the candidate through one vacancy must not hand over
+    # the questions - and their answer keys - of another one.
     return await service.list_questions(
-        db, current_user.tenant_id, candidate_id, vacancy_id=vacancy_id
+        db, current_user.tenant_id, candidate_id, vacancy_id=vacancy_id, scope_filter=scope_filter
     )
 
 
@@ -92,7 +100,7 @@ async def add_question(
     vacancy_id: uuid.UUID,
     data: QuestionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _candidate_scope: None = Depends(candidate_scope),
     _vacancy_scope: None = Depends(vacancy_scope),
 ):
@@ -109,7 +117,7 @@ async def update_question(
     question_id: uuid.UUID,
     data: QuestionUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(candidate_question_scope),
 ):
     return await service.update_question(db, current_user.tenant_id, question_id, data)
@@ -119,7 +127,7 @@ async def update_question(
 async def delete_question(
     question_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(candidate_question_scope),
 ):
     await service.delete_question(db, current_user.tenant_id, question_id)
@@ -133,7 +141,7 @@ async def export_questions_pdf(
     vacancy_id: uuid.UUID,
     data: QuestionsPDFExportRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _candidate_scope: None = Depends(candidate_scope),
     _vacancy_scope: None = Depends(vacancy_scope),
 ):
@@ -165,7 +173,7 @@ async def generate_questions(
     candidate_id: uuid.UUID,
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     """Queue AI question generation task."""
     await service.get_candidate(db, current_user.tenant_id, candidate_id)
@@ -193,7 +201,7 @@ async def record_assessment(
     request: Request,
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(cv_scope),
 ):
     result = await service.record_human_assessment(
@@ -220,7 +228,7 @@ async def update_assessment(
     request: Request,
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(human_assessment_scope),
 ):
     result = await service.update_human_assessment(
@@ -230,6 +238,7 @@ async def update_assessment(
         data,
         if_match=if_match,
         initiator_id=current_user.id,
+        own_cell_only=not await runs_hiring_level(db, current_user),
         request=request,
     )
     response.headers["ETag"] = service.assessment_etag(result["version"])
@@ -240,7 +249,7 @@ async def update_assessment(
 async def list_assessments(
     cv_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(cv_scope),
 ):
     return await service.list_assessments(db, current_user.tenant_id, cv_id)
@@ -260,7 +269,7 @@ async def list_assessment_history(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
     _query_scope: None = Depends(candidate_vacancy_query_scope),
 ):
@@ -300,7 +309,7 @@ async def revert_assessment(
     request: Request,
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(cv_scope),
 ):
     """Restore an evaluator's cell to a prior audit-event score (HRP-266).
@@ -308,10 +317,13 @@ async def revert_assessment(
     The body must carry ``audit_event_id`` — the UI selects the source
     row from the Versions panel before confirming. Optional ``If-Match``
     refuses the revert when the cell advanced between the Versions panel
-    render and the click. Role set matches the write endpoints (admin /
-    recruiter / hiring_manager) so a HM who scored a 5 by mistake can
-    self-revert via the same Versions panel they opened to inspect it.
+    render and the click. Same guard as the write endpoints so a HM who
+    scored a 5 by mistake can self-revert via the same Versions panel
+    they opened to inspect it - their own column only; another
+    evaluator's cell is ``manage``'s (HRP-830).
     """
+    if evaluator_id != current_user.id and not await runs_hiring_level(db, current_user):
+        raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
     result = await service.revert_human_assessment(
         db,
         current_user.tenant_id,
@@ -339,7 +351,7 @@ async def create_invite(
     cv_id: uuid.UUID,
     data: InviteCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.create_assessment_invite(
         db, current_user.tenant_id, cv_id, data
@@ -350,7 +362,7 @@ async def create_invite(
 async def list_invites(
     cv_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(cv_scope),
 ):
     return await service.list_invites(db, current_user.tenant_id, cv_id)
@@ -413,7 +425,7 @@ async def record_invite_assessment(
 async def get_canvas(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     return await service.get_canvas(db, current_user.tenant_id, vacancy_id)
@@ -434,7 +446,7 @@ async def get_assessment_matrix(
         ),
     ),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     """Aggregated matrix for the Assessments tab and the % match column.
@@ -523,7 +535,7 @@ async def export_assessment_matrix_xlsx(
     vacancy_id: uuid.UUID,
     state: _CanvasExportState = Depends(),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     """HRP-510 — the fullscreen canvas' XLSX export.
@@ -554,7 +566,7 @@ async def export_assessment_matrix_csv(
     vacancy_id: uuid.UUID,
     state: _CanvasExportState = Depends(),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     """HRP-744 — the CSV twin of the XLSX export.
@@ -586,7 +598,7 @@ async def get_assessment_matrix_cell_detail(
     candidate_vacancy_id: uuid.UUID,
     competence_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
     _cv_scope: None = Depends(candidate_vacancy_scope),
 ):
@@ -616,12 +628,13 @@ async def list_candidate_question_sets(
     candidate_id: uuid.UUID,
     vacancy_id: uuid.UUID | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(candidate_scope),
     _query_scope: None = Depends(vacancy_query_scope),
+    scope_filter: ColumnElement[bool] | None = Depends(list_scope_filter),
 ):
     return await question_service.list_question_sets(
-        db, current_user.tenant_id, candidate_id, vacancy_id=vacancy_id
+        db, current_user.tenant_id, candidate_id, vacancy_id=vacancy_id, scope_filter=scope_filter
     )
 
 
@@ -635,14 +648,14 @@ async def list_candidate_question_sets(
 async def list_vacancy_question_sets(
     vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    # HRP-701: gated by RECRUITMENT_VIEWER_ROLES plus ``vacancy_scope``.
+    # HRP-701: gated by ``view`` on recruitment plus ``vacancy_scope``.
     # The payload is the vacancy's whole roster (names + the questions
     # prepared for them), so it must not be enumerable by any
     # authenticated employee — but a manager reading their own division's
     # canvas needs it, and the scope dependency is what keeps them there.
     # The enriched candidates listing still sits on the narrow tuple —
     # known tail, not in scope here.
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(vacancy_scope),
 ):
     """HRP-504: every candidate's latest question set for this vacancy,
@@ -657,7 +670,7 @@ async def list_vacancy_question_sets(
     response_model=QuestionSetRead,
 )
 async def get_question_set_sample(
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
 ):
     """Static preview shown when credits < generation threshold.
 
@@ -677,17 +690,36 @@ async def generate_question_set(
     cv_id: uuid.UUID,
     data: GenerateQuestionSetRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(cv_scope),
 ):
-    """Generate, regenerate or evolve a question set (8 credits)."""
-    return await question_service.generate_question_set(
+    """Generate, regenerate or evolve a question set (8 credits).
+
+    HRP-471: answers at once with the set in ``generating`` (or the target
+    in ``regenerating``); the block polls the list until it is ``ready``.
+    """
+    return await question_service.enqueue_question_set_generation(
         db,
         current_user.tenant_id,
         cv_id,
         data,
         current_user_id=current_user.id,
     )
+
+
+@router.post("/v1/question-sets/{set_id}/cancel", status_code=204)
+async def cancel_question_set_generation(
+    set_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(evaluates),
+    _scope: None = Depends(question_set_scope),
+):
+    """HRP-471: stop waiting for a generation that is still running. Asks
+    what starting one asks (HRP-830: ``manage`` or the hiring_manager role)."""
+    await question_service.cancel_question_set_generation(
+        db, current_user.tenant_id, set_id
+    )
+    return Response(status_code=204)
 
 
 @router.post(
@@ -699,7 +731,7 @@ async def add_question_to_set(
     set_id: uuid.UUID,
     data: QuestionCreate2,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(question_set_scope),
 ):
     return await question_service.add_question_to_set(
@@ -719,7 +751,7 @@ async def patch_question(
     question_id: uuid.UUID,
     data: QuestionUpdate2,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(question_scope),
 ):
     return await question_service.update_question_v2(
@@ -735,7 +767,7 @@ async def patch_question(
 async def delete_question_v2(
     question_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(question_scope),
 ):
     await question_service.soft_delete_question(db, current_user.tenant_id, question_id)
@@ -748,7 +780,7 @@ async def export_question_set_pdf(
     set_id: uuid.UUID,
     data: QuestionSetExportRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "hiring_manager")),
+    current_user: User = Depends(evaluates),
     _scope: None = Depends(question_set_scope),
 ):
     pdf_bytes = await question_service.export_question_set_pdf(

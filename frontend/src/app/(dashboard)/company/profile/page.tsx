@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { sectionAccessApi } from "@/lib/api/section-access";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,6 +67,10 @@ export default function CompanyProfilePage() {
   const [logoUrlInput, setLogoUrlInput] = useState("");
   const [logoDragging, setLogoDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // HRP-820: N sections hidden, or the hint while it hasn't loaded / admin
+  // can't read it — canAdminister gates the fetch since the matrix API is
+  // admin-only.
+  const [hiddenCount, setHiddenCount] = useState<number | null>(null);
 
   const [form, setForm] = useState({
     industry: "",
@@ -101,6 +107,14 @@ export default function CompanyProfilePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!canAdminister) return;
+    sectionAccessApi
+      .get()
+      .then((m) => setHiddenCount(m.sections.filter((s) => s.hidden).length))
+      .catch(() => setHiddenCount(null));
+  }, [canAdminister]);
 
   async function save() {
     setSaving(true);
@@ -432,6 +446,30 @@ export default function CompanyProfilePage() {
                 </p>
               </div>
             </div>
+
+            {canAdminister && (
+              <div
+                className="flex items-center justify-between gap-3"
+                data-testid="company-profile-section-access"
+              >
+                <div className="space-y-1">
+                  <Label>{t("sectionAccess")}</Label>
+                  <p className="text-xs text-muted-foreground">
+                    {hiddenCount === null
+                      ? t("sectionAccessHint")
+                      : t("sectionAccessSummary", { count: hiddenCount })}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  render={<Link href="/company/profile/section-access" />}
+                  data-testid="company-profile-link-section-access"
+                >
+                  {t("sectionAccessOpen")}
+                </Button>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="company-profile-hourly-rate">{t("hourlyRate")}</Label>

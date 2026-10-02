@@ -101,17 +101,19 @@ def require_role(*role_codes: str) -> Callable:
 
 
 def require_admin() -> Callable:
-    """Guard for tenant-admin-only endpoints (HRP-436).
+    """Guard for the admin pieces the section matrix does not cover (HRP-436).
 
     Resolves the allowed codes through ``rbac_hooks`` at request time, so the
     enterprise edition can widen "admin" to its platform-level role without
     core naming it.
 
-    Currently used by the invitation registry only. The other admin surfaces
-    (dictionaries, AI settings, data import, grade system) still spell
+    Used by the two admin pieces on the employee card - setting a role and
+    resending the set-password link. The grade system still spells
     ``require_role("admin")`` literally, so in the enterprise edition a
-    platform-level role reaches invitations but not those — converting them is
-    a separate change, not something this dependency has already done.
+    platform-level role reaches those two but not it. The admin block
+    (dictionaries, import, invitations, roles, AI settings) left that list
+    for the section matrix (HRP-827, HRP-831), which never gates
+    ``platform_admin``.
     """
 
     async def admin_checker(current_user: User = Depends(get_current_user)) -> User:
@@ -121,18 +123,3 @@ def require_admin() -> Callable:
         return current_user
 
     return admin_checker
-
-
-def require_permission(*codenames: str) -> Callable:
-    async def permission_checker(
-        current_user: User = Depends(get_current_user),
-    ) -> User:
-        user_permissions: set[str] = set()
-        for role in current_user.roles:
-            for perm in role.permissions:
-                user_permissions.add(perm.codename)
-        if not user_permissions.intersection(codenames):
-            raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
-        return current_user
-
-    return permission_checker

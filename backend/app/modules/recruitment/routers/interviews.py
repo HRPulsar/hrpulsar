@@ -16,12 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.database import get_db
-from app.modules.auth.dependencies import require_role
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     service,
 )
-from app.modules.recruitment.routers.common import RECRUITMENT_VIEWER_ROLES
+from app.modules.recruitment.routers.common import runs_hiring
 from app.modules.recruitment.schemas import (
     AbortUploadRequest,
     AIAnalysisEnqueueRequest,
@@ -47,9 +47,11 @@ from app.modules.recruitment.schemas import (
     UploadChunkAck,
 )
 from app.modules.recruitment.scope import (
+    RecruitmentScope,
     candidate_vacancy_scope,
     cv_scope,
     interview_scope,
+    recruitment_scope,
 )
 
 router = APIRouter(tags=["recruitment"])
@@ -63,11 +65,15 @@ router = APIRouter(tags=["recruitment"])
     response_model=list[InterviewerOption],
 )
 async def list_interviewers(
+    candidate_vacancy_id: uuid.UUID | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
-    """HRP-386: tenant users offered in the Interviewer(s) multi-select."""
-    return await service.list_interviewer_options(db, current_user.tenant_id)
+    """HRP-386: tenant users offered in the Interviewer(s) multi-select;
+    for a candidacy, without those the fence keeps off it (HRP-971)."""
+    return await service.list_interviewer_options(
+        db, current_user.tenant_id, candidate_vacancy_id
+    )
 
 
 @router.post(
@@ -79,7 +85,7 @@ async def create_interview(
     cv_id: uuid.UUID,
     data: InterviewCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.create_interview(
         db, current_user.tenant_id, current_user.id, cv_id, data
@@ -93,14 +99,15 @@ async def list_cv_interviews(
     cv_id: uuid.UUID,
     include_archived: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(cv_scope),
+    scope: RecruitmentScope = Depends(recruitment_scope),
 ):
     return await service.list_interviews(
         db,
         current_user.tenant_id,
         cv_id,
-        role=service.resolve_user_role(current_user),
+        role=service.resolve_user_role(current_user, full=scope.unrestricted),
         include_archived=include_archived,
     )
 
@@ -109,14 +116,15 @@ async def list_cv_interviews(
 async def get_interview(
     interview_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(interview_scope),
+    scope: RecruitmentScope = Depends(recruitment_scope),
 ):
     return await service.get_interview(
         db,
         current_user.tenant_id,
         interview_id,
-        role=service.resolve_user_role(current_user),
+        role=service.resolve_user_role(current_user, full=scope.unrestricted),
     )
 
 
@@ -125,7 +133,7 @@ async def update_interview(
     interview_id: uuid.UUID,
     data: InterviewUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ):
     """Update interview metadata.
@@ -160,7 +168,7 @@ async def update_transcript(
     interview_id: uuid.UUID,
     data: TranscriptUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.update_transcript(
         db, current_user.tenant_id, interview_id, data
@@ -176,7 +184,7 @@ async def update_interview_segment(
     segment_id: uuid.UUID,
     data: InterviewSegmentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.update_segment(
         db, current_user.tenant_id, interview_id, segment_id, data
@@ -191,7 +199,7 @@ async def init_interview_upload(
     interview_id: uuid.UUID,
     data: InitUploadRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.init_interview_upload(
         db,
@@ -210,7 +218,7 @@ async def head_interview_upload(
     interview_id: uuid.UUID,
     upload_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(interview_scope),
 ):
     """TUS-style HEAD: returns ``Upload-Offset`` and ``Upload-Length``.
@@ -241,7 +249,7 @@ async def patch_interview_upload(
     upload_id: str,
     ack: UploadChunkAck,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
     upload_offset: int | None = Header(default=None, alias="Upload-Offset"),
 ):
     """TUS-style PATCH companion: acks one part-N upload to S3.
@@ -273,7 +281,7 @@ async def delete_interview_upload(
     interview_id: uuid.UUID,
     upload_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     """TUS-style cancel — aborts the S3 multipart and marks the session."""
 
@@ -294,7 +302,7 @@ async def get_interview_upload_part_url(
     interview_id: uuid.UUID,
     data: PartUrlRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.get_upload_part_url(
         db, current_user.tenant_id, interview_id, data
@@ -315,7 +323,7 @@ async def complete_interview_upload(
     filename: str = Query("interview.bin"),
     mime_type: str = Query("application/octet-stream"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.complete_interview_upload(
         db,
@@ -335,11 +343,12 @@ async def complete_interview_upload(
 async def get_interview_media_url(
     interview_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(interview_scope),
+    scope: RecruitmentScope = Depends(recruitment_scope),
 ):
     """Presigned GET URL for the interview's media file (audio preferred)."""
-    role = service.resolve_user_role(current_user)
+    role = service.resolve_user_role(current_user, full=scope.unrestricted)
     allow_evaluator = await _tenant_allows_invited_evaluator_playback(
         db, current_user.tenant_id
     )
@@ -359,8 +368,9 @@ async def get_interview_file_signed_url(
     interview_id: uuid.UUID,
     expires_in: int = Query(300, ge=60, le=3600),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(interview_scope),
+    scope: RecruitmentScope = Depends(recruitment_scope),
 ):
     """HRP-202 explicit signed-URL endpoint with caller-tunable TTL.
 
@@ -368,7 +378,7 @@ async def get_interview_file_signed_url(
     same connection without scrambling the existing client.
     """
 
-    role = service.resolve_user_role(current_user)
+    role = service.resolve_user_role(current_user, full=scope.unrestricted)
     allow_evaluator = await _tenant_allows_invited_evaluator_playback(
         db, current_user.tenant_id
     )
@@ -410,7 +420,7 @@ async def paste_text_transcript(
     interview_id: uuid.UUID,
     data: TextTranscriptRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     """HRP-202: inline-paste a transcript (no media file)."""
     return await service.paste_text_transcript(
@@ -426,7 +436,7 @@ async def archive_interview(
     interview_id: uuid.UUID,
     data: InterviewArchiveRequest | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.archive_interview(
         db,
@@ -444,7 +454,7 @@ async def archive_interview(
 async def restore_interview(
     interview_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.restore_interview(
         db,
@@ -461,7 +471,7 @@ async def restore_interview(
 async def replace_interview_file(
     interview_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.replace_interview_file(
         db, current_user.tenant_id, interview_id
@@ -476,7 +486,7 @@ async def abort_interview_upload(
     interview_id: uuid.UUID,
     data: AbortUploadRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.abort_interview_upload(
         db, current_user.tenant_id, interview_id, data
@@ -490,9 +500,11 @@ async def abort_interview_upload(
 async def enqueue_transcribe(
     interview_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
-    return await service.enqueue_transcribe(db, current_user.tenant_id, interview_id)
+    return await service.enqueue_transcribe(
+        db, current_user.tenant_id, interview_id, user_id=current_user.id
+    )
 
 
 @router.post(
@@ -501,12 +513,12 @@ async def enqueue_transcribe(
 async def enqueue_analyze(
     interview_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     from fastapi.responses import JSONResponse
 
     result = await service.enqueue_analyze_or_cached(
-        db, current_user.tenant_id, interview_id
+        db, current_user.tenant_id, interview_id, user_id=current_user.id
     )
     # Cache hit → analysis is already complete (200 OK). Cache miss →
     # the Celery task has been queued (202 Accepted). Keeping the two
@@ -528,7 +540,7 @@ async def enqueue_ai_analysis(
     candidate_vacancy_id: uuid.UUID,
     data: AIAnalysisEnqueueRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     """Single entry point for resume-only / top-up / full triggers.
 
@@ -594,7 +606,9 @@ async def enqueue_ai_analysis(
     # outdated analysis with no way to refresh it. This button names its
     # price (40 cr) and the caller picked it deliberately; the in-flight
     # run it now creates is what blocks a second click.
-    res = await service.enqueue_analyze(db, current_user.tenant_id, data.interview_id)
+    res = await service.enqueue_analyze(
+        db, current_user.tenant_id, data.interview_id, user_id=current_user.id
+    )
     run_id = res.get("run_id")
     return AIAnalysisEnqueueResponse(
         task_id=res.get("task_id"),
@@ -614,7 +628,7 @@ async def enqueue_ai_analysis(
 async def cancel_ai_analysis(
     run_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ) -> dict:
     """HRP-270: cancel an in-flight AI analysis run.
 
@@ -636,7 +650,7 @@ async def cancel_ai_analysis(
 async def list_ai_analyses(
     candidate_vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(candidate_vacancy_scope),
 ):
     from app.modules.recruitment import resume_analysis_service
@@ -665,8 +679,16 @@ async def list_ai_analyses(
         if needs_hash
         else None
     )
+    # HRP-685: one presence lookup per list, so every run's ``readiness``
+    # chip agrees with the candidates table about whether a resume exists.
+    has_resume = await resume_analysis_service.candidate_has_resume_for_cv(
+        db, current_user.tenant_id, candidate_vacancy_id
+    )
     return [
-        resume_analysis_service.serialize_run_for_read(r, current_hash) for r in rows
+        resume_analysis_service.serialize_run_for_read(
+            r, current_hash, candidate_has_resume=has_resume
+        )
+        for r in rows
     ]
 
 
@@ -677,7 +699,7 @@ async def list_ai_analyses(
 async def get_topup_eligibility(
     candidate_vacancy_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(candidate_vacancy_scope),
 ):
     from app.modules.recruitment import resume_analysis_service
@@ -695,7 +717,7 @@ async def bulk_analyze_resume_only(
     vacancy_id: uuid.UUID,
     data: BulkAnalyzeRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     """Fan-out resume-only analysis over a recruiter selection. Hiring
     Manager role is **not** allowed (bulk × 20 cr is a budget risk —

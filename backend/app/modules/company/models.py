@@ -14,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.database import Base
 from app.models import BaseModel, TenantMixin
 
 
@@ -109,6 +110,15 @@ class Tenant(BaseModel):
     )
     brand_theme: Mapped[str | None] = mapped_column(String(32), nullable=True)
     brand_accent_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+
+    # HRP-1005: the platform admin's adjustment of the instance's AI processor
+    # list for this tenant — {"jev": true, "openai": false}; NULL = the
+    # instance list as is. ai_own_keys_only cuts the tenant off platform keys
+    # entirely: only its own BYOK keys work.
+    ai_processor_overrides: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    ai_own_keys_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     divisions: Mapped[list["Division"]] = relationship(back_populates="tenant")
     activity_fields: Mapped[list["CompanyActivityField"]] = relationship(
@@ -214,3 +224,46 @@ class CompanyActivityField(BaseModel, TenantMixin):
 
     tenant: Mapped["Tenant"] = relationship(back_populates="activity_fields")
     activity_field = relationship("DictionaryItem", lazy="selectin")
+
+
+# --- HRP-820: tenant section x role access matrix ---
+
+
+class TenantSectionSetting(Base):
+    """HRP-820: a section hidden from every role. Deviations only - no row
+    means the section is shown."""
+
+    __tablename__ = "tenant_section_settings"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True
+    )
+    section: Mapped[str] = mapped_column(String(32), primary_key=True)
+    hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+
+
+class TenantSectionAccess(Base):
+    """HRP-820: one cell of the section x role matrix that differs from
+    the default in ``app.core.sections``. Codes are strings, not enums: a
+    new section needs no type migration, unknown codes are dropped on read."""
+
+    __tablename__ = "tenant_section_access"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True
+    )
+    section: Mapped[str] = mapped_column(String(32), primary_key=True)
+    role_code: Mapped[str] = mapped_column(String(32), primary_key=True)
+    level: Mapped[str] = mapped_column(String(8), nullable=False)
+
+
+class TenantSectionAccessLog(BaseModel, TenantMixin):
+    """HRP-820: one row per saved matrix - the diff against the previous
+    state, ``{"<section>": {"hidden": [old, new], "roles": {"hr": [old, new]}}}``."""
+
+    __tablename__ = "tenant_section_access_log"
+
+    changed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    diff: Mapped[dict] = mapped_column(JSONB, nullable=False)

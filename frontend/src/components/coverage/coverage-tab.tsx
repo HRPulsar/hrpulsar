@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
+import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "sonner";
 import {
   Bot,
@@ -488,6 +489,7 @@ function MatchRow({
   onGrounds: () => void;
 }) {
   const tc = useTranslations("common");
+  const canViewRecruitment = usePermissions().canViewSection("recruitment");
   const testId = `coverage-match-row-${row.step_id}`;
   // HRP-863: a step out of scope is in no bucket - nothing to override.
   // The agent type is only offered in a mode where an agent produces the
@@ -590,14 +592,16 @@ function MatchRow({
               </span>
             )}
             {assigned && (
-              <div className="inline-flex flex-wrap items-start gap-1" data-testid={`coverage-executor-${row.step_id}`}>
-                <UserRound className="mt-0.5 size-4" />
+              <div className="inline-flex flex-wrap items-center gap-1" data-testid={`coverage-executor-${row.step_id}`}>
+                <UserRound className="size-4" />
+                {/* HRP-809 REDO: "Executor:" already says the person was
+                    named - no Assigned chip on top of it. */}
                 <PersonLine
                   sentence={(name) => t("executorPerson", { name })}
                   person={assigned}
                   testId={`coverage-link-executor-${row.step_id}`}
+                  summaryTestId={`coverage-executor-summary-${row.step_id}`}
                 />
-                <Badge variant="outline">{t("humanLabel_assigned")}</Badge>
                 {assigned.missing_codes.length > 0 && (
                   <Badge
                     className={BADGE_COLOR.amber}
@@ -624,9 +628,25 @@ function MatchRow({
                 )}
               </span>
             )}
+            {/* HRP-809 REDO: a button, right after the agent type it changes. */}
+            {canOverride && row.mode && CANDIDATE_MODES.includes(row.mode) && (
+              <StepOverrideMenu
+                testId={`coverage-btn-change-pack-${row.step_id}`}
+                trigger={<Button size="sm" variant="outline" className="h-7" />}
+                options={packs && packs.map((pack) => ({ value: pack.code, label: packLabel(pack.code) }))}
+                value={row.agent?.pack_code ?? null}
+                manual={row.agent?.pack_manual ?? false}
+                resetLabel={t("manualReset")}
+                emptyLabel={tc("loading")}
+                onOpen={onLoadPacks}
+                onPick={(code) => onOverride({ manual_pack_code: code })}
+              >
+                {row.agent ? t("changeAgent") : t("setAgent")}
+              </StepOverrideMenu>
+            )}
             {row.human && !assigned && (
-              <div className="inline-flex items-start gap-1" data-testid={`coverage-human-${row.step_id}`}>
-                <UserRound className="mt-0.5 size-4" />
+              <div className="inline-flex items-center gap-1" data-testid={`coverage-human-${row.step_id}`}>
+                <UserRound className="size-4" />
                 <PersonLine
                   sentence={(name) => (row.human_backup ? t("backupPerson", { name }) : name)}
                   person={row.human}
@@ -667,14 +687,17 @@ function MatchRow({
                 {/* Already handed over: link to the draft rather than
                     offer a second vacancy for the same step. */}
                 {row.hire_need?.vacancy_id ? (
-                  <Link
-                    href={`/recruitment/requisitions/${row.hire_need.vacancy_id}`}
-                    className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
-                    data-testid={`coverage-link-vacancy-${row.step_id}`}
-                  >
-                    <ExternalLink className="size-3.5" />
-                    {t("openVacancy")}
-                  </Link>
+                  // HRP-830: the vacancy lives in Recruitment.
+                  canViewRecruitment && (
+                    <Link
+                      href={`/recruitment/requisitions/${row.hire_need.vacancy_id}`}
+                      className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
+                      data-testid={`coverage-link-vacancy-${row.step_id}`}
+                    >
+                      <ExternalLink className="size-3.5" />
+                      {t("openVacancy")}
+                    </Link>
+                  )
                 ) : (
                   canOpenHireNeed && (
                     <Button
@@ -703,26 +726,11 @@ function MatchRow({
                 {t(canEdit ? "unclassifiedHint" : "unclassifiedReadOnly")}
               </span>
             )}
-            {canOverride && row.mode && CANDIDATE_MODES.includes(row.mode) && (
-              <StepOverrideMenu
-                testId={`coverage-btn-change-pack-${row.step_id}`}
-                trigger={<Button size="sm" variant="link" className="h-auto p-0" />}
-                options={packs && packs.map((pack) => ({ value: pack.code, label: packLabel(pack.code) }))}
-                value={row.agent?.pack_code ?? null}
-                manual={row.agent?.pack_manual ?? false}
-                resetLabel={t("manualReset")}
-                emptyLabel={tc("loading")}
-                onOpen={onLoadPacks}
-                onPick={(code) => onOverride({ manual_pack_code: code })}
-              >
-                {row.agent ? t("changeAgent") : t("setAgent")}
-              </StepOverrideMenu>
-            )}
             {canEdit && (
               <Button
                 size="sm"
-                variant="link"
-                className="h-auto p-0"
+                variant="outline"
+                className="h-7"
                 onClick={() => onAssign("executor_employee_id")}
                 data-testid={`coverage-btn-assign-executor-${row.step_id}`}
               >
@@ -777,9 +785,10 @@ function MatchRow({
   );
 }
 
-/** HRP-859 REDO: a person on the row the way every other screen shows one -
- * the name, and under it the position in the shared EmployeeSummaryLine
- * (HRP-182). `sentence` gives the name its role ("Executor: {name}"). */
+/** HRP-859 REDO: a person on the row through the shared EmployeeSummaryLine
+ * (HRP-182); HRP-809 REDO: the position and the status chip sit on the line
+ * with the name, not under it, so a row stays one line. `sentence` gives the
+ * name its role ("Executor: {name}"). */
 function PersonLine({
   sentence,
   person,
@@ -792,9 +801,14 @@ function PersonLine({
   summaryTestId?: string;
 }) {
   return (
-    <div className="inline-flex min-w-0 flex-col">
+    <div className="inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
       <span>{around(sentence, <PersonLink person={person} testId={testId} />)}</span>
-      <EmployeeSummaryLine employee={{ position_title: person.position }} hideName data-testid={summaryTestId} />
+      <EmployeeSummaryLine
+        employee={{ position_title: person.position, status: person.status }}
+        hideName
+        className="flex-row items-center gap-2"
+        data-testid={summaryTestId}
+      />
     </div>
   );
 }
@@ -816,12 +830,13 @@ function AccountableLine({
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
       {row.accountable && (
-        <div className="inline-flex items-start gap-1" data-testid={`coverage-accountable-${row.step_id}`}>
-          <ShieldCheck className="mt-0.5 size-4" />
+        <div className="inline-flex items-center gap-1" data-testid={`coverage-accountable-${row.step_id}`}>
+          <ShieldCheck className="size-4" />
           <PersonLine
             sentence={(name) => t("accountablePerson", { name })}
             person={row.accountable}
             testId={`coverage-link-accountable-${row.step_id}`}
+            summaryTestId={`coverage-accountable-summary-${row.step_id}`}
           />
         </div>
       )}

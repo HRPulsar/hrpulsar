@@ -117,7 +117,7 @@ class TestEventDiff:
             db, tenant.id, employee.id, EmployeeUpdate(status="terminated"), user
         )
         events = await service.list_events(
-            db, tenant.id, employee.id, event_type="termination"
+            db, tenant.id, employee.id, event_type="termination", current_user=user
         )
         assert len(events) == 1
         assert events[0]["old_value"] == {"status": "active"}

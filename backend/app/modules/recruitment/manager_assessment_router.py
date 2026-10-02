@@ -24,7 +24,7 @@ from app.core.client_ip import client_ip
 from app.core.dev_guard import require_dev_endpoint
 from app.core.errors import AppError
 from app.database import get_db
-from app.modules.auth.dependencies import require_role
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     manager_assessment_public as public_service,
@@ -45,8 +45,9 @@ from app.modules.recruitment.manager_assessment_schemas import (
     ScaleUpdate,
 )
 from app.modules.recruitment.routers.common import (
-    RECRUITMENT_VIEWER_ROLES,
     recruitment_public_limiter,
+    runs_hiring,
+    runs_rounds,
 )
 from app.modules.recruitment.scope import (
     assessment_scope,
@@ -65,7 +66,7 @@ public_router = APIRouter(tags=["recruitment-public-assessment"])
 @router.get("/v1/tenants/me/assessment-scales")
 async def list_scales_endpoint(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     return await service.list_scales(db, current_user.tenant_id)
 
@@ -74,7 +75,7 @@ async def list_scales_endpoint(
 async def get_scale_endpoint(
     scale_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     return await service.get_scale(db, current_user.tenant_id, scale_id)
 
@@ -83,7 +84,7 @@ async def get_scale_endpoint(
 async def create_scale_endpoint(
     payload: ScaleCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ) -> dict[str, Any]:
     return await service.create_scale(
         db, current_user.tenant_id, current_user.id, payload
@@ -95,7 +96,7 @@ async def update_scale_endpoint(
     scale_id: uuid.UUID,
     payload: ScaleUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ) -> dict[str, Any]:
     return await service.update_scale(
         db, current_user.tenant_id, current_user.id, scale_id, payload
@@ -106,7 +107,7 @@ async def update_scale_endpoint(
 async def archive_scale_endpoint(
     scale_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ) -> dict[str, Any]:
     return await service.archive_scale(
         db, current_user.tenant_id, current_user.id, scale_id
@@ -117,7 +118,7 @@ async def archive_scale_endpoint(
 async def delete_scale_endpoint(
     scale_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ) -> None:
     await service.delete_scale(db, current_user.tenant_id, current_user.id, scale_id)
 
@@ -130,7 +131,7 @@ async def set_vacancy_scale_endpoint(
     vacancy_id: uuid.UUID,
     payload: dict[str, uuid.UUID] = Body(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ) -> dict[str, Any]:
     scale_id = payload.get("assessment_scale_id")
     if scale_id is None:
@@ -147,7 +148,7 @@ async def set_vacancy_scale_endpoint(
 async def list_rounds_endpoint(
     cv_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(cv_scope),
 ) -> list[dict[str, Any]]:
     return await service.list_rounds(db, current_user.tenant_id, cv_id)
@@ -158,7 +159,7 @@ async def create_round_endpoint(
     cv_id: uuid.UUID,
     payload: RoundCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(cv_scope),
 ) -> dict[str, Any]:
     return await service.create_round(
@@ -171,7 +172,7 @@ async def update_round_endpoint(
     round_id: uuid.UUID,
     payload: dict[str, Any] = Body(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(round_scope),
 ) -> dict[str, Any]:
     # HRP-376: the kebab sends an explicit action ("restore" cannot be
@@ -206,7 +207,7 @@ async def add_evaluator_endpoint(
     round_id: uuid.UUID,
     payload: RoundEvaluatorAdd,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(round_scope),
 ) -> dict[str, Any]:
     return await service.add_evaluator(
@@ -221,7 +222,7 @@ async def round_aggregate_endpoint(
     # HRP-374: the payload now names each evaluator and their individual
     # score, so it is gated like the round's other hiring-team surfaces
     # rather than left open to any authenticated tenant member.
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(round_scope),
 ) -> dict[str, Any]:
     # HRP-373: it also names each scorer, so an evaluator of this round
@@ -236,7 +237,7 @@ async def round_aggregate_endpoint(
 async def list_round_assessments_endpoint(
     round_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(round_scope),
 ) -> list[dict[str, Any]]:
     # HRP-373: a colleague's sheet stays hidden until the caller's own one
@@ -250,7 +251,7 @@ async def list_round_assessments_endpoint(
 async def list_eligible_evaluators_endpoint(
     round_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(round_scope),
 ) -> list[dict[str, Any]]:
     """HRP-373: candidates for the `+ Add evaluator` picker."""
@@ -264,7 +265,7 @@ async def list_eligible_evaluators_endpoint(
 async def get_assessment_endpoint(
     assessment_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(assessment_scope),
 ) -> dict[str, Any]:
     # HRP-373: fetching a colleague's sheet by id is the same disclosure
@@ -281,7 +282,7 @@ async def set_competence_score_endpoint(
     competence_id: uuid.UUID,
     payload: CompetenceScoreIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(assessment_scope),
 ) -> dict[str, Any]:
     return await service.set_competence_score(
@@ -300,7 +301,7 @@ async def set_indicator_score_endpoint(
     indicator_id: uuid.UUID,
     payload: IndicatorScoreIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(assessment_scope),
 ) -> dict[str, Any]:
     return await service.set_indicator_score(
@@ -318,7 +319,7 @@ async def submit_assessment_endpoint(
     assessment_id: uuid.UUID,
     payload: FinalNotesIn = Body(default_factory=FinalNotesIn),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(assessment_scope),
 ) -> dict[str, Any]:
     return await service.submit_assessment(
@@ -341,7 +342,7 @@ async def create_invites_endpoint(
     cv_id: uuid.UUID,
     payload: ManagerAssessmentInviteCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(cv_scope),
 ) -> list[dict[str, Any]]:
     return await service.create_invites(
@@ -357,7 +358,7 @@ async def create_invites_endpoint(
 async def list_invites_endpoint(
     cv_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(cv_scope),
 ) -> list[dict[str, Any]]:
     return await service.list_manager_invites(db, current_user.tenant_id, cv_id)
@@ -367,7 +368,7 @@ async def list_invites_endpoint(
 async def revoke_invite_endpoint(
     invite_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(invite_scope),
 ) -> dict[str, Any]:
     return await service.revoke_invite(
@@ -379,7 +380,7 @@ async def revoke_invite_endpoint(
 async def resend_invite_endpoint(
     invite_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(invite_scope),
 ) -> dict[str, Any]:
     """HRP-377: mail the same invitation link again (bounced / lost email)."""
@@ -393,7 +394,7 @@ async def extend_invite_endpoint(
     invite_id: uuid.UUID,
     payload: ExtendInviteIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter", "manager")),
+    current_user: User = Depends(runs_rounds),
     _scope: None = Depends(invite_scope),
 ) -> dict[str, Any]:
     return await service.extend_invite(

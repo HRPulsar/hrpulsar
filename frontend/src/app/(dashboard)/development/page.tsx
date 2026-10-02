@@ -54,6 +54,7 @@ import {
   PDP_FLAGS,
   hasActivePdpFilters,
   matchesPdpFilters,
+  parseFinishedDays,
   sortPdpsForList,
 } from "@/lib/pdp-filters";
 
@@ -120,6 +121,7 @@ export default function DevelopmentPage() {
         q: params.get("q") ?? "",
         statuses: params.getAll("status").filter(Boolean),
         flags: params.getAll("flag").filter(Boolean),
+        finishedDays: parseFinishedDays(params.get("finished_days")),
       };
     },
     // read once on mount
@@ -131,8 +133,15 @@ export default function DevelopmentPage() {
     initialFilters.statuses,
   );
   const [filterFlags, setFilterFlags] = useState<string[]>(initialFilters.flags);
+  // HRP-724: the dashboard's period tiles arrive with the window they
+  // counted. It has no control of its own — a chip names it, Clear drops it.
+  const [finishedDays, setFinishedDays] = useState<number | undefined>(
+    initialFilters.finishedDays,
+  );
 
-  const { canManage } = usePermissions();
+  const { canManageSection } = usePermissions();
+  // HRP-825: authoring plans follows the section's level, not a role flag.
+  const canManage = canManageSection("development");
 
   async function load() {
     try {
@@ -161,12 +170,13 @@ export default function DevelopmentPage() {
     if (searchQuery) params.set("q", searchQuery);
     for (const value of filterStatuses) params.append("status", value);
     for (const value of filterFlags) params.append("flag", value);
+    if (finishedDays !== undefined) params.set("finished_days", String(finishedDays));
     const qs = params.toString();
     if (qs !== searchParams.toString()) {
       router.replace(qs ? `/development?${qs}` : "/development", { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, filterStatuses, filterFlags]);
+  }, [searchQuery, filterStatuses, filterFlags, finishedDays]);
 
   // Monotonic token: a slow response for a previously selected
   // specialization must not overwrite the options of the current one.
@@ -427,7 +437,7 @@ export default function DevelopmentPage() {
 
   if (loading) return <div className="py-12 text-center text-muted-foreground">{tc("loading")}</div>;
 
-  const filters = { searchQuery, filterStatuses, filterFlags };
+  const filters = { searchQuery, filterStatuses, filterFlags, finishedDays };
   // HRP-222: list order — active first (by Created desc), then Done by
   // ``finished_at``, then Cancelled by ``finished_at``.
   const filtered = sortPdpsForList(pdps.filter((p) => matchesPdpFilters(p, filters)));
@@ -518,12 +528,20 @@ export default function DevelopmentPage() {
           placeholder={t("allFlags")}
           className="w-44"
         />
+        {finishedDays !== undefined && (
+          <span
+            data-testid="development-finished-window"
+            className="inline-flex h-8 items-center whitespace-nowrap rounded-md border border-border bg-muted/40 px-2.5 text-xs text-muted-foreground"
+          >
+            {t("finishedWithin", { days: finishedDays })}
+          </span>
+        )}
         {filtersActive && (
           <Button
             data-testid="development-btn-clear-filters"
             variant="ghost"
             size="sm"
-            onClick={() => { setSearchQuery(""); setFilterStatuses([]); setFilterFlags([]); }}
+            onClick={() => { setSearchQuery(""); setFilterStatuses([]); setFilterFlags([]); setFinishedDays(undefined); }}
           >
             <X className="mr-1 h-3 w-3" />
             {t("clear")}

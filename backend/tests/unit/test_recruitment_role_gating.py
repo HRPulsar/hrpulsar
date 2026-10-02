@@ -102,27 +102,22 @@ def _user_with_codes(*codes: str):
     )
 
 
-def test_resolve_user_role_admin_wins_over_others():
-    user = _user_with_codes("admin", "hiring_manager")
-    assert resolve_user_role(user) == "admin"
-
-
-def test_resolve_user_role_returns_recruiter_when_no_admin():
-    user = _user_with_codes("recruiter", "hiring_manager")
-    assert resolve_user_role(user) == "recruiter"
+def test_resolve_user_role_full_follows_the_scope_not_the_role():
+    # HRP-830: an unrestricted scope (admin-level or ``manage``) reads the
+    # full payload whatever the roles; the roles decide only below it.
+    assert resolve_user_role(_user_with_codes("hiring_manager"), full=True) == "recruiter"
+    assert resolve_user_role(_user_with_codes("employee"), full=True) == "recruiter"
+    assert resolve_user_role(_user_with_codes("recruiter"), full=False) is None
+    assert resolve_user_role(_user_with_codes("admin"), full=False) is None
 
 
 def test_resolve_user_role_falls_back_to_hiring_manager():
-    assert resolve_user_role(_user_with_codes("hiring_manager")) == "hiring_manager"
-
-
-def test_resolve_user_role_unknown_role_returns_none():
-    assert resolve_user_role(_user_with_codes("employee")) is None
+    assert resolve_user_role(_user_with_codes("hiring_manager", "manager"), full=False) == "hiring_manager"
 
 
 def test_resolve_user_role_no_roles_returns_none():
-    assert resolve_user_role(SimpleNamespace(roles=[])) is None
+    assert resolve_user_role(SimpleNamespace(roles=[]), full=False) is None
 
 
 def test_resolve_user_role_handles_missing_attribute():
-    assert resolve_user_role(SimpleNamespace()) is None
+    assert resolve_user_role(SimpleNamespace(), full=False) is None

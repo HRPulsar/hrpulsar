@@ -82,3 +82,11 @@ class ProviderStatusRead(BaseModel):
     # ciphertext is unreadable, so generation silently uses the platform
     # key — the UI must not present it as BYOK.
     key_status: Literal["ok", "decrypt_failed"] | None = None
+    blocked: bool = False
+
+
+class ProcessorRead(BaseModel):
+    """One outside company this workspace's data reaches on platform keys."""
+
+    name: str
+    label: str

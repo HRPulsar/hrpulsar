@@ -45,6 +45,7 @@ import { toast } from "sonner";
 import Link from "next/link";
 import { Pagination } from "@/components/pagination";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useAuth } from "@/context/auth-context";
 import { readCreateDeepLink } from "@/lib/employee-actions";
 import {
   ChevronDown,
@@ -69,12 +70,12 @@ import {
   assessmentStatusLabel,
 } from "@/lib/assessment-status";
 
-// HRP-723: `hintKey` explains what the format is for — 180°/360° carry
-// staffing decisions, self-assessment feeds development tracks.
+// HRP-723: one hint under the select explains all three formats at once
+// (``typesUsageHint``) — the reporter's wording, so no per-type text here.
 const TYPE_OPTION_KEYS = [
-  { value: "self", labelKey: "typeSelf", hintKey: "typeSelfHint" },
-  { value: "180", labelKey: "type180", hintKey: "type180Hint" },
-  { value: "360", labelKey: "type360", hintKey: "type360Hint" },
+  { value: "self", labelKey: "typeSelf" },
+  { value: "180", labelKey: "type180" },
+  { value: "360", labelKey: "type360" },
 ];
 
 const statusOptions = ASSESSMENT_STATUS_OPTIONS;
@@ -189,7 +190,10 @@ export default function AssessmentsPage() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [groupChildren, setGroupChildren] = useState<Record<string, Assessment[]>>({});
 
-  const { canManage } = usePermissions();
+  // HRP-826: running assessments is the section's `manage`, not a role flag.
+  const { canManageSection, isAdminLevel } = usePermissions();
+  const canManage = canManageSection("assessments");
+  const { user } = useAuth();
 
   const typeOptions = useMemo(
     () => TYPE_OPTION_KEYS.map(({ value, labelKey }) => ({
@@ -479,7 +483,9 @@ export default function AssessmentsPage() {
       await api.post(`/assessments/${statusTarget.id}/status`, {
         status_code: newStatus,
       });
-      toast.success(t("toastStatusUpdated"));
+      toast.success(
+        t("toastStatusChanged", { status: assessmentStatusLabel(t, newStatus) }),
+      );
       setStatusOpen(false);
       await loadData(page, { search: searchQuery, types: filterTypes, statuses: filterStatuses });
       // Refresh expanded group if the assessment belongs to one
@@ -842,7 +848,8 @@ export default function AssessmentsPage() {
                           })}
                         </TableCell>
                         <TableCell>
-                          {canManage && (
+                          {/* HRP-640: another's mass assessment has no group actions below the admin level. */}
+                          {canManage && (isAdminLevel || g.initiator_id === user?.id) && (
                             <DropdownMenu>
                               <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" />}>
                                 <MoreHorizontal className="h-4 w-4" />
@@ -1014,10 +1021,6 @@ export default function AssessmentsPage() {
                     className="text-xs text-muted-foreground"
                     data-testid="assessments-modal-create-type-hint"
                   >
-                    {t(
-                      TYPE_OPTION_KEYS.find((o) => o.value === form.type_code)
-                        ?.hintKey ?? "typeSelfHint",
-                    )}{" "}
                     {t("typesUsageHint")}
                   </p>
                 </div>

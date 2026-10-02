@@ -29,7 +29,7 @@ class TestDetailedEmployeeEvents:
         await service.update_employee(db, tenant.id, employee.id, data, user)
 
         events = await service.list_events(
-            db, tenant.id, employee.id, event_type="position_change"
+            db, tenant.id, employee.id, event_type="position_change", current_user=user
         )
         assert len(events) == 1
         event = events[0]
@@ -55,7 +55,7 @@ class TestDetailedEmployeeEvents:
         await service.update_employee(db, tenant.id, employee.id, data, user)
 
         events = await service.list_events(
-            db, tenant.id, employee.id, event_type="division_change"
+            db, tenant.id, employee.id, event_type="division_change", current_user=user
         )
         assert len(events) == 1
         event = events[0]
@@ -74,7 +74,7 @@ class TestDetailedEmployeeEvents:
         await service.create_compensation(db, tenant.id, employee.id, data, user)
 
         events = await service.list_events(
-            db, tenant.id, employee.id, event_type="compensation_change"
+            db, tenant.id, employee.id, event_type="compensation_change", current_user=user
         )
         assert len(events) == 1
         event = events[0]
@@ -98,7 +98,7 @@ class TestDetailedEmployeeEvents:
         await service.update_compensation(db, tenant.id, result["id"], update, user)
 
         events = await service.list_events(
-            db, tenant.id, employee.id, event_type="compensation_change"
+            db, tenant.id, employee.id, event_type="compensation_change", current_user=user
         )
         # Should have 2 events: create + update
         assert len(events) == 2
@@ -106,21 +106,21 @@ class TestDetailedEmployeeEvents:
         assert update_event["old_value"]["amount"] == 500000
         assert update_event["new_value"]["amount"] == 600000
 
-    async def test_filter_events_by_type(self, db: AsyncSession, employee, tenant):
+    async def test_filter_events_by_type(self, db: AsyncSession, employee, tenant, user):
         # Employee already has a 'hire' event from creation
-        all_events = await service.list_events(db, tenant.id, employee.id)
+        all_events = await service.list_events(db, tenant.id, employee.id, None, user)
         hire_events = await service.list_events(
-            db, tenant.id, employee.id, event_type="hire"
+            db, tenant.id, employee.id, event_type="hire", current_user=user
         )
         assert len(hire_events) <= len(all_events)
         for e in hire_events:
             assert e["event_type"] == "hire"
 
     async def test_filter_returns_empty_for_unknown_type(
-        self, db: AsyncSession, employee, tenant
+        self, db: AsyncSession, employee, tenant, user
     ):
         events = await service.list_events(
-            db, tenant.id, employee.id, event_type="nonexistent"
+            db, tenant.id, employee.id, event_type="nonexistent", current_user=user
         )
         assert events == []
 
@@ -142,6 +142,6 @@ class TestDetailedEmployeeEvents:
         await service.update_employee(db, tenant.id, employee.id, data, user)
 
         events = await service.list_events(
-            db, tenant.id, employee.id, event_type="termination"
+            db, tenant.id, employee.id, event_type="termination", current_user=user
         )
         assert len(events) == 1

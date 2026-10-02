@@ -59,6 +59,9 @@ import {
 } from "@/lib/division-employee-filters";
 import { Checkbox } from "@/components/ui/checkbox";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useAuth } from "@/context/auth-context";
+import { headCandidates } from "@/lib/division-heads";
+import { holdsAdminLevel } from "@/lib/user-role-label";
 import { ArrowLeft, Pencil, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { gradeTitleLabel } from "@/lib/reference-labels";
@@ -94,10 +97,40 @@ export default function DivisionDetailPage() {
   const tRef = useTranslations("reference");
   const tc = useTranslations("common");
   const { id } = useParams<{ id: string }>();
-  const { canManage, canViewHrData } = usePermissions();
+  const {
+    canAssignRoles,
+    canManageSection,
+    canViewEmployeeRecords: canViewHrData,
+    isAdmin,
+    isAdminLevel,
+  } = usePermissions();
+  // HRP-819: a division head edits only the subtree they manage; the API
+  // answers 403 outside it, so the button is not rendered there. HRP-828:
+  // only at `manage` on the section.
+  const [inWriteScope, setInWriteScope] = useState(false);
+  const [scopeIds, setScopeIds] = useState<Set<string>>(new Set());
+  const canEditDivision =
+    canManageSection("company") && (isAdmin || inWriteScope);
+  // HRP-829: adding someone here writes their record - `manage` on
+  // employees, and this division must be in the caller's subtree.
+  const canAddEmployee =
+    canManageSection("employees") && (isAdminLevel || inWriteScope);
   const [division, setDivision] = useState<Division | null>(null);
   const [allDivisions, setAllDivisions] = useState<Division[]>([]);
   const [allEmployees, setAllEmployees] = useState<Employee[]>([]);
+  // HRP-829: below the admin level nobody moves themselves or an
+  // admin-level colleague - the API refuses both.
+  const { user } = useAuth();
+  const heads = headCandidates(allEmployees, {
+    adminLevel: isAdminLevel,
+    scopeIds,
+    userId: user?.id,
+  });
+  const seatFromElsewhere = (id: string) =>
+    !isAdminLevel && Boolean(id) && !heads.some((e) => e.id === id);
+  const writableEmployees = isAdminLevel
+    ? allEmployees
+    : allEmployees.filter((e) => e.user_id !== user?.id && !holdsAdminLevel(e.roles));
   const [specializations, setSpecializations] = useState<SpecializationDivision[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -130,7 +163,7 @@ export default function DivisionDetailPage() {
       // HRP-174: positions are needed so the Add-employee modal can
       // surface them as an optional picker. Pull alongside the existing
       // payloads to avoid an extra round-trip when the modal opens.
-      const [div, specs, empList, divsAll, empsAll, posAll] =
+      const [div, specs, empList, divsAll, empsAll, posAll, scope] =
         await Promise.allSettled([
           api.get<Division>(`/divisions/${id}`),
           // HRP-571: the subtree's mappings, not just this division's —
@@ -158,6 +191,7 @@ export default function DivisionDetailPage() {
           api.get<Division[]>("/divisions"),
           api.get<EmployeeListResponse>("/employees?limit=500"),
           api.get<PositionListResponse>("/positions?lifecycle_status=active"),
+          api.get<{ id: string }[]>("/divisions/scope"),
         ]);
       if (div.status === "fulfilled") setDivision(div.value);
       if (specs.status === "fulfilled") setSpecializations(specs.value);
@@ -165,6 +199,10 @@ export default function DivisionDetailPage() {
       if (divsAll.status === "fulfilled") setAllDivisions(divsAll.value);
       if (empsAll.status === "fulfilled") setAllEmployees(empsAll.value.items);
       if (posAll.status === "fulfilled") setAllPositions(posAll.value.items);
+      if (scope.status === "fulfilled") {
+        setInWriteScope(scope.value.some((d) => d.id === id));
+        setScopeIds(new Set(scope.value.map((d) => d.id)));
+      }
       if (div.status === "rejected") toast.error(t("toastDivisionLoadFailed"));
     } finally {
       setLoading(false);
@@ -348,7 +386,9 @@ export default function DivisionDetailPage() {
           toast.success(t("toastUserPromoted"));
         }
       }
-      if (manual.length > 0) {
+      // HRP-829: the downgrade is PUT /employees/{id}/role - the admin
+      // role's; anyone else leaves the role as it is (HRP-857).
+      if (manual.length > 0 && canAssignRoles) {
         setPendingDowngrade(manual);
         setDowngradeIndex(0);
       }
@@ -403,7 +443,7 @@ export default function DivisionDetailPage() {
             <p className="text-sm text-muted-foreground">{division.description}</p>
           )}
         </div>
-        {canManage && (
+        {canEditDivision && (
           <Button
             variant="outline"
             size="sm"
@@ -650,7 +690,7 @@ export default function DivisionDetailPage() {
               {/* HRP-174: Add employee — opens a contextual modal so HR
                   can add existing or create a new employee without
                   leaving the division detail page. */}
-              {canManage ? (
+              {canAddEmployee ? (
                 <Button
                   size="sm"
                   data-testid="division-detail-btn-add-employee"
@@ -773,7 +813,7 @@ export default function DivisionDetailPage() {
               <p className="text-sm text-muted-foreground">
                 {t("divisionNoEmployees")}
               </p>
-              {canManage ? (
+              {canAddEmployee ? (
                 <Button
                   variant="outline"
                   size="sm"
@@ -844,9 +884,20 @@ export default function DivisionDetailPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">{t("noneTopLevel")}</SelectItem>
+                  {/* HRP-819: below the admin level a parent comes from the
+                      caller's subtree - "top level" sits in nobody's, and
+                      the API refuses both; the current parent stays listed. */}
+                  {(isAdminLevel || !editForm.parent_id) && (
+                    <SelectItem value="">{t("noneTopLevel")}</SelectItem>
+                  )}
                   {flatDivisions
-                    .filter((d) => d.id !== division.id)
+                    .filter(
+                      (d) =>
+                        d.id !== division.id &&
+                        (isAdminLevel ||
+                          scopeIds.has(d.id) ||
+                          d.id === editForm.parent_id),
+                    )
                     .map((d) => (
                       <SelectItem key={d.id} value={d.id}>
                         {"—".repeat(d.depth)} {d.name}
@@ -859,6 +910,9 @@ export default function DivisionDetailPage() {
               <Label>{t("manager")}</Label>
               <Select
                 value={editForm.manager_id}
+                // HRP-857: a seat an admin gave someone from elsewhere is the
+                // admin's to change.
+                disabled={seatFromElsewhere(editForm.manager_id)}
                 onValueChange={(val) => setEditForm({ ...editForm, manager_id: val })}
               >
                 <SelectTrigger
@@ -876,18 +930,29 @@ export default function DivisionDetailPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">{t("none")}</SelectItem>
-                  {allEmployees.map((emp) => (
+                  {heads.map((emp) => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.user_name?.trim() || emp.user_email || "—"}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {seatFromElsewhere(editForm.manager_id) && (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-testid="company-division-manager-from-elsewhere"
+                >
+                  {t("seatFromElsewhere")}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>{t("deputyManager")}</Label>
               <Select
                 value={editForm.deputy_manager_id}
+                // HRP-857: a seat an admin gave someone from elsewhere is the
+                // admin's to change.
+                disabled={seatFromElsewhere(editForm.deputy_manager_id)}
                 onValueChange={(val) =>
                   setEditForm({ ...editForm, deputy_manager_id: val })
                 }
@@ -907,13 +972,21 @@ export default function DivisionDetailPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">{t("none")}</SelectItem>
-                  {allEmployees.map((emp) => (
+                  {heads.map((emp) => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.user_name?.trim() || emp.user_email || "—"}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {seatFromElsewhere(editForm.deputy_manager_id) && (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-testid="company-division-deputy-from-elsewhere"
+                >
+                  {t("seatFromElsewhere")}
+                </p>
+              )}
             </div>
           </div>
           <DialogFooter>
@@ -982,7 +1055,7 @@ export default function DivisionDetailPage() {
         onOpenChange={setAddEmployeeOpen}
         divisionId={division.id}
         divisionName={division.name}
-        allEmployees={allEmployees.map((e) => ({
+        allEmployees={writableEmployees.map((e) => ({
           id: e.id,
           user_id: e.user_id,
           user_name: e.user_name,
@@ -990,7 +1063,11 @@ export default function DivisionDetailPage() {
           division_id: e.division_id,
           division_name: e.division_name,
         }))}
-        positions={allPositions.map((p) => ({ id: p.id, title: p.title }))}
+        positions={allPositions
+          // HRP-829: below the admin level a seat of this division or a
+          // workspace-wide one - another department's is refused.
+          .filter((p) => isAdminLevel || !p.division_id || p.division_id === division.id)
+          .map((p) => ({ id: p.id, title: p.title }))}
         onRefresh={async () => {
           await load();
         }}

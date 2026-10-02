@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
 import { Input } from "@/components/ui/input";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
@@ -19,6 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { LoadErrorState } from "@/components/load-error-state";
+import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { usePermissions } from "@/hooks/use-permissions";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 import { formatDate } from "@/lib/date-format";
@@ -148,6 +149,23 @@ export default function CoveragePage() {
             placeholder={t("allStatuses")}
             className="w-36"
           />
+          {/* HRP-859 REDO: like /assessments - shown once any filter is set,
+              resets them all. */}
+          {(search || types.length > 0 || statuses.length > 0) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSearch("");
+                setTypes([]);
+                setStatuses([]);
+              }}
+              data-testid="coverage-btn-clear-filters"
+            >
+              <X className="mr-1 h-3 w-3" />
+              {tc("clear")}
+            </Button>
+          )}
         </div>
       )}
 
@@ -195,6 +213,7 @@ export default function CoveragePage() {
               <TableHead>{t("colTitle")}</TableHead>
               <TableHead>{t("colType")}</TableHead>
               <TableHead>{t("colStatus")}</TableHead>
+              <TableHead>{t("colOwner")}</TableHead>
               <TableHead>{t("colAutomated")}</TableHead>
               <TableHead>{t("colUpdated")}</TableHead>
             </TableRow>
@@ -210,6 +229,21 @@ export default function CoveragePage() {
                 <TableCell>{t(`type_${c.type}`)}</TableCell>
                 <TableCell>
                   <Badge className={STATUS_COLOR[c.status]}>{t(`status_${c.status}`)}</Badge>
+                </TableCell>
+                {/* HRP-810 REDO: the owner like any employee - name, position,
+                    status chip when they are not active. */}
+                <TableCell data-testid={`coverage-row-${c.id}-owner`}>
+                  {c.owner ? (
+                    <EmployeeSummaryLine
+                      employee={{
+                        user_name: c.owner.name,
+                        position_title: c.owner.position_title,
+                        status: c.owner.status,
+                      }}
+                    />
+                  ) : (
+                    <span className="text-muted-foreground">{t("accessOwnerNone")}</span>
+                  )}
                 </TableCell>
                 <TableCell
                   className="tabular-nums"

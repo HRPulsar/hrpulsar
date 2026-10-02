@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Role } from "@/lib/types";
-import { RequireRole } from "@/components/require-role";
+import { RequireSection } from "@/components/require-section";
+import { usePermissions } from "@/hooks/use-permissions";
 import { FALLBACK_ROLE_CODE, SYSTEM_ROLE_KEYS } from "@/lib/user-role-label";
 import { Badge } from "@/components/ui/badge";
 import { BADGE_COLOR } from "@/lib/badge-tones";
@@ -20,11 +21,8 @@ import {
 } from "@/components/ui/table";
 import { Hint } from "@/components/ui/hint";
 
-// HRP-634: what each role can really do. The `permissions` rows the API also
-// returns are seeded but dead — no gate reads a `Permission.codename`, access
-// resolves through `require_role` on the role code — so printing them would
-// claim a recruiter can do nothing while they run the whole hiring surface.
-// These strings mirror docs/core/docs/rbac.md instead.
+// HRP-634: what each role can really do. Access resolves through the role
+// code and the section matrix, so these strings mirror docs/core/docs/rbac.md.
 const CAPABILITY_KEYS: Record<string, string> = {
   platform_admin: "rolesCapPlatformAdmin",
   admin: "rolesCapAdmin",
@@ -68,14 +66,17 @@ function rank(code: string): number {
 
 export default function RolesPage() {
   return (
-    <RequireRole admin>
+    <RequireSection code="roles">
       <RolesPageContent />
-    </RequireRole>
+    </RequireSection>
   );
 }
 
 function RolesPageContent() {
   const t = useTranslations("settings");
+  // HRP-831: the count drills into the employee list filtered by role -
+  // a filter the directory drops, so below the HR record it is a number.
+  const { canViewEmployeeRecords } = usePermissions();
   const tSections = useTranslations("sections");
   const tSidebar = useTranslations("sidebar");
   const [roles, setRoles] = useState<Role[] | null>(null);
@@ -158,14 +159,18 @@ function RolesPageContent() {
                           : role.description || t("rolesCapCustom")}
                       </TableCell>
                       <TableCell className="align-top text-right tabular-nums">
-                        <Link
-                          href={holdersHref(role.code)}
-                          data-testid={`roles-count-${role.code}`}
-                          title={t("rolesHoldersLink")}
-                          className="rounded underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                          {role.user_count ?? 0}
-                        </Link>
+                        {canViewEmployeeRecords ? (
+                          <Link
+                            href={holdersHref(role.code)}
+                            data-testid={`roles-count-${role.code}`}
+                            title={t("rolesHoldersLink")}
+                            className="rounded underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            {role.user_count ?? 0}
+                          </Link>
+                        ) : (
+                          <span data-testid={`roles-count-${role.code}`}>{role.user_count ?? 0}</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   );

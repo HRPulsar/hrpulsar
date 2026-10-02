@@ -36,6 +36,7 @@ import { SkillDialog } from "@/components/coverage/skill-dialog";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 import { EECreditCostBadge } from "@/lib/ee-hooks";
 import { useCostConfirmation } from "@/hooks/use-cost-confirmation";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ApiError } from "@/lib/api";
 import {
   type AutomationMode,
@@ -91,6 +92,7 @@ export function GapsTab({
 }: GapsTabProps) {
   const t = useTranslations("coverage");
   const tc = useTranslations("common");
+  const canViewRecruitment = usePermissions().canViewSection("recruitment");
   const [gaps, setGaps] = useState<Gap[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -296,7 +298,8 @@ export function GapsTab({
                     <div className="flex-1 space-y-2">
                       <GapHeadline gap={gap} testId={testId} t={t} />
                       <Capabilities gap={gap} testId={testId} labelOf={labelOf} />
-                      {gap.hire_need?.vacancy_id && (
+                      {/* HRP-830: the vacancy lives in Recruitment. */}
+                      {gap.hire_need?.vacancy_id && canViewRecruitment && (
                         <Link
                           href={`/recruitment/requisitions/${gap.hire_need.vacancy_id}`}
                           className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline"

@@ -772,10 +772,13 @@ class TestReportXlsxRenderer:
 
         total_row = ws.max_row
         assert str(ws.cell(row=total_row, column=2).value).startswith("TOTAL (max ")
-        # Live SUM formula that displays as "<sum>/<denominator> (<pct>%)".
+        # Live SUM formula that displays as "<sum>/<denominator> (<pct>%)";
+        # the percent is the payload's "% of scale" (HRP-774), not SUM/denom.
         anna_total = str(ws.cell(row=total_row, column=4).value)
         assert anna_total.startswith("=SUM(")
-        assert '&"/4 ("' in anna_total
+        assert anna_total.endswith('&"/4 (100.0%)"')
+        # No percent yet — the cell keeps the points, drops the brackets.
+        assert str(ws.cell(row=total_row, column=7).value).endswith('&"/2"')
         # Threshold colours: Anna manager 100% emerald, Bob manager 25% rose,
         # Anna AI 75% amber (>75 is emerald, 50-75 inclusive is amber).
         assert ws.cell(row=total_row, column=4).fill.start_color.rgb.endswith("DCFCE7")
@@ -1697,6 +1700,173 @@ class TestGenerateReportTask:
         assert ws.cell(row=7, column=5).value == "No resume"
         assert ws.cell(row=7, column=6).value != "Recommended"
         assert "Resume not parsed" in self._sheet_values(wb["Incomplete data"])
+
+    async def test_percent_of_scale_matches_the_assessment_matrix(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """HRP-774 — the workbook's Manager / AI percent is the matrix's
+        "% of scale" (the vacancy scale's level weights), not
+        ``sum / (max x N)``. On a non-linear 1-4 scale (0/30/60/100) canvas
+        marks of 5 and 3.75 on the tenant's 5-point scale rebase to levels
+        4 and 3: (100 + 60) / 2 = 80 %, where the old rule printed 87.5 %.
+        The AI's raw 0.5 lands on level 2.5, worth 45 % on this scale."""
+        from app.modules.recruitment import manager_assessment_service
+        from app.modules.recruitment.manager_assessment_schemas import (
+            ScaleCreate,
+            ScaleLevelIn,
+        )
+        from app.modules.recruitment.models import (
+            AIAnalysisRun,
+            HumanAssessment,
+            VacancyProfile,
+        )
+
+        scale = await manager_assessment_service.create_scale(
+            db,
+            tenant.id,
+            user.id,
+            ScaleCreate(
+                name="Weighted",
+                is_default=True,
+                levels=[
+                    ScaleLevelIn(value=v, label=f"L{v}", weight=w)
+                    for v, w in ((1, 0), (2, 30), (3, 60), (4, 100))
+                ],
+            ),
+        )
+        vac = await _make_vacancy(db, tenant, user, title="Weighted")
+        vacancy_id = uuid.UUID(str(vac["id"]))
+        await manager_assessment_service.set_vacancy_scale(
+            db, tenant.id, user.id, vacancy_id, uuid.UUID(str(scale["id"]))
+        )
+        comp_ids = [uuid.uuid4() for _ in range(2)]
+        db.add(
+            VacancyProfile(
+                tenant_id=tenant.id,
+                vacancy_id=vacancy_id,
+                profile_data={
+                    "competences": [
+                        {"id": str(cid), "name": f"Competence {n}"}
+                        for n, cid in enumerate(comp_ids, start=1)
+                    ]
+                },
+            )
+        )
+        cand = await _make_candidate(db, tenant, user)
+        cv = await service.attach_candidate(
+            db,
+            tenant.id,
+            user.id,
+            CandidateVacancyCreate(
+                candidate_id=uuid.UUID(str(cand["id"])), vacancy_id=vacancy_id
+            ),
+        )
+        cv_id = uuid.UUID(str(cv["id"]))
+        for cid, score in zip(comp_ids, (5.0, 3.75), strict=True):
+            db.add(
+                HumanAssessment(
+                    tenant_id=tenant.id,
+                    candidate_vacancy_id=cv_id,
+                    competence_id=cid,
+                    evaluator_id=user.id,
+                    score=score,
+                )
+            )
+        db.add(
+            AIAnalysisRun(
+                tenant_id=tenant.id,
+                candidate_vacancy_id=cv_id,
+                mode="resume_only",
+                status="completed",
+                analysis_data={
+                    "mode": "resume_only",
+                    "competence_assessments": [
+                        {"competence_id": str(cid), "score": 0.5, "status": "assessed"}
+                        for cid in comp_ids
+                    ],
+                },
+            )
+        )
+        await db.flush()
+
+        wb = await self._run_report(
+            db,
+            tenant,
+            user,
+            vacancy_id,
+            ["summary_ranking", "competency_matrix"],
+            monkeypatch,
+        )
+        summary = wb["Summary"]
+        assert summary.cell(row=7, column=3).value == "7.0/8.0 (80.0%)"
+        assert summary.cell(row=7, column=4).value == "5.0/8.0 (45.0%)"
+        matrix_ws = wb["Matrix"]
+        total_row = matrix_ws.max_row
+        assert str(matrix_ws.cell(row=total_row, column=4).value).endswith(
+            '&"/8 (80.0%)"'
+        )
+        assert str(matrix_ws.cell(row=total_row, column=5).value).endswith(
+            '&"/8 (45.0%)"'
+        )
+        assert "Scale: Weighted (max 4.0" in str(matrix_ws.cell(row=4, column=1).value)
+
+        # The same vacancy on screen — one number, not two.
+        matrix = await service.get_assessment_matrix(db, tenant.id, vacancy_id)
+        on_screen = matrix["candidates"][0]
+        assert on_screen["manager_percent"] == 80.0
+        assert on_screen["ai_percent"] == 45.0
+
+    async def test_recommendation_keeps_its_pre_hrp774_footing(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """HRP-774 review — the displayed percent is the weighted one, but the
+        70 % "strong" threshold was tuned to level / max and is a product
+        decision still open. A candidate at "Meets expectations" (3 of 4)
+        everywhere shows 66 % yet stays "Recommended", as before the pack;
+        the AI side likewise shows 69.5 % but is judged on its 70 % raw mean.
+        """
+        from app.modules.recruitment import manager_assessment_service
+        from app.modules.recruitment.models import (
+            CandidateVacancy,
+            HumanAssessment,
+            ScaleConfig,
+        )
+
+        vacancy_id, cv_id, comp_ids = await self._seed_analysed_candidate(
+            db, tenant, user, with_resume=True, mode="full",
+            extra_unanalysed_interview=False,
+        )
+        await manager_assessment_service.ensure_default_scale(db, tenant.id)
+        db.add(
+            ScaleConfig(
+                tenant_id=tenant.id,
+                name="1-4",
+                min_value=1.0,
+                max_value=4.0,
+                is_active=True,
+            )
+        )
+        for cid in comp_ids:
+            db.add(
+                HumanAssessment(
+                    tenant_id=tenant.id,
+                    candidate_vacancy_id=cv_id,
+                    competence_id=cid,
+                    evaluator_id=user.id,
+                    score=3.0,
+                )
+            )
+        (await db.get(CandidateVacancy, cv_id)).ai_verdict = "recommended"
+        await db.flush()
+
+        wb = await self._run_report(
+            db, tenant, user, vacancy_id, ["summary_ranking"], monkeypatch
+        )
+        ws = wb["Summary"]
+        assert ws.cell(row=7, column=3).value == "6.0/8.0 (66.0%)"
+        assert ws.cell(row=7, column=4).value == "6.2/8.0 (69.5%)"
+        assert ws.cell(row=7, column=5).value == "Full data"
+        assert ws.cell(row=7, column=6).value == "Recommended"
 
 
 # ---------------------------------------------------------------------------

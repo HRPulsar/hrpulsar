@@ -4,7 +4,8 @@ Visibility is a property of the container, not of its owner: an owner who
 leaves must not strand the process. A user reads a container when any of
 these holds:
 
-* they manage the section (``MANAGE_ROLES``);
+* they manage the section (``manage`` on ``coverage`` in the tenant's
+  section access matrix - HRP-821);
 * the container is ``company``-wide;
 * they own it;
 * one of its rules names their role, their current position or them;
@@ -32,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access_scope import get_current_employee
 from app.core.errors import AppError
+from app.core.sections import Level, matrix_levels
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
@@ -42,10 +44,7 @@ from app.modules.work.models import (
     WorkStep,
 )
 
-# ponytail: a constant until HRP-820/821 put Coverage on the tenant's
-# section access matrix; the /auth/me contract (``sections.coverage``) and
-# ``Actor.manage`` stay, only this line's source changes.
-MANAGE_ROLES = frozenset({"admin", "hr"})
+SECTION = "coverage"  # this module's row in the section access matrix
 
 Access = Literal["manage", "edit", "read"]
 SectionLevel = Literal["manage", "view"]
@@ -64,13 +63,21 @@ class Actor:
     position_id: uuid.UUID | None
 
 
-async def actor_for(db: AsyncSession, user: User) -> Actor:
+async def actor_for(
+    db: AsyncSession, user: User, *, matrix_level: Level | None = None
+) -> Actor:
+    """The caller as Coverage sees them. ``matrix_level`` is their level on
+    the section: passed in by a caller that already read it (``/auth/me``),
+    read here otherwise. Not named ``level`` - that is this module's
+    per-container function."""
     codes = tuple(sorted(r.code for r in user.roles))
+    if matrix_level is None:
+        matrix_level = (await matrix_levels(db, user))[SECTION]
     emp = await get_current_employee(db, user)
     return Actor(
         user_id=user.id,
         tenant_id=user.tenant_id,
-        manage=bool(MANAGE_ROLES.intersection(codes)),
+        manage=matrix_level == "manage",
         role_codes=codes,
         employee_id=emp.id if emp else None,
         position_id=emp.position_id if emp else None,
@@ -150,12 +157,17 @@ async def ensure(
     return row
 
 
-async def section_level(db: AsyncSession, user: User) -> SectionLevel | None:
-    """``/auth/me.sections.coverage``: the managers always, anyone else once
-    at least one container is theirs to read."""
-    actor = await actor_for(db, user)
-    if actor.manage:
+async def section_level(
+    db: AsyncSession, user: User, matrix_level: Level
+) -> SectionLevel | None:
+    """``/auth/me.sections.coverage``: the section's managers always, anyone
+    else once at least one container is theirs to read (HRP-810). The menu
+    entry needs a process; the routes behind it do not."""
+    if matrix_level == "none":
+        return None
+    if matrix_level == "manage":
         return "manage"
+    actor = await actor_for(db, user, matrix_level=matrix_level)
     found = await db.scalar(
         select(WorkContainer.id)
         .where(WorkContainer.tenant_id == actor.tenant_id, visible(actor))

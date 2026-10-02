@@ -26,6 +26,7 @@ from app.modules.recruitment.notifications import (
     _resolve_assessment_submitted,
 )
 from jinja2 import Template
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.unit.test_hrp186_manager_assessment import (
@@ -99,10 +100,17 @@ class TestSubmitPublishesTheEvent:
         assert payload["evaluator_name"] == "Ext Eval"
         assert payload["vacancy_title"] == vacancy.title
         assert payload["round_type"] == "interview"
-        # Straight into the block that shows the sheet that just landed.
+        # Straight into the block that shows the sheet that just landed —
+        # HRP-379 REDO: on the very round tab it landed in.
+        invite = (
+            await db.execute(
+                select(AssessmentInvite).where(AssessmentInvite.token == token)
+            )
+        ).scalar_one()
         assert payload["link"] == (
             f"/recruitment/candidates/{cv.candidate_id}"
-            f"?vacancyId={cv.vacancy_id}#manager-assessments"
+            f"?vacancyId={cv.vacancy_id}&round={invite.round_id}"
+            "#manager-assessments"
         )
 
     async def test_resubmitting_does_not_send_a_second_copy(

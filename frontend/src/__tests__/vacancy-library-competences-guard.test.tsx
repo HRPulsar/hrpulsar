@@ -6,7 +6,8 @@
 // deleted every library competence on the vacancy and said "saved".
 //
 // Second finding: the picker button was live for every role on the page
-// while the PATCH behind it is admin/recruiter only.
+// while the PATCH behind it is `manage` on recruitment only (HRP-830;
+// admin/recruiter before the matrix).
 
 import { NextIntlClientProvider } from "next-intl";
 import { act } from "react";
@@ -16,6 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import enMessages from "../../messages/en.json";
 
 let roles: string[] = ["recruiter"];
+// HRP-830: the PATCH is `manage` on recruitment, whatever the role.
+let recruitmentLevel = "manage";
 let competencesGetFails = false;
 
 const apiGet = vi.fn((url: string) => {
@@ -49,7 +52,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/context/auth-context", () => ({
-  useAuth: () => ({ user: { roles } }),
+  useAuth: () => ({ user: { roles, sections: { recruitment: recruitmentLevel } } }),
 }));
 
 vi.mock("@/hooks/use-competence-tree", () => ({
@@ -139,11 +142,13 @@ describe("Library competences — a failed read never becomes an empty save", ()
 
   it("disables the picker for a role that cannot PATCH", async () => {
     roles = ["hr"];
+    recruitmentLevel = "view";
     competencesGetFails = false;
     await render();
     const btn = pickerButton();
     expect(btn).not.toBeNull();
     expect(btn!.disabled).toBe(true);
-    expect(btn!.title).toContain("Only an admin or a recruiter");
+    expect(btn!.title).toContain("needs Manage on Recruitment");
+    recruitmentLevel = "manage";
   });
 });

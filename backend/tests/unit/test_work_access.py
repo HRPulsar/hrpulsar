@@ -10,6 +10,7 @@ from datetime import date
 
 import pytest
 from app.core.errors import AppError
+from app.core.sections import SECTIONS_BY_CODE
 from app.main import app
 from app.modules.employee.models import Employee
 from app.modules.primitives import catalog_data
@@ -23,6 +24,7 @@ from app.modules.work.models import (
 from sqlalchemy import select, update
 
 from tests.unit.test_coverage_matching import _employee
+from tests.unit.test_section_gate import _save
 from tests.unit.test_work_containers import _user_with_role
 
 
@@ -40,13 +42,18 @@ async def _container(db, tenant, *, visibility="restricted", owner_id=None):
     return row
 
 
+_COVERAGE_DEFAULTS = SECTIONS_BY_CODE[access.SECTION].defaults
+
+
 def _actor(
     tenant, *, codes=("employee",), user_id=None, employee_id=None, position_id=None
 ):
     return access.Actor(
         user_id=user_id or uuid.uuid4(),
         tenant_id=tenant.id,
-        manage=bool(access.MANAGE_ROLES & set(codes)),
+        # HRP-821: who manages the section is the matrix's answer; these
+        # roles reach ``manage`` on ``coverage`` by default.
+        manage=any(_COVERAGE_DEFAULTS.get(code) == "manage" for code in codes),
         role_codes=tuple(codes),
         employee_id=employee_id,
         position_id=position_id,
@@ -69,7 +76,7 @@ class TestVisible:
         assert await _visible(db, _actor(tenant)) == {open_.id}
         assert closed.id not in await _visible(db, _actor(tenant, codes=("manager",)))
 
-    async def test_manage_roles_read_everything(self, db, tenant):
+    async def test_section_managers_read_everything(self, db, tenant):
         closed = await _container(db, tenant)
         for code in ("admin", "hr"):
             assert closed.id in await _visible(db, _actor(tenant, codes=(code,)))
@@ -318,6 +325,71 @@ class TestHttpMatrix:
         assert listed.json()["items"][0]["my_access"] == "read"
 
 
+    async def test_the_matrix_decides_who_manages_the_section(
+        self, client, auth_client, db, tenant
+    ):
+        # HRP-821: ``manage`` on ``coverage`` replaced the admin/hr constant,
+        # so the tenant moves it - away from hr, over to the managers - and
+        # both the container reads and the privileged routes follow.
+        created = await auth_client.post(
+            "/api/work/containers", json={"type": "process", "title": "Severance"}
+        )
+        assert created.status_code == 201, created.text
+        cid = created.json()["id"]
+        _, _, hr_h = await _person(db, tenant, "hr")
+        _, _, manager_h = await _person(db, tenant, "manager")
+
+        assert (await client.get(f"/api/work/containers/{cid}", headers=hr_h)).status_code == 200
+        assert (await client.get(f"/api/work/containers/{cid}", headers=manager_h)).status_code == 404
+
+        await _save(auth_client, levels={"coverage": {"hr": "view", "manager": "manage"}})
+
+        # hr keeps the section - the menu entry needs a process they read,
+        # and a restricted one is no longer theirs - but not its management.
+        assert (await client.get(f"/api/work/containers/{cid}", headers=hr_h)).status_code == 404
+        refused = await client.post(
+            "/api/work/containers", json={"type": "process", "title": "Payroll"}, headers=hr_h
+        )
+        assert refused.status_code == 403
+        me = await client.get("/api/auth/me", headers=hr_h)
+        assert "coverage" not in me.json()["sections"]
+
+        # The managers manage it, with no process of their own to start from.
+        assert (await client.get(f"/api/work/containers/{cid}", headers=manager_h)).status_code == 200
+        started = await client.post(
+            "/api/work/containers", json={"type": "process", "title": "Payroll"}, headers=manager_h
+        )
+        assert started.status_code == 201, started.text
+        me = await client.get("/api/auth/me", headers=manager_h)
+        assert me.json()["sections"]["coverage"] == "manage"
+
+        # ... but Coverage does not hand them a section the matrix keeps
+        # closed: a hire need is Recruitment's record, and `manager` reads
+        # Recruitment without managing it.
+        step = await auth_client.post(
+            f"/api/work/containers/{cid}/steps", json={"title": "Sign off"}
+        )
+        blocked = await client.post(
+            f"/api/work/containers/{cid}/gaps/hire-need",
+            json={"step_ids": [step.json()["id"]], "label": "Payroll clerk"},
+            headers=manager_h,
+        )
+        assert blocked.status_code == 403
+
+    async def test_the_platform_admin_manages_every_process(self, client, auth_client, db, tenant):
+        # The matrix answers ``manage`` on every section for
+        # ``platform_admin`` (core/sections.py), and Coverage now reads the
+        # matrix - so the support account is not stopped by a restricted
+        # process the way a tenant role without the section is.
+        created = await auth_client.post(
+            "/api/work/containers", json={"type": "process", "title": "Compensation"}
+        )
+        cid = created.json()["id"]
+        _, _, platform_h = await _person(db, tenant, "platform_admin")
+        got = await client.get(f"/api/work/containers/{cid}", headers=platform_h)
+        assert got.status_code == 200 and got.json()["my_access"] == "manage"
+
+
 class TestAccessApi:
     async def test_rules_history_and_owner(
         self, client, auth_client, db, tenant, user, position
@@ -401,19 +473,46 @@ class TestAccessApi:
         mine = await client.get(f"/api/work/containers/{cid}/access", headers=owner_h)
         assert mine.status_code == 200, mine.text
         assert mine.json()["history"][0]["action"] == "owner_changed"
-        assert mine.json()["owner"] == {
-            "user_id": str(new_owner.id),
-            "name": "Employee User",
-            "active": True,
-        }
+        owner = mine.json()["owner"]
+        assert owner["user_id"] == str(new_owner.id)
+        assert owner["name"] == "Employee User"
+        assert owner["status"] == "active"
+        assert owner["active"] is True
+        # HRP-810 REDO: the same summary on the list and the detail, for the
+        # Owner column.
+        listed = await auth_client.get("/api/work/containers")
+        in_list = next(i for i in listed.json()["items"] if i["id"] == cid)
+        assert in_list["owner"] == owner
+        detail = await auth_client.get(f"/api/work/containers/{cid}")
+        assert detail.json()["owner"] == owner
         _, _, reader_h = await _person(db, tenant, "employee")
         panel = await client.get(f"/api/work/containers/{cid}/access", headers=reader_h)
         assert panel.status_code == 403
 
+        owner_emp.status = "on_leave"
+        await db.commit()
+        away = await auth_client.get(f"/api/work/containers/{cid}/access")
+        assert away.json()["owner"]["status"] == "on_leave"
+        assert away.json()["owner"]["active"] is True
+
+        # A switched-off account is not with the company, whatever the card
+        # says: the card's status stays on the chip, ``active`` goes False.
+        new_owner.is_active = False
+        await db.commit()
+        off = await auth_client.get(f"/api/work/containers/{cid}/access")
+        assert off.json()["owner"]["status"] == "on_leave"
+        assert off.json()["owner"]["active"] is False
+        new_owner.is_active = True
+        await db.commit()
+
         owner_emp.status = "terminated"
         await db.commit()
         left = await auth_client.get(f"/api/work/containers/{cid}/access")
+        assert left.json()["owner"]["status"] == "terminated"
         assert left.json()["owner"]["active"] is False
+        listed = await auth_client.get("/api/work/containers")
+        in_list = next(i for i in listed.json()["items"] if i["id"] == cid)
+        assert in_list["owner"]["status"] == "terminated"
 
     async def test_access_change_keeps_an_accepted_breakdown(self, auth_client):
         created = await auth_client.post(
@@ -440,10 +539,10 @@ class TestMeSections:
         self, client, auth_client, db, tenant
     ):
         me = await auth_client.get("/api/auth/me")
-        assert me.json()["sections"] == {"coverage": "manage"}
+        assert me.json()["sections"]["coverage"] == "manage"
         _, _, employee_h = await _person(db, tenant, "employee")
         me = await client.get("/api/auth/me", headers=employee_h)
-        assert me.json()["sections"] == {}
+        assert "coverage" not in me.json()["sections"]
         created = await auth_client.post(
             "/api/work/containers", json={"type": "process", "title": "Onboarding"}
         )
@@ -453,7 +552,7 @@ class TestMeSections:
         )
         assert opened.status_code == 200, opened.text
         me = await client.get("/api/auth/me", headers=employee_h)
-        assert me.json()["sections"] == {"coverage": "view"}
+        assert me.json()["sections"]["coverage"] == "view"
 
 
 class TestReviewFollowUps:
@@ -528,7 +627,7 @@ class TestReviewFollowUps:
             await client.get(f"/api/work/containers/{cid}", headers=reader_h)
         ).status_code == 200
         me = await client.get("/api/auth/me", headers=reader_h)
-        assert me.json()["sections"] == {"coverage": "view"}
+        assert me.json()["sections"]["coverage"] == "view"
         for method, path, body in (
             (
                 "put",
@@ -544,16 +643,16 @@ class TestReviewFollowUps:
         # An assignment opens the section. The assignee reads their own card
         # (what they lack included, as access_scope has it); a reader with no
         # HR scope sees the assignee but not what they lack.
-        assert (await client.get("/api/auth/me", headers=doer_h)).json()[
-            "sections"
-        ] == {}
+        assert "coverage" not in (
+            await client.get("/api/auth/me", headers=doer_h)
+        ).json()["sections"]
         assigned = await auth_client.patch(
             f"/api/work/steps/{sid}", json={"executor_employee_id": str(doer_emp.id)}
         )
         assert assigned.status_code == 200, assigned.text
-        assert (await client.get("/api/auth/me", headers=doer_h)).json()[
-            "sections"
-        ] == {"coverage": "view"}
+        assert (await client.get("/api/auth/me", headers=doer_h)).json()["sections"][
+            "coverage"
+        ] == "view"
         full = (await auth_client.get(f"/api/work/containers/{cid}/coverage")).json()
         row = next(r for r in full["steps"] if r["step_id"] == sid)
         assert row["human"]["label"] == "assigned"
@@ -664,6 +763,43 @@ def test_redact_people_keeps_verdicts_and_assignees():
     assert steps[0]["human"] == {**assignee, "missing_codes": []}
     assert steps[1]["human"] is None and steps[1]["human_backup"] is False
     assert [s["verdict"] for s in steps] == ["human", "agent", "gap"]
+
+
+def test_redact_people_withholds_leave_outside_the_reader_scope():
+    # Review 01.10 (HRP-623): the assignee and the accountable carried
+    # their employee status to every reader; leave is HR data the directory
+    # withholds. Gone stays visible - nobody can do the step then.
+    from app.modules.work import coverage
+
+    def person(eid, status, label="assigned"):
+        return {"employee_id": eid, "name": eid, "position": None, "label": label,
+                "missing_codes": [], "status": status}
+
+    result = {
+        "steps": [
+            {"verdict": "human", "human": person("e1", "on_leave"), "human_backup": False,
+             "accountable": person("e2", "on_leave")},
+            {"verdict": "human", "human": person("e3", "terminated"), "human_backup": False,
+             "accountable": person("e4", "on_leave")},
+        ]
+    }
+    steps = coverage.redact_people(result, visible={"e4"})["steps"]
+    assert steps[0]["human"]["status"] == "active"
+    assert steps[0]["accountable"]["status"] == "active"
+    assert steps[1]["human"]["status"] == "terminated"
+    assert steps[1]["accountable"]["status"] == "on_leave"
+
+
+async def test_owner_leave_is_shown_only_when_revealed(db, tenant):
+    from app.modules.work import service as work_service
+
+    user, emp, _ = await _person(db, tenant, "employee")
+    emp.status = "on_leave"
+    await db.commit()
+    hidden = await work_service.owner_summaries(db, tenant.id, {user.id})
+    shown = await work_service.owner_summaries(db, tenant.id, {user.id}, reveal_leave=True)
+    assert hidden[user.id]["status"] == "active" and hidden[user.id]["active"] is True
+    assert shown[user.id]["status"] == "on_leave"
 
 
 def test_redact_people_keeps_a_colleague_within_the_reader_scope():

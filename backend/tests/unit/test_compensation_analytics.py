@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 class TestCompensationAnalytics:
     async def test_empty_compensation_stats(self, db: AsyncSession, tenant):
-        result = await analytics_service.compensation_stats(db, tenant.id)
+        result = await analytics_service.compensation_stats(db, tenant.id, None)
         assert result["total_records"] == 0
         assert result["total_amount"] == 0
         assert result["by_type"] == {}
@@ -40,7 +40,7 @@ class TestCompensationAnalytics:
         )
         await db.commit()
 
-        result = await analytics_service.compensation_stats(db, tenant.id)
+        result = await analytics_service.compensation_stats(db, tenant.id, None)
         assert result["total_records"] == 2
         assert "salary" in result["by_type"]
         assert result["by_type"]["salary"]["count"] == 1
@@ -66,7 +66,7 @@ class TestCompensationAnalytics:
         )
         await db.commit()
 
-        result = await analytics_service.compensation_stats(db, tenant.id)
+        result = await analytics_service.compensation_stats(db, tenant.id, None)
         assert len(result["by_division"]) == 1
         assert result["by_division"][0]["division_name"] == "Engineering"
         assert result["by_division"][0]["avg_salary"] == 600000.0
@@ -98,6 +98,6 @@ class TestCompensationAnalytics:
         )
         await db.commit()
 
-        result = await analytics_service.compensation_stats(db, tenant.id)
+        result = await analytics_service.compensation_stats(db, tenant.id, None)
         assert result["total_records"] == 1
         assert result["by_type"]["salary"]["total"] == 500000

@@ -38,3 +38,26 @@ describe("Match drawer development-plan control (HRP-665)", () => {
     expect(FLAT).not.toContain("text-primary underline-offset-2 hover:underline");
   });
 });
+
+describe("Match drawer plan outside the viewer's scope (HRP-856)", () => {
+  const PAGE = readFileSync(
+    resolve(__dirname, "../app/(dashboard)/talent-market/[id]/page.tsx"),
+    "utf8",
+  ).replace(/\s+/g, " ");
+
+  it("feeds the drawer the row's own scope flag", () => {
+    expect(PAGE).toContain(
+      "outOfScope={ card.candidates.find((c) => c.id === drawerCandidateId)?.can_view_profile === false }",
+    );
+  });
+
+  it("keeps Create inactive and explains why, instead of a 403", () => {
+    expect(FLAT).toContain("disabled={creatingPlan || outOfScope}");
+    expect(FLAT).toContain('data-testid="talent-market-match-drawer-plan-out-of-scope"');
+    expect(FLAT).toContain('t("drawerPlanOutOfScope")');
+  });
+
+  it("does not link a plan the viewer cannot open", () => {
+    expect(FLAT).toContain("{candidateId && pdpId && !outOfScope && (");
+  });
+});

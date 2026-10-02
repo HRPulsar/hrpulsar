@@ -83,7 +83,7 @@ def cleanup_stuck_recruitment_tasks_task(self) -> dict:
     """
 
     from sqlalchemy import create_engine, select
-    from sqlalchemy.orm import Session
+    from sqlalchemy.orm import Session, selectinload
 
     from app.config import settings
     from app.modules.recruitment.models import (
@@ -91,6 +91,7 @@ def cleanup_stuck_recruitment_tasks_task(self) -> dict:
         CandidateFile,
         ConsolidatedReport,
         Interview,
+        QuestionSet,
     )
 
     sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
@@ -102,6 +103,7 @@ def cleanup_stuck_recruitment_tasks_task(self) -> dict:
         "reports": 0,
         "resumes": 0,
         "ai_analysis_runs": 0,
+        "question_sets": 0,
     }
 
     try:
@@ -195,6 +197,33 @@ def cleanup_stuck_recruitment_tasks_task(self) -> dict:
                     f"{_STUCK_AGE_MINUTES} minutes; resetting to failed"
                 )
                 reset["ai_analysis_runs"] += 1
+
+            # HRP-471: a question set whose worker was killed (OOM, the hard
+            # limit) stays in flight - its message acked, never redelivered.
+            # Past the task's own time limit no live job can still be
+            # filling it; its hold expired with the same lifetime.
+            qs_cutoff = datetime.now(timezone.utc) - timedelta(
+                seconds=celery.conf.task_time_limit
+            )
+            qs_rows = (
+                db.execute(
+                    select(QuestionSet)
+                    .options(selectinload(QuestionSet.questions))
+                    .where(
+                        QuestionSet.status.in_(("generating", "regenerating")),
+                        QuestionSet.updated_at < qs_cutoff,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for qs_row in qs_rows:
+                # As a Cancel settles it: back to ready with the questions
+                # it had, or failed; the version moves past the dead job.
+                has_questions = any(q.status == "active" for q in qs_row.questions)
+                qs_row.status = "ready" if has_questions else "failed"
+                qs_row.version = (qs_row.version or 1) + 1
+                reset["question_sets"] += 1
 
             db.commit()
         return {"status": "ok", **reset}

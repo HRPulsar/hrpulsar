@@ -163,12 +163,11 @@ export function CandidateInterviewsSection({
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
   // Every write this block offers — consent send/resend, schedule, upload,
-  // edit, archive/restore — is require_role("admin", "recruiter"); the
-  // other recruitment viewers keep the list and the banner and lose the
-  // actions, the same rule as the Add button on the internal-candidates
-  // shortlist.
-  const { isAdmin, isRecruiter } = usePermissions();
-  const canEdit = isAdmin || isRecruiter;
+  // edit, archive/restore — is `manage` on recruitment (HRP-830); the other
+  // `view` holders keep the list and the banner and lose the actions, the
+  // same rule as the Add button on the internal-candidates shortlist.
+  const { isAdmin, canManageSection } = usePermissions();
+  const canEdit = canManageSection("recruitment");
 
   const currentVacancy = useMemo(
     () => vacancyOptions.find((v) => v.id === vacancyId),
@@ -397,8 +396,9 @@ export function CandidateInterviewsSection({
     }
   }
 
-  // HRP-684: resend the pending link — same token, same expiry, so an
-  // already-delivered email keeps working.
+  // HRP-684: resend the pending link to the candidate's current email —
+  // same token and expiry while the link is valid, so an already-delivered
+  // email keeps working; an expired link comes back as a fresh one.
   async function resendConsentRequest() {
     setSendingConsent(true);
     try {
@@ -836,14 +836,17 @@ export function CandidateInterviewsSection({
             >
               {tc("close")}
             </Button>
-            <Button
-              render={
-                <Link href="/recruitment/settings/consent-templates" />
-              }
-              data-testid="recruitment-candidate-interviews-consent-setup-link"
-            >
-              {t("candidateInterviewsConsentSetupAction")}
-            </Button>
+            {/* The templates are the admin role's to write. */}
+            {isAdmin && (
+              <Button
+                render={
+                  <Link href="/recruitment/settings/consent-templates" />
+                }
+                data-testid="recruitment-candidate-interviews-consent-setup-link"
+              >
+                {t("candidateInterviewsConsentSetupAction")}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

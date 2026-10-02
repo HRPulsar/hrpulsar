@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import * as Popover from "@radix-ui/react-popover";
 import { Command } from "cmdk";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import type { Position, PositionList } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +24,10 @@ interface PositionComboboxProps {
   /** Offer "create a new position" under the list (default). Off where the
    *  caller only picks, e.g. an access rule on a process (HRP-810). */
   allowCreate?: boolean;
+  /** The pick seats a person (an invitation, an employee's position): below
+   *  the admin level only workspace-wide seats and seats of the caller's
+   *  own subtree are offered - the API refuses any other (HRP-829). */
+  seat?: boolean;
   "data-testid"?: string;
 }
 
@@ -32,10 +37,16 @@ export function PositionCombobox({
   placeholder,
   disabled,
   allowCreate = true,
+  seat = false,
   "data-testid": testId,
 }: PositionComboboxProps) {
   const t = useTranslations("company");
   const tRef = useTranslations("reference");
+  // HRP-828: quick-create files a position with no division, which only an
+  // admin-level role at `manage` on company may do - a division head got a
+  // 403 here since HRP-631.
+  const { canManageSection, isAdminLevel } = usePermissions();
+  const canCreate = allowCreate && canManageSection("company") && isAdminLevel;
   const tc = useTranslations("common");
   const resolvedPlaceholder = placeholder ?? t("selectPositionPlaceholder");
   const [open, setOpen] = useState(false);
@@ -49,6 +60,7 @@ export function PositionCombobox({
   const [newTitle, setNewTitle] = useState("");
   const [creating, setCreating] = useState(false);
 
+  const scoped = seat && !isAdminLevel;
   const loadPositions = useCallback(async (query: string) => {
     setLoading(true);
     try {
@@ -57,14 +69,24 @@ export function PositionCombobox({
         limit: "50",
       });
       if (query) params.set("search", query);
-      const data = await api.get<PositionList>(`/positions?${params}`);
-      setPositions(data.items.filter((p) => p.source !== "ai_draft"));
+      const [data, scope] = await Promise.all([
+        api.get<PositionList>(`/positions?${params}`),
+        scoped ? api.get<{ id: string }[]>("/divisions/scope") : null,
+      ]);
+      const inScope = scope ? new Set(scope.map((d) => d.id)) : null;
+      setPositions(
+        data.items.filter(
+          (p) =>
+            p.source !== "ai_draft" &&
+            (!inScope || !p.division_id || inScope.has(p.division_id)),
+        ),
+      );
     } catch {
       setPositions([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [scoped]);
 
   // Load on open
   useEffect(() => {
@@ -211,7 +233,7 @@ export function PositionCombobox({
             </Command.List>
 
             {/* Quick create */}
-            {allowCreate && (
+            {canCreate && (
             <div className="border-t p-2">
               {showCreate ? (
                 <div className="flex gap-1">

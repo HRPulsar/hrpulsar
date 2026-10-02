@@ -2,7 +2,8 @@
 //
 // Review follow-ups on HRP-386/387 and HRP-684. Every recruitment viewer
 // role may open an interview (GET), but PUT /recruitment/interviews/{id}
-// and the consent send/resend endpoints are admin/recruiter only. The
+// and the consent send/resend endpoints are `manage` on recruitment
+// (HRP-830; admin/recruiter before the matrix). The
 // pencils on the interview page and the consent buttons on the candidate
 // page used to render for hr / hiring_manager / manager and land on a
 // 403. Same rule as the Add button in internal-candidates-block: an
@@ -70,7 +71,19 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/context/auth-context", () => ({
-  useAuth: () => ({ user: { roles } }),
+  // HRP-830: the level decides, not the role. Admin and recruiter stand for
+  // `manage`; hr here is hr the tenant left at `view` (its default is
+  // `manage`), next to the hiring manager and the manager.
+  useAuth: () => ({
+    user: {
+      roles,
+      sections: {
+        recruitment: roles.some((r) => r === "admin" || r === "recruiter")
+          ? "manage"
+          : "view",
+      },
+    },
+  }),
 }));
 
 vi.mock("sonner", () => ({

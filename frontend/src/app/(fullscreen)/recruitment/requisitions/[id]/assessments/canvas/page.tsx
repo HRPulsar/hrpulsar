@@ -50,6 +50,8 @@ const EMPTY_CELL: AssessmentMatrixCell = {
   ai_score: null,
   ai_status: "missing",
   divergence: false,
+  manager_percent: null,
+  ai_percent: null,
 };
 
 export default function AssessmentCanvasPage() {
@@ -74,6 +76,13 @@ export default function AssessmentCanvasPage() {
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   const [onlyDivergences, setOnlyDivergences] = useState(
     () => searchParams.get("filter") === "divergences",
+  );
+  // HRP-507 REDO: ``?candidates=a,b`` — the Divergence chip's tooltip opens
+  // the canvas on one candidate. Read once and applied when the first
+  // matrix lands (the candidate list is not known before that); round
+  // switches afterwards keep whatever the recruiter ticked since.
+  const pendingCandidatesParam = useRef<string | null>(
+    searchParams.get("candidates"),
   );
   const [hideUnscored, setHideUnscored] = useState(false);
 
@@ -107,7 +116,26 @@ export default function AssessmentCanvasPage() {
         `/recruitment/vacancies/${id}/assessment-matrix?round=${round}`,
       )
       .then((res) => {
-        if (!cancelled) setData(res);
+        if (cancelled) return;
+        setData(res);
+        const wanted = new Set(
+          (pendingCandidatesParam.current ?? "").split(",").filter(Boolean),
+        );
+        pendingCandidatesParam.current = null;
+        // A stale or foreign id must not blank the whole grid: only apply
+        // the filter when at least one wanted candidate is in the matrix.
+        if (
+          wanted.size > 0 &&
+          res.candidates.some((c) => wanted.has(c.candidate_vacancy_id))
+        ) {
+          setHidden(
+            new Set(
+              res.candidates
+                .filter((c) => !wanted.has(c.candidate_vacancy_id))
+                .map((c) => c.candidate_vacancy_id),
+            ),
+          );
+        }
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -126,7 +154,7 @@ export default function AssessmentCanvasPage() {
   const allCandidates = useMemo(() => data?.candidates ?? [], [data]);
   const allCompetences = useMemo(() => data?.competences ?? [], [data]);
   // The vacancy's Assessment scale (HRP-510 REDO) — its top level is the
-  // matrix maximum, and Percent is taken against it.
+  // maximum the Points option names.
   const maxScore = data?.max_score ?? 5;
   const roundSlots = useMemo(() => data?.round_slots ?? [], [data]);
 
@@ -229,23 +257,26 @@ export default function AssessmentCanvasPage() {
     });
   }
 
-  function formatValue(value: number | null): string {
-    if (value === null) return "—";
-    if (scale === "percent" && maxScore > 0) {
-      return `${numFmt(locale).format((value / maxScore) * 100)}%`;
+  // HRP-774: Percent is the cell's own percent of scale, computed by the
+  // backend from the scale's level weights — the browser keeps no second
+  // level → percent rule, so a cell can never disagree with the totals
+  // row or the round header for the same score.
+  function formatValue(points: number | null, percent: number | null): string {
+    if (scale === "percent") {
+      return percent === null ? "—" : `${numFmt(locale).format(percent)}%`;
     }
-    return numFmt(locale).format(value);
+    return points === null ? "—" : numFmt(locale).format(points);
   }
 
   function aiText(cell: AssessmentMatrixCell): string {
     if (cell.ai_status === "not_covered") return t("assessmentsTabScoreNa");
-    return formatValue(cell.ai_score);
+    return formatValue(cell.ai_score, cell.ai_percent);
   }
 
   // The M:/AI: prefixes are machine-ish labels, not prose — building them
   // here keeps the JSX free of raw string literals (jsx-no-literals).
   function managerCellText(cell: AssessmentMatrixCell): string {
-    return `M:${formatValue(cell.manager_score)}`;
+    return `M:${formatValue(cell.manager_score, cell.manager_percent)}`;
   }
 
   function aiCellText(cell: AssessmentMatrixCell): string {
@@ -268,13 +299,18 @@ export default function AssessmentCanvasPage() {
     return label ? `(${label})` : null;
   }
 
-  /** "Aggregated" collapses Manager and AI into their mean. */
-  function aggregatedValue(cell: AssessmentMatrixCell): number | null {
-    const parts = [cell.manager_score, cell.ai_score].filter(
-      (v): v is number => v !== null,
-    );
+  function mean(values: (number | null)[]): number | null {
+    const parts = values.filter((v): v is number => v !== null);
     if (parts.length === 0) return null;
     return parts.reduce((a, b) => a + b, 0) / parts.length;
+  }
+
+  /** "Aggregated" collapses Manager and AI into their mean, in either unit. */
+  function aggregatedText(cell: AssessmentMatrixCell): string {
+    return formatValue(
+      mean([cell.manager_score, cell.ai_score]),
+      mean([cell.manager_percent, cell.ai_percent]),
+    );
   }
 
   /** HRP-744 — the export is whatever the toolbar is showing, so the
@@ -610,7 +646,7 @@ export default function AssessmentCanvasPage() {
                             className="flex w-full flex-col items-center gap-0.5 px-2 py-1 text-center font-mono hover:bg-accent/10"
                           >
                             {view === "aggregated" ? (
-                              <span>{formatValue(aggregatedValue(cell))}</span>
+                              <span>{aggregatedText(cell)}</span>
                             ) : (
                               <>
                                 {view !== "ai" && (

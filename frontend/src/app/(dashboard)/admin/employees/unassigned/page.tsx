@@ -21,14 +21,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { RequireRole } from "@/components/require-role";
+import { RequireSection } from "@/components/require-section";
+import { useAuth } from "@/context/auth-context";
+import { usePermissions } from "@/hooks/use-permissions";
+import { holdsAdminLevel } from "@/lib/user-role-label";
 import { toast } from "sonner";
 
 export default function UnassignedEmployeesPage() {
   return (
-    <RequireRole manage>
+    // HRP-829: filing a position on someone runs their record - `manage`
+    // on employees, not the admin/manager role pair.
+    <RequireSection code="employees" level="manage">
       <UnassignedEmployeesView />
-    </RequireRole>
+    </RequireSection>
   );
 }
 
@@ -40,6 +45,8 @@ function UnassignedEmployeesView() {
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [pendingPos, setPendingPos] = useState<Record<string, string>>({});
+  const { user } = useAuth();
+  const { isAdminLevel } = usePermissions();
 
   // HRP-476: memoised because the error fallback now closes over the
   // translator — an inline function would re-run the effect on every render.
@@ -50,7 +57,13 @@ function UnassignedEmployeesView() {
         api.get<EmployeeList>("/employees?unassigned_only=true&limit=100"),
         api.get<{ items: Position[]; total: number }>("/positions?limit=100"),
       ]);
-      setEmployees(empRes.items);
+      // HRP-829: below the admin level one's own card and an admin-level
+      // colleague's are not the caller's to seat - the API refuses both.
+      setEmployees(
+        isAdminLevel
+          ? empRes.items
+          : empRes.items.filter((e) => e.user_id !== user?.id && !holdsAdminLevel(e.roles)),
+      );
       setPositions(
         posRes.items.filter((p) => p.lifecycle_status !== "closed"),
       );
@@ -59,7 +72,7 @@ function UnassignedEmployeesView() {
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, isAdminLevel, user?.id]);
 
   useEffect(() => {
     load();
@@ -157,7 +170,11 @@ function UnassignedEmployeesView() {
                         </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        {positions.map((p) => (
+                        {positions
+                          // HRP-829: a seat of the person's division or a
+                          // workspace-wide one below the admin level.
+                          .filter((p) => isAdminLevel || !p.division_id || p.division_id === emp.division_id)
+                          .map((p) => (
                           <SelectItem key={p.id} value={p.id}>
                             {p.title}
                             {p.division_name ? ` · ${p.division_name}` : ""}

@@ -209,8 +209,11 @@ export function ScheduleInterviewDialog({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    // HRP-971: for a candidacy, without those its vacancy is fenced from.
     api
-      .get<InterviewerOption[]>("/recruitment/interviewers")
+      .get<InterviewerOption[]>(
+        `/recruitment/interviewers${cvId ? `?candidate_vacancy_id=${cvId}` : ""}`,
+      )
       .then((rows) => {
         if (!cancelled) setPeople(Array.isArray(rows) ? rows : []);
       })
@@ -220,7 +223,7 @@ export function ScheduleInterviewDialog({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, cvId]);
 
   // HRP-386 REDO: Title is mandatory — no default value, no hint.
   const titleValue = title.trim();

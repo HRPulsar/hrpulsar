@@ -211,3 +211,9 @@ class TestExamImport:
         rows = list(ws.iter_rows(values_only=True))
         assert rows[0][0] == "question_text"
         assert len(rows) == 4  # header + 3 examples
+
+    async def test_template_route_is_not_taken_for_an_id(self, auth_client):
+        # It sat after ``/mass-exams/{mass_exam_id}`` and answered 422.
+        r = await auth_client.get("/api/mass-exams/import-template")
+        assert r.status_code == 200, r.text
+        assert r.content[:2] == b"PK"  # an xlsx is a zip

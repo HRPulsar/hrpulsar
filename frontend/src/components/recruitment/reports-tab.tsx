@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { ReportWizardDialog } from "./report-wizard-dialog";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   reportSectionLabel,
   reportStatusLabel,
@@ -50,6 +51,8 @@ export function ReportsTab({ vacancyId }: ReportsTabProps) {
   const [items, setItems] = useState<ReportExport[]>([]);
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
+  // HRP-830: generating and deleting a report are `manage` on recruitment.
+  const canManage = usePermissions().canManageSection("recruitment");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -130,14 +133,16 @@ export function ReportsTab({ vacancyId }: ReportsTabProps) {
             <RefreshCw className="size-4" />
             {t("actionRefresh")}
           </Button>
-          <Button
-            size="sm"
-            onClick={() => setWizardOpen(true)}
-            data-testid="recruitment-reports-btn-new"
-          >
-            <Plus className="size-4" />
-            {t("reportsTabGenerateButton")}
-          </Button>
+          {canManage && (
+            <Button
+              size="sm"
+              onClick={() => setWizardOpen(true)}
+              data-testid="recruitment-reports-btn-new"
+            >
+              <Plus className="size-4" />
+              {t("reportsTabGenerateButton")}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -227,14 +232,16 @@ export function ReportsTab({ vacancyId }: ReportsTabProps) {
                       >
                         <Download className="size-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void handleDelete(row.id)}
-                        data-testid={`recruitment-reports-btn-delete-${row.id}`}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
+                      {canManage && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void handleDelete(row.id)}
+                          data-testid={`recruitment-reports-btn-delete-${row.id}`}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>

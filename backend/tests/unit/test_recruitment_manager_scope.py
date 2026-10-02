@@ -321,8 +321,8 @@ class TestManagerHiringScope:
 class TestManagerReadsTheAssessmentMatrix:
     """HRP-694: the matrix explains the card a manager already reads.
 
-    The candidate card and its divergence badge are open to
-    ``RECRUITMENT_VIEWER_ROLES``, but the matrix behind them used to be
+    The candidate card and its divergence badge are open to every
+    recruitment viewer (``view`` since HRP-830), but the matrix behind them used to be
     ``admin / recruiter / hr / hiring_manager`` — so the Manager vs AI
     block rendered empty for a division head. Reads are level with the
     card now; writing a score is still recruiter work.

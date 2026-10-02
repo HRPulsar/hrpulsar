@@ -1,20 +1,17 @@
 import { RecruitmentOnboardingBanner } from "@/components/recruitment/onboarding-banner";
-import { RequireRole } from "@/components/require-role";
 
-// HRP-622: every recruitment route (requisitions, candidates, interviews,
-// reports, settings, audit log) is behind RECRUITMENT_VIEWER_ROLES on the
-// API. Without this gate a bookmarked deep link rendered the shell for
-// anyone and turned into a cascade of 403 toasts instead of the standard
-// "no permission" bounce.
+// HRP-830: the recruitment subtree follows its section - `SectionGate` in
+// the dashboard layout bounces a caller without `view` on it before any
+// child request goes out (it used to be `RequireRole recruit`, HRP-622).
 export default function RecruitmentLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   return (
-    <RequireRole recruit>
+    <>
       <RecruitmentOnboardingBanner />
       {children}
-    </RequireRole>
+    </>
   );
 }

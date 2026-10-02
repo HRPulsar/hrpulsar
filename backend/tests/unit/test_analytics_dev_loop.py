@@ -24,6 +24,7 @@ from app.modules.assessment.models import (
     AssessmentResult,
     AssessmentStatus,
     AssessmentType,
+    PDPItem,
 )
 from app.modules.auth.models import User
 from app.modules.company.models import Tenant
@@ -171,6 +172,34 @@ def _pdp(tenant: Tenant, emp: Employee, **kwargs) -> PDP:
         author_id=emp.user_id,
         **kwargs,
     )
+
+
+async def _finished_plan_on(
+    db: AsyncSession,
+    tenant: Tenant,
+    emp: Employee,
+    competence: Competence,
+    *,
+    finished_days_ago: int,
+) -> PDP:
+    """A done plan whose one item worked on ``competence`` (HRP-724)."""
+    plan = _pdp(
+        tenant,
+        emp,
+        status="done",
+        finished_at=datetime.now(UTC) - timedelta(days=finished_days_ago),
+    )
+    db.add(plan)
+    await db.flush()
+    db.add(
+        PDPItem(
+            pdp_id=plan.id,
+            competence_id=competence.id,
+            title=f"Item {uuid.uuid4().hex[:6]}",
+        )
+    )
+    await db.commit()
+    return plan
 
 
 def _finding(payload: dict, code: str) -> dict | None:
@@ -432,6 +461,134 @@ async def test_plans_done_on_time_in_closed_window(db: AsyncSession, tenant):
 
     payload = await analytics_service.dev_loop(db, tenant.id, None)
     assert payload["stages"]["closed"]["plans_done_on_time"] == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_tile_draws_both_numbers_from_one_set(db: AsyncSession, tenant):
+    """HRP-766: "Completed 1" over "2 plans completed on time" cannot recur.
+
+    The headline used to count closed competence gaps and the sub-line
+    plans -- two sets that never had to agree. Both now come from the plans
+    finished inside the window, on-time is a subset of them, and the
+    dynamics tile next door reads the same list, for every period.
+    """
+    emp = await _make_employee(db, tenant)
+    gone = await _make_employee(db, tenant, last_name="Left", status="terminated")
+    now = datetime.now(UTC)
+    # Inside 30 days: two finished, one of them late.
+    db.add(
+        _pdp(
+            tenant,
+            emp,
+            status="done",
+            finished_at=now - timedelta(days=10),
+            deadline=now - timedelta(days=5),
+        )
+    )
+    db.add(
+        _pdp(
+            tenant,
+            emp,
+            status="done",
+            finished_at=now - timedelta(days=10),
+            deadline=now - timedelta(days=20),
+        )
+    )
+    # Inside 90 days: one more, on time.
+    db.add(
+        _pdp(
+            tenant,
+            emp,
+            status="done",
+            finished_at=now - timedelta(days=60),
+            deadline=now - timedelta(days=50),
+        )
+    )
+    # A terminated employee's on-time plan belongs to neither number.
+    db.add(
+        _pdp(
+            tenant,
+            gone,
+            status="done",
+            finished_at=now - timedelta(days=3),
+            deadline=now - timedelta(days=1),
+        )
+    )
+    await db.commit()
+
+    expected = {30: (2, 1), 90: (3, 2), 365: (3, 2)}
+    for days, (completed, on_time) in expected.items():
+        payload = await analytics_service.dev_loop(db, tenant.id, None, days=days)
+        closed = payload["stages"]["closed"]
+        assert (closed["plans_completed"], closed["plans_done_on_time"]) == (
+            completed,
+            on_time,
+        ), days
+        assert closed["plans_done_on_time"] <= closed["plans_completed"]
+        assert payload["dynamics"]["plans_completed"] == closed["plans_completed"]
+
+
+@pytest.mark.asyncio
+async def test_plan_closed_on_its_deadline_day_is_on_time(db: AsyncSession, tenant):
+    """A deadline is entered as a date; finishing that afternoon is not late."""
+    emp = await _make_employee(db, tenant)
+    deadline = (datetime.now(UTC) - timedelta(days=5)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    db.add(
+        _pdp(
+            tenant,
+            emp,
+            status="done",
+            finished_at=deadline + timedelta(hours=15),
+            deadline=deadline,
+        )
+    )
+    await db.commit()
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
+    assert payload["stages"]["closed"]["plans_done_on_time"] == 1
+
+
+@pytest.mark.asyncio
+async def test_my_loop_completed_tile_counts_my_plans(db: AsyncSession, tenant):
+    """HRP-766 on the personal hero: my finished plans, my on-time subset."""
+    emp = await _make_employee(db, tenant, last_name="Mine")
+    other = await _make_employee(db, tenant, last_name="Theirs")
+    now = datetime.now(UTC)
+    db.add(
+        _pdp(
+            tenant,
+            emp,
+            status="done",
+            finished_at=now - timedelta(days=10),
+            deadline=now - timedelta(days=5),
+        )
+    )
+    db.add(
+        _pdp(
+            tenant,
+            emp,
+            status="done",
+            finished_at=now - timedelta(days=10),
+            deadline=now - timedelta(days=20),
+        )
+    )
+    db.add(
+        _pdp(
+            tenant,
+            other,
+            status="done",
+            finished_at=now - timedelta(days=10),
+            deadline=now,
+        )
+    )
+    await db.commit()
+
+    payload = await analytics_service.my_loop(db, tenant.id, emp.user_id, days=90)
+    closed = payload["stages"]["closed"]
+    assert (closed["plans_completed"], closed["plans_done_on_time"]) == (2, 1)
+    assert payload["dynamics"]["plans_completed"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1180,6 +1337,7 @@ async def test_dynamics_counts_a_strict_rise_against_the_earlier_result(
         finished_days_ago=5,
         competence=comp,
     )
+    await _finished_plan_on(db, tenant, emp, comp, finished_days_ago=30)
 
     payload = await analytics_service.dev_loop(db, tenant.id, None, days=90)
 
@@ -1216,6 +1374,7 @@ async def test_dynamics_ignores_a_score_that_held_or_fell(
             finished_days_ago=5,
             competence=comp,
         )
+        await _finished_plan_on(db, tenant, emp, comp, finished_days_ago=30)
 
     payload = await analytics_service.dev_loop(db, tenant.id, None, days=90)
 
@@ -1228,13 +1387,145 @@ async def test_dynamics_ignores_a_competence_measured_for_the_first_time(
 ):
     """No baseline, no gain -- a first reading is not an improvement."""
     emp = await _make_employee(db, tenant, last_name="Newcomer")
+    comp = await _make_competence(db, tenant)
     await _make_done_assessment(
-        db, tenant, emp, status_done, type_self, percent=90, finished_days_ago=5
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=90,
+        finished_days_ago=5,
+        competence=comp,
     )
+    await _finished_plan_on(db, tenant, emp, comp, finished_days_ago=30)
 
     payload = await analytics_service.dev_loop(db, tenant.id, None, days=90)
 
     assert payload["dynamics"]["competences_improved"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dynamics_counts_a_rise_only_on_the_plan_s_own_competences(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    """HRP-724 REDO: the rise has to be the plan's doing.
+
+    (a) only competences the finished plan's items were about count;
+    (b) the "after" reading is an assessment completed after the plan.
+    A competence that rose but was never in the plan stays out.
+    """
+    emp = await _make_employee(db, tenant, last_name="Planner")
+    planned = await _make_competence(db, tenant)
+    unplanned = await _make_competence(db, tenant)
+    for comp in (planned, unplanned):
+        await _make_done_assessment(
+            db,
+            tenant,
+            emp,
+            status_done,
+            type_self,
+            percent=40,
+            finished_days_ago=200,
+            competence=comp,
+        )
+        await _make_done_assessment(
+            db,
+            tenant,
+            emp,
+            status_done,
+            type_self,
+            percent=70,
+            finished_days_ago=5,
+            competence=comp,
+        )
+    await _finished_plan_on(db, tenant, emp, planned, finished_days_ago=30)
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None, days=90)
+
+    assert payload["dynamics"]["competences_improved"] == 1
+
+
+@pytest.mark.asyncio
+async def test_dynamics_ignores_a_rise_measured_before_the_plan_finished(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    emp = await _make_employee(db, tenant, last_name="Early")
+    comp = await _make_competence(db, tenant)
+    await _make_done_assessment(
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=40,
+        finished_days_ago=200,
+        competence=comp,
+    )
+    await _make_done_assessment(
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=70,
+        finished_days_ago=30,
+        competence=comp,
+    )
+    # The plan finished after both readings: nothing has been measured since.
+    await _finished_plan_on(db, tenant, emp, comp, finished_days_ago=10)
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None, days=90)
+
+    assert payload["dynamics"]["plans_completed"] == 1
+    assert payload["dynamics"]["competences_improved"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dynamics_reads_the_plan_s_competences_from_its_items(
+    db: AsyncSession, tenant, status_done, type_self
+):
+    """A finished plan with no competence-linked item raises nothing."""
+    emp = await _make_employee(db, tenant, last_name="Freeform")
+    comp = await _make_competence(db, tenant)
+    await _make_done_assessment(
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=40,
+        finished_days_ago=200,
+        competence=comp,
+    )
+    await _make_done_assessment(
+        db,
+        tenant,
+        emp,
+        status_done,
+        type_self,
+        percent=70,
+        finished_days_ago=5,
+        competence=comp,
+    )
+    plan = _pdp(
+        tenant,
+        emp,
+        status="done",
+        finished_at=datetime.now(UTC) - timedelta(days=30),
+    )
+    db.add(plan)
+    await db.flush()
+    db.add(PDPItem(pdp_id=plan.id, title="Read the handbook"))
+    await db.commit()
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None, days=90)
+
+    assert payload["dynamics"] == {
+        "days": 90,
+        "plans_completed": 1,
+        "competences_improved": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -1279,7 +1570,7 @@ async def test_my_loop_dynamics_counts_my_own_plans_and_rises(
         competence=comp,
     )
     now = datetime.now(UTC)
-    db.add(_pdp(tenant, emp, status="done", finished_at=now - timedelta(days=10)))
+    await _finished_plan_on(db, tenant, emp, comp, finished_days_ago=10)
     db.add(_pdp(tenant, other, status="done", finished_at=now - timedelta(days=10)))
     await db.commit()
 

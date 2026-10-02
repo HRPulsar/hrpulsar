@@ -109,7 +109,9 @@ export function AssessmentDetailedResults({
       })
       .catch((err) => {
         if (cancelled) return;
-        if (err instanceof ApiError && err.status === 403) {
+        // 404: an assessment outside the caller's read scope that they
+        // only take part in - the block is simply not theirs (HRP-826).
+        if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
           setState({ loading: false, error: null, data: null });
         } else {
           setState({

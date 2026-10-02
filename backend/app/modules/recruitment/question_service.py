@@ -20,23 +20,29 @@ Manager scores are intentionally NOT passed to the LLM — see
 ``QUESTION_SET_SYSTEM_PROMPT``. The dynamic mode does see *its own*
 prior question sets but never any human assessment numbers.
 
-Billing: ``generate_question_set`` is wired into ``ee/billing.py``
-``BILLABLE`` at 8 credits. ``generate_sample_question_set`` is exempt —
-when a tenant's balance is below threshold the UI can fall back to a
-static preview without spending credits.
+Billing (HRP-471): generation runs in Celery and is split-billed through
+``app.core.billing_hooks`` — ``enqueue_question_set_generation`` prechecks
+the 8 credits and holds them for the job, the worker consumes them in the
+transaction that turns the set ``ready`` and drops the hold; a job that is
+cancelled or fails is never charged. Nothing here is in ``BILLABLE``.
+``generate_sample_question_set`` is exempt — when a tenant's balance is
+below threshold the UI can fall back to a static preview without spending
+credits.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
 
 from fastapi import status
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import billing_hooks
 from app.core.errors import AppError
 from app.modules.ai.llm_client import generate_json
 from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
@@ -69,6 +75,9 @@ from app.modules.recruitment.schemas import (
     QuestionUpdate2,
 )
 
+if TYPE_CHECKING:
+    from app.modules.ai.providers import GenerationTarget
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,13 +107,11 @@ def _set_to_dict(qs: QuestionSet) -> dict:
         "archived_at": qs.archived_at,
         "version": qs.version,
         "created_at": qs.created_at,
-        # HRP-740: regeneration overwrites the set in place, so
-        # ``created_at`` stays pinned to the first generation. The
-        # "Generated <date>" line wants the last one — which is what the
-        # regeneration write moves ``updated_at`` to. Nothing else
-        # writes to a ``question_sets`` row: questions live in their own
-        # table and there is no rename or archive endpoint.
         "updated_at": qs.updated_at,
+        # HRP-740: regeneration overwrites the set in place, so
+        # ``created_at`` stays pinned to the first generation; the
+        # "Generated <date>" line reads this, stamped when questions land.
+        "generated_at": qs.generated_at,
         "questions": [
             _question_to_dict(q) for q in qs.questions if q.status == "active"
         ],
@@ -140,8 +147,10 @@ async def list_question_sets(
     candidate_id: uuid.UUID,
     *,
     vacancy_id: uuid.UUID | None = None,
+    scope_filter: ColumnElement[bool] | None = None,
 ) -> list[dict]:
-    """List question sets for a candidate, optionally filtered by vacancy.
+    """List question sets for a candidate, optionally filtered by vacancy
+    and by the caller's scope (HRP-629, HRP-971).
 
     Sets are returned newest-first; the active (non-archived) ones come
     first so the frontend tab-bar lights up the latest set by default.
@@ -152,6 +161,8 @@ async def list_question_sets(
     )
     if vacancy_id is not None:
         cv_query = cv_query.where(CandidateVacancy.vacancy_id == vacancy_id)
+    if scope_filter is not None:
+        cv_query = cv_query.join(Vacancy, Vacancy.id == CandidateVacancy.vacancy_id).where(scope_filter)
     cvs = (await db.execute(cv_query)).scalars().all()
     if not cvs:
         return []
@@ -254,6 +265,9 @@ async def list_vacancy_question_sets(
                         QuestionSet.tenant_id == tenant_id,
                         QuestionSet.candidate_vacancy_id.in_([cv.id for cv in cvs]),
                         QuestionSet.archived_at.is_(None),
+                        # HRP-471: a set still being generated, or one whose
+                        # generation failed, must not shadow the last real one.
+                        QuestionSet.status.in_(("ready", "regenerating")),
                     )
                     # Sets generated inside one transaction share a
                     # created_at to the microsecond, so the id breaks the
@@ -424,6 +438,11 @@ async def _previous_sets_payload(
     payload = []
     for s in sets:
         if exclude_set_id is not None and s.id == exclude_set_id:
+            continue
+        # HRP-471: a placeholder still being generated (or one that failed)
+        # has no questions and is not a "previous set"; a set being
+        # regenerated keeps its questions until the new ones land.
+        if not any(q.status == "active" for q in s.questions):
             continue
         payload.append(
             {
@@ -725,6 +744,8 @@ async def _call_llm(
     *,
     db: AsyncSession | None = None,
     tenant_id: uuid.UUID | None = None,
+    language: str | None = None,
+    credentials: GenerationTarget | None = None,
     vacancy: Vacancy,
     profile_competences: list[dict],
     resume_data: dict,
@@ -737,7 +758,7 @@ async def _call_llm(
 ) -> GeneratedQuestionSet:
     prompt = build_question_set_prompt(
         vacancy_title=vacancy.title,
-        language=await resolve_analysis_language(db, tenant_id, vacancy),
+        language=language or await resolve_analysis_language(db, tenant_id, vacancy),
         profile_competences=profile_competences,
         resume_data=resume_data,
         previous_questions=previous_questions,
@@ -755,6 +776,7 @@ async def _call_llm(
         schema=GeneratedQuestionSet,
         db=db,
         tenant_id=tenant_id,
+        credentials=credentials,
     )
     if isinstance(raw, GeneratedQuestionSet):
         return raw
@@ -811,7 +833,7 @@ async def _resolve_target_round(
     if round_row is None:
         raise AppError("assessment_round_not_found", status.HTTP_404_NOT_FOUND)
 
-    taken = (
+    bound = (
         (
             await db.execute(
                 select(QuestionSet).where(
@@ -822,10 +844,15 @@ async def _resolve_target_round(
             )
         )
         .scalars()
-        .first()
+        .all()
     )
-    if taken is not None:
+    if any(s.status != "failed" for s in bound):
         raise AppError("round_already_has_question_set", status.HTTP_409_CONFLICT)
+    # A failed attempt holds no questions and does not hold the round: the
+    # retry takes it over (with the transcripts a Regenerate would not
+    # load), and the empty placeholder is archived out of the tab bar.
+    for failed in bound:
+        failed.archived_at = datetime.now(timezone.utc)
     return round_row.id, _round_label(round_row.type, round_row.round_number)
 
 
@@ -845,19 +872,25 @@ def _round_label(round_type: str | None, round_number: int | None) -> str:
     return "Next round"
 
 
-async def generate_question_set(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    cv_id: uuid.UUID,
-    data: GenerateQuestionSetRequest,
-    *,
-    current_user_id: uuid.UUID | None = None,
-) -> dict:
-    """Generate or regenerate a question set for a candidate-vacancy.
+# HRP-471: a set the worker is still filling. ``generating`` is a fresh
+# placeholder (first or next-round set); ``regenerating`` is an existing set
+# whose AI questions are being replaced and which keeps them until the
+# result lands.
+_IN_FLIGHT = ("generating", "regenerating")
 
-    Billable. Wrapped by ``ee.billing.register_billing`` at 8 credits per
-    call.
-    """
+# The billing action of a generation. Split-billed: the handler prechecks
+# the pinned cost, the worker consumes it in the transaction that turns
+# the row ``ready`` — a cancelled or failed job is never charged.
+_GENERATION_ACTION = "recruitment.generate_question_set"
+# HRP-547 hold entity: the job's credits are earmarked on the set it fills,
+# so parallel enqueues cannot all pass one balance check.
+_HOLD_ENTITY = "question_set"
+
+
+async def _load_generation_inputs(
+    db: AsyncSession, tenant_id: uuid.UUID, cv_id: uuid.UUID
+) -> tuple[CandidateVacancy, Candidate, Vacancy, dict, list[dict]]:
+    """The pair, its people and the resume — or the 4xx every caller shares."""
     cv = await _load_candidate_vacancy(db, tenant_id, cv_id)
     candidate = await db.get(Candidate, cv.candidate_id)
     vacancy = await db.get(Vacancy, cv.vacancy_id)
@@ -873,7 +906,26 @@ async def generate_question_set(
         raise AppError("parsed_resume_required", status.HTTP_409_CONFLICT)
 
     profile_competences = await _load_profile_competences(db, tenant_id, cv.vacancy_id)
+    return cv, candidate, vacancy, resume_data, profile_competences
 
+
+async def _prepare_generation(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cv: CandidateVacancy,
+    data: GenerateQuestionSetRequest,
+    *,
+    current_user_id: uuid.UUID | None,
+    job: QuestionSet | None = None,
+) -> dict[str, Any]:
+    """Mode-specific validation and prompt context.
+
+    ``job`` (HRP-471, worker) is the row the result will land on. It
+    already carries the assessment round the enqueue resolved — possibly
+    a round it opened — so the round is not resolved a second time
+    (that would answer "round already has a question set" against the
+    job's own placeholder).
+    """
     if data.mode == "regenerated":
         if data.target_set_id is None:
             raise AppError("target_set_id_required", status.HTTP_400_BAD_REQUEST)
@@ -912,9 +964,12 @@ async def generate_question_set(
         # ``source_round_ids`` persisted on the set.
         round_ids = [uuid.UUID(t["interview_id"]) for t in transcripts]
         source_round_ids = round_ids
-        assessment_round_id, round_label = await _resolve_target_round(
-            db, tenant_id, cv.id, data, current_user_id=current_user_id
-        )
+        if job is not None:
+            assessment_round_id, round_label = job.assessment_round_id, None
+        else:
+            assessment_round_id, round_label = await _resolve_target_round(
+                db, tenant_id, cv.id, data, current_user_id=current_user_id
+            )
         previous_questions = await _previous_sets_payload(db, tenant_id, cv.id)
         blind_spots = await _collect_blind_spots(db, tenant_id, cv.id, round_ids)
         prior_analyses = await _collect_prior_analyses(db, tenant_id, cv.id, round_ids)
@@ -936,7 +991,9 @@ async def generate_question_set(
         # Binding a round is optional for a first set, but when a caller
         # does bind one the one-set-per-round rule still has to hold —
         # otherwise the guard is only as good as the UI that calls it.
-        if data.assessment_round_id is not None:
+        if job is not None:
+            assessment_round_id, round_label = job.assessment_round_id, None
+        elif data.assessment_round_id is not None:
             assessment_round_id, round_label = await _resolve_target_round(
                 db, tenant_id, cv.id, data, current_user_id=current_user_id
             )
@@ -944,39 +1001,215 @@ async def generate_question_set(
             assessment_round_id, round_label = None, None
         set_type = data.set_type
 
-    notify_ctx = {
-        "tenant_id": str(tenant_id),
+    return {
+        "target": target,
+        "previous_questions": previous_questions,
+        "transcripts": transcripts,
+        "blind_spots": blind_spots,
+        "prior_analyses": prior_analyses,
+        "manager_divergence": manager_divergence,
+        "assessment_round_id": assessment_round_id,
+        "round_label": round_label,
+        "set_type": set_type,
+        "source_round_ids": source_round_ids,
+    }
+
+
+def _settled_status(job: QuestionSet) -> str:
+    """HRP-471: what a row goes back to when its generation stops short.
+
+    A set that has questions was being regenerated and is usable again; a
+    bare placeholder — a first attempt, or a failed one retried — has
+    nothing to show and reads ``failed``.
+    """
+    return "ready" if any(q.status == "active" for q in job.questions) else "failed"
+
+
+async def _release_hold(
+    db: AsyncSession, tenant_id: uuid.UUID, set_id: uuid.UUID
+) -> None:
+    """Drop the generation's hold on the set, in the caller's transaction.
+    Idempotent; the expiry sweep is the backstop for a job that died hard."""
+    await billing_hooks.release_action(
+        db,
+        tenant_id,
+        entity_type=_HOLD_ENTITY,
+        entity_id=set_id,
+        action=_GENERATION_ACTION,
+    )
+
+
+async def _lock_job(
+    db: AsyncSession, job_id: uuid.UUID, expected_version: int | None
+) -> QuestionSet | None:
+    """HRP-471: the row a worker result lands on — locked, re-read from the
+    database rather than the identity map (a Cancel happens in another
+    session). ``None`` when the row is gone, settled, or was cancelled and
+    re-enqueued since (its version moved): the caller must not write."""
+    job = await db.scalar(
+        select(QuestionSet)
+        .where(QuestionSet.id == job_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        job is None
+        or job.status not in _IN_FLIGHT
+        or (expected_version is not None and job.version != expected_version)
+    ):
+        return None
+    return job
+
+
+async def _settle_failed_job(
+    db: AsyncSession, job_id: uuid.UUID, expected_version: int | None
+) -> bool:
+    """HRP-471: the job died before its result landed. The row it was
+    filling settles (``failed`` or back to ``ready``) and its hold goes —
+    unless a Cancel got there first or the set was re-enqueued since, in
+    which case the row belongs to that later job and is left alone.
+    Returns whether it wrote, i.e. whether this job's failure is news."""
+    await db.rollback()
+    job = await _lock_job(db, job_id, expected_version)
+    if job is None:
+        await db.rollback()
+        return False
+    job.status = _settled_status(job)
+    await _release_hold(db, job.tenant_id, job.id)
+    await db.commit()
+    return True
+
+
+def _notify_ctx(
+    cv: CandidateVacancy,
+    candidate: Candidate,
+    vacancy: Vacancy,
+    data: GenerateQuestionSetRequest,
+    current_user_id: uuid.UUID | None,
+) -> dict[str, Any]:
+    return {
+        "tenant_id": str(cv.tenant_id),
         "candidate_id": str(cv.candidate_id),
         "candidate_name": candidate.full_name,
         "vacancy_id": str(cv.vacancy_id),
         "vacancy_title": vacancy.title,
         "requested_by": str(current_user_id) if current_user_id else None,
         "mode": data.mode,
-        # Failure has no set to open yet — the ready event re-links below
-        # with the generated set so the email lands on the right tab.
+        # Failure has no set to open yet — the ready event re-links with
+        # the generated set so the email lands on the right tab.
         "link": candidate_question_deep_link(cv.candidate_id, cv.vacancy_id),
     }
+
+
+async def generate_question_set(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cv_id: uuid.UUID,
+    data: GenerateQuestionSetRequest,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    into_set_id: uuid.UUID | None = None,
+    expected_version: int | None = None,
+    cost: float | None = None,
+) -> dict:
+    """Generate or regenerate a question set for a candidate-vacancy.
+
+    Runs the model and persists the result. The API does not call this
+    directly any more: it enqueues through
+    :func:`enqueue_question_set_generation` (HRP-471) and the worker runs
+    this body, which charges the pinned ``cost`` in the transaction that
+    turns the row ``ready``.
+
+    ``into_set_id`` (worker) names the row the result lands on — the
+    ``generating`` placeholder of a first or next-round set, or the
+    ``regenerating`` target of a regeneration — and ``expected_version``
+    the version it had when the job was enqueued. The row is re-read under
+    lock before the model is asked and again after it answers: a Cancel
+    meanwhile deleted the placeholder or restored the target (bumping its
+    version), and then nothing is written and nothing is charged.
+    """
+    (
+        cv,
+        candidate,
+        vacancy,
+        resume_data,
+        profile_competences,
+    ) = await _load_generation_inputs(db, tenant_id, cv_id)
+    job: QuestionSet | None = None
+    if into_set_id is not None:
+        job = await db.get(QuestionSet, into_set_id)
+        if job is None:
+            # Cancelled while the job sat in the queue: the placeholder is gone.
+            logger.info("question set %s was cancelled before the job ran", into_set_id)
+            return {"id": into_set_id, "status": "cancelled"}
+    plan = await _prepare_generation(
+        db, tenant_id, cv, data, current_user_id=current_user_id, job=job
+    )
+    target: QuestionSet | None = plan["target"]
+
+    notify_ctx = _notify_ctx(cv, candidate, vacancy, data, current_user_id)
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    creds = None
+    language: str | None = None
+    if into_set_id is not None:
+        # HRP-471: a Cancel may have landed while this job sat in the
+        # queue — do not ask the model for a row nobody is waiting for.
+        job = await _lock_job(db, into_set_id, expected_version)
+        if job is None:
+            await db.rollback()
+            logger.info(
+                "question set %s was cancelled before the model ran", into_set_id
+            )
+            return {"id": into_set_id, "status": "cancelled"}
+        # Provenance of the answer; stamped when the answer lands.
+        from app.modules.ai.providers import resolve_generation_target
+
+        creds = await resolve_generation_target(db, tenant_id, None)
+        llm_provider, llm_model = creds.provider, creds.model
+        language = await resolve_analysis_language(db, tenant_id, vacancy)
+        # Nothing written: this lets go of the row lock (held across the
+        # model call it would block Cancel) and ends the read transaction,
+        # which the model call must not hold open either - Postgres kills
+        # an idle-in-transaction connection after five minutes.
+        await db.commit()
     try:
         generated = await _call_llm(
-            db=db,
+            db=None if into_set_id is not None else db,
             tenant_id=tenant_id,
+            language=language if into_set_id is not None else None,
+            credentials=creds if into_set_id is not None else None,
             vacancy=vacancy,
             profile_competences=profile_competences,
             resume_data=resume_data,
-            previous_questions=previous_questions,
-            transcripts=transcripts,
-            blind_spots=blind_spots,
-            prior_analyses=prior_analyses,
-            manager_divergence=manager_divergence,
+            previous_questions=plan["previous_questions"],
+            transcripts=plan["transcripts"],
+            blind_spots=plan["blind_spots"],
+            prior_analyses=plan["prior_analyses"],
+            manager_divergence=plan["manager_divergence"],
             generation_mode=data.mode,
         )
         _validate_question_count(generated)
     except Exception:
         # HRP-205 REDO: N-question_set_failed with a deep link back to the
-        # candidate page so the requester can retry. Published before the
-        # error propagates to the client.
-        await _publish_event("recruitment.question_set.failed", notify_ctx)
+        # candidate page so the requester can retry. A worker job leaves
+        # this to ``_run_generation_job``, which settles the row first and
+        # tells only when the failure was still news.
+        if into_set_id is None:
+            await _publish_event("recruitment.question_set.failed", notify_ctx)
         raise
+
+    if into_set_id is not None:
+        # HRP-471: the row may have been cancelled while the model wrote.
+        job = await _lock_job(db, into_set_id, expected_version)
+        if job is None:
+            await db.rollback()
+            logger.info("question set %s was cancelled; result discarded", into_set_id)
+            return {"id": into_set_id, "status": "cancelled"}
+        job.llm_provider = llm_provider
+        job.llm_model = llm_model
+        if data.mode == "regenerated":
+            target = job
 
     competence_lookup = _competence_id_by_name(profile_competences)
 
@@ -1005,29 +1238,45 @@ async def generate_question_set(
             db.add(q)
         target.coverage_note = generated.coverage_note
         target.generation_mode = "regenerated"
+        target.status = "ready"
+        target.generated_at = datetime.now(timezone.utc)
         target.version = (target.version or 1) + 1
         target.created_by = current_user_id
+        if into_set_id is not None:
+            await _charge_generation(db, tenant_id, current_user_id, cost)
+            await _release_hold(db, tenant_id, target.id)
         await db.commit()
         await db.refresh(target)
         saved = target
     else:
-        saved = QuestionSet(
-            tenant_id=tenant_id,
-            candidate_vacancy_id=cv.id,
-            round_id=data.round_id,
-            assessment_round_id=assessment_round_id,
-            set_type=set_type,
-            # A round set is named after the round it prepares, so the
-            # tab bar reads "Interview 2" rather than "Next round".
-            name=data.name or round_label or _default_set_name(data.mode, set_type),
-            status="ready",
-            generation_mode=data.mode,
-            source_round_ids=source_round_ids,
-            coverage_note=generated.coverage_note,
-            created_by=current_user_id,
-        )
-        db.add(saved)
-        await db.flush()
+        if job is not None:
+            # HRP-471: the placeholder the block has been polling becomes
+            # the set — same id, same tab.
+            saved = job
+            saved.coverage_note = generated.coverage_note
+            saved.status = "ready"
+            saved.created_by = current_user_id
+        else:
+            saved = QuestionSet(
+                tenant_id=tenant_id,
+                candidate_vacancy_id=cv.id,
+                round_id=data.round_id,
+                assessment_round_id=plan["assessment_round_id"],
+                set_type=plan["set_type"],
+                # A round set is named after the round it prepares, so the
+                # tab bar reads "Interview 2" rather than "Next round".
+                name=data.name
+                or plan["round_label"]
+                or _default_set_name(data.mode, plan["set_type"]),
+                status="ready",
+                generation_mode=data.mode,
+                source_round_ids=plan["source_round_ids"],
+                coverage_note=generated.coverage_note,
+                created_by=current_user_id,
+            )
+            db.add(saved)
+            await db.flush()
+        saved.generated_at = datetime.now(timezone.utc)
         for q in _build_questions(
             generated,
             tenant_id=tenant_id,
@@ -1035,9 +1284,14 @@ async def generate_question_set(
             competence_lookup=competence_lookup,
         ):
             db.add(q)
+        if job is not None:
+            await _charge_generation(db, tenant_id, current_user_id, cost)
+            await _release_hold(db, tenant_id, saved.id)
         await db.commit()
         await db.refresh(saved)
 
+    result = _set_to_dict(saved)
+    # In the worker's own session: the event bus has no subscribers there.
     await _publish_event(
         "recruitment.question_set.ready",
         {
@@ -1048,8 +1302,234 @@ async def generate_question_set(
                 cv.candidate_id, cv.vacancy_id, saved.id
             ),
         },
+        db=db,
     )
-    return _set_to_dict(saved)
+    return result
+
+
+async def _charge_generation(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    cost: float | None,
+) -> None:
+    """HRP-471: consume the generation's credits, in the caller's transaction.
+
+    The cost was pinned by the enqueue so a tenant flipping AI settings
+    mid-flight cannot change the price; a task queued before the pin
+    existed resolves it the same way.
+    """
+    amount = (
+        cost
+        if cost is not None
+        else await billing_hooks.resolve_cost(db, tenant_id, _GENERATION_ACTION)
+    )
+    await billing_hooks.consume_action(
+        db, tenant_id, user_id, _GENERATION_ACTION, amount_override=amount
+    )
+
+
+async def _run_generation_job(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cv_id: uuid.UUID,
+    data: GenerateQuestionSetRequest,
+    *,
+    current_user_id: uuid.UUID | None,
+    into_set_id: uuid.UUID,
+    expected_version: int | None,
+    cost: float | None,
+) -> dict:
+    """HRP-471: the worker body. Whatever raises — before the model (the
+    resume vanished, the target moved), in it, or after — the row the job
+    was filling is settled, never left ``generating`` for good, and the
+    requester hears about the failure only when it was still theirs."""
+    try:
+        return await generate_question_set(
+            db,
+            tenant_id,
+            cv_id,
+            data,
+            current_user_id=current_user_id,
+            into_set_id=into_set_id,
+            expected_version=expected_version,
+            cost=cost,
+        )
+    except Exception:
+        if await _settle_failed_job(db, into_set_id, expected_version):
+            cv = await db.get(CandidateVacancy, cv_id, populate_existing=True)
+            candidate = (
+                await db.get(Candidate, cv.candidate_id, populate_existing=True)
+                if cv is not None
+                else None
+            )
+            vacancy = (
+                await db.get(Vacancy, cv.vacancy_id, populate_existing=True)
+                if cv is not None
+                else None
+            )
+            if cv is not None and candidate is not None and vacancy is not None:
+                await _publish_event(
+                    "recruitment.question_set.failed",
+                    _notify_ctx(cv, candidate, vacancy, data, current_user_id),
+                    db=db,
+                )
+        raise
+
+
+async def enqueue_question_set_generation(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cv_id: uuid.UUID,
+    data: GenerateQuestionSetRequest,
+    *,
+    current_user_id: uuid.UUID | None = None,
+) -> dict:
+    """HRP-471: start a generation in the background and answer at once.
+
+    Split-billed (see ``ee/billing.py``): the cost is resolved and
+    prechecked before anything is written, then held on the set for the
+    life of the job (HRP-547) — several tabs or API calls cannot queue more
+    jobs than the balance pays for. The worker consumes it in the
+    transaction that turns the row ``ready``; a job that is cancelled or
+    dies only drops the hold. Everything that can refuse (no resume, no
+    transcript, a foreign target, the round — including opening a new one)
+    is checked before a placeholder exists. The placeholder (or the
+    regeneration target, flipped to ``regenerating`` with its questions
+    intact) is what the block polls and what Cancel acts on;
+    :func:`generate_question_set` fills it in from the worker.
+    """
+    cv, _candidate, _vacancy, _resume, _competences = await _load_generation_inputs(
+        db, tenant_id, cv_id
+    )
+    # HRP-1005: a processor list that leaves no provider answers here, with
+    # its own 409, rather than as a generic failed set from the worker.
+    from app.modules.ai.providers import resolve_generation_target
+
+    await resolve_generation_target(db, tenant_id, None)
+    cost = await billing_hooks.resolve_cost(db, tenant_id, _GENERATION_ACTION)
+    await billing_hooks.precheck_action(
+        db,
+        tenant_id,
+        _GENERATION_ACTION,
+        amount_override=cost,
+        reserved_entity=(
+            (_HOLD_ENTITY, data.target_set_id)
+            if data.mode == "regenerated" and data.target_set_id is not None
+            else None
+        ),
+    )
+    plan = await _prepare_generation(
+        db, tenant_id, cv, data, current_user_id=current_user_id
+    )
+    job: QuestionSet | None
+    if data.mode == "regenerated":
+        # Locked before the in-flight check: two concurrent regenerations
+        # must not both pass it and share one expected version.
+        job = await db.scalar(
+            select(QuestionSet)
+            .where(QuestionSet.id == plan["target"].id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if job is None:
+            raise AppError("question_set_not_found", status.HTTP_404_NOT_FOUND)
+        if job.status in _IN_FLIGHT:
+            raise AppError(
+                "question_set_generation_in_progress", status.HTTP_409_CONFLICT
+            )
+        job.status = "regenerating"
+    else:
+        job = QuestionSet(
+            tenant_id=tenant_id,
+            candidate_vacancy_id=cv.id,
+            round_id=data.round_id,
+            assessment_round_id=plan["assessment_round_id"],
+            set_type=plan["set_type"],
+            name=data.name
+            or plan["round_label"]
+            or _default_set_name(data.mode, plan["set_type"]),
+            status="generating",
+            generation_mode=data.mode,
+            source_round_ids=plan["source_round_ids"],
+            created_by=current_user_id,
+        )
+        db.add(job)
+    await db.flush()
+
+    from app.core.celery_app import celery
+    from app.modules.recruitment.tasks.generation import generate_question_set_task
+
+    # The hold lives as long as the worker may run, so no live job outlives
+    # it; a refused hold (a parallel enqueue took the balance) is a 402 and
+    # rolls the placeholder back with it.
+    await billing_hooks.reserve_action(
+        db,
+        tenant_id,
+        current_user_id,
+        _GENERATION_ACTION,
+        entity_type=_HOLD_ENTITY,
+        entity_id=job.id,
+        ttl=timedelta(seconds=celery.conf.task_time_limit),
+        amount_override=cost,
+    )
+    await db.commit()
+    await db.refresh(job)
+
+    try:
+        generate_question_set_task.delay(
+            str(job.id),
+            str(tenant_id),
+            str(cv.id),
+            data.model_dump(mode="json"),
+            str(current_user_id) if current_user_id else None,
+            job.version,
+            cost,
+        )
+    except Exception:
+        # The broker refused the job: settle the row now, or it stays in
+        # flight - with its credits held - and nothing behind it.
+        await _settle_failed_job(db, job.id, job.version)
+        raise
+    return _set_to_dict(job)
+
+
+async def cancel_question_set_generation(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    set_id: uuid.UUID,
+) -> None:
+    """HRP-471: stop waiting for a generation.
+
+    A fresh placeholder disappears; a regeneration target settles — back to
+    ``ready`` with the questions it had, or ``failed`` if it never had any
+    — and its version moves so the worker's result, which may still
+    arrive, is recognised as stale and dropped. The job's hold goes with
+    it; nothing was charged, since credits are consumed only when a result
+    lands.
+
+    ponytail: no Celery revoke. The worker re-reads the row under lock
+    before asking the model and after it answers, so a late result is
+    dropped either way; a revoke keyed on the set id would also auto-drop
+    the *next* generation of the same set.
+    """
+    job = await db.scalar(
+        select(QuestionSet)
+        .where(QuestionSet.id == set_id, QuestionSet.tenant_id == tenant_id)
+        .with_for_update()
+    )
+    if job is None:
+        raise AppError("question_set_not_found", status.HTTP_404_NOT_FOUND)
+    if job.status not in _IN_FLIGHT:
+        raise AppError("question_set_not_generating", status.HTTP_409_CONFLICT)
+
+    if job.status == "regenerating":
+        job.status = _settled_status(job)
+        job.version = (job.version or 1) + 1
+    else:
+        await db.delete(job)
+    await _release_hold(db, tenant_id, set_id)
+    await db.commit()
 
 
 def candidate_question_deep_link(

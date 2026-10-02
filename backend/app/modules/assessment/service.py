@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import status
 from sqlalchemy import ColumnElement, and_, case, delete, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
@@ -1419,6 +1420,9 @@ async def add_competences(
             status.HTTP_400_BAD_REQUEST,
         )
 
+    from app.modules.competence.service import assert_catalogue_competences
+
+    await assert_catalogue_competences(db, tenant_id, competence_ids)
     for cid in competence_ids:
         db.add(AssessmentCompetence(assessment_id=assessment_id, competence_id=cid))
     await db.commit()
@@ -1610,6 +1614,11 @@ async def _apply_criteria_to_assessment(
             )
         assessment.specialization_id = None
         assessment.grade_id = None
+        from app.modules.competence.service import assert_catalogue_competences
+
+        await assert_catalogue_competences(
+            db, assessment.tenant_id, [item.competence_id for item in data.competences]
+        )
         for item in data.competences:
             db.add(
                 AssessmentCompetence(
@@ -1829,20 +1838,17 @@ async def record_answer(
 
     # HRP-146: assessment now opens in a Sheet with auto-save, so the
     # same indicator can be re-submitted by a participant tweaking their
-    # answer. Upsert on (assessment, participant, indicator) keeps one
-    # row per question — without this every keystroke / radio change
-    # would clone an answer, double-count the rater and stall the
+    # answer. One row per question — without this every keystroke / radio
+    # change would clone an answer, double-count the rater and stall the
     # ``_maybe_mark_participant_completed`` distinct-count check.
-    existing_q = await db.execute(
-        select(AssessmentAnswer).where(
-            AssessmentAnswer.assessment_id == assessment_id,
-            AssessmentAnswer.participant_id == data.participant_id,
-            AssessmentAnswer.indicator_id == data.indicator_id,
-        )
-    )
-    answer = existing_q.scalar_one_or_none()
-    if answer is None:
-        answer = AssessmentAnswer(
+    # HRP-910: two saves racing past a SELECT both inserted, and the next
+    # save failed on the pair (MultipleResultsFound) — the survey could
+    # never finish. The upsert conflicts on the unique (participant,
+    # indicator) constraint, so the loser of the race updates the
+    # winner's row instead of adding a second one.
+    upsert = (
+        pg_insert(AssessmentAnswer)
+        .values(
             assessment_id=assessment_id,
             participant_id=data.participant_id,
             indicator_id=data.indicator_id,
@@ -1850,12 +1856,20 @@ async def record_answer(
             score=data.score,
             comment=data.comment,
         )
-        db.add(answer)
-    else:
-        answer.answer_option_id = data.answer_option_id
-        answer.score = data.score
-        answer.comment = data.comment
-    await db.flush()
+        .on_conflict_do_update(
+            constraint="uq_assessment_answers_participant_indicator",
+            set_={
+                "answer_option_id": data.answer_option_id,
+                "score": data.score,
+                "comment": data.comment,
+                "updated_at": func.now(),
+            },
+        )
+        .returning(
+            AssessmentAnswer.id, AssessmentAnswer.indicator_id, AssessmentAnswer.score
+        )
+    )
+    answer = (await db.execute(upsert)).one()
 
     # First answer on a "sent" assessment kicks it to "in_progress".
     if a.status is None:
@@ -1895,7 +1909,6 @@ async def record_answer(
         )
 
     await db.commit()
-    await db.refresh(answer)
     return {
         "id": answer.id,
         "indicator_id": answer.indicator_id,
@@ -4072,10 +4085,14 @@ async def create_cpa(
     return _cpa_to_read(cpa)
 
 
-async def list_cpas(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
-    result = await db.execute(
-        select(CPA).where(CPA.tenant_id == tenant_id).order_by(CPA.created_at.desc())
-    )
+async def list_cpas(
+    db: AsyncSession, tenant_id: uuid.UUID, author_id: uuid.UUID | None = None
+) -> list[dict]:
+    """``author_id`` narrows to one author's rounds (HRP-640)."""
+    stmt = select(CPA).where(CPA.tenant_id == tenant_id)
+    if author_id is not None:
+        stmt = stmt.where(CPA.author_id == author_id)
+    result = await db.execute(stmt.order_by(CPA.created_at.desc()))
     return [_cpa_to_read(c) for c in result.scalars().all()]
 
 
@@ -4186,10 +4203,9 @@ async def get_cpa_analytics(
     visible_employee_ids: set[uuid.UUID] | None,
 ) -> dict:
     """HRP-641 review: the payload is a named per-employee ranking, so it
-    is scoped by assessee like ``compare_cpa_rounds``. Who owns the CPA
-    round itself is still HRP-640's question; this only applies the rule
-    the assessments already carry. ``None`` = no restriction, an empty
-    set = nothing."""
+    is scoped by assessee like ``compare_cpa_rounds``; the round itself is
+    its author's below the admin level (``cpa_scope``, HRP-640).
+    ``None`` = no restriction, an empty set = nothing."""
     c = await db.get(CPA, cpa_id)
     if not c or c.tenant_id != tenant_id:
         raise AppError("cpa_not_found", status.HTTP_404_NOT_FOUND)
@@ -4556,8 +4572,12 @@ async def get_external_assessment(db: AsyncSession, token: str) -> dict:
 
 async def submit_external_answers(db: AsyncSession, token: str, answers: list) -> dict:
     """Submit answers from external reviewer (no auth required)."""
+    # Locked: a double submit waits here and then reads completed_at,
+    # instead of both inserting into the HRP-910 unique and one getting 500.
     result = await db.execute(
-        select(ExternalReviewer).where(ExternalReviewer.token == token)
+        select(ExternalReviewer)
+        .where(ExternalReviewer.token == token)
+        .with_for_update()
     )
     er = result.scalar_one_or_none()
     if not er:
@@ -4585,8 +4605,9 @@ async def submit_external_answers(db: AsyncSession, token: str, answers: list) -
             "assessment_participant_record_not_found", status.HTTP_400_BAD_REQUEST
         )
 
-    # Record all answers
-    for ans in answers:
+    # Record all answers. HRP-910: one row per question — a payload that
+    # names the same indicator twice keeps its last answer.
+    for ans in {ans.indicator_id: ans for ans in answers}.values():
         answer = AssessmentAnswer(
             assessment_id=er.assessment_id,
             participant_id=participant.id,

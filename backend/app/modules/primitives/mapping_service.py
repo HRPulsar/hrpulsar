@@ -39,6 +39,7 @@ from app.modules.ai import providers as ai_providers
 from app.modules.ai_settings import service as ai_settings_service
 from app.modules.competence.models import Competence, Indicator, SkillLevel
 from app.modules.dictionary.models import DictionaryItem
+from app.modules.primitives.conventions import render_rules
 from app.modules.primitives.models import (
     MAPPING_STATUSES,
     CompetenceMappingState,
@@ -58,7 +59,15 @@ logger = logging.getLogger(__name__)
 # v5 (2026-09-09, review): P5 covers written explaining and reporting, a
 # spoken presentation adds no code; P12 needs an outside party; escalation
 # by rule is P11; registering from documents stays P1.
-PROMPT_VERSION = "v2map.v5"
+# v6 (2026-09-28, HRP-961): the code boundaries are the shared conventions
+# block (app.modules.primitives.conventions), the same the decomposition
+# prompt embeds - escalation by rule is P3, people by judgment are P8. The
+# competence-only rules stay here: top-level evidence, engineering spans,
+# spoken communication, one confidence per set (a doubtful P6 lowers it).
+# v7 (2026-09-29, HRP-961): the shared block carries the P6 answers - a
+# check whose point is the go or no-go, a negotiation that chooses the
+# concession.
+PROMPT_VERSION = "v2map.v7"
 TOP_LEVEL_TAG = "top level"
 BATCH_SIZE = 20
 MAX_INDICATORS = 10
@@ -304,7 +313,9 @@ def build_system_prompt(primitives: Sequence[Primitive]) -> str:
         "competence to every capability a person exercising it actually",
         "performs - usually one to four codes.",
         "Rules:",
-        "- Use only codes from the catalog below.",
+        "- Use only codes from the catalog below, by the conventions that",
+        "  follow it; read 'the step' there as the work a person exercising",
+        "  the competence does.",
         "- Include a code only when the competence's title, description or at",
         "  least one of its indicators evidences that capability, and name the",
         "  evidence in the rationale. Do not add a code for a capability the",
@@ -318,26 +329,18 @@ def build_system_prompt(primitives: Sequence[Primitive]) -> str:
         "  producing the artifact (P9), checking it against a reference such as",
         "  a review or a test (P2), finding the cause of a failure (P4). Include",
         "  each one only when evidenced.",
-        "- Spoken or interactive communication is dialogue, not text. P7 only",
-        "  for dialogue with a party outside the company (a customer, a",
-        "  supplier, a candidate, a regulator) whose outcome is open:",
-        "  negotiation, bargaining, interviews, disputes. Explaining or",
-        "  reporting is P5 - the report, the memo or the deck is written text;",
-        "  a spoken presentation adds no code. Gathering facts from people is",
-        "  P1 or P4; internal alignment and conflict is P8; escalation by rule",
-        "  is P11. Use P12 when the competence is explicitly about following a",
-        "  script, a questionnaire or a procedure with a party outside the",
-        "  company.",
-        "- Posting transactions to accounts, booking entries or filing tickets",
-        "  by known rules is P3, a choice from a finite set - not P9 (an",
-        "  artifact accepted by whether it works). Registering an object in a",
-        "  system from its documents is P1: the fields are extracted.",
-        "- Boundary codes (kind: boundary) only when the competence is about",
-        "  physical, sensory or hands-on transfer work; a competence may consist",
-        "  of a boundary code alone.",
+        "- A competence may consist of a boundary code alone.",
+        "- Spoken or interactive communication is dialogue, not text:",
+        "  explaining or reporting is P5 because the report, the memo or the",
+        "  deck is written text, and a spoken presentation adds no code.",
+        "  Gathering facts from people is P1 or P4. Use P12 only when the",
+        "  competence is explicitly about following a script, a questionnaire",
+        "  or a procedure with a party outside the company.",
         "- Return an empty list only when no capability applies.",
         "- confidence is a number in [0, 1] for the whole set; rationale is one",
         "  or two English sentences naming the evidence for each code.",
+        "- A doubtful P6 stays in the set: lower the confidence instead of",
+        "  dropping it.",
         "- Return one item per input competence, with the same competence_id.",
         "Catalog:",
     ]
@@ -347,6 +350,9 @@ def build_system_prompt(primitives: Sequence[Primitive]) -> str:
             f"- {p.code} - {p.title_en}.{scope} (kind: {p.kind}, "
             f"AI verdict: {p.ai_verdict})"
         )
+    # HRP-961: the same conventions the decomposition prompt embeds, so a
+    # person's codes and a step's codes are assigned by one text.
+    lines += ["", render_rules()]
     return "\n".join(lines)
 
 
@@ -366,7 +372,11 @@ async def _load_competences(
     *,
     include_origin: bool = False,
 ) -> list[Competence]:
-    stmt = select(Competence).where(Competence.is_active.is_(True))
+    # HRP-632: a personal draft is attached nowhere until published - coverage
+    # included, which would carry it into hire needs and skill generation.
+    stmt = select(Competence).where(
+        Competence.is_active.is_(True), Competence.draft_owner_id.is_(None)
+    )
     if competence_ids:
         # Origin competences (tenant_id IS NULL) are shared by every tenant
         # and only coverage decides a tenant references one; ids that came

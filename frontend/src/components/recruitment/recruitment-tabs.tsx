@@ -42,11 +42,13 @@ const tabs = [
 export function RecruitmentTabs() {
   const t = useTranslations("recruitment");
   const pathname = usePathname() ?? "";
-  const { roles, isAdmin, isPlatformAdmin } = usePermissions();
-  const adminTier = isAdmin || isPlatformAdmin;
+  // HRP-830: both tabs follow the role gates behind them - the settings
+  // writes are `require_role("admin")`, the audit log `("admin", "hr")`;
+  // neither names platform_admin.
+  const { isAdmin, isHr } = usePermissions();
   const visibleTabs = tabs.filter((tab) => {
-    if (tab.adminOnly) return adminTier;
-    if (tab.auditRoles) return adminTier || roles.includes("hr");
+    if (tab.adminOnly) return isAdmin;
+    if (tab.auditRoles) return isAdmin || isHr;
     return true;
   });
   return (

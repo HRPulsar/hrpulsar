@@ -11,8 +11,13 @@ from __future__ import annotations
 import pytest
 from app.core.errors import AppError
 from app.modules.auth.models import Role, User, user_roles
+from app.modules.dictionary.models import DictionaryItem
 from app.modules.talent_market import service
-from app.modules.talent_market.models import TalentCandidate, TalentCardCompetence
+from app.modules.talent_market.models import (
+    TalentCandidate,
+    TalentCardCompetence,
+    TalentCardSpecialization,
+)
 from app.modules.talent_market.schemas import (
     CandidateBulkAdd,
     SearchRequest,
@@ -263,8 +268,8 @@ async def _seed_gap_templates(db: AsyncSession) -> None:
         ),
         (
             "talent_market.plan_requested",
-            "{{ employee_name }} asked for a plan",
-            "<p>{{ employee_name }} asked for a development plan for "
+            "{{ employee_name }} requests a development plan for {{ card_title }}",
+            "<p>{{ employee_name }} requests a development plan for "
             "{{ card_title }}.</p>",
         ),
     ):
@@ -396,8 +401,61 @@ async def _assess_at(
         )
 
 
+async def _require_experience(db: AsyncSession, tenant_id, card_id, *, years: int) -> None:
+    """HRP-739: a specialization requirement with a tenure floor nobody in these
+    tests has, so the experience axis fails while the competences may pass."""
+    spec = DictionaryItem(
+        type="specialization", tenant_id=tenant_id, title="Enterprise Sales"
+    )
+    db.add(spec)
+    await db.flush()
+    db.add(
+        TalentCardSpecialization(
+            card_id=card_id,
+            specialization_id=spec.id,
+            grade_id=None,
+            min_experience_years=years,
+        )
+    )
+    await db.commit()
+
+
 class TestReactionGapAutoReply:
     """HRP-714: silence read as a rejection nobody sent."""
+
+    async def test_competences_met_but_no_experience_gets_no_reply(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """HRP-739: the row reads "Competencies met, no experience".
+
+        The reply talks about skills, and a development plan is what it
+        offers -- neither fits a shortfall in years of tenure. The stored
+        score is stale here on purpose: the decision has to be the live one.
+        """
+        await _seed_gap_templates(db)
+        _capture_letters(monkeypatch)
+        card_dict, emp, emp_user = await _reacting_candidate(db, tenant.id, user.id)
+        await _require_experience(db, tenant.id, card_dict["id"], years=5)
+        await _assess_at(db, tenant.id, card_dict["id"], emp.id, user.id, 90)
+        row = await _candidate_row(db, card_dict["id"], emp.id)
+        assert row.match_score is None  # the stored verdict still says "below"
+
+        await service.react_to_card(db, tenant.id, card_dict["id"], emp_user)
+        assert await _notifications_for(db, emp_user.id) == []
+
+    async def test_short_on_both_axes_still_gets_the_reply(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """An experience requirement on the card does not mute a real skills gap."""
+        await _seed_gap_templates(db)
+        _capture_letters(monkeypatch)
+        card_dict, emp, emp_user = await _reacting_candidate(db, tenant.id, user.id)
+        await _require_experience(db, tenant.id, card_dict["id"], years=5)
+
+        await service.react_to_card(db, tenant.id, card_dict["id"], emp_user)
+        mine = await _notifications_for(db, emp_user.id)
+        assert [code for code, _ in mine] == ["talent_market.reaction_gap"]
+        assert mine[0][1]["gaps"] == ["Negotiation"]
 
     async def test_below_the_bar_gets_the_soft_reply(
         self, db: AsyncSession, tenant, user, monkeypatch
@@ -519,9 +577,12 @@ class TestRequestDevelopmentPlan:
         assert theirs[0][1]["link"] == (
             f"/talent-market/{card_dict['id']}?candidate={row.id}"
         )
-        # Same fix on the manager's side: the entry says what was asked.
-        assert "asked for a plan" in theirs[0][1]["title"]
-        assert "asked for a development plan for" in theirs[0][1]["message"]
+        # Same fix on the manager's side: the entry says what was asked, and
+        # (QA 10.09) for which card — the bell shows only the title.
+        assert theirs[0][1]["title"].endswith(
+            f"requests a development plan for {card_dict['title']}"
+        )
+        assert "requests a development plan for" in theirs[0][1]["message"]
         assert [
             code for _, _, code in letters if code == "talent_market.plan_requested"
         ] == ["talent_market.plan_requested"]
@@ -590,6 +651,25 @@ class TestRequestDevelopmentPlan:
         _capture_letters(monkeypatch)
         card_dict, emp, emp_user = await _reacting_candidate(db, tenant.id, user.id)
         await self._with_manager(db, tenant.id, emp)
+        await service.react_to_card(db, tenant.id, card_dict["id"], emp_user)
+        await _assess_at(db, tenant.id, card_dict["id"], emp.id, user.id, 90)
+
+        with pytest.raises(AppError) as ex:
+            await service.request_development_plan(
+                db, tenant.id, card_dict["id"], emp_user
+            )
+        assert ex.value.status_code == 409
+        assert ex.value.code == "tm_plan_request_no_gap"
+
+    async def test_refuses_when_only_experience_is_short(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """HRP-739: a plan is built from competences below the bar; tenure is not one."""
+        await _seed_gap_templates(db)
+        _capture_letters(monkeypatch)
+        card_dict, emp, emp_user = await _reacting_candidate(db, tenant.id, user.id)
+        await self._with_manager(db, tenant.id, emp)
+        await _require_experience(db, tenant.id, card_dict["id"], years=5)
         await service.react_to_card(db, tenant.id, card_dict["id"], emp_user)
         await _assess_at(db, tenant.id, card_dict["id"], emp.id, user.id, 90)
 

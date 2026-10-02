@@ -37,6 +37,7 @@ _TEMPLATES = (
     ("recruitment.consent_signed", "Consent signed", "x"),
     ("recruitment.invite_completed", "Evaluation submitted", "x"),
     ("recruitment.ai_task_failed", "AI task failed", "x"),
+    ("recruitment.question_set_ready", "Questions ready", "x"),
 )
 
 
@@ -205,6 +206,33 @@ class TestRecruitmentNotifications:
                 "interview_id": str(uuid.uuid4()),
                 "interviewer_id": str(user.id),
             },
+        )
+        rows = await _list_notifications_for(db, user.id)
+        assert len(rows) == 1
+
+    async def test_a_worker_event_reaches_the_user_without_the_bus(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ):
+        # Review 01.10: question-set generation moved into the worker
+        # (HRP-471), where nothing subscribes to the event bus - the ready
+        # and failed notices reached nobody. Code that may run there hands
+        # its own session in, and the handlers deliver through it.
+        from app.modules.recruitment.common import _publish_event
+
+        events._handlers.clear()
+
+        def _no_global_session():
+            raise AssertionError("the worker's own session must be used")
+
+        monkeypatch.setattr("app.database.async_session", _no_global_session)
+        await _publish_event(
+            "recruitment.question_set.ready",
+            {
+                "tenant_id": str(tenant.id),
+                "requested_by": str(user.id),
+                "set_name": "Interview 1",
+            },
+            db=db,
         )
         rows = await _list_notifications_for(db, user.id)
         assert len(rows) == 1

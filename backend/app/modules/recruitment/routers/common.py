@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
-from slowapi.util import get_remote_address
+from collections.abc import Callable
 
+from fastapi import Depends, status
+from slowapi.util import get_remote_address
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.errors import AppError
 from app.core.rate_limit import make_limiter
+from app.core.sections import matrix_levels, require_section
+from app.database import get_db
+from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.models import User
 
 
 def resolve_page_params(
@@ -38,31 +47,45 @@ def resolve_page_params(
 recruitment_public_limiter = make_limiter(get_remote_address)
 
 
-# Who deals with hiring at all. Reading recruitment is not a company-wide
-# surface: candidate PII, resumes and interview transcripts live behind it,
-# so every GET here is gated by role rather than by bare authentication
-# (HRP-615).
+# HRP-830: who may do what in recruitment is the section access matrix.
+# Reading needs ``view`` - the global gate answers that, and
+# ``recruitment.scope`` narrows it to the caller's vacancies. The section
+# is self-guarded, so each write asks for itself with one of these (or
+# keeps its admin / hr role for the tenant settings and GDPR):
 #
-# ``manager`` is on the list because managers sit on hiring rounds:
-# ``ELIGIBLE_EVALUATOR_ROLES`` (manager_assessment_service) admits them, and
-# the round endpoints there are already ``require_role("admin", "recruiter",
-# "manager")``.
-#
-# This tuple is deliberately a wide door — ``company.service`` grants
-# ``manager`` to every division head automatically. It is not the whole
-# answer: which *particular* vacancy a caller may read is decided
-# separately by ``recruitment.scope`` (HRP-629), which narrows everyone
-# outside ``FULL_RECRUITMENT_ROLES`` to their own division. Roles say
-# "may you be in recruitment", scope says "is this one yours".
-#
-# ``platform_admin`` mirrors ``ADMIN_ROLE_CODES``: ``require_role`` compares
-# literals and never consults ``rbac_hooks``, so an operator-level account
-# would otherwise 403 on the rounds it is eligible to evaluate.
-RECRUITMENT_VIEWER_ROLES = (
-    "admin",
-    "platform_admin",
-    "hr",
-    "recruiter",
-    "hiring_manager",
-    "manager",
-)
+# * ``runs_hiring`` - ``manage``, which also sees the whole workspace.
+#   Used to be the admin/recruiter role list.
+# * ``evaluates`` - ``manage`` or the ``hiring_manager`` role: questions,
+#   human scores, the candidate's stage on a vacancy in scope. The role
+#   keeps it at ``view`` (Maxim, 25.09), in its own column of the scores:
+#   another evaluator's cell is ``manage``'s.
+# * ``runs_rounds`` - ``manage`` or the ``manager`` role: hiring rounds,
+#   their evaluators, scores and invites. ``manager`` sits on hiring
+#   rounds (``ELIGIBLE_EVALUATOR_ROLES``) and keeps them at ``view``.
+runs_hiring = require_section("recruitment", "manage")
+
+
+async def runs_hiring_level(db: AsyncSession, user: User) -> bool:
+    return (await matrix_levels(db, user))["recruitment"] == "manage"
+
+
+def _manage_or_role(role: str) -> Callable:
+    async def section_or_role_checker(
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> User:
+        if role in {r.code for r in current_user.roles}:
+            return current_user
+        if await runs_hiring_level(db, current_user):
+            return current_user
+        raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
+
+    return section_or_role_checker
+
+
+evaluates = _manage_or_role("hiring_manager")
+runs_rounds = _manage_or_role("manager")
+# The two reads behind the admin's own settings pages that the section
+# also runs on (the consent templates, the branding): the admin role keeps
+# its page at any level, ``manage`` keeps what it read before.
+reads_hiring_settings = _manage_or_role("admin")

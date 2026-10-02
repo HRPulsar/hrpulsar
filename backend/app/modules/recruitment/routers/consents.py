@@ -12,14 +12,15 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.modules.auth.dependencies import require_role
+from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
 from app.modules.recruitment import (
     service,
 )
 from app.modules.recruitment.routers.common import (
-    RECRUITMENT_VIEWER_ROLES,
+    reads_hiring_settings,
     recruitment_public_limiter,
+    runs_hiring,
 )
 from app.modules.recruitment.schemas import (
     ConsentRequestRead,
@@ -45,7 +46,7 @@ router = APIRouter(tags=["recruitment"])
 )
 async def list_consent_templates(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(reads_hiring_settings),
 ):
     return await service.list_consent_templates(db, current_user.tenant_id)
 
@@ -84,7 +85,7 @@ async def update_consent_template(
 async def get_latest_consent(
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(*RECRUITMENT_VIEWER_ROLES)),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(candidate_scope),
 ):
     """Most recent consent request for the candidate (or null)."""
@@ -100,7 +101,7 @@ async def send_consent_request(
     candidate_id: uuid.UUID,
     data: ConsentSendRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
     return await service.send_consent_request(
         db, current_user.tenant_id, current_user.id, candidate_id, data
@@ -115,11 +116,11 @@ async def send_consent_request(
 async def resend_consent_request(
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "recruiter")),
+    current_user: User = Depends(runs_hiring),
 ):
-    """HRP-684: send the pending consent link again (same link)."""
+    """HRP-684: send the consent link again, to the candidate's current email."""
     return await service.resend_consent_request(
-        db, current_user.tenant_id, candidate_id
+        db, current_user.tenant_id, current_user.id, candidate_id
     )
 
 

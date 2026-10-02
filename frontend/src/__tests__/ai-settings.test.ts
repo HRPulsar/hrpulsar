@@ -4,7 +4,9 @@ import {
   brokenKeyProviders,
   buildPatchDiff,
   isFormValid,
+  modelSubstituted,
   roundUpTenth,
+  selectableProviders,
   settingsToForm,
   type AISettingsFormState,
 } from "@/lib/ai-settings-form";
@@ -126,6 +128,7 @@ describe("brokenKeyProviders (HRP-543)", () => {
     source: "byok",
     supports_local: false,
     key_status: null,
+    blocked: false,
     ...over,
   });
 
@@ -156,5 +159,37 @@ describe("brokenKeyProviders (HRP-543)", () => {
     expect(
       brokenKeyProviders([provider({ provider: "anthropic", key_status: "ok" })]),
     ).toEqual([]);
+  });
+});
+
+describe("processor list in the settings form (HRP-1005)", () => {
+  const status = (p: Partial<ProviderStatus>): ProviderStatus => ({
+    provider: "openai",
+    label: "OpenAI",
+    configured: false,
+    source: null,
+    supports_local: false,
+    key_status: null,
+    blocked: false,
+    ...p,
+  });
+
+  it("keeps configured and blocked providers, drops the rest", () => {
+    const kept = selectableProviders([
+      status({ provider: "anthropic", configured: true, source: "global" }),
+      status({ provider: "openai", blocked: true }),
+      status({ provider: "gemini" }),
+    ]);
+    expect(kept.map((p) => p.provider)).toEqual(["anthropic", "openai"]);
+  });
+
+  it("flags a pinned model that is not the one really used", () => {
+    expect(
+      modelSubstituted({ ...baseSettings, llm_model: "gpt-4o", effective_model: "claude-x" }),
+    ).toBe(true);
+    expect(
+      modelSubstituted({ ...baseSettings, llm_model: "gpt-4o", effective_model: "gpt-4o" }),
+    ).toBe(false);
+    expect(modelSubstituted({ ...baseSettings, llm_model: null })).toBe(false);
   });
 });

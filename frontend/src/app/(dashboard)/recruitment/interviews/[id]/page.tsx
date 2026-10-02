@@ -90,12 +90,11 @@ export default function InterviewDetailPage() {
     insufficient: analyzeInsufficient,
     refresh: refreshAnalyzeCredits,
   } = useCreditGate(ANALYZE_ACTION);
-  // PUT /recruitment/interviews/{id} is require_role("admin", "recruiter");
-  // the rest of RECRUITMENT_VIEWER_ROLES only read the page. Same rule as
-  // the Add button on the internal-candidates shortlist: a pencil is not
-  // shown to a role that cannot use it — there is nothing to explain.
-  const { isAdmin, isRecruiter } = usePermissions();
-  const canEdit = isAdmin || isRecruiter;
+  // PUT /recruitment/interviews/{id} is `manage` on recruitment (HRP-830);
+  // every other `view` holder only reads the page. Same rule as the Add
+  // button on the internal-candidates shortlist: a pencil is not shown to
+  // a caller who cannot use it — there is nothing to explain.
+  const canEdit = usePermissions().canManageSection("recruitment");
   const [editing, setEditing] = useState<EditableField>(null);
   const [savingField, setSavingField] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -172,9 +171,15 @@ export default function InterviewDetailPage() {
   }, [interview?.candidate_vacancy_id]);
 
   useEffect(() => {
+    // The interviewer picker is an edit control, and so is its list -
+    // without those the interview's vacancy is fenced from (HRP-971).
+    const cvId = interview?.candidate_vacancy_id;
+    if (!canEdit || !cvId) return;
     let cancelled = false;
     api
-      .get<InterviewerOption[]>("/recruitment/interviewers")
+      .get<InterviewerOption[]>(
+        `/recruitment/interviewers?candidate_vacancy_id=${cvId}`,
+      )
       .then((rows) => {
         if (!cancelled) setPeople(Array.isArray(rows) ? rows : []);
       })
@@ -182,7 +187,7 @@ export default function InterviewDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [canEdit, interview?.candidate_vacancy_id]);
 
   // Once we know the vacancy id, fetch its profile to label competence ids.
   useEffect(() => {
@@ -783,8 +788,8 @@ export default function InterviewDetailPage() {
                 <p className="text-sm text-muted-foreground">
                   {t("interviewNoRecording")}
                 </p>
-                {/* POST upload/* and transcript-text are admin/recruiter,
-                    like the pencils. */}
+                {/* POST upload/* and transcript-text are `manage` on
+                    recruitment, like the pencils. */}
                 {canEdit && (
                   <>
                     <InterviewUploadZone
@@ -851,7 +856,7 @@ export default function InterviewDetailPage() {
               <h2 className="text-sm font-medium">
                 {t("interviewTranscriptHeading")}
               </h2>
-              {/* PUT .../transcript is admin/recruiter, like the pencils. */}
+              {/* PUT .../transcript is `manage`, like the pencils. */}
               {canEdit && (
                 <Button
                   variant="ghost"
@@ -869,7 +874,7 @@ export default function InterviewDetailPage() {
               interview={interview}
               currentSec={currentSec}
               onSeek={seekTo}
-              // PUT .../segments/{id} is admin/recruiter — no callback, no
+              // PUT .../segments/{id} is `manage` — no callback, no
               // per-segment pencil.
               onSegmentChange={canEdit ? () => void refresh() : undefined}
             />
@@ -883,7 +888,7 @@ export default function InterviewDetailPage() {
               {t("interviewProgressHeading")}
             </h2>
             <AnalysisProgress interview={interview} />
-            {/* POST transcribe / analyze are admin/recruiter, like the
+            {/* POST transcribe / analyze are `manage`, like the
                 pencils. */}
             {canEdit && (
               <>

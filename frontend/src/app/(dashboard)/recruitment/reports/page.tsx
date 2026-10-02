@@ -29,6 +29,7 @@ import { formatDateTime } from "@/lib/date-format";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs, RecruitmentTabs } from "@/components/recruitment";
 import { RecruitmentShareDialog } from "@/components/recruitment/share-dialog";
+import { usePermissions } from "@/hooks/use-permissions";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 
 const STATUS_COLORS: Record<ReportStatus, string> = {
@@ -40,6 +41,8 @@ const STATUS_COLORS: Record<ReportStatus, string> = {
 
 export default function ReportsListPage() {
   const t = useTranslations("recruitment");
+  // HRP-830: sharing and deleting a report are `manage` on recruitment.
+  const canManage = usePermissions().canManageSection("recruitment");
   const tc = useTranslations("common");
   const [items, setItems] = useState<ReportExport[]>([]);
   const [vacancies, setVacancies] = useState<Vacancy[]>([]);
@@ -254,22 +257,26 @@ export default function ReportsListPage() {
                       >
                         <Download className="size-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={row.status !== "completed"}
-                        onClick={() => setShareReportId(row.id)}
-                        data-testid={`recruitment-reports-share-${row.id}`}
-                      >
-                        <Share2 className="size-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void handleDelete(row.id)}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
+                      {canManage && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={row.status !== "completed"}
+                            onClick={() => setShareReportId(row.id)}
+                            data-testid={`recruitment-reports-share-${row.id}`}
+                          >
+                            <Share2 className="size-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void handleDelete(row.id)}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>

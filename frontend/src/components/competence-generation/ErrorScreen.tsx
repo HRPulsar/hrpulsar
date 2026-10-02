@@ -27,6 +27,10 @@ const MESSAGE_KEYS: Record<string, { titleKey: string; bodyKey: string }> = {
     titleKey: "genErrorTruncatedTitle",
     bodyKey: "genErrorTruncatedBody",
   },
+  no_allowed_processor: {
+    titleKey: "genErrorNoProcessorTitle",
+    bodyKey: "genErrorNoProcessorBody",
+  },
 };
 
 export interface ErrorScreenProps {
@@ -52,8 +56,10 @@ export function ErrorScreen({
         body: errorMessage || t("genErrorFallbackBody"),
       };
   // Retrying a truncated generation re-runs the same over-budget request;
-  // the remedy is a narrower scope, so the retry button is hidden.
-  const retryable = errorCode !== "output_truncated";
+  // the remedy is a narrower scope, so the retry button is hidden. Nor does
+  // a retry help a workspace whose processor list allows no provider.
+  const retryable =
+    errorCode !== "output_truncated" && errorCode !== "no_allowed_processor";
   return (
     <div
       data-testid="compgen-error-screen"

@@ -519,6 +519,9 @@ class CandidateVacancyEnrichedRead(BaseModel):
     manager_percent: float | None = None
     ai_percent: float | None = None
     divergence_count: int = 0
+    # HRP-507 REDO: the M in the Divergence chip's "N/M" — how many
+    # competences the vacancy profile holds.
+    profile_competence_count: int = 0
     divergence_top: list[DivergentCompetencePreview] = Field(default_factory=list)
     ai_readiness: str
     ai_verdict: str
@@ -1404,7 +1407,10 @@ QuestionSource = Literal[
 ]
 SetType = Literal["pre_interview", "interview_round", "final"]
 GenerationMode = Literal["initial", "regenerated", "dynamic_next", "manual"]
-SetStatus = Literal["ready", "generating", "failed", "sample"]
+# HRP-471: ``generating`` is a placeholder the worker is filling;
+# ``regenerating`` is an existing set whose AI questions are being replaced
+# and which keeps them until the result lands.
+SetStatus = Literal["ready", "generating", "regenerating", "failed", "sample"]
 
 
 class QuestionRead2(BaseModel):
@@ -1451,9 +1457,11 @@ class QuestionSetRead(BaseModel):
     archived_at: datetime | None = None
     version: int
     created_at: datetime
-    # HRP-740: the last generation. Regeneration rewrites the set in
-    # place, so ``created_at`` only ever names the first one.
     updated_at: datetime
+    # HRP-740: the last generation. Regeneration rewrites the set in
+    # place, so ``created_at`` only ever names the first one; a set no
+    # model has filled yet (a placeholder, a manual one) has none.
+    generated_at: datetime | None = None
     questions: list[QuestionRead2] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
@@ -1609,6 +1617,11 @@ class AIAnalysisRunRead(BaseModel):
     id: uuid.UUID
     candidate_vacancy_id: uuid.UUID
     mode: Literal["resume_only", "full"]
+    # HRP-685 — the data this run was actually based on, derived by
+    # ``resume_analysis_service.serialize_run_for_read`` through the
+    # same ``_derive_readiness`` the candidates table uses. ``mode``
+    # alone overstates a full run made without a resume as "full".
+    readiness: str = "none"
     # HRP-270: ``cancelled`` joins the prior four states.
     status: Literal["pending", "processing", "completed", "failed", "cancelled"]
     data_completeness: str | None = None

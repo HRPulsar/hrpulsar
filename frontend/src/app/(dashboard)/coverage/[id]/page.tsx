@@ -5,13 +5,14 @@
 // tab, HRP-760) and what nobody covers yet (Gaps tab, HRP-759).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Archive, Lock, Pencil, Sparkles, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LoadErrorState } from "@/components/load-error-state";
@@ -66,13 +67,17 @@ function ContainerView({ id }: { id: string }) {
   const t = useTranslations("coverage");
   const tc = useTranslations("common");
   const router = useRouter();
-  const { canRecruit } = usePermissions();
+  // HRP-830: a hire need drafts a vacancy - `manage` on recruitment.
+  const canRunHiring = usePermissions().canManageSection("recruitment");
 
   const [container, setContainer] = useState<WorkContainer | null>(null);
   const [steps, setSteps] = useState<WorkStep[]>([]);
   const [primitives, setPrimitives] = useState<Primitive[]>([]);
   const [session, setSession] = useState<DecompositionSession | null>(null);
   const [failed, setFailed] = useState(false);
+  // HRP-853: a 404 - hidden by the access rules or deleted - is "not found",
+  // not a failure worth a retry.
+  const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -102,8 +107,10 @@ function ContainerView({ id }: { id: string }) {
       setPrimitives(p);
       setSession(latest);
       setFailed(false);
-    } catch {
-      setFailed(true);
+      setNotFound(false);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) setNotFound(true);
+      else setFailed(true);
     }
   }, [id]);
 
@@ -249,6 +256,23 @@ function ContainerView({ id }: { id: string }) {
     }
   }
 
+  if (notFound) {
+    return (
+      <div
+        className="rounded-lg border border-dashed p-12 text-center text-muted-foreground"
+        data-testid="coverage-detail-not-found"
+      >
+        <p>{t("notFound")}</p>
+        <Link
+          href="/coverage"
+          className={`${buttonVariants({ variant: "outline", size: "sm" })} mt-4`}
+          data-testid="coverage-detail-not-found-link"
+        >
+          {t("backToList")}
+        </Link>
+      </div>
+    );
+  }
   if (failed) {
     return <LoadErrorState onRetry={load} testIdPrefix="coverage-detail" />;
   }
@@ -477,7 +501,7 @@ function ContainerView({ id }: { id: string }) {
             steps={steps}
             primitives={primitives}
             canEdit={canEdit}
-            canOpenHireNeed={canEdit && canManageSection && canRecruit}
+            canOpenHireNeed={canEdit && canManageSection && canRunHiring}
             canRegisterAgent={canEdit && canManageSection}
             onStepsChanged={setSteps}
           />
@@ -509,7 +533,7 @@ function ContainerView({ id }: { id: string }) {
             containerId={id}
             primitives={primitives}
             canEdit={canEdit}
-            canOpenHireNeed={canEdit && canManageSection && canRecruit}
+            canOpenHireNeed={canEdit && canManageSection && canRunHiring}
             canRegisterAgent={canEdit && canManageSection}
             onStepsChanged={setSteps}
           />

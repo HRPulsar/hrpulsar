@@ -234,7 +234,7 @@ class TestCompensationBenchmark:
         )
         await db.commit()
 
-        result = await analytics_service.compensation_benchmark(db, tenant.id)
+        result = await analytics_service.compensation_benchmark(db, tenant.id, None)
         assert result["by_grade"] == [
             {
                 "grade_id": str(grade.id),
@@ -253,7 +253,7 @@ class TestCompensationBenchmark:
         ]
 
     async def test_benchmark_empty(self, db: AsyncSession, tenant):
-        result = await analytics_service.compensation_benchmark(db, tenant.id)
+        result = await analytics_service.compensation_benchmark(db, tenant.id, None)
         assert result == {"by_grade": [], "by_specialization": []}
 
 
@@ -272,7 +272,7 @@ class TestDivisionSpecializationMatrix:
         )
         await db.commit()
 
-        result = await analytics_service.division_specialization_matrix(db, tenant.id)
+        result = await analytics_service.division_specialization_matrix(db, tenant.id, None)
         assert result["divisions"] == [{"id": str(div.id), "name": "Engineering"}]
         assert result["specializations"] == [{"id": str(spec.id), "title": "QA"}]
         assert result["cells"] == [
@@ -288,7 +288,7 @@ class TestDivisionSpecializationMatrix:
         db.add(Division(tenant_id=tenant.id, name="Sales"))
         await db.commit()
 
-        result = await analytics_service.division_specialization_matrix(db, tenant.id)
+        result = await analytics_service.division_specialization_matrix(db, tenant.id, None)
         assert len(result["divisions"]) == 1
         assert result["cells"] == []
 

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 //
 // HRP-667 — the "post to the internal talent market" offer is shown to
-// every recruitment viewer, but POST /talent-card is admin/recruiter
-// only. The project rule (REDO checklist) is to show an action a role
-// cannot take as disabled with the reason, never to let it 403.
+// every recruitment viewer, but POST /talent-card is `manage` on
+// recruitment (HRP-830). The project rule (REDO checklist) is to show an
+// action a caller cannot take as disabled with the reason, never to let
+// it 403.
 
 import { NextIntlClientProvider } from "next-intl";
 import { act } from "react";
@@ -22,6 +23,11 @@ const NOT_POSTED: VacancyInternalCandidates = {
 };
 
 let roles: string[] = [];
+// HRP-824: the tenant's matrix opens the market to every role by default;
+// HRP-830: the recruiter's row runs hiring.
+const RUNS_HIRING = { "talent-market": "view", recruitment: "manage" };
+const READS_HIRING = { "talent-market": "view", recruitment: "view" };
+let sections: Record<string, string> = RUNS_HIRING;
 let payload: VacancyInternalCandidates = NOT_POSTED;
 
 vi.mock("@/lib/api", () => ({
@@ -33,7 +39,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/context/auth-context", () => ({
-  useAuth: () => ({ user: { roles } }),
+  useAuth: () => ({ user: { roles, sections } }),
 }));
 
 vi.mock("sonner", () => ({
@@ -61,8 +67,10 @@ afterEach(() => {
 async function render(
   withRoles: string[],
   data: VacancyInternalCandidates = NOT_POSTED,
+  withSections: Record<string, string> = RUNS_HIRING,
 ) {
   roles = withRoles;
+  sections = withSections;
   payload = data;
   await act(async () => {
     root.render(
@@ -95,20 +103,31 @@ describe("Internal candidates offer — who may post (HRP-667)", () => {
     expect(postButton()!.disabled).toBe(false);
   });
 
-  it("shows hr the button disabled with the reason, not a 403", async () => {
-    await render(["hr"]);
+  it("greys the button out with its own reason when the market is closed for the caller (HRP-824)", async () => {
+    // The API refuses a posting into a section the tenant closed for the
+    // recruiter's role, and the role reason would be false here.
+    await render(["recruiter"], NOT_POSTED, { recruitment: "manage" });
+    expect(postButton()!.disabled).toBe(true);
+    expect(container.textContent).toContain(
+      "The talent market is closed for your role",
+    );
+    expect(container.textContent).not.toContain("needs Manage on Recruitment");
+  });
+
+  it("shows a view holder the button disabled with the reason, not a 403", async () => {
+    await render(["hr"], NOT_POSTED, READS_HIRING);
     const btn = postButton();
     // Visible on purpose — hiding it would leave the role wondering why
     // colleagues see an action they do not.
     expect(btn).not.toBeNull();
     expect(btn!.disabled).toBe(true);
     expect(container.textContent).toContain(
-      "Only an admin or a recruiter can post this vacancy",
+      "Posting this vacancy to the internal talent market needs Manage on Recruitment",
     );
   });
 
   it("does the same for a hiring manager", async () => {
-    await render(["hiring_manager"]);
+    await render(["hiring_manager"], NOT_POSTED, READS_HIRING);
     expect(postButton()!.disabled).toBe(true);
   });
 });
@@ -216,10 +235,15 @@ describe("Add to candidates — who may do it (HRP-711)", () => {
     expect(addButton()).not.toBeNull();
   });
 
-  it("hides it from hr and from a hiring manager", async () => {
-    await render(["hr"], ROSTER(null));
+  it("keeps offering it when the market is closed - it is recruitment's own write (HRP-824)", async () => {
+    await render(["recruiter"], ROSTER(null), { recruitment: "manage" });
+    expect(addButton()).not.toBeNull();
+  });
+
+  it("hides it from a view holder, whatever the role", async () => {
+    await render(["hr"], ROSTER(null), READS_HIRING);
     expect(addButton()).toBeNull();
-    await render(["hiring_manager"], ROSTER(null));
+    await render(["hiring_manager"], ROSTER(null), READS_HIRING);
     expect(addButton()).toBeNull();
   });
 
@@ -230,12 +254,14 @@ describe("Add to candidates — who may do it (HRP-711)", () => {
     expect(link).not.toBeNull();
     expect(link!.textContent).toContain("In candidates");
     expect(link!.querySelector("a")?.getAttribute("href") ?? link!.getAttribute("href")).toBe(
-      "/recruitment/candidates/cand-9",
+      // HRP-840: the link is on the vacancy page, so it carries the vacancy
+      // context and Back on the card returns here.
+      "/recruitment/candidates/cand-9?vacancyId=vac-1",
     );
   });
 
   it("still shows the link to a role that may not add", async () => {
-    await render(["hr"], ROSTER("cand-9"));
+    await render(["hr"], ROSTER("cand-9"), READS_HIRING);
     expect(addedLink()).not.toBeNull();
   });
 });

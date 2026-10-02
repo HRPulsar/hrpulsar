@@ -134,7 +134,9 @@ const emptyMaterialForm: MaterialForm = {
 
 export default function CompetenceDetailPage() {
   const t = useTranslations("competences");
-  const { canManageCatalogues } = usePermissions();
+  // HRP-827: authoring follows the section; deleting and AI generation the
+  // admin role on top of it.
+  const { canManageSection, canAdministerCompetences } = usePermissions();
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const { id } = useParams<{ id: string }>();
@@ -265,7 +267,8 @@ export default function CompetenceDetailPage() {
   // HRP-631: the competence catalogue is workspace-wide, so editing it is
   // admin / HR. Origin rows stay read-only for everyone. Managers keep the
   // page — they build assessments on it — without the edit affordances.
-  const canEditMeta = !isOrigin && canManageCatalogues;
+  const canEditMeta = !isOrigin && canManageSection("competences");
+  const canDelete = canEditMeta && canAdministerCompetences;
 
   // HRP-102: the matrix cell link puts `?from=matrix&specialization_id=…`
   // on the URL. We thread that spec id into (a) the breadcrumb (Back to
@@ -820,15 +823,17 @@ export default function CompetenceDetailPage() {
           </div>
           {canEditMeta && (
             <div className="flex shrink-0 flex-wrap items-center gap-2">
-              <AiIndicatorsButton
-                checking={activeSessionLoading && !activeSession}
-                running={aiRunning}
-                ready={aiReady}
-                busyElsewhere={aiBusyElsewhere}
-                starting={aiStarting}
-                hasIndicators={detail.indicators.length > 0}
-                onClick={handleAiButtonClick}
-              />
+              {canAdministerCompetences && (
+                <AiIndicatorsButton
+                  checking={activeSessionLoading && !activeSession}
+                  running={aiRunning}
+                  ready={aiReady}
+                  busyElsewhere={aiBusyElsewhere}
+                  starting={aiStarting}
+                  hasIndicators={detail.indicators.length > 0}
+                  onClick={handleAiButtonClick}
+                />
+              )}
               {detail.is_published ? (
                 <Button
                   variant="outline"
@@ -925,12 +930,15 @@ export default function CompetenceDetailPage() {
                     competenceId={detail.id}
                     onAdd={() => openCreateIndicator(level.id)}
                     onEdit={openEditIndicator}
-                    onDelete={(ind) =>
-                      setDeleting({
-                        kind: "indicator",
-                        id: ind.id,
-                        title: ind.title,
-                      })
+                    onDelete={
+                      canDelete
+                        ? (ind) =>
+                            setDeleting({
+                              kind: "indicator",
+                              id: ind.id,
+                              title: ind.title,
+                            })
+                        : undefined
                     }
                     onWeightChange={updateIndicatorWeight}
                     onBulkSaved={refresh}
@@ -1005,12 +1013,15 @@ export default function CompetenceDetailPage() {
                     canEdit={canEditMeta}
                     onAdd={() => openCreateMaterial(level.id)}
                     onEdit={openEditMaterial}
-                    onDelete={(mat) =>
-                      setDeleting({
-                        kind: "material",
-                        id: mat.id,
-                        title: mat.title,
-                      })
+                    onDelete={
+                      canDelete
+                        ? (mat) =>
+                            setDeleting({
+                              kind: "material",
+                              id: mat.id,
+                              title: mat.title,
+                            })
+                        : undefined
                     }
                     onGenerate={() => setMaterialsAiOpen(true)}
                   />
@@ -1543,7 +1554,8 @@ function LevelIndicatorsBlock({
   competenceId: string;
   onAdd: () => void;
   onEdit: (ind: Indicator) => void;
-  onDelete: (ind: Indicator) => void;
+  /** Absent below the admin role (HRP-827). */
+  onDelete?: (ind: Indicator) => void;
   onWeightChange: (ind: Indicator, next: number) => Promise<void>;
   onBulkSaved: () => void;
 }) {
@@ -1700,7 +1712,7 @@ function LevelIndicatorsBlock({
               indicator={ind}
               canEdit={canEdit}
               onEdit={() => onEdit(ind)}
-              onDelete={() => onDelete(ind)}
+              onDelete={onDelete && (() => onDelete(ind))}
               onWeightChange={(next) => onWeightChange(ind, next)}
             />
           ))}
@@ -1720,7 +1732,7 @@ function SortableIndicatorRow({
   indicator: Indicator;
   canEdit: boolean;
   onEdit: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
   onWeightChange: (next: number) => Promise<void>;
 }) {
   const t = useTranslations("competences");
@@ -1789,14 +1801,16 @@ function SortableIndicatorRow({
           >
             <Pencil className="size-3.5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onDelete}
-            data-testid={`competence-detail-indicator-${indicator.id}-btn-delete`}
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onDelete}
+              data-testid={`competence-detail-indicator-${indicator.id}-btn-delete`}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
         </>
       )}
     </li>
@@ -1821,7 +1835,8 @@ function LevelMaterialsBlock({
   canEdit: boolean;
   onAdd: () => void;
   onEdit: (mat: Material) => void;
-  onDelete: (mat: Material) => void;
+  /** Absent below the admin role (HRP-827). */
+  onDelete?: (mat: Material) => void;
   onGenerate: () => void;
 }) {
   const t = useTranslations("competences");
@@ -1913,7 +1928,7 @@ function LevelMaterialsBlock({
               material={mat}
               canEdit={canEdit}
               onEdit={() => onEdit(mat)}
-              onDelete={() => onDelete(mat)}
+              onDelete={onDelete && (() => onDelete(mat))}
             />
           ))}
         </ul>
@@ -1931,7 +1946,7 @@ function SortableMaterialRow({
   material: Material;
   canEdit: boolean;
   onEdit: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
 }) {
   const t = useTranslations("competences");
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -1987,14 +2002,16 @@ function SortableMaterialRow({
           >
             <Pencil className="size-3.5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onDelete}
-            data-testid={`competence-detail-material-${material.id}-btn-delete`}
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onDelete}
+              data-testid={`competence-detail-material-${material.id}-btn-delete`}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
         </>
       )}
     </li>

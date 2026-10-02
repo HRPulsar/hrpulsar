@@ -15,6 +15,7 @@ import uuid
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core import ai_usage_hooks
 from app.core.celery_app import celery
 from app.modules.ai.tasks import _run_with_async_session
 from app.modules.primitives import mapping_service
@@ -39,6 +40,11 @@ def map_competences_task(
     force = force and self.request.retries == 0
 
     async def _run(session_factory: async_sessionmaker[AsyncSession]) -> dict:
+        ai_usage_hooks.bind(
+            tenant_id=uuid.UUID(tenant_id),
+            action="primitives.map_competences",
+            work_unit_id=ai_usage_hooks.celery_task_uuid(self.request.id),
+        )
         async with session_factory() as db:
             result = await mapping_service.map_competences(
                 db,

@@ -80,6 +80,9 @@ export interface MatchDrawerProps {
   pdpId?: string | null;
   /** Same write gate the Appoint button uses. */
   canCreatePlan?: boolean;
+  /** HRP-856: the candidate sits outside the viewer's employee scope, so
+   * their plan is not the viewer's to write or open. */
+  outOfScope?: boolean;
   /** Card title — names the plan built from this card's gaps. */
   cardTitle?: string | null;
   onPlanCreated?: (pdpId: string) => void;
@@ -122,6 +125,7 @@ export function MatchDrawer({
   candidateId = null,
   pdpId = null,
   canCreatePlan = false,
+  outOfScope = false,
   cardTitle = null,
   onPlanCreated,
 }: MatchDrawerProps) {
@@ -244,7 +248,7 @@ export function MatchDrawer({
 
           {/* HRP-665: the plan is created where the gap is visible. An
               existing plan links out instead of offering a second one. */}
-          {candidateId && pdpId && (
+          {candidateId && pdpId && !outOfScope && (
             <Button
               size="sm"
               data-testid="talent-market-match-drawer-plan-link"
@@ -258,7 +262,7 @@ export function MatchDrawer({
               <Button
                 size="sm"
                 onClick={() => void createPlan()}
-                disabled={creatingPlan}
+                disabled={creatingPlan || outOfScope}
                 data-testid="talent-market-match-drawer-create-plan"
               >
                 {creatingPlan ? t("drawerCreatingPlan") : t("drawerCreatePlan")}
@@ -267,6 +271,14 @@ export function MatchDrawer({
                 {t("drawerCreatePlanHint", { count: gaps.length })}
               </p>
             </div>
+          )}
+          {candidateId && outOfScope && (pdpId || (canCreatePlan && gaps.length > 0)) && (
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid="talent-market-match-drawer-plan-out-of-scope"
+            >
+              {t("drawerPlanOutOfScope")}
+            </p>
           )}
 
           {data && data.competences.length > 0 && (

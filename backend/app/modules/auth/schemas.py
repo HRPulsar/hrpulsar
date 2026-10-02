@@ -137,9 +137,8 @@ class UserRead(BaseModel):
     # own copy of the role set. The switch above stays: it is a public
     # property of the tenant and other surfaces read it.
     can_view_job_profile: bool = False
-    # HRP-810: the sections this caller opens and how far - ``coverage`` is
-    # ``manage`` for the roles that run it and ``view`` for anyone who reads
-    # at least one process. HRP-820 fills in the other sections.
+    # HRP-820: the sections this caller opens and how far - hidden and
+    # ``none`` are absent; ``coverage`` also needs at least one readable process.
     sections: dict[str, Literal["view", "manage"]] = {}
 
     model_config = {"from_attributes": True}
@@ -192,7 +191,6 @@ class RoleRead(BaseModel):
     description: str | None
     is_system: bool
     tenant_id: uuid.UUID | None
-    permissions: list[str] = []
     # HRP-634: how many users of the tenant hold this role. Only the list
     # endpoint counts — single-role responses answer ``null`` rather than a
     # confident 0 they never computed.

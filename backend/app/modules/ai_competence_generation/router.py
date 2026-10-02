@@ -36,12 +36,15 @@ from app.modules.ai_competence_generation.schemas import (
     SessionRefine,
     SessionScope,
 )
-from app.modules.auth.dependencies import require_role
 from app.modules.auth.models import User
+from app.modules.competence.dependencies import admin_manages_competences
 from app.modules.position.models import Position
 from app.modules.specialization import service as spec_service
 
 router = APIRouter(prefix="/competence-generation", tags=["ai-generation"])
+
+# HRP-827: generating the tree stays the admin role's, now on top of
+# ``manage`` on ``competences`` (``competence/dependencies.py``).
 
 
 def _billing_action_for_scope(scope: str) -> str:
@@ -115,7 +118,7 @@ async def create_session(
     payload: SessionCreate,
     response: Response,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     # Precheck before persisting the session so a 402 doesn't leave a
     # stranded `pending` row that would block the per-user partial unique.
@@ -153,7 +156,7 @@ async def list_sessions(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     """Tenant-scoped list of generation sessions for the AI history tab.
 
@@ -174,7 +177,7 @@ async def list_sessions(
 @router.get("/sessions/active", response_model=SessionRead | None)
 async def get_active(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     sess = await service.get_active_session(db, current_user.id)
     return _to_read(sess) if sess else None
@@ -185,7 +188,7 @@ async def context_options(
     scope: SessionScope = Query(...),
     target_id: uuid.UUID | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     """HRP-143: lists the tenant data the preflight modal can drop into
     ``context_excludes``. Used by the whole_base / group / indicators
@@ -213,7 +216,7 @@ async def context_options(
 )
 async def list_active_others(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     """Active generation sessions belonging to *other* tenant users (PreflightModal)."""
     return await service.list_other_active_sessions(
@@ -225,7 +228,7 @@ async def list_active_others(
 async def get_session(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     # Tenant-wide visibility for the history tab (HRP-71): any admin in the
     # tenant can open any session read-only. Write-paths still require
@@ -241,7 +244,7 @@ async def patch_selection(
     session_id: uuid.UUID,
     patch: SelectionPatch,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     sess = await service.update_selection(
         db,
@@ -259,7 +262,7 @@ async def put_selection_state(
     session_id: uuid.UUID,
     body: SelectionReplace,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     sess = await service.replace_selection(
         db,
@@ -279,7 +282,7 @@ async def refine_session(
     session_id: uuid.UUID,
     refine: SessionRefine,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     # Refine cost is constant per call (one LLM round on a smaller context),
     # but specialization_matrix sessions bill from their own pricing
@@ -331,7 +334,7 @@ async def refine_session(
 async def regenerate_session(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     # Regenerate inherits the parent's billing intent: re-running a refine
     # is a refine-priced call; re-running an initial generation is start-priced.
@@ -378,7 +381,7 @@ async def apply_session(
     session_id: uuid.UUID,
     body: SessionApply,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     result = await service.apply_session(
         db,
@@ -396,7 +399,7 @@ async def apply_session(
 async def cancel_session(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     sess = await service.cancel_session(
         db,
@@ -411,7 +414,7 @@ async def cancel_session(
 async def clear_session(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     sess = await service.clear_payload(
         db,
@@ -453,7 +456,7 @@ async def create_matrix_session(
     refinement_prompt: str | None = Form(None),
     files: list[UploadFile] = File(default_factory=list),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(admin_manages_competences),
 ):
     """Start an AI generation for a specialization's competence matrix.
 

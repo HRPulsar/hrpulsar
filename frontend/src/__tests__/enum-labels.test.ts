@@ -3,7 +3,7 @@
 // shipped locale, and an unknown value still renders (raw) instead of
 // vanishing behind an empty label.
 import { readdirSync, readFileSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -23,6 +23,13 @@ import {
 type Tree = { [key: string]: string | Tree };
 
 const MESSAGES_DIR = resolve(__dirname, "../../messages");
+const BACKEND_APP = resolve(__dirname, "../../../backend/app");
+
+function pythonSources(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: "utf8" })
+    .filter((path) => path.endsWith(".py") && !path.includes("tests"))
+    .map((path) => join(dir, path));
+}
 
 const catalogs = readdirSync(MESSAGES_DIR)
   .filter((file) => file.endsWith(".json"))
@@ -43,9 +50,39 @@ function leaf(tree: Tree, namespace: string, key: string): unknown {
 describe("frontend-owned enum labels", () => {
   it.each(catalogs)("%s translates every event type", (_locale, catalog) => {
     for (const value of EVENT_TYPE_OPTIONS) {
-      const key = EVENT_TYPE_LABEL_KEYS[value];
-      expect(key, `no label key for event type ${value}`).toBeTruthy();
-      expect(leaf(catalog, "employees", key)).toBeTypeOf("string");
+      expect(EVENT_TYPE_LABEL_KEYS[value], `no label key for ${value}`)
+        .toBeTruthy();
+    }
+    for (const key of Object.values(EVENT_TYPE_LABEL_KEYS)) {
+      expect(leaf(catalog, "employees", key), key).toBeTypeOf("string");
+    }
+  });
+
+  it("labels every event type the backend writes", () => {
+    // HRP-999: a role change read "Role_changed" — the map knew only the
+    // types the dialog offers. The backend's own are the literal types of
+    // `_create_event(db, <employee>, "<type>", ...)` and the `event_type=`
+    // of a file that builds `EmployeeEvent(...)` itself (the seed).
+    const written = new Set<string>();
+    let seeded = 0;
+    for (const file of pythonSources(BACKEND_APP)) {
+      const source = readFileSync(file, "utf8");
+      for (const match of source.matchAll(
+        /_create_event\(\s*db,\s*[\w.]+,\s*"(\w+)"/g,
+      )) {
+        written.add(match[1]);
+      }
+      if (!source.includes("EmployeeEvent(")) continue;
+      for (const match of source.matchAll(/event_type="(\w+)"/g)) {
+        written.add(match[1]);
+        seeded += 1;
+      }
+    }
+    // Both readings still find something - a pattern gone blind passes.
+    expect(written).toContain("role_changed");
+    expect(seeded).toBeGreaterThan(0);
+    for (const type of written) {
+      expect(EVENT_TYPE_LABEL_KEYS[type], `no label for ${type}`).toBeTruthy();
     }
   });
 
@@ -99,8 +136,8 @@ describe("frontend-owned enum labels", () => {
 
   it("renders an unknown value raw rather than blank", () => {
     const t = (key: string) => `translated:${key}`;
-    // Seeded employee histories carry codes the dialog never offers.
-    expect(eventTypeLabel(t, "position_change")).toBe("position_change");
+    // An imported history can carry a code nobody labelled.
+    expect(eventTypeLabel(t, "sabbatical")).toBe("sabbatical");
     // A format the plan does not offer but a copied material can carry
     // still resolves — that is the whole point of sharing the vocabulary.
     expect(materialFormatLabel(t, "webinar")).toBe(

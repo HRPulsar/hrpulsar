@@ -34,7 +34,7 @@ vi.mock("@/lib/api/work", async (importOriginal) => ({
   workApi: { getCoverage, listContainers, updateStep },
 }));
 vi.mock("@/hooks/use-permissions", () => ({
-  usePermissions: () => ({ canCreateCoverage: false }),
+  usePermissions: () => ({ canCreateCoverage: false, canViewSection: () => true }),
 }));
 vi.mock("@/context/auth-context", () => ({ useAuth: () => ({ user: null }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: toastError } }));

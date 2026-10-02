@@ -103,12 +103,14 @@ export function MultiSelectFilter({
           />
         }
       >
-        <span className="truncate">{labelText}</span>
+        <span className="truncate" title={labelText}>
+          {labelText}
+        </span>
         <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className="max-h-72 min-w-[--anchor-width] overflow-y-auto"
+        className="max-h-72 min-w-(--anchor-width) overflow-y-auto"
       >
         {options.length === 0 ? (
           <div className="px-2 py-2 text-xs text-muted-foreground">

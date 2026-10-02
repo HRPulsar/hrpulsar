@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -48,6 +49,8 @@ export function VacancyAssessmentScaleBlock({
 
   const snapshot = vacancy.assessment_scale_snapshot ?? null;
   const lockedBySnapshot = Boolean(snapshot);
+  // HRP-830: picking the vacancy's scale is `manage` on recruitment.
+  const canPick = usePermissions().canManageSection("recruitment");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -139,7 +142,7 @@ export function VacancyAssessmentScaleBlock({
             <select
               className="rounded-md border px-2 py-1 text-xs"
               value={vacancy.assessment_scale_id ?? ""}
-              disabled={lockedBySnapshot || picking}
+              disabled={!canPick || lockedBySnapshot || picking}
               onChange={(e) => {
                 if (e.target.value) void selectScale(e.target.value);
               }}

@@ -530,6 +530,8 @@ def _render_matrix(
     # Total row — a live SUM per candidate column, formatted as the spec's
     # "39/44 (89%)" so the denominator (which differs per AI column once
     # not-covered competences drop out) is visible in the cell itself.
+    # HRP-774: the percent is the payload's "% of scale" (level weights),
+    # not SUM / denominator — Excel cannot see the weights.
     total_row = row_idx
     _set_body_cell(ws, total_row, 1, "", fill=_TOTAL_FILL)
     _set_body_cell(
@@ -560,14 +562,13 @@ def _render_matrix(
                 col_letter = get_column_letter(col_idx)
                 span = f"{col_letter}{body_first}:{col_letter}{body_last}"
                 denom = float(denominator or 0)
+                formula = f"=SUM({span})"
                 if denom > 0:
-                    formula = (
-                        f'=SUM({span})&"/{_trim_number(denom)} ("'
-                        f"&ROUND(SUM({span})/{_trim_number(denom)}*100,0)"
-                        f'&"%)"'
-                    )
-                else:
-                    formula = f"=SUM({span})"
+                    formula += f'&"/{_trim_number(denom)}'
+                    if percent is not None:
+                        # One decimal, as on Summary — so both read 66.5 %.
+                        formula += f" ({round(float(percent), 1)}%)"
+                    formula += '"'
                 cell = ws.cell(row=total_row, column=col_idx, value=formula)
                 cell.alignment = _CENTER_ALIGN
                 cell.fill = _total_fill_for(percent)
@@ -936,16 +937,20 @@ _CANVAS_SOURCE_LABELS = {
 }
 
 
-def _canvas_value(score: Any, *, percent: bool, max_score: float) -> Any:
-    """One score in the units the toolbar asked for."""
+def _canvas_value(score: Any, percent_of_scale: Any, *, percent: bool) -> Any:
+    """One score in the units the toolbar asked for.
+
+    HRP-774: the percent is the matrix cell's own ``*_percent`` (the
+    scale's level weights via ``scale_percent``), not ``score / max`` —
+    the export used to print 75 % where the round header said 66 %.
+    """
+    if percent:
+        return (
+            "—" if percent_of_scale is None else f"{round(float(percent_of_scale), 1)}%"
+        )
     if score is None:
         return "—"
-    value = float(score)
-    if percent:
-        if max_score <= 0:
-            return "—"
-        return f"{round(value / max_score * 100, 1)}%"
-    return round(value, 1)
+    return round(float(score), 1)
 
 
 def build_canvas_rows(
@@ -969,7 +974,6 @@ def build_canvas_rows(
 
     percent = scale == "percent"
     view = view if view in _CANVAS_VIEWS else "manager_ai"
-    max_score = float(matrix.get("max_score") or 0)
 
     candidates = [
         cand
@@ -1028,21 +1032,26 @@ def build_canvas_rows(
                 ai_score = entry.get("ai_score")
                 if source == "manager":
                     text = _canvas_value(
-                        manager_score, percent=percent, max_score=max_score
+                        manager_score, entry.get("manager_percent"), percent=percent
                     )
                 elif source == "ai":
                     if (entry.get("ai_status") or "").lower() == "not_covered":
                         text = "n/a"
                     else:
                         text = _canvas_value(
-                            ai_score, percent=percent, max_score=max_score
+                            ai_score, entry.get("ai_percent"), percent=percent
                         )
                 else:
                     parts = [v for v in (manager_score, ai_score) if v is not None]
+                    pct_parts = [
+                        v
+                        for v in (entry.get("manager_percent"), entry.get("ai_percent"))
+                        if v is not None
+                    ]
                     text = _canvas_value(
                         sum(parts) / len(parts) if parts else None,
+                        sum(pct_parts) / len(pct_parts) if pct_parts else None,
                         percent=percent,
-                        max_score=max_score,
                     )
                 cells.append({"text": text, "divergence": diverges})
 

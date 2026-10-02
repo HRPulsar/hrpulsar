@@ -47,6 +47,8 @@ import {
 } from "@/lib/form-errors";
 import { CompanyTabs } from "@/components/company/company-tabs";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useAuth } from "@/context/auth-context";
+import { headCandidates } from "@/lib/division-heads";
 import { toast } from "sonner";
 import Link from "next/link";
 import { MoreHorizontal, Pencil, Plus, Trash2, Upload } from "lucide-react";
@@ -54,16 +56,19 @@ import { MoreHorizontal, Pencil, Plus, Trash2, Upload } from "lucide-react";
 function DivisionNode({
   division,
   depth = 0,
-  canManage,
+  canEdit,
+  canDelete,
   onEdit,
   onDelete,
   onAddChild,
 }: {
   division: Division;
   depth?: number;
-  // HRP-622: every action in the menu is admin/manager-gated server-side,
-  // so a rank-and-file employee only got as far as the 403.
-  canManage: boolean;
+  // HRP-622: every action in the menu is gated server-side, and a button
+  // that would 403 is never rendered. HRP-819: a division head edits only
+  // the subtree they manage; deleting is admin-only on the API.
+  canEdit: (id: string) => boolean;
+  canDelete: boolean;
   onEdit: (d: Division) => void;
   onDelete: (d: Division) => void;
   onAddChild: (parentId: string) => void;
@@ -114,28 +119,34 @@ function DivisionNode({
             {division.description}
           </span>
         )}
-        {canManage && (
+        {(canEdit(division.id) || canDelete) && (
           <DropdownMenu>
             <DropdownMenuTrigger data-testid={`company-division-${division.id}-actions`} render={<Button variant="ghost" size="icon-xs" className="opacity-0 group-hover:opacity-100 transition-opacity" />}>
               <MoreHorizontal className="h-4 w-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem data-testid={`company-division-${division.id}-btn-add-child`} onClick={() => onAddChild(division.id)}>
-                <Plus className="mr-2 h-4 w-4" />
-                {t("addChild")}
-              </DropdownMenuItem>
-              <DropdownMenuItem data-testid={`company-division-${division.id}-btn-edit`} onClick={() => onEdit(division)}>
-                <Pencil className="mr-2 h-4 w-4" />
-                {t("edit")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                data-testid={`company-division-${division.id}-btn-delete`}
-                variant="destructive"
-                onClick={() => onDelete(division)}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                {tc("delete")}
-              </DropdownMenuItem>
+              {canEdit(division.id) && (
+                <>
+                  <DropdownMenuItem data-testid={`company-division-${division.id}-btn-add-child`} onClick={() => onAddChild(division.id)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    {t("addChild")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem data-testid={`company-division-${division.id}-btn-edit`} onClick={() => onEdit(division)}>
+                    <Pencil className="mr-2 h-4 w-4" />
+                    {t("edit")}
+                  </DropdownMenuItem>
+                </>
+              )}
+              {canDelete && (
+                <DropdownMenuItem
+                  data-testid={`company-division-${division.id}-btn-delete`}
+                  variant="destructive"
+                  onClick={() => onDelete(division)}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  {tc("delete")}
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -145,7 +156,8 @@ function DivisionNode({
           key={child.id}
           division={child}
           depth={depth + 1}
-          canManage={canManage}
+          canEdit={canEdit}
+          canDelete={canDelete}
           onEdit={onEdit}
           onDelete={onDelete}
           onAddChild={onAddChild}
@@ -222,16 +234,38 @@ export default function CompanyPage() {
 
   const [saving, setSaving] = useState(false);
 
-  const { canManage, isAdmin } = usePermissions();
+  const { canAssignRoles, canImport, canManageSection, isAdmin, isAdminLevel } = usePermissions();
+  // HRP-819: the divisions the caller may write — everything for an
+  // admin-level role, the managed subtree for anyone else. HRP-828: only at
+  // `manage` on the section.
+  const [editableIds, setEditableIds] = useState<Set<string>>(new Set());
+  const managesChart = canManageSection("company");
+  const canEditDivision = (id: string) =>
+    managesChart && (isAdmin || editableIds.has(id));
+  // A top-level division sits in nobody's subtree.
+  const canAddRootDivision = managesChart && isAdminLevel;
+  const { user } = useAuth();
+  const heads = headCandidates(employees, {
+    adminLevel: isAdminLevel,
+    scopeIds: editableIds,
+    userId: user?.id,
+  });
+  const seatFromElsewhere = (id: string) =>
+    !isAdminLevel && Boolean(id) && !heads.some((e) => e.id === id);
 
   async function load() {
-    const [tRes, dRes, empRes] = await Promise.allSettled([
+    const [tRes, dRes, empRes, scopeRes] = await Promise.allSettled([
       api.get<Tenant>("/company"),
       api.get<Division[]>("/divisions"),
-      api.get<EmployeeList>("/employees?limit=100"),
+      // ponytail: one page of people, as on the division page - a head past
+      // the 500th reads as "from elsewhere"; page the list if a tenant grows.
+      api.get<EmployeeList>("/employees?limit=500"),
+      api.get<{ id: string }[]>("/divisions/scope"),
     ]);
     if (tRes.status === "fulfilled") setTenant(tRes.value);
     if (dRes.status === "fulfilled") setDivisions(dRes.value);
+    if (scopeRes.status === "fulfilled")
+      setEditableIds(new Set(scopeRes.value.map((d) => d.id)));
     if (empRes.status === "fulfilled") setEmployees(empRes.value.items);
     setLoading(false);
   }
@@ -335,7 +369,9 @@ export default function CompanyPage() {
           toast.success(t("toastPreviousManagerDowngraded"));
         }
       }
-      if (manual.length > 0) {
+      // HRP-829: the downgrade is PUT /employees/{id}/role - the admin
+      // role's; anyone else leaves the role as it is (HRP-857).
+      if (manual.length > 0 && canAssignRoles) {
         setPendingDowngrade(manual);
         setDowngradeIndex(0);
       }
@@ -421,7 +457,7 @@ export default function CompanyPage() {
           </div>
           <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
-        {isAdmin && (
+        {canImport && (
           <Button data-testid="company-btn-import" variant="outline" size="sm" render={<Link href="/settings/import" />}>
             <Upload className="mr-1 h-4 w-4" />
             {t("import")}
@@ -451,7 +487,7 @@ export default function CompanyPage() {
       <Card data-testid="company-divisions-card">
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle className="text-base">{t("divisions")}</CardTitle>
-          {canManage && (
+          {canAddRootDivision && (
             <Button data-testid="company-divisions-btn-add" size="sm" onClick={() => openCreateDivision()}>
               <Plus className="mr-1 h-4 w-4" />
               {t("addDivision")}
@@ -469,7 +505,8 @@ export default function CompanyPage() {
                 <DivisionNode
                   key={div.id}
                   division={div}
-                  canManage={canManage}
+                  canEdit={canEditDivision}
+                  canDelete={isAdmin}
                   onEdit={openEditDivision}
                   onDelete={openDeleteDivision}
                   onAddChild={(parentId) => openCreateDivision(parentId)}
@@ -581,9 +618,20 @@ export default function CompanyPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">{t("noneTopLevel")}</SelectItem>
+                  {/* HRP-819: below the admin level a parent comes from the
+                      caller's subtree - "top level" sits in nobody's, and
+                      the API refuses both; the current parent stays listed. */}
+                  {(isAdminLevel || !divForm.parent_id) && (
+                    <SelectItem value="">{t("noneTopLevel")}</SelectItem>
+                  )}
                   {flatDivisions
-                    .filter((d) => d.id !== editingDivId)
+                    .filter(
+                      (d) =>
+                        d.id !== editingDivId &&
+                        (isAdminLevel ||
+                          editableIds.has(d.id) ||
+                          d.id === divForm.parent_id),
+                    )
                     .map((d) => (
                       <SelectItem key={d.id} value={d.id}>
                         {"—".repeat(d.depth)} {d.name}
@@ -596,6 +644,9 @@ export default function CompanyPage() {
               <Label>{t("manager")}</Label>
               <Select
                 value={divForm.manager_id}
+                // HRP-857: a seat an admin gave someone from elsewhere is the
+                // admin's to change.
+                disabled={seatFromElsewhere(divForm.manager_id)}
                 onValueChange={(val) =>
                   setDivForm({ ...divForm, manager_id: val })
                 }
@@ -607,18 +658,29 @@ export default function CompanyPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">{t("none")}</SelectItem>
-                  {employees.map((emp) => (
+                  {heads.map((emp) => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.user_name?.trim() || emp.user_email || "—"}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {seatFromElsewhere(divForm.manager_id) && (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-testid="company-division-manager-from-elsewhere"
+                >
+                  {t("seatFromElsewhere")}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>{t("deputyManager")}</Label>
               <Select
                 value={divForm.deputy_manager_id}
+                // HRP-857: a seat an admin gave someone from elsewhere is the
+                // admin's to change.
+                disabled={seatFromElsewhere(divForm.deputy_manager_id)}
                 onValueChange={(val) =>
                   setDivForm({ ...divForm, deputy_manager_id: val })
                 }
@@ -630,13 +692,21 @@ export default function CompanyPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">{t("none")}</SelectItem>
-                  {employees.map((emp) => (
+                  {heads.map((emp) => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.user_name?.trim() || emp.user_email || "—"}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {seatFromElsewhere(divForm.deputy_manager_id) && (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-testid="company-division-deputy-from-elsewhere"
+                >
+                  {t("seatFromElsewhere")}
+                </p>
+              )}
             </div>
           </div>
           <DialogFooter>

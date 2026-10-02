@@ -5,11 +5,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from app.modules.auth import service
-from app.modules.auth.models import Invitation
+from app.modules.auth.models import Invitation, Role, user_roles
 from app.modules.auth.schemas import AcceptInvitationRequest, InvitationCreate
 from app.modules.company.models import Division
 from fastapi import HTTPException
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -251,6 +252,9 @@ class TestAcceptInvitation:
         return db_inv
 
     async def test_accept(self, db: AsyncSession, user, tenant, admin_role, position):
+        if not (await db.execute(select(Role).where(Role.code == "employee"))).scalar_one_or_none():
+            db.add(Role(name="Employee", code="employee", is_system=True))
+            await db.commit()
         inv = await self._create_pending(db, user, tenant, position)
         data = AcceptInvitationRequest(
             token=inv.token,
@@ -263,6 +267,13 @@ class TestAcceptInvitation:
         assert result["user"]["first_name"] == "New"
         assert "access_token" in result
         assert "refresh_token" in result
+        # HRP-832: the invited tier comes with the ``employee`` baseline.
+        codes = await db.execute(
+            select(Role.code)
+            .join(user_roles, user_roles.c.role_id == Role.id)
+            .where(user_roles.c.user_id == uuid.UUID(str(result["user"]["id"])))
+        )
+        assert {c for (c,) in codes.all()} == {"admin", "employee"}
 
     async def test_accept_creates_employee(
         self, db: AsyncSession, user, tenant, admin_role, position

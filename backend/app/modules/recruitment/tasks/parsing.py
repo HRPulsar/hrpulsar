@@ -78,6 +78,7 @@ def parse_resume_task(
     from sqlalchemy.orm import Session
 
     from app.config import settings
+    from app.core import ai_usage_hooks
     from app.modules.recruitment.models import Candidate, CandidateFile
 
     target_id = file_id or resume_id
@@ -103,6 +104,14 @@ def parse_resume_task(
             if not resume:
                 logger.error("CandidateFile %s not found", target_id)
                 return {"status": "error", "error": "Resume not found"}
+
+            ai_usage_hooks.bind(
+                tenant_id=resume.tenant_id,
+                action="recruitment.upload_resume",
+                entity_type="candidate" if resume.candidate_id else None,
+                entity_id=resume.candidate_id,
+                work_unit_id=ai_usage_hooks.work_unit_id_or(resume.id),
+            )
 
             resume.parse_status = "processing"
             db.commit()

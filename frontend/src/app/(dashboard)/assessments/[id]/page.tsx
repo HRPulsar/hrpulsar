@@ -100,6 +100,7 @@ import {
   ASSESSMENT_STATUS_COLORS as statusColors,
   ASSESSMENT_STATUS_FLOW as statusFlow,
   ASSESSMENT_TERMINAL_STATUSES as TERMINAL_STATUSES,
+  assessmentStatusLabel,
 } from "@/lib/assessment-status";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 
@@ -139,20 +140,19 @@ export default function AssessmentDetailPage() {
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const { user: currentUser } = useAuth();
-  const { canManage, canManageCatalogues, roles } = usePermissions();
-  // HRP-154: Platform admin sits outside `canManage` (which only covers
-  // admin + manager), but the Detailed results block is meant to be
-  // visible to them too — backend RBAC already enforces this; the gate
-  // here just keeps the network call from firing for Employees.
-  const canViewDetailedResults =
-    canManage || roles.includes("platform_admin");
+  const { canManageCatalogues, canManageSection, canViewSection } = usePermissions();
+  // HRP-826: running assessments is the section's `manage`, not a role
+  // flag - platform_admin reaches it like every section. The Detailed
+  // results block asks for the same level on the API.
+  const canManage = canManageSection("assessments");
+  const canViewDetailedResults = canManage;
   // HRP-243: an Employee-only caller sees the Results card only when
   // they are the assessee (the `self` participant) AND the assessment is
   // Done. Peers / subordinates never see results for assessments they
   // merely participated in. The backend mirrors this — it returns an
   // empty `results` array — but we also gate render-side so the
   // condition is explicit in the UI and trivial to test.
-  const isPrivileged = canManage || roles.includes("platform_admin");
+  const isPrivileged = canManage;
   const [assessment, setAssessment] = useState<AssessmentDetail | null>(null);
   const [employee, setEmployee] = useState<Employee | null>(null);
   const { tree: competenceTree } = useCompetenceTree();
@@ -325,7 +325,11 @@ export default function AssessmentDetailPage() {
     setSaving(true);
     try {
       await api.post(`/assessments/${id}/status`, { status_code: status });
-      toast.success(t("toastStatusChanged", { status }));
+      // HRP-917: the toast names the status the way the badge does, not
+      // by its wire code.
+      toast.success(
+        t("toastStatusChanged", { status: assessmentStatusLabel(t, status) }),
+      );
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("errorStatusChangeFailed"));
@@ -1440,7 +1444,8 @@ export default function AssessmentDetailPage() {
                     {t("openDevelopmentPlan")}
                   </Button>
                 ) : (
-                  canManage && (
+                  // HRP-825: the plan is the development section's record.
+                  canManageSection("development") && (
                     <Button
                       size="sm"
                       data-testid="assessment-create-plan"
@@ -1628,8 +1633,9 @@ export default function AssessmentDetailPage() {
         }}
       />
 
-      {/* CPA Comparison */}
-      {assessment.cpa_id && (
+      {/* CPA Comparison. HRP-826: the comparison is the analytics
+          section's route - closed there, the button would answer 403. */}
+      {assessment.cpa_id && canViewSection("analytics") && (
         <Card>
           <CardHeader className="flex-row items-center justify-between">
             <CardTitle className="text-base">{t("compareCpaRounds")}</CardTitle>

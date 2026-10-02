@@ -26,8 +26,8 @@ test.describe("Invitations — INV2 (inline edit + email change)", () => {
     await page.close();
   });
 
-  // HRP-436 moved the manager case (Invitations is admin-only now) to
-  // admin-section-access.spec.ts, which owns the whole Admin-group matrix.
+  // HRP-436 moved the manager case to admin-section-access.spec.ts, which
+  // owns the whole Admin-group matrix (the section's, since HRP-831).
 
   test("admin: all three fields editable + edit-email button available", async ({
     page,

@@ -83,3 +83,17 @@ export function brokenKeyProviders(
 ): ProviderStatus[] {
   return providers.filter((p) => p.key_status === "decrypt_failed");
 }
+
+/** HRP-1005: providers the picker shows — usable ones, and blocked ones
+ * (visible but not selectable, so the admin sees why they are missing). */
+export function selectableProviders(
+  providers: ProviderStatus[],
+): ProviderStatus[] {
+  return providers.filter((p) => p.configured || p.blocked);
+}
+
+/** HRP-1005: the pinned model is not the one really used — the processor
+ * list or the catalog replaced it. */
+export function modelSubstituted(s: AISettings): boolean {
+  return s.llm_model !== null && s.effective_model !== s.llm_model;
+}

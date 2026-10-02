@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import {
   Bot,
   Check,
@@ -86,7 +87,10 @@ const RESUME_ANCHOR_MAX = 60;
 
 type GenerationMode = "initial" | "regenerated" | "dynamic_next" | "manual";
 type SetType = "pre_interview" | "interview_round" | "final";
-type SetStatus = "ready" | "generating" | "failed" | "sample";
+// HRP-471: ``generating`` is a placeholder the worker is filling;
+// ``regenerating`` is an existing set keeping its questions until the new
+// ones land. Both poll and both can be cancelled.
+type SetStatus = "ready" | "generating" | "regenerating" | "failed" | "sample";
 
 interface QuestionRow {
   id: string | null;
@@ -124,8 +128,10 @@ interface QuestionSet {
   archived_at: string | null;
   version: number;
   created_at: string | null;
-  /** HRP-740: moved by every regeneration; ``created_at`` is not. */
+  /** Moved by any write to the row, status changes included. */
   updated_at: string | null;
+  /** HRP-740: when questions last landed; status changes do not move it. */
+  generated_at?: string | null;
   questions: QuestionRow[];
 }
 
@@ -184,6 +190,16 @@ function activeQuestions(set: QuestionSet): QuestionRow[] {
   return set.questions.filter((q) => q.status === "active");
 }
 
+function isInFlight(set: QuestionSet): boolean {
+  return set.status === "generating" || set.status === "regenerating";
+}
+
+/** The set's active questions, by id: a failed regeneration settles back
+ *  to ``ready`` with the very questions it had when it went in flight. */
+function questionsKey(set: QuestionSet | undefined): string {
+  return set ? activeQuestions(set).map((q) => q.id).join(",") : "";
+}
+
 export function InterviewQuestionSets({
   candidateId,
   vacancyOptions,
@@ -192,6 +208,9 @@ export function InterviewQuestionSets({
 }: Props) {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  // HRP-830: question sets are evaluation - `manage` on recruitment or the
+  // hiring manager; everyone else reads them.
+  const { canEvaluateCandidates: canEvaluate } = usePermissions();
   const [vacancyId, setVacancyId] = useState<string | undefined>(
     initialVacancyId || vacancyOptions[0]?.id,
   );
@@ -307,17 +326,24 @@ export function InterviewQuestionSets({
     return m;
   }, [competences]);
 
-  const loadSets = useCallback(async () => {
+  // Only the latest request lands: a poll for the vacancy the user just
+  // switched away from must not overwrite the new one's sets.
+  const loadSeq = useRef(0);
+  const loadSets = useCallback(async (opts?: { silent?: boolean }) => {
+    const seq = ++loadSeq.current;
     if (!vacancyId) {
       setSets([]);
       return;
     }
-    setLoading(true);
+    // HRP-471: the poll re-reads the list every few seconds; flashing
+    // "Loading…" over the block each time would hide the progress card.
+    if (!opts?.silent) setLoading(true);
     try {
       const params = new URLSearchParams({ vacancy_id: vacancyId });
       const data = await api.get<QuestionSet[]>(
         `/v1/candidates/${candidateId}/question-sets?${params}`,
       );
+      if (seq !== loadSeq.current) return;
       const ours = data.filter((s) => s.archived_at === null);
       setSets(ours);
       // A deep link wins once; after that the user's tab clicks do.
@@ -334,16 +360,69 @@ export function InterviewQuestionSets({
         ours.some((s) => s.id === prev) ? prev : (ours[0]?.id ?? null),
       );
     } catch {
+      // A failed poll keeps what is on screen and the poll going: emptying
+      // the list stopped it and offered "Generate first set" over sets
+      // that exist - a second, charged generation one click away.
+      if (opts?.silent || seq !== loadSeq.current) return;
       setSets([]);
       setActiveSetId(null);
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }, [candidateId, vacancyId]);
 
   useEffect(() => {
     loadSets();
   }, [loadSets]);
+
+  // HRP-471: generation runs in the background. While a set is in flight
+  // the list is polled, and the toast fires when the set settles — not
+  // when the request that started the job returns.
+  const inFlightIds = useMemo(
+    () => sets.filter(isInFlight).map((s) => s.id ?? ""),
+    [sets],
+  );
+  const inFlightKey = inFlightIds.join(",");
+  // In-flight set id -> its active questions when it went in flight.
+  const watchedRef = useRef<Map<string, string>>(new Map());
+  // Sets the user is cancelling: never watched, so neither a poll that
+  // lands before the cancel commits nor the settle after it toasts. An id
+  // leaves this set once it is no longer in flight.
+  const cancelledRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const now = new Map<string, string>();
+    for (const id of inFlightIds) {
+      if (cancelledRef.current.has(id)) continue;
+      now.set(
+        id,
+        watchedRef.current.get(id) ??
+          questionsKey(sets.find((s) => s.id === id)),
+      );
+    }
+    for (const [id, before] of watchedRef.current) {
+      if (now.has(id) || cancelledRef.current.has(id)) continue;
+      const settled = sets.find((s) => s.id === id);
+      // A vanished placeholder was cancelled by the user — nothing to say.
+      if (!settled) continue;
+      // A failed regeneration lands back on ``ready`` with the questions
+      // it had: that is a failure, not new questions.
+      if (settled.status === "ready" && questionsKey(settled) !== before) {
+        toast.success(t("questionSetsToastReady"));
+      } else if (settled.status === "ready" || settled.status === "failed") {
+        toast.error(t("questionSetsGenerateFailed"));
+      }
+    }
+    for (const id of cancelledRef.current) {
+      if (!inFlightIds.includes(id)) cancelledRef.current.delete(id);
+    }
+    watchedRef.current = now;
+  }, [sets, inFlightIds, t]);
+  useEffect(() => {
+    if (!inFlightKey) return;
+    const timer = setInterval(() => void loadSets({ silent: true }), 3000);
+    return () => clearInterval(timer);
+  }, [inFlightKey, loadSets]);
+  const busy = generating || inFlightIds.length > 0;
 
   // HRP-442 REDO: the "Interview questions ready" email links to
   // ``...?questionSet=...#interview-questions``. The page-level anchor
@@ -387,7 +466,7 @@ export function InterviewQuestionSets({
     // HRP-740: the date of the *last* generation. A regenerated set is
     // rewritten in place, so ``created_at`` keeps naming the first run
     // and the header kept advertising a date the content no longer had.
-    const generatedAt = currentSet.updated_at ?? currentSet.created_at;
+    const generatedAt = currentSet.generated_at ?? currentSet.created_at;
     if (currentSet.generation_mode === "manual" || !generatedAt) {
       return null;
     }
@@ -444,7 +523,8 @@ export function InterviewQuestionSets({
         return [created, ...filtered];
       });
       setActiveSetId(created.id);
-      toast.success(t("questionSetsToastReady"));
+      // HRP-471: the response is the set in flight; the progress card
+      // takes over and the ready toast fires when it settles.
       refreshBalance();
       return true;
     } catch (err) {
@@ -483,6 +563,32 @@ export function InterviewQuestionSets({
       setRounds(Array.isArray(rows) ? rows : []);
     } catch {
       // Non-fatal: the set is generated either way.
+    }
+  }
+
+  // HRP-471: stop waiting. A placeholder disappears, a regeneration
+  // target keeps the questions it had; nothing is charged, since credits
+  // are taken only when a result lands.
+  async function handleCancelGeneration(set: QuestionSet) {
+    if (!set.id) return;
+    const id = set.id;
+    // Stop watching before the request goes out: a poll landing in
+    // between must not toast "ready" for a set being cancelled.
+    cancelledRef.current.add(id);
+    watchedRef.current.delete(id);
+    try {
+      await api.post(`/v1/question-sets/${id}/cancel`);
+      toast.message(t("questionSetsGenerationCancelled"));
+      await loadSets({ silent: true });
+    } catch (err) {
+      // Re-read rather than re-watch blindly: a set that settled while the
+      // cancel was out (409) must not toast "ready" on some later change;
+      // one still in flight is picked up again by the watcher.
+      cancelledRef.current.delete(id);
+      void loadSets({ silent: true });
+      toast.error(
+        err instanceof Error ? err.message : t("questionSetsCancelFailed"),
+      );
     }
   }
 
@@ -586,6 +692,10 @@ export function InterviewQuestionSets({
   }
 
   const resumeMissing = currentVacancy?.has_parsed_resume === false;
+  // HRP-471 case 1: the first set is still being written — the empty
+  // state stays, with its button disabled and a Cancel next to it.
+  const firstSetInFlight =
+    sets.length > 0 && sets.every((s) => s.status === "generating");
 
   return (
     <section
@@ -625,7 +735,7 @@ export function InterviewQuestionSets({
         </div>
       </header>
 
-      {sets.length > 0 && !sample && (
+      {sets.length > 0 && !sample && !firstSetInFlight && (
         <div
           role="tablist"
           aria-label={t("questionSetsTablistAria")}
@@ -655,34 +765,40 @@ export function InterviewQuestionSets({
           {/* HRP-444: a second set is never another from-scratch
               pre-interview set — the dialog resolves which round it is
               for and which transcript it builds on. */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setNewSetOpen(true)}
-            disabled={generating || resumeMissing || insufficient}
-            data-testid="recruitment-interview-questions-new-set-btn"
-          >
-            {generating ? (
-              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-            ) : (
+          {/* HRP-471 case 2: progress lives on the set's own tab, so the
+              tab bar no longer says "Generating…" — the button just waits. */}
+          {canEvaluate && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setNewSetOpen(true)}
+              disabled={busy || resumeMissing || insufficient}
+              data-testid="recruitment-interview-questions-new-set-btn"
+            >
               <Plus className="mr-1 h-4 w-4" />
-            )}
-            {generating ? t("questionSetsGenerating") : t("questionSetsNewSet")}
-          </Button>
+              {t("questionSetsNewSet")}
+            </Button>
+          )}
         </div>
       )}
 
       {loading ? (
         <p className="text-sm text-muted-foreground">{t("loading")}</p>
-      ) : !sets.length && !sample ? (
+      ) : (!sets.length || firstSetInFlight) && !sample ? (
         <EmptyState
           resumeMissing={Boolean(resumeMissing)}
           insufficient={insufficient}
-          generating={generating}
+          generating={busy}
           balance={creditBalance}
           cost={generateCost}
           showCredits={isSaas}
+          canGenerate={canEvaluate}
           onGenerate={() => handleGenerate("initial")}
+          onCancel={
+            firstSetInFlight
+              ? () => handleCancelGeneration(sets[0])
+              : undefined
+          }
           onSample={handleSample}
         />
       ) : currentSet ? (
@@ -728,7 +844,7 @@ export function InterviewQuestionSets({
               )}
             </div>
             <div className="flex items-center gap-2">
-              {currentSet.status !== "sample" && (
+              {canEvaluate && currentSet.status !== "sample" && !isInFlight(currentSet) && (
                 <>
                   {/* HRP-485 task 1: split button — the primary half
                       opens the custom-question dialog, the caret offers
@@ -781,7 +897,7 @@ export function InterviewQuestionSets({
                     variant="outline"
                     size="sm"
                     onClick={() => setRegenerateConfirm(true)}
-                    disabled={generating || insufficient}
+                    disabled={busy || insufficient}
                     data-testid="recruitment-interview-questions-regenerate-btn"
                   >
                     <RefreshCw className="mr-1 h-4 w-4" />
@@ -805,16 +921,31 @@ export function InterviewQuestionSets({
             </div>
           </CardHeader>
           <CardContent className="space-y-2">
-            {activeQuestions(currentSet).length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {t("questionSetsSetEmpty")}
+            {isInFlight(currentSet) ? (
+              <GenerationProgress
+                // Cancelling asks what generating asks (HRP-830): a reader
+                // watches the progress without a button that would 403.
+                onCancel={canEvaluate ? () => handleCancelGeneration(currentSet) : undefined}
+              />
+            ) : activeQuestions(currentSet).length === 0 ? (
+              <p
+                className="text-sm text-muted-foreground"
+                data-testid={
+                  currentSet.status === "failed"
+                    ? "recruitment-interview-questions-failed"
+                    : undefined
+                }
+              >
+                {currentSet.status === "failed"
+                  ? t("questionSetsGenerationFailedNotice")
+                  : t("questionSetsSetEmpty")}
               </p>
             ) : (
               activeQuestions(currentSet).map((q) => (
                 <QuestionItem
                   key={q.id || `${q.sort_order}-${q.text.slice(0, 8)}`}
                   question={q}
-                  readOnly={currentSet.status === "sample"}
+                  readOnly={!canEvaluate || currentSet.status === "sample"}
                   competenceName={
                     q.competence_id
                       ? competenceNames.get(String(q.competence_id))
@@ -840,7 +971,7 @@ export function InterviewQuestionSets({
         rounds={rounds}
         interviews={transcribed}
         sets={sets}
-        generating={generating}
+        generating={busy}
         costSuffix={creditSuffix}
         onSubmit={handleGenerateNext}
       />
@@ -900,6 +1031,41 @@ export function InterviewQuestionSets({
   );
 }
 
+// HRP-471: the indeterminate bar and the Cancel a set shows while the
+// worker is writing it.
+function GenerationProgress({ onCancel }: { onCancel?: () => void }) {
+  const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
+  return (
+    <div
+      className="space-y-3 rounded-md border border-dashed p-4"
+      data-testid="recruitment-interview-questions-progress"
+    >
+      <div className="flex items-center gap-2 text-sm">
+        <Loader2 className="h-4 w-4 animate-spin text-sky-600" />
+        <span>{t("questionSetsGenerationProgress")}</span>
+      </div>
+      <div
+        role="progressbar"
+        aria-busy="true"
+        className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+      >
+        <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-500" />
+      </div>
+      {onCancel && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onCancel}
+          data-testid="recruitment-interview-questions-cancel-btn"
+        >
+          {tc("cancel")}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 interface EmptyStateProps {
   resumeMissing: boolean;
   insufficient: boolean;
@@ -907,7 +1073,10 @@ interface EmptyStateProps {
   balance: number | null;
   cost: number | null;
   showCredits: boolean;
+  canGenerate: boolean;
   onGenerate: () => void;
+  /** HRP-471: set while the first set is being written. */
+  onCancel?: () => void;
   onSample: () => void;
 }
 
@@ -918,10 +1087,13 @@ function EmptyState({
   balance,
   cost,
   showCredits,
+  canGenerate,
   onGenerate,
+  onCancel,
   onSample,
 }: EmptyStateProps) {
   const t = useTranslations("recruitment");
+  const tc = useTranslations("common");
   const withCredits = showCredits && cost !== null;
   return (
     <div
@@ -941,22 +1113,33 @@ function EmptyState({
             : t("questionSetsEmptyDefault")}
       </p>
       <div className="mt-4 flex items-center justify-center gap-2">
-        <Button
-          onClick={onGenerate}
-          disabled={resumeMissing || insufficient || generating}
-          data-testid="recruitment-interview-questions-generate-btn"
-        >
-          {generating ? (
-            t("questionSetsGenerating")
-          ) : (
-            <>
-              <Sparkles className="mr-1 h-4 w-4" />
-              {withCredits
-                ? t("questionSetsGenerateFirstSetCost", { cost: cost ?? 0 })
-                : t("questionSetsGenerateFirstSet")}
-            </>
-          )}
-        </Button>
+        {canGenerate && (
+          <Button
+            onClick={onGenerate}
+            disabled={resumeMissing || insufficient || generating}
+            data-testid="recruitment-interview-questions-generate-btn"
+          >
+            {generating ? (
+              t("questionSetsGenerating")
+            ) : (
+              <>
+                <Sparkles className="mr-1 h-4 w-4" />
+                {withCredits
+                  ? t("questionSetsGenerateFirstSetCost", { cost: cost ?? 0 })
+                  : t("questionSetsGenerateFirstSet")}
+              </>
+            )}
+          </Button>
+        )}
+        {canGenerate && generating && onCancel && (
+          <Button
+            variant="outline"
+            onClick={onCancel}
+            data-testid="recruitment-interview-questions-cancel-btn"
+          >
+            {tc("cancel")}
+          </Button>
+        )}
         {insufficient && (
           <Button
             variant="outline"

@@ -1,13 +1,14 @@
-"""HRP-615: recruitment reads are role-gated, not merely authenticated.
+"""HRP-615: recruitment reads are gated, not merely authenticated.
 
 Before this, 40-odd recruitment GETs hung on bare ``get_current_user``:
 any employee of the tenant could list candidates with their contacts,
-download resumes and read interview transcripts. The endpoints now sit
-behind ``RECRUITMENT_VIEWER_ROLES``.
+download resumes and read interview transcripts. The endpoints sat behind
+a list of recruitment roles; since HRP-830 they sit behind ``view`` on the
+``recruitment`` section, which ``employee`` does not get by default.
 
 Two layers here: request-level tests on the surfaces that actually leak
-PII, plus a scanner that fails when a *new* GET lands on bare
-``get_current_user`` — the regression this file exists to prevent.
+PII, plus a scanner that fails when a *new* GET lands outside the
+section gate — the regression this file exists to prevent.
 """
 
 from __future__ import annotations
@@ -18,9 +19,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest_asyncio
+from app.core.sections import gated_section, section_for_path
 from app.core.security import create_access_token, hash_password
+from app.main import app
 from app.modules.auth.models import Role, User, user_roles
-from app.modules.recruitment.routers.common import RECRUITMENT_VIEWER_ROLES
+from fastapi.routing import APIRoute
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -148,14 +151,32 @@ class TestRecruitmentReadGate:
             assert resp.status_code == 200, f"{path} -> {resp.text}"
 
 
-def _scan_get_endpoints() -> tuple[list[str], list[str]]:
-    """Walk every recruitment router; classify each GET/HEAD handler.
+# Dependencies that authenticate a recruitment handler (HRP-830): bare
+# ``get_current_user`` for reads - the section gate answers ``view`` - and
+# the section's own level guards from ``routers/common.py``.
+AUTH_DEPENDENCIES = frozenset(
+    {"get_current_user", "runs_hiring", "evaluates", "runs_rounds", "reads_hiring_settings"}
+)
 
-    Returns (on bare ``get_current_user``, with no auth dependency at all).
-    """
+
+def _depends(node) -> list:
+    args = node.args
+    defaults = [None] * (len(args.args) - len(args.defaults))
+    defaults += list(args.defaults)
+    # Keyword-only params carry dependencies just as well.
+    defaults += list(args.kw_defaults)
+    return [
+        d.args[0]
+        for d in defaults
+        if isinstance(d, ast.Call) and getattr(d.func, "id", None) == "Depends" and d.args
+    ]
+
+
+def _scan_get_endpoints() -> list[str]:
+    """Walk every recruitment router; the GET/HEAD handlers with no auth
+    dependency at all."""
     files = sorted((RECRUITMENT / "routers").glob("*.py"))
     files += sorted(RECRUITMENT.glob("*router*.py"))
-    bare: list[str] = []
     unauthenticated: list[str] = []
     for path in files:
         if path.name in SCAN_SKIP_FILES:
@@ -171,44 +192,47 @@ def _scan_get_endpoints() -> tuple[list[str], list[str]]:
             }
             if not methods & {"get", "head"}:
                 continue
-            args = node.args
-            defaults = [None] * (len(args.args) - len(args.defaults))
-            defaults += list(args.defaults)
-            # Keyword-only params carry dependencies just as well.
-            defaults += list(args.kw_defaults)
-            depends = []
-            for default in defaults:
-                if (
-                    isinstance(default, ast.Call)
-                    and getattr(default.func, "id", None) == "Depends"
-                    and default.args
-                ):
-                    depends.append(default.args[0])
-            name = f"{path.name}::{node.name}"
-            if any(getattr(d, "id", None) == "get_current_user" for d in depends):
-                bare.append(name)
-                continue
             guarded = any(
-                isinstance(d, ast.Call)
-                and getattr(d.func, "id", "") in ("require_role", "require_admin")
-                for d in depends
+                getattr(d, "id", None) in AUTH_DEPENDENCIES
+                or (isinstance(d, ast.Call) and getattr(d.func, "id", "") in ("require_role", "require_admin"))
+                for d in _depends(node)
             )
             if not guarded:
-                unauthenticated.append(name)
-    return bare, unauthenticated
+                unauthenticated.append(f"{path.name}::{node.name}")
+    return unauthenticated
 
 
-def test_no_recruitment_get_on_bare_authentication():
-    bare, _ = _scan_get_endpoints()
-    assert not bare, (
-        "recruitment GET endpoints must be gated by "
-        "require_role(*RECRUITMENT_VIEWER_ROLES), not bare get_current_user: "
-        + ", ".join(bare)
-    )
+def test_every_authenticated_recruitment_get_is_behind_the_section():
+    # HRP-830: a read that authenticates is the section's - ``/v1`` rounds,
+    # question sets and scales included, which sat outside the matrix next
+    # to the public API until this ticket.
+    outside = [
+        f"{sorted(r.methods)} {r.path}"
+        for r in app.routes
+        if isinstance(r, APIRoute)
+        and r.endpoint.__module__.startswith("app.modules.recruitment.")
+        and not r.endpoint.__module__.endswith("e2e_seed")
+        and r.methods <= {"GET", "HEAD"}
+        and "get_current_user" in _dependency_names(r.dependant)
+        and (
+            (section := section_for_path(r.path)) is None
+            or section.code != "recruitment"
+            or gated_section(r) is None
+        )
+    ]
+    assert not outside, outside
+
+
+def _dependency_names(dependant) -> set[str]:
+    names: set[str] = set()
+    for dep in dependant.dependencies:
+        names.add(getattr(dep.call, "__name__", ""))
+        names |= _dependency_names(dep)
+    return names
 
 
 def test_unauthenticated_recruitment_gets_are_declared():
-    _, unauthenticated = _scan_get_endpoints()
+    unauthenticated = _scan_get_endpoints()
     unexpected = sorted(set(unauthenticated) - UNAUTHENTICATED_GET_ALLOWLIST)
     assert not unexpected, (
         "these recruitment GET endpoints take no authentication; if that is "
@@ -294,32 +318,18 @@ def _declared_guards(node) -> set[str]:
     }
 
 
-# Roles that get scoped to a division. A route no scoped role can reach
-# needs no guard — and stating it this way rather than as an allowlist
-# means widening such a route's ``require_role`` re-arms the check.
-SCOPED_ROLES = frozenset({"hiring_manager", "manager"})
+# Dependencies a scoped caller gets through (HRP-830): ``view`` on the
+# section (bare ``get_current_user`` behind the gate), and the two roles
+# that keep a piece at ``view`` - ``hiring_manager`` evaluates,
+# ``manager`` runs hiring rounds. ``runs_hiring`` is ``manage``, which sees
+# the whole workspace, and ``require_role("admin"[, "hr"])`` is admin-level:
+# a route only those reach needs no guard - and stating it this way rather
+# than as an allowlist means widening such a route re-arms the check.
+SCOPED_REACH = frozenset({"get_current_user", "evaluates", "runs_rounds"})
 
 
-def _route_roles(node) -> set[str]:
-    """Role codes in the handler's ``require_role(...)`` gate."""
-    args = node.args
-    defaults = [None] * (len(args.args) - len(args.defaults))
-    defaults += list(args.defaults) + list(args.kw_defaults)
-    for default in defaults:
-        if not (
-            isinstance(default, ast.Call)
-            and getattr(default.func, "id", None) == "Depends"
-            and default.args
-            and isinstance(default.args[0], ast.Call)
-            and getattr(default.args[0].func, "id", None) == "require_role"
-        ):
-            continue
-        gate = default.args[0]
-        codes = {a.value for a in gate.args if isinstance(a, ast.Constant)}
-        if any(isinstance(a, ast.Starred) for a in gate.args):
-            codes |= set(RECRUITMENT_VIEWER_ROLES)
-        return codes
-    return set()
+def _reached_by_scoped_callers(node) -> bool:
+    return any(getattr(d, "id", None) in SCOPED_REACH for d in _depends(node))
 
 
 def test_keyed_recruitment_gets_carry_a_scope_guard():
@@ -331,7 +341,7 @@ def test_keyed_recruitment_gets_carry_a_scope_guard():
         in_query = {k for k in SCOPED_PATH_KEYS if k in params} - in_path
         if not (in_path or in_query):
             continue
-        if not _route_roles(node) & SCOPED_ROLES:
+        if not _reached_by_scoped_callers(node):
             continue
         covered = {SCOPE_GUARDS[g] for g in _declared_guards(node)}
         missing = (in_path | in_query) - covered

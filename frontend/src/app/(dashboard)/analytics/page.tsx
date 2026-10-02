@@ -18,8 +18,8 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
-import { RequireRole } from "@/components/require-role";
 import { gradeTitleLabel } from "@/lib/reference-labels";
+import { usePermissions } from "@/hooks/use-permissions";
 
 interface AssessmentStats {
   total: number;
@@ -224,6 +224,9 @@ function HrMetrics() {
 }
 
 export default function AnalyticsPage() {
+  // HRP-822: the section's level, not a role - `view` reads the charts,
+  // the export is a POST and belongs to `manage`.
+  const { canManageSection } = usePermissions();
   const t = useTranslations("analytics");
   const tRef = useTranslations("reference");
   const tSections = useTranslations("sections");
@@ -268,7 +271,6 @@ export default function AnalyticsPage() {
   if (loading) return <div className="py-12 text-center text-muted-foreground">{tc("loading")}</div>;
 
   return (
-    <RequireRole managementData>
     <div className="space-y-6">
       <div>
         <div className="flex items-center gap-2">
@@ -303,33 +305,44 @@ export default function AnalyticsPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">{t("kpiTotalPdps")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{pdpStats?.total ?? 0}</div>
-          </CardContent>
-        </Card>
+        {/* HRP-822: the plan figures come from the `development` section,
+            not this one, so a role the tenant handed only `analytics` is
+            refused them. A swallowed 403 would otherwise read as "no plans
+            and no progress" - a confident wrong number rather than a card
+            that is simply not there. */}
+        {pdpStats && (
+          <>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">{t("kpiTotalPdps")}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold">{pdpStats.total}</div>
+              </CardContent>
+            </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">{t("kpiAvgPdpProgress")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{pdpStats?.avg_progress ?? 0}%</div>
-          </CardContent>
-        </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">{t("kpiAvgPdpProgress")}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold">{pdpStats.avg_progress}%</div>
+              </CardContent>
+            </Card>
+          </>
+        )}
       </div>
 
-      <div>
-        <h2 className="text-lg font-semibold mb-3">{t("exports")}</h2>
-        <div className="flex gap-3">
-          <Button variant="outline" onClick={exportAssessments}>
-            {t("exportAssessments")}
-          </Button>
+      {canManageSection("analytics") && (
+        <div>
+          <h2 className="text-lg font-semibold mb-3">{t("exports")}</h2>
+          <div className="flex gap-3">
+            <Button variant="outline" onClick={exportAssessments}>
+              {t("exportAssessments")}
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* GF5: Compensation Benchmark */}
       {benchmark && (benchmark.by_grade.length > 0 || benchmark.by_specialization.length > 0) && (
@@ -452,6 +465,5 @@ export default function AnalyticsPage() {
         </div>
       )}
     </div>
-    </RequireRole>
   );
 }

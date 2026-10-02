@@ -67,6 +67,10 @@ class TestRegistry:
         from app.modules.recruitment.settings_schemas import LLMProviderName
 
         for name in get_args(LLMProviderName):
+            if name == "jev":
+                # Decision provider (HRP-936), resolved by ai.decision_client;
+                # generation skipping its rows is the point.
+                continue
             assert providers.resolve_provider_name(name) is not None, name
 
     def test_ai_settings_provider_names_all_resolve(self) -> None:

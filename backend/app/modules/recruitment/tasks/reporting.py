@@ -49,11 +49,18 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
     from app.models import Person
     from app.modules.company.models import Tenant
     from app.modules.recruitment.assessment_service import (
+        _ai_score_on_scale,
+        _legacy_matrix_scale,
+        _matrix_scale_from,
         competence_cells_from_run_data,
     )
     from app.modules.recruitment.common import (
         candidate_display_name,
         normalize_competence_id,
+    )
+    from app.modules.recruitment.manager_assessment_models import (
+        AssessmentScale,
+        AssessmentScaleLevel,
     )
     from app.modules.recruitment.models import (
         AIAnalysisRun,
@@ -73,7 +80,8 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
         candidate_ids_with_resume_sync,
     )
     from app.modules.recruitment.score_normalization import (
-        compute_normalized_ai_score,
+        clamp_unit_score,
+        scale_percent,
     )
     from app.modules.storage.models import File
 
@@ -279,6 +287,59 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                         }
                     )
 
+            from app.modules.recruitment.models import ScaleConfig
+
+            active_scale = db.execute(
+                select(ScaleConfig).where(
+                    ScaleConfig.tenant_id == vacancy.tenant_id,
+                    ScaleConfig.is_active.is_(True),
+                )
+            ).scalar_one_or_none()
+            # HRP-774 — the vacancy's own scale, in the order the matrix
+            # resolves it (``_matrix_scale``): frozen snapshot, bound scale,
+            # tenant default, then the legacy ScaleConfig. Its level weights
+            # are the "% of scale" the matrix and the round header show, so
+            # the workbook can no longer print 75 % where they print 66 %.
+            # Resolved before the first read of canvas scores, so every block
+            # below speaks the vacancy scale's units.
+            snapshot = vacancy.assessment_scale_snapshot or {}
+            matrix_scale = _matrix_scale_from(
+                active_scale, snapshot.get("name"), snapshot.get("levels") or []
+            )
+            if matrix_scale is None:
+                bound_scale = (
+                    db.get(AssessmentScale, vacancy.assessment_scale_id)
+                    if vacancy.assessment_scale_id is not None
+                    else None
+                ) or (
+                    db.execute(
+                        select(AssessmentScale).where(
+                            AssessmentScale.tenant_id == vacancy.tenant_id,
+                            AssessmentScale.is_default.is_(True),
+                            AssessmentScale.archived_at.is_(None),
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                if bound_scale is not None:
+                    matrix_scale = _matrix_scale_from(
+                        active_scale,
+                        bound_scale.name,
+                        [
+                            {"value": value, "weight": weight}
+                            for value, weight in db.execute(
+                                select(
+                                    AssessmentScaleLevel.value,
+                                    AssessmentScaleLevel.weight,
+                                ).where(AssessmentScaleLevel.scale_id == bound_scale.id)
+                            ).all()
+                        ],
+                    )
+            if matrix_scale is None:
+                matrix_scale = _legacy_matrix_scale(active_scale)
+            min_score, max_score = matrix_scale.min_score, matrix_scale.max_score
+
             # Comparison grid (covers SCR-56) — averages over evaluators on
             # the human side, falls back to AI when no human scores exist.
             human_rows = (
@@ -318,7 +379,9 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 bucket = human_buckets.setdefault(
                     target_cv.candidate_id, {}
                 ).setdefault(str(hs.competence_id), [])
-                bucket.append(float(hs.score))
+                # Canvas cells are entered against the tenant ScaleConfig;
+                # rebased onto the vacancy scale the way the matrix does.
+                bucket.append(round(float(hs.score) * matrix_scale.legacy_ratio, 2))
             ai_buckets: dict[uuid.UUID, dict[str, list[float]]] = {}
             for ai in ai_rows:
                 if ai.score is None:
@@ -418,7 +481,11 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                         "competence_name": comp_name_by_id.get(str(hs.competence_id))
                         or str(hs.competence_id),
                         "evaluator_name": hs.evaluator_name or "",
-                        "score": hs.score,
+                        "score": (
+                            None
+                            if hs.score is None
+                            else round(float(hs.score) * matrix_scale.legacy_ratio, 2)
+                        ),
                         "comment": hs.comment or "",
                     }
                 )
@@ -554,9 +621,8 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 for cv in selected_cvs
             }
 
-            # Tenant divergence threshold + active scale max (HRP-265).
+            # Tenant divergence threshold (HRP-265).
             divergence_threshold = 1.0
-            max_score = 5.0
             tenant_row = db.get(Tenant, vacancy.tenant_id)
             if tenant_row is not None:
                 matrix_settings = tenant_row.recruitment_matrix_settings or {}
@@ -573,16 +639,6 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                             vacancy.tenant_id,
                             raw_threshold,
                         )
-            from app.modules.recruitment.models import ScaleConfig
-
-            active_scale = db.execute(
-                select(ScaleConfig).where(
-                    ScaleConfig.tenant_id == vacancy.tenant_id,
-                    ScaleConfig.is_active.is_(True),
-                )
-            ).scalar_one_or_none()
-            if active_scale is not None:
-                max_score = float(active_scale.max_value)
 
             comp_keys: list[str] = []
             comp_meta_by_key: dict[str, dict] = {}
@@ -699,8 +755,11 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
             per_cv_aggregates: dict[uuid.UUID, dict] = {}
             for cv in selected_cvs:
                 manager_sum = 0.0
+                manager_percent_sum = 0.0
                 manager_scored = 0
                 ai_sum = 0.0
+                ai_percent_sum = 0.0
+                ai_raw_sum = 0.0
                 ai_scored = 0
                 ai_not_covered = 0
                 divergence_count = 0
@@ -709,8 +768,11 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     human_vals = human_buckets.get(cv.candidate_id, {}).get(ckey)
                     manager_score: float | None = None
                     if human_vals:
-                        manager_score = sum(human_vals) / len(human_vals)
+                        manager_score = round(sum(human_vals) / len(human_vals), 2)
                         manager_sum += manager_score
+                        manager_percent_sum += (
+                            scale_percent(manager_score, matrix_scale.levels) or 0.0
+                        )
                         manager_scored += 1
                     ai_entry = _ai_entry_for(cv.id, ckey)
                     ai_score: float | None = None
@@ -731,17 +793,21 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                             # HRP-685 — AI competence scores are stored on
                             # the canonical 0..1 scale (HRP-274) while the
                             # denominator below and the manager column are
-                            # on the tenant scale. Printed raw, a top mark
+                            # on the vacancy scale. Printed raw, a top mark
                             # read as 0.8/5 and every populated cell looked
                             # like a divergence; the compact matrix rebases
                             # the same way (HRP-507).
                             ai_score = float(
-                                compute_normalized_ai_score(
-                                    ai_entry["score"], max_score
+                                _ai_score_on_scale(
+                                    ai_entry["score"], min_score, max_score
                                 )
                                 or 0.0
                             )
                             ai_sum += ai_score
+                            ai_raw_sum += clamp_unit_score(ai_entry["score"]) or 0.0
+                            ai_percent_sum += (
+                                scale_percent(ai_score, matrix_scale.levels) or 0.0
+                            )
                             ai_scored += 1
                         elif ai_status == "not_covered":
                             # Only the explicit not-covered family drops out
@@ -768,36 +834,47 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                         }
                     )
 
-                manager_denominator = max_score * len(comp_keys)
-                ai_denominator = max_score * max(len(comp_keys) - ai_not_covered, 0)
+                # HRP-774 — every percent is the mean of the cells' "% of
+                # scale" (``scale_percent``), the matrix's own rule; the
+                # old ``sum / (max × N)`` ignored the scale's level weights.
                 # HRP-523 REDO — two different manager percentages, for two
                 # different questions. ``manager_percent`` keeps the full
-                # denominator: it is the coverage-aware figure the Summary and
-                # Matrix totals display. ``manager_scored_percent`` divides by
-                # what the manager actually rated, and only that one feeds the
-                # recommendation — otherwise a candidate scored 5/5 on 3 of 10
-                # competences reads as 30% and gets "Not recommended" for the
-                # manager's unfinished work rather than for their answers.
-                manager_scored_denominator = max_score * manager_scored
+                # denominator (an unrated competence counts as 0): it is the
+                # coverage-aware figure the Summary and Matrix totals
+                # display. ``manager_scored_percent`` divides by what the
+                # manager actually rated, and only that one feeds the
+                # recommendation — otherwise a candidate scored top marks on
+                # 3 of 10 competences reads as 30% and gets "Not recommended"
+                # for the manager's unfinished work rather than their answers.
+                # ponytail: verdict still uses the pre-HRP-774 level/max
+                # percent; switch to the displayed percent once the threshold
+                # is decided (HRP-774). Level / max on the rebased marks equals
+                # the old tenant-scale figure; the AI side is the raw 0..1 mean.
+                ai_covered = max(len(comp_keys) - ai_not_covered, 0)
                 per_cv_aggregates[cv.id] = {
                     "manager_total": manager_sum,
                     "manager_scored": manager_scored,
                     "manager_percent": (
-                        round(manager_sum / manager_denominator * 100, 1)
-                        if manager_scored > 0 and manager_denominator > 0
+                        round(manager_percent_sum / len(comp_keys), 1)
+                        if manager_scored > 0
                         else None
                     ),
                     "manager_scored_percent": (
-                        round(manager_sum / manager_scored_denominator * 100, 1)
-                        if manager_scored > 0 and manager_scored_denominator > 0
+                        round(manager_sum / (max_score * manager_scored) * 100, 1)
+                        if manager_scored > 0 and max_score > 0
                         else None
                     ),
                     "ai_total": ai_sum,
                     "ai_scored": ai_scored,
                     "ai_not_covered": ai_not_covered,
                     "ai_percent": (
-                        round(ai_sum / ai_denominator * 100, 1)
-                        if ai_scored > 0 and ai_denominator > 0
+                        round(ai_percent_sum / ai_covered, 1)
+                        if ai_scored > 0 and ai_covered > 0
+                        else None
+                    ),
+                    "verdict_ai_percent": (
+                        round(ai_raw_sum / ai_covered * 100, 1)
+                        if ai_scored > 0 and ai_covered > 0
                         else None
                     ),
                     "divergence_count": divergence_count,
@@ -861,8 +938,9 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 # HRP-523 REDO — strength is judged on the competences the
                 # manager actually rated; coverage is a separate question,
                 # answered by the ``manager_partial`` branch below.
+                # Both on the pre-HRP-774 footing — see ``verdict_ai_percent``.
                 manager_pct = agg["manager_scored_percent"]
-                ai_pct = agg["ai_percent"]
+                ai_pct = agg["verdict_ai_percent"]
                 manager_strong = (
                     manager_pct is not None and manager_pct >= strong_percent
                 )
@@ -998,8 +1076,10 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     "the competence and it drops out of the AI denominator."
                 ),
                 "scale_disclaimer": (
-                    f"Scale: {active_scale.name if active_scale else 'default'} "
+                    f"Scale: {matrix_scale.name or 'default'} "
                     f"(max {round(max_score, 1)} per competence). "
+                    "Percent of scale values each score by the scale's level "
+                    "weights. "
                     f"Divergence threshold: {divergence_threshold}."
                 ),
             }

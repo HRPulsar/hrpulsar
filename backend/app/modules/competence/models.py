@@ -109,6 +109,14 @@ class Competence(BaseModel):
     is_published: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
+    # HRP-632: the division head whose personal draft this is - seen by
+    # them and by ``manage`` alone, offered by no picker; cleared on publish.
+    draft_owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # HRP-749: who the competence describes — human | agent | both. Read-only
     # for clients in the MVP; the human layer of coverage filters on it.
     applicable_to: Mapped[str] = mapped_column(

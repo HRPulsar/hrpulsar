@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   hasActivePdpFilters,
   matchesPdpFilters,
+  parseFinishedDays,
 } from "@/lib/pdp-filters";
 import type { PDP } from "@/lib/types";
 
@@ -191,5 +192,38 @@ describe("attention flags (HRP-638)", () => {
         filterFlags: ["overdue"],
       }),
     ).toBe(true);
+  });
+});
+
+// HRP-724: the dashboard's period tiles open the list with the window they
+// counted, so "3 plans in 90 days" lands on exactly those three rows.
+describe("finished-in-window filter (HRP-724)", () => {
+  const daysAgo = (n: number) =>
+    new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+  const match = (pdp: PDP, finishedDays: number) =>
+    matchesPdpFilters(pdp, { searchQuery: "", filterStatuses: [], finishedDays });
+
+  it("keeps a plan finished inside the window and drops one outside it", () => {
+    expect(match(makePdp({ status: "done", finished_at: daysAgo(10) }), 30)).toBe(true);
+    expect(match(makePdp({ status: "done", finished_at: daysAgo(40) }), 30)).toBe(false);
+    expect(match(makePdp({ status: "done", finished_at: daysAgo(40) }), 90)).toBe(true);
+  });
+
+  it("drops a plan that has not finished at all", () => {
+    expect(match(makePdp({ status: "in_progress", finished_at: null }), 365)).toBe(false);
+  });
+
+  it("counts as an active filter for the Clear button", () => {
+    expect(
+      hasActivePdpFilters({ searchQuery: "", filterStatuses: [], finishedDays: 90 }),
+    ).toBe(true);
+  });
+
+  it("reads only a positive whole number of days from the URL", () => {
+    expect(parseFinishedDays("90")).toBe(90);
+    expect(parseFinishedDays("abc")).toBeUndefined();
+    expect(parseFinishedDays("-5")).toBeUndefined();
+    expect(parseFinishedDays("1.5")).toBeUndefined();
+    expect(parseFinishedDays(null)).toBeUndefined();
   });
 });
