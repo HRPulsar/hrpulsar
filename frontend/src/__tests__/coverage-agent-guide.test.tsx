@@ -111,6 +111,15 @@ describe("agentGroups", () => {
     const [group] = agentGroups([named(1, "Claude Code"), named(2, "Claude Code"), named(3, "Cursor")]);
     expect(group.agentNames).toEqual(["Claude Code", "Cursor"]);
   });
+
+  it("keeps the tenant's own pack apart from the built-in one of the same code", () => {
+    // HRP-911: two agent types to set up, as the archive's README lists them.
+    const own = step(2, "drafting", {
+      agent: { pack_id: "own-drafting", pack_code: "drafting", agent_id: null, agent_name: null },
+    });
+    const groups = agentGroups([step(1, "drafting", { hours_per_year: 10 }), own]);
+    expect(groups.map((g) => g.packId)).toEqual(["pack-drafting", "own-drafting"]);
+  });
 });
 
 let container: HTMLDivElement;

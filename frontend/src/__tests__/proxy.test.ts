@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Track calls
 let redirectTarget: string | URL = "";
 let redirectStatus: number | undefined;
+// HRP-924: NextResponse.rewrite target (the check host's short URLs).
+let rewriteTarget = "";
 let nextHeaders: Map<string, string> = new Map();
 // i18n (F1): response cookies set by withLocaleCookie
 let setCookies: Map<string, string> = new Map();
@@ -21,7 +23,10 @@ function mockCookies() {
 
 vi.mock("next/server", () => ({
   NextRequest: class {},
-  NextResponse: {
+  // `new NextResponse(body, init)` - a bare status answer (D2: 404).
+  NextResponse: Object.assign(function (_body: unknown, init?: { status?: number }) {
+    return { type: "status", status: init?.status, headers: new Map(), cookies: mockCookies() };
+  }, {
     redirect(url: string | URL, status?: number) {
       redirectTarget = url;
       redirectStatus = status;
@@ -37,6 +42,10 @@ vi.mock("next/server", () => ({
         cookies: mockCookies(),
       };
     },
+    rewrite(url: URL) {
+      rewriteTarget = url.toString();
+      return { type: "rewrite", url, headers: new Map(), cookies: mockCookies() };
+    },
     next() {
       nextHeaders = new Map();
       return {
@@ -45,7 +54,7 @@ vi.mock("next/server", () => ({
         cookies: mockCookies(),
       };
     },
-  },
+  }),
 }));
 
 function makeRequest(
@@ -92,7 +101,11 @@ function makeRequest(
   };
 }
 
-let proxy: (req: unknown) => { type: string; headers?: { get: (k: string) => string | undefined } };
+let proxy: (req: unknown) => {
+  type: string;
+  status?: number;
+  headers?: { get: (k: string) => string | undefined };
+};
 
 beforeEach(async () => {
   vi.resetModules();
@@ -101,6 +114,10 @@ beforeEach(async () => {
   nextHeaders = new Map();
   setCookies = new Map();
   setCookieOptions = new Map();
+  rewriteTarget = "";
+  // The public check is off unless a test turns it on (HRP-924).
+  vi.stubEnv("PUBLIC_CHECK_ENABLED", "");
+  vi.stubEnv("PUBLIC_CHECK_HOST", "");
   vi.stubEnv("NEXT_PUBLIC_MARKETING_DOMAIN", "hrpulsar.com");
   vi.stubEnv("NEXT_PUBLIC_APP_DOMAIN", "app.hrpulsar.com");
   const mod = await import("../proxy");
@@ -187,6 +204,12 @@ describe("app domain (app.hrpulsar.com)", () => {
   it("sets X-Robots-Tag on app routes", () => {
     const result = proxy(makeRequest("/dashboard", { host, hasToken: true }));
     expect(result.headers?.get("X-Robots-Tag")).toBe("noindex, nofollow");
+  });
+
+  it("sends no Referer from the import of saved public checks (its bearer link)", () => {
+    const result = proxy(makeRequest("/coverage/saved-checks", { host, hasToken: true }));
+    expect(result.headers?.get("Referrer-Policy")).toBe("no-referrer");
+    expect(proxy(makeRequest("/coverage", { host, hasToken: true })).headers?.get("Referrer-Policy")).toBeUndefined();
   });
 
   it("serves /robots.txt without auth (disallow-all route must be reachable)", () => {
@@ -531,6 +554,183 @@ describe("NEXT_LOCALE cookie", () => {
       const res = proxy(makeRequest("/login", { host, lang: "fr", localeCookie: "en" }));
       expect(res.type).not.toBe("redirect");
       expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+    });
+  });
+});
+
+// ─── Public process check host (HRP-924/925) ────────────────
+
+describe("public check host (check.hrpulsar.com)", () => {
+  const host = "check.hrpulsar.com";
+
+  function turnOn() {
+    vi.stubEnv("PUBLIC_CHECK_ENABLED", "true");
+    vi.stubEnv("PUBLIC_CHECK_HOST", host);
+  }
+
+  describe("with the service on", () => {
+    beforeEach(turnOn);
+
+    it("rewrites / to the input page, keeping the short URL", () => {
+      const res = proxy(makeRequest("/", { host, query: "utm_source=linkedin" }));
+      expect(res.type).toBe("rewrite");
+      expect(rewriteTarget).toBe("https://check.hrpulsar.com/check?utm_source=linkedin");
+      expect(redirectTarget).toBe("");
+    });
+
+    it("rewrites /r/<token> to the result page", () => {
+      const res = proxy(makeRequest("/r/AbC-123_x", { host }));
+      expect(res.type).toBe("rewrite");
+      expect(rewriteTarget).toBe("https://check.hrpulsar.com/check/r/AbC-123_x");
+    });
+
+    // HRP-926: the links of the saving letters and "my checks".
+    it.each(["/confirm/tok", "/unsubscribe/tok", "/my", "/my/link", "/my/link/0f8e-11"])(
+      "rewrites %s onto its /check page",
+      (path) => {
+        const res = proxy(makeRequest(path, { host }));
+        expect(res.type).toBe("rewrite");
+        expect(rewriteTarget).toBe(`https://check.hrpulsar.com/check${path}`);
+      },
+    );
+
+    it.each(["/confirm", "/unsubscribe", "/unsubscribe/a/b", "/my/a/b/c", "/mine"])(
+      "does not serve %s, a near miss of the saving pages",
+      (path) => {
+        proxy(makeRequest(path, { host }));
+        expect(rewriteTarget).toBe("");
+        expect(redirectTarget).toBe(`https://app.hrpulsar.com${path}`);
+      },
+    );
+
+    it("rewrites a client-side navigation too", () => {
+      const request = makeRequest("/r/tok", { host });
+      request.headers.set("rsc", "1");
+      const res = proxy(request);
+      expect(res.type).toBe("rewrite");
+      expect(rewriteTarget).toBe("https://check.hrpulsar.com/check/r/tok");
+      expect(setCookies.has("NEXT_LOCALE")).toBe(false);
+    });
+
+    it("makes the locale sticky on the first visit", () => {
+      proxy(makeRequest("/", { host }));
+      expect(setCookies.get("NEXT_LOCALE")).toBe("en");
+    });
+
+    it("sends any other product path to the app host (307, no-store)", () => {
+      const res = proxy(makeRequest("/dashboard", { host, query: "a=1" }));
+      expect(redirectTarget).toBe("https://app.hrpulsar.com/dashboard?a=1");
+      expect(redirectStatus).toBe(307);
+      expect(res.headers?.get("Cache-Control")).toBe("no-store");
+      expect(rewriteTarget).toBe("");
+    });
+
+    it.each(["/login", "/register", "/r/a/b", "/check", "/pricing"])(
+      "does not serve %s on the check host",
+      (path) => {
+        proxy(makeRequest(path, { host }));
+        expect(redirectTarget).toBe(`https://app.hrpulsar.com${path}`);
+      },
+    );
+
+    it.each([
+      ["/gallery", "https://check.hrpulsar.com/check/gallery"],
+      ["/gallery/month-end-close", "https://check.hrpulsar.com/check/gallery/month-end-close"],
+    ])("rewrites the gallery path %s (HRP-930)", (path, target) => {
+      const res = proxy(makeRequest(path, { host }));
+      expect(res.type).toBe("rewrite");
+      expect(rewriteTarget).toBe(target);
+      expect(redirectTarget).toBe("");
+    });
+
+    it("sends a path deeper than a gallery process to the app host", () => {
+      proxy(makeRequest("/gallery/a/b", { host }));
+      expect(redirectTarget).toBe("https://app.hrpulsar.com/gallery/a/b");
+    });
+
+    it.each([
+      "/check/opengraph-image-17fv4v",
+      "/check/r/tok/opengraph-image-1hdne6",
+      "/check/gallery/opengraph-image-r9cfbj",
+      "/check/gallery/hiring/opengraph-image-qg32xd",
+    ])("serves the share card %s on the check host (HRP-928)", (path) => {
+      expect(proxy(makeRequest(path, { host, query: "8b4c7135" })).type).toBe("next");
+      expect(redirectTarget).toBe("");
+      expect(rewriteTarget).toBe("");
+    });
+
+    it("still sends the other /check pages to the app host", () => {
+      proxy(makeRequest("/check/r/tok", { host }));
+      expect(redirectTarget).toBe("https://app.hrpulsar.com/check/r/tok");
+    });
+
+    it("leaves robots.txt, sitemap.xml and an RSC request outside the check alone", () => {
+      expect(proxy(makeRequest("/robots.txt", { host })).type).toBe("next");
+      expect(proxy(makeRequest("/sitemap.xml", { host })).type).toBe("next");
+      const request = makeRequest("/dashboard", { host });
+      request.headers.set("rsc", "1");
+      expect(proxy(request).type).toBe("next");
+      expect(redirectTarget).toBe("");
+    });
+
+
+    it("matches the host whatever its port", async () => {
+      vi.stubEnv("PUBLIC_CHECK_HOST", "check.localhost");
+      const res = proxy(makeRequest("/", { host: "check.localhost:3410" }));
+      expect(res.type).toBe("rewrite");
+      expect(rewriteTarget).toBe("https://check.localhost:3410/check");
+    });
+
+    it("consumes ?lang= on the check host itself", async () => {
+      vi.resetModules();
+      vi.stubEnv("NEXT_PUBLIC_AVAILABLE_LOCALES", "de,en");
+      const localized = (await import("../proxy")).proxy as typeof proxy;
+      localized(makeRequest("/r/tok", { host, lang: "de" }));
+      expect(redirectTarget.toString()).toBe("https://check.hrpulsar.com/r/tok");
+      expect(setCookies.get("NEXT_LOCALE")).toBe("de");
+      vi.stubEnv("NEXT_PUBLIC_AVAILABLE_LOCALES", "");
+    });
+
+    it("falls back to the usual routing when the site names no app host", () => {
+      vi.stubEnv("NEXT_PUBLIC_APP_DOMAIN", "");
+      proxy(makeRequest("/dashboard", { host }));
+      expect(redirectTarget.toString()).toBe(
+        "https://check.hrpulsar.com/login?next=%2Fdashboard",
+      );
+    });
+
+    it("serves /check and /check/r/<token> on the app host without auth", () => {
+      expect(proxy(makeRequest("/check", { host: "app.hrpulsar.com" })).type).toBe("next");
+      expect(proxy(makeRequest("/check/r/tok", { host: "app.hrpulsar.com" })).type).toBe("next");
+      expect(rewriteTarget).toBe("");
+      expect(redirectTarget).toBe("");
+    });
+
+    it("keeps lookalike app paths behind the auth wall", () => {
+      proxy(makeRequest("/checklist", { host: "app.hrpulsar.com" }));
+      expect(redirectTarget.toString()).toContain("/login");
+    });
+  });
+
+  describe("with the service off (on-prem, Community)", () => {
+    it.each([
+      ["no variables", "", ""],
+      ["a host but no switch", "", host],
+      ["the switch but no host", "true", ""],
+    ])("behaves as before with %s", (_label, enabled, checkHost) => {
+      vi.stubEnv("PUBLIC_CHECK_ENABLED", enabled);
+      vi.stubEnv("PUBLIC_CHECK_HOST", checkHost);
+
+      proxy(makeRequest("/", { host }));
+      expect(redirectTarget.toString()).toBe("https://check.hrpulsar.com/login");
+      redirectTarget = "";
+      proxy(makeRequest("/r/tok", { host }));
+      expect(redirectTarget.toString()).toContain("/login?next=%2Fr%2Ftok");
+      redirectTarget = "";
+      // /check is an ordinary app path: the auth wall, then the page's 404.
+      proxy(makeRequest("/check", { host: "app.hrpulsar.com" }));
+      expect(redirectTarget.toString()).toContain("/login?next=%2Fcheck");
+      expect(rewriteTarget).toBe("");
     });
   });
 });

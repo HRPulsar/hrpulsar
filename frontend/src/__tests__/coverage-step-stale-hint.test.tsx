@@ -50,7 +50,7 @@ function stepOf(id: string): WorkStep {
     accountable_employee_id: null,
     review_human_share: null,
     manual_mode: null,
-    manual_pack_code: null,
+    manual_pack_id: null,
     hourly_rate: null,
     primitive_codes: [],
     capabilities: [],

@@ -265,6 +265,44 @@ async def test_turnover_counts_the_leavers_in_the_base_of_their_bucket(
 
 
 @pytest.mark.asyncio
+async def test_turnover_counts_people_on_leave_as_employed(db: AsyncSession, tenant):
+    """HRP-732 REDO: a leave is not an exit, and the person stays in the base.
+
+    Three active, one on leave, one who left inside the window: 1 of 5 is 20.
+    Leaving the on-leave person out of the base read 1 of 4 — sending someone
+    on leave raised turnover.
+    """
+    for _ in range(3):
+        await _employee(db, tenant)
+    away = await _employee(db, tenant, "Away")
+    away.status = "on_leave"
+    leaver = await _employee(db, tenant, "Gone")
+    leaver.status = "terminated"
+    db.add(_exit(leaver, 10))
+    await db.commit()
+
+    metrics = _by_code(await hr_metrics(db, tenant.id, None, days=90))
+    assert metrics["turnover"]["now"] == 20
+
+
+@pytest.mark.asyncio
+async def test_one_promotion_each_is_not_a_pace(db: AsyncSession, tenant):
+    """HRP-732 REDO, QA point 4: grade changes counted, time between them not.
+
+    Two people promoted once each give "Grade changes 2" and nothing to measure
+    a pace by — the time metric needs one person with two promotions.
+    """
+    junior, middle, _ = await _grades(db, tenant)
+    for name in ("One", "Two"):
+        db.add(_move(await _employee(db, tenant, name), junior, middle, 10))
+    await db.commit()
+
+    metrics = _by_code(await hr_metrics(db, tenant.id, None, days=90))
+    assert metrics["promoted"]["now"] == 2
+    assert metrics["time_to_promote"]["kind"] == NO_DATA
+
+
+@pytest.mark.asyncio
 async def test_future_dated_events_are_not_counted(db: AsyncSession, tenant):
     """A termination or promotion dated after today is not a fact yet."""
     junior, _, senior = await _grades(db, tenant)
@@ -506,9 +544,20 @@ def test_analytics_page_endpoints_admit_hr():
     """HRP-732: HR opens the analytics page, so its own endpoints must let
     HR in. HRP-822: that is the tenant's ``analytics`` row now (``manage``
     for HR by default), not a role list written into the route - so what is
-    pinned here is that the section is what they ask."""
+    pinned here is that the section is what they ask. HRP-1018: the global
+    gate asks it, the route carries no check of its own."""
+    from app.core.sections import gated_section
+
     for route in ("assessments", "hr-metrics"):
-        assert "Depends(_view)" in _guard_of(route), route
+        assert "require_role" not in _guard_of(route), route
+        (found,) = [
+            r
+            for r in app.routes
+            if getattr(r, "path", None) == f"/api/analytics/{route}"
+            and "GET" in getattr(r, "methods", ())
+        ]
+        section = gated_section(found)
+        assert section is not None and section.code == "analytics", route
 
 
 def test_the_plan_chart_still_answers_to_its_own_section():

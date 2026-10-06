@@ -21,12 +21,21 @@ import type {
 
 const runs: AiAnalysisRun[] = [];
 let eligibility: TopupEligibility | null = null;
+// HRP-979: the candidate's consent, as `consent/latest` reports it.
+const SIGNED = { status: "signed", active: true };
+let consent: { status: string; active: boolean } | null = SIGNED;
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {},
   api: {
     get: vi.fn((url: string) =>
-      Promise.resolve(url.includes("topup-eligibility") ? eligibility : runs),
+      Promise.resolve(
+        url.includes("consent/latest")
+          ? consent
+          : url.includes("topup-eligibility")
+            ? eligibility
+            : runs,
+      ),
     ),
     post: vi.fn(() => Promise.resolve({ status: "queued" })),
   },
@@ -185,6 +194,61 @@ describe("AI Insights — empty state (HRP-488)", () => {
       "candidate-section-ai-insights-analyze-menu-trigger",
     ) as HTMLButtonElement;
     expect(trigger.disabled).toBe(false);
+  });
+
+  it("keeps Analyze off and says why while the candidate has not consented", async () => {
+    eligibility = mkEligibility();
+    consent = null;
+    try {
+      await render(true);
+      const trigger = byTestId(
+        "candidate-section-ai-insights-analyze-menu-trigger",
+      ) as HTMLButtonElement;
+      expect(trigger.disabled).toBe(true);
+      expect(
+        byTestId("candidate-section-ai-insights-consent-hint")!.textContent,
+      ).toContain("need the candidate's consent");
+    } finally {
+      consent = SIGNED;
+    }
+  });
+
+  it("re-reads consent when the tab is shown again", async () => {
+    eligibility = mkEligibility();
+    consent = null;
+    try {
+      await render(true);
+      const trigger = () =>
+        byTestId(
+          "candidate-section-ai-insights-analyze-menu-trigger",
+        ) as HTMLButtonElement;
+      expect(trigger().disabled).toBe(true);
+
+      // The candidate signs in their mailbox; the recruiter comes back.
+      consent = SIGNED;
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(trigger().disabled).toBe(false);
+      expect(byTestId("candidate-section-ai-insights-consent-hint")).toBeNull();
+    } finally {
+      consent = SIGNED;
+    }
+  });
+
+  it("names a withdrawn consent", async () => {
+    eligibility = mkEligibility();
+    consent = { status: "revoked", active: false };
+    try {
+      await render(true);
+      expect(
+        byTestId("candidate-section-ai-insights-consent-hint")!.textContent,
+      ).toContain("withdrew consent");
+    } finally {
+      consent = SIGNED;
+    }
   });
 
   it("puts the action inside the empty state, not in a footer", async () => {

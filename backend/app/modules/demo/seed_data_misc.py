@@ -170,3 +170,22 @@ NOTIFICATIONS: list[dict] = [
         "days_ago": 0,
     },
 ]
+
+
+# ---------------------------------------------------------------------------
+# Candidate consent (HRP-979)
+# ---------------------------------------------------------------------------
+
+# Recruitment runs no AI processing on a candidate without a signed,
+# unrevoked consent request, so every seeded candidate has signed this
+# template — otherwise the demo's finished analyses could not be re-run.
+CONSENT_TEMPLATE: dict = {
+    "name": "Interview recording and AI analysis",
+    "body": (
+        "I agree that my interview may be recorded and transcribed, and that "
+        "the recording, the transcript and my resume may be analysed with AI "
+        "tools to support the hiring decision. A person makes the decision. "
+        "I can withdraw this consent at any time by writing to the recruiter, "
+        "and my data is deleted when the retention period ends."
+    ),
+}

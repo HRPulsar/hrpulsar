@@ -675,7 +675,7 @@ class TestCandidateCard:
 
 
 class TestStagesEndpoints:
-    async def test_tenant_defaults_returns_nine_stages(
+    async def test_tenant_defaults_returns_the_default_stages(
         self, db: AsyncSession, tenant, user
     ):
         await service.seed_default_recruitment_stages(db, tenant.id)
@@ -689,7 +689,9 @@ class TestStagesEndpoints:
             "manager_interview",
             "final_interview",
             "offer",
+            "offer_accepted",  # HRP-790
             "hired",
+            "probation_completed",  # HRP-790
             "rejected",
             "withdrew",
         ]

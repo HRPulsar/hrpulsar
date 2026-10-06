@@ -36,7 +36,10 @@ from app.config import settings
 from app.core.errors import AppError
 from app.core.redis import redis_client
 from app.modules.recruitment import audit_service
-from app.modules.recruitment.common import candidate_display_name
+from app.modules.recruitment.common import (
+    candidate_display_name,
+    ensure_vacancy_unlocked,
+)
 from app.modules.recruitment.manager_assessment_models import (
     AssessmentCompetenceScore,
     AssessmentIndicatorScore,
@@ -1351,6 +1354,9 @@ async def set_competence_score(
     payload: CompetenceScoreIn,
 ) -> dict[str, Any]:
     a = await _load_assessment(db, tenant_id, assessment_id)
+    await ensure_vacancy_unlocked(
+        db, tenant_id, "manager_assessments", round_id=a.round_id
+    )
     if (
         a.evaluator_user_id is not None
         and user_id is not None
@@ -1449,6 +1455,9 @@ async def set_indicator_score(
     payload: IndicatorScoreIn,
 ) -> dict[str, Any]:
     a = await _load_assessment(db, tenant_id, assessment_id)
+    await ensure_vacancy_unlocked(
+        db, tenant_id, "manager_assessments", round_id=a.round_id
+    )
     if (
         a.evaluator_user_id is not None
         and user_id is not None
@@ -1553,6 +1562,9 @@ async def submit_assessment(
     final_notes: str | None = None,
 ) -> dict[str, Any]:
     a = await _load_assessment(db, tenant_id, assessment_id)
+    await ensure_vacancy_unlocked(
+        db, tenant_id, "manager_assessments", round_id=a.round_id
+    )
     # HRP-830: the sheet's scores are its evaluator's (``set_*_score``), so
     # is submitting it - ``runs_rounds`` reaches every sheet in scope.
     if (
@@ -1824,6 +1836,7 @@ async def create_invites(
     payload: ManagerAssessmentInviteCreate,
 ) -> list[dict[str, Any]]:
     cv = await _load_cv(db, tenant_id, cv_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "manager_assessments", cv_id=cv.id)
     await refuse_fenced_assignees(
         db, tenant_id, cv.vacancy_id, emails={i.email for i in payload.invitees}
     )

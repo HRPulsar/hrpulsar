@@ -47,6 +47,8 @@ import {
 } from "@/lib/recruitment-helpers";
 import { useCreditGate } from "@/hooks/use-cost-confirmation";
 import { usePermissions } from "@/hooks/use-permissions";
+import { ALERT_TONE } from "@/lib/badge-tones";
+import { vacancyLocks, vacancyStatusOptionLabel } from "@/lib/vacancy-status";
 
 const POLL_INTERVAL = 3000;
 
@@ -94,7 +96,11 @@ export default function InterviewDetailPage() {
   // every other `view` holder only reads the page. Same rule as the Add
   // button on the internal-candidates shortlist: a pencil is not shown to
   // a caller who cannot use it — there is nothing to explain.
-  const canEdit = usePermissions().canManageSection("recruitment");
+  const canManage = usePermissions().canManageSection("recruitment");
+  // HRP-836: an interview of a paused, closed or cancelled vacancy is
+  // read-only; the backend answers 409 to the same writes.
+  const statusLocked = vacancyLocks(cvCtx?.vacancy_status, "interviews");
+  const canEdit = canManage && !statusLocked;
   const [editing, setEditing] = useState<EditableField>(null);
   const [savingField, setSavingField] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -393,9 +399,11 @@ export default function InterviewDetailPage() {
   const subtitleParts = [cvCtx?.vacancy_title, roundLabel].filter(
     Boolean,
   ) as string[];
-  const interviewerNames = (interview.interviewer_ids ?? [])
-    .map((id) => people.find((p) => p.id === id)?.full_name)
-    .filter(Boolean) as string[];
+  // HRP-1019: names come with the interview - the picker's list is loaded
+  // for editors only.
+  const interviewerNames = (interview.interviewers ?? []).map(
+    (i) => i.full_name,
+  );
   // HRP-387: an interview created by dropping a file has no type of its own
   // until the upload lands; afterwards the type is a property of the asset
   // and stops being hand-editable.
@@ -500,6 +508,16 @@ export default function InterviewDetailPage() {
         </div>
       </header>
 
+      {canManage && statusLocked && (
+        <div
+          className={`rounded-md border p-3 text-sm ${ALERT_TONE.yellow}`}
+          data-testid="recruitment-interview-vacancy-readonly-banner"
+        >
+          {t("interviewVacancyReadOnlyBanner", {
+            status: vacancyStatusOptionLabel(t, cvCtx?.vacancy_status ?? ""),
+          })}
+        </div>
+      )}
       <section
         className="rounded-lg border bg-card p-4"
         data-testid="recruitment-interview-details"
@@ -969,6 +987,7 @@ export default function InterviewDetailPage() {
         open={textPasteOpen}
         onOpenChange={setTextPasteOpen}
         interviewId={interview.id}
+        consentSigned={!!interview.consent_signed_at}
         onSaved={(updated) => {
           setInterview(updated);
           void refresh();

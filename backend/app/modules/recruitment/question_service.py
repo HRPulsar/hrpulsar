@@ -45,11 +45,13 @@ from sqlalchemy.orm import selectinload
 from app.core import billing_hooks
 from app.core.errors import AppError
 from app.modules.ai.llm_client import generate_json
+from app.modules.recruitment import consent_service
 from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
 from app.modules.recruitment.analysis_language import resolve_analysis_language
 from app.modules.recruitment.common import (
     _get_vacancy,
     _publish_event,
+    ensure_vacancy_unlocked,
     normalize_competence_id,
 )
 from app.modules.recruitment.models import (
@@ -896,6 +898,9 @@ async def _load_generation_inputs(
     vacancy = await db.get(Vacancy, cv.vacancy_id)
     if candidate is None or vacancy is None:
         raise AppError("candidate_or_vacancy_missing", status.HTTP_404_NOT_FOUND)
+    # HRP-979: the resume and past transcripts go to the AI provider. The
+    # worker re-reads this too, so a consent revoked in the queue stops it.
+    await consent_service.require_active_consent(db, tenant_id, cv.candidate_id)
 
     # HRP-704: the shared loader — filtered to ``file_type="resume"`` so
     # an audio row's ``parsed_data`` cannot reach the prompt, and falling
@@ -1650,6 +1655,9 @@ async def add_question_to_set(
     current_user_id: uuid.UUID | None = None,
 ) -> dict:
     qs = await get_question_set(db, tenant_id, question_set_id)
+    await ensure_vacancy_unlocked(
+        db, tenant_id, "questions", cv_id=qs.candidate_vacancy_id
+    )
     next_order = (
         max((q.sort_order for q in qs.questions if q.status == "active"), default=-1)
         + 1
@@ -1693,6 +1701,18 @@ async def _get_question(
     return q
 
 
+async def _ensure_question_unlocked(
+    db: AsyncSession, tenant_id: uuid.UUID, q: Question
+) -> None:
+    """HRP-836: a question set follows its vacancy's ``questions`` lock."""
+    cv_id = await db.scalar(
+        select(QuestionSet.candidate_vacancy_id).where(
+            QuestionSet.id == q.question_set_id
+        )
+    )
+    await ensure_vacancy_unlocked(db, tenant_id, "questions", cv_id=cv_id)
+
+
 async def update_question_v2(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1702,6 +1722,7 @@ async def update_question_v2(
     current_user_id: uuid.UUID | None = None,
 ) -> dict:
     q = await _get_question(db, tenant_id, question_id)
+    await _ensure_question_unlocked(db, tenant_id, q)
 
     payload = data.model_dump(exclude_unset=True)
     move_to = payload.pop("move_to_set_id", None)
@@ -1742,6 +1763,7 @@ async def soft_delete_question(
 ) -> None:
     """Soft-delete: keeps the row so regenerate logic can avoid resurrecting it."""
     q = await _get_question(db, tenant_id, question_id)
+    await _ensure_question_unlocked(db, tenant_id, q)
     q.status = "removed"
     q.version = (q.version or 1) + 1
     await db.commit()

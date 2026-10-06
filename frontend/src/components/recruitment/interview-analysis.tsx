@@ -6,7 +6,9 @@ import { api } from "@/lib/api";
 import type {
   Interview,
   InterviewAnalysis,
+  InterviewAnalysisCitation,
   InterviewAnalysisCompetence,
+  InterviewSegment,
 } from "@/lib/types";
 import {
   aiVerdictLabel,
@@ -62,6 +64,82 @@ export function scoreBar(
   };
 }
 
+// HRP-981: the same slack the backend check gives a quote
+// (``_normalize_text`` / ``_normalize_quote`` in prompts_interview.py —
+// keep the two in step): typographic quotes and apostrophes read as
+// straight ones, an ellipsis as three dots, whitespace collapsed, lower
+// case; a quote also loses the quote marks and dots around it.
+const TYPOGRAPHIC: Record<string, string> = {
+  "\u2018": "'",
+  "\u2019": "'",
+  "\u201a": "'",
+  "\u201b": "'",
+  "\u201c": '"',
+  "\u201d": '"',
+  "\u201e": '"',
+  "\u201f": '"',
+  "\u00ab": '"',
+  "\u00bb": '"',
+  "\u2039": '"',
+  "\u203a": '"',
+  "\u2026": "...",
+};
+const normalizeText = (text?: string | null) =>
+  (text ?? "")
+    .replace(/[\u2018-\u201f\u00ab\u00bb\u2039\u203a\u2026]/g, (ch) => TYPOGRAPHIC[ch] ?? ch)
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+const normalizeQuote = (text?: string | null) =>
+  normalizeText(text).replace(/^[\s"'.]+|[\s"'.]+$/g, "");
+
+/** HRP-981: where a saved citation stands against the transcript as it
+ *  reads now. The analysis kept only checked quotes, so a quote that is no
+ *  longer in the text means the transcript was edited after the run.
+ *  Judged by text, not by segment id: editing the whole transcript leaves
+ *  the segment rows as they were, and pasting the same text again mints
+ *  new ids — so the quote has to be found both in a segment and in the
+ *  transcript text, whichever of the two the interview has. The segments
+ *  only supply the timecode to seek to. */
+export function locateCitation(
+  citation: InterviewAnalysisCitation,
+  segments: InterviewSegment[],
+  transcript?: string | null,
+): { current: boolean; seekSec: number | null } {
+  const quote = normalizeQuote(citation.quote);
+  const single = quote
+    ? segments.filter((s) => normalizeText(s.text).includes(quote))
+    : [];
+  // A quote across the seam of two neighbours: the first one holds it, as
+  // on the backend (`_segment_windows`).
+  const holders =
+    single.length > 0 || !quote
+      ? single
+      : segments.filter(
+          (s, i) =>
+            i + 1 < segments.length &&
+            normalizeText(`${s.text} ${segments[i + 1].text}`).includes(quote),
+        );
+  const current =
+    !!quote &&
+    (segments.length > 0 || !!transcript) &&
+    (segments.length === 0 || holders.length > 0) &&
+    (!transcript || normalizeText(transcript).includes(quote));
+  const holder =
+    holders.find((s) => s.id === citation.segment_id) ?? holders[0];
+  return {
+    current,
+    seekSec: holder?.start_sec ?? citation.start_sec ?? null,
+  };
+}
+
+function formatTimecode(sec: number) {
+  return `@ ${Math.floor(sec / 60)}:${(Math.floor(sec) % 60)
+    .toString()
+    .padStart(2, "0")}`;
+}
+
 // Keyed on the backend ``Verdict`` enum (prompts_interview.py) — the
 // same vocabulary ai-verdict-badge colours.
 const verdictTone: Record<string, string> = {
@@ -75,11 +153,17 @@ function CompetenceBars({
   dictionary,
   onSeek,
   scaleMax,
+  segments,
+  transcript,
+  hasMedia,
 }: {
   competences: InterviewAnalysisCompetence[];
   dictionary: CompetenceDictionary;
   onSeek?: (sec: number) => void;
   scaleMax: number | null;
+  segments: InterviewSegment[];
+  transcript?: string | null;
+  hasMedia: boolean;
 }) {
   const t = useTranslations("recruitment");
   if (competences.length === 0) {
@@ -116,34 +200,100 @@ function CompetenceBars({
             {c.reasoning && (
               <p className="text-[11px] text-muted-foreground">{c.reasoning}</p>
             )}
-            {c.citations && c.citations.length > 0 && onSeek && (
-              <div className="flex flex-wrap gap-1.5">
-                {c.citations.slice(0, 3).map((cit, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => {
-                      if (typeof cit.start_sec === "number")
-                        onSeek(cit.start_sec);
-                    }}
-                    className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
-                    title={cit.quote}
-                  >
-                    {typeof cit.start_sec === "number"
-                      ? `@ ${Math.floor(cit.start_sec / 60)}:${(
-                          Math.floor(cit.start_sec) % 60
-                        )
-                          .toString()
-                          .padStart(2, "0")}`
-                      : t("interviewAnalysisQuote")}
-                  </button>
-                ))}
-              </div>
-            )}
+            <CitationList
+              citations={(c.citations ?? []).slice(0, 3)}
+              assessed={c.status === "assessed"}
+              segments={segments}
+              transcript={transcript}
+              // A text transcript (PDF, TXT, pasted) has no recording to
+              // seek — its timecodes are word-count estimates — so the
+              // quote itself is the evidence there.
+              onSeek={hasMedia ? onSeek : undefined}
+            />
           </li>
         );
       })}
     </ul>
+  );
+}
+
+function CitationList({
+  citations,
+  assessed,
+  segments,
+  transcript,
+  onSeek,
+}: {
+  citations: InterviewAnalysisCitation[];
+  assessed: boolean;
+  segments: InterviewSegment[];
+  transcript?: string | null;
+  onSeek?: (sec: number) => void;
+}) {
+  const t = useTranslations("recruitment");
+  const checked = citations.map((citation) => ({
+    citation,
+    ...locateCitation(citation, segments, transcript),
+  }));
+  const confirmed = checked.some((c) => c.current);
+  if (checked.length === 0 && !assessed) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {assessed && !confirmed && (
+        <Badge
+          variant="outline"
+          className={`text-[10px] ${BADGE_COLOR.amber}`}
+          title={t("interviewAnalysisUnconfirmedHint")}
+          data-testid="recruitment-analysis-unconfirmed"
+        >
+          {t("interviewAnalysisUnconfirmed")}
+        </Badge>
+      )}
+      {checked.map(({ citation, current, seekSec }, idx) => {
+        if (current && onSeek && seekSec !== null) {
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => onSeek(seekSec)}
+              className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
+              title={citation.quote}
+            >
+              {formatTimecode(seekSec)}
+            </button>
+          );
+        }
+        // A quote without a segment that is not in the text was never
+        // checked: it predates the check (HRP-981), when the model's
+        // paraphrase was saved as is. Saying the transcript changed would
+        // name the wrong reason.
+        const unchecked = !current && !citation.segment_id;
+        return (
+          <span
+            key={idx}
+            className="text-[11px] text-muted-foreground"
+            title={
+              current
+                ? undefined
+                : unchecked
+                  ? t("interviewAnalysisCitationUncheckedHint")
+                  : t("interviewAnalysisCitationOutdatedHint")
+            }
+          >
+            <q className={current ? "italic" : "italic opacity-60 line-through"}>
+              {citation.quote}
+            </q>
+            {!current && (
+              <span className="ml-1">
+                {unchecked
+                  ? t("interviewAnalysisCitationUnchecked")
+                  : t("interviewAnalysisCitationOutdated")}
+              </span>
+            )}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 
@@ -277,6 +427,9 @@ export function InterviewAnalysisPanel({
           dictionary={competences}
           onSeek={onSeek}
           scaleMax={resolvedScaleMax}
+          segments={interview.segments ?? []}
+          transcript={interview.transcript}
+          hasMedia={!!(interview.audio_file_id || interview.video_file_id)}
         />
       </section>
 

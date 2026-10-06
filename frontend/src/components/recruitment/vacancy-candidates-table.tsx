@@ -109,6 +109,8 @@ interface VacancyCandidatesTableProps {
   vacancyId: string;
   reloadToken: number;
   onRowCountChange?: (count: number) => void;
+  /** HRP-836: a closed or cancelled vacancy's funnel is read-only. */
+  readOnly?: boolean;
 }
 
 // HRP-493: how often the table re-reads itself while an analysis is
@@ -138,13 +140,15 @@ export function VacancyCandidatesTable({
   vacancyId,
   reloadToken,
   onRowCountChange,
+  readOnly = false,
 }: VacancyCandidatesTableProps) {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
   // HRP-830: moving a candidate through the funnel is evaluation (`manage`
   // or the hiring manager); removing one and the bulk AI run are `manage`.
   const { canManageSection, canEvaluateCandidates } = usePermissions();
-  const canManage = canManageSection("recruitment");
+  const canManage = canManageSection("recruitment") && !readOnly;
+  const canMoveStage = canEvaluateCandidates && !readOnly;
   const [rows, setRows] = useState<CandidateVacancyEnrichedRow[]>([]);
   const [stages, setStages] = useState<VacancyStage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -489,7 +493,7 @@ export function VacancyCandidatesTable({
                 row={row}
                 vacancyId={vacancyId}
                 stages={stages}
-                canMoveStage={canEvaluateCandidates}
+                canMoveStage={canMoveStage}
                 canRemove={canManage}
                 onStageSelected={onStageSelected}
                 onDelete={(cvId, candidateName) =>
@@ -509,7 +513,7 @@ export function VacancyCandidatesTable({
             row={row}
             vacancyId={vacancyId}
             stages={stages}
-            canMoveStage={canEvaluateCandidates}
+            canMoveStage={canMoveStage}
             canRemove={canManage}
             onStageSelected={onStageSelected}
             onDelete={(cvId, candidateName) =>

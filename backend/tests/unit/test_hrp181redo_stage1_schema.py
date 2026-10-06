@@ -163,7 +163,7 @@ class TestCandidateFile:
 
 @pytest.mark.asyncio
 class TestDefaultStagesSeed:
-    async def test_seed_creates_nine_stages_per_tenant(
+    async def test_seed_creates_the_default_stages_per_tenant(
         self, db: AsyncSession, tenant
     ) -> None:
         # Existing rows from the migration may already cover this tenant
@@ -178,7 +178,7 @@ class TestDefaultStagesSeed:
 
         inserted = await seed_default_recruitment_stages(db, tenant.id)
         await db.commit()
-        assert inserted == 9
+        assert inserted == len(DEFAULT_RECRUITMENT_STAGES)
 
         result = await db.execute(
             select(VacancyStage)
@@ -194,7 +194,12 @@ class TestDefaultStagesSeed:
             s[3] for s in DEFAULT_RECRUITMENT_STAGES
         ]
         terminal = [r for r in rows if r.stage_type != "active"]
-        assert {r.code for r in terminal} == {"hired", "rejected", "withdrew"}
+        assert {r.code for r in terminal} == {
+            "hired",
+            "probation_completed",  # HRP-790
+            "rejected",
+            "withdrew",
+        }
 
     async def test_seed_is_idempotent(
         self, db: AsyncSession, tenant
@@ -244,4 +249,4 @@ class TestRegisterTenantSeedsStages:
                 VacancyStage.vacancy_id.is_(None),
             )
         )
-        assert count.scalar_one() == 9
+        assert count.scalar_one() == len(DEFAULT_RECRUITMENT_STAGES)

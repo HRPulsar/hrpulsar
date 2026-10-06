@@ -9,6 +9,7 @@ import {
   isOpenAssessment,
   isOpenPdp,
   isRunningAssessment,
+  lastAssessmentActiveCount,
   latestDoneAssessment,
   openAssessmentCount,
   openPdpCount,
@@ -198,5 +199,31 @@ describe("latestDoneAssessment", () => {
 
   it("counts age from the completion date", () => {
     expect(daysSinceCompleted({ finished_at: iso(200) })).toBe(200);
+  });
+});
+
+describe("lastAssessmentActiveCount (HRP-736 REDO)", () => {
+  const done = { status_code: "done", finished_at: new Date().toISOString() };
+
+  it("counts every assessment not Done or Cancelled, On review included", () => {
+    // QA 28.09: Sent + two On review read "+1 running" - the marker
+    // counted the narrower running set instead of the open one.
+    expect(
+      lastAssessmentActiveCount([
+        { status_code: "sent" },
+        { status_code: "on_review" },
+        { status_code: "on_review" },
+        done,
+        { status_code: "cancelled" },
+      ]),
+    ).toBe(3);
+  });
+
+  it("counts a draft as active", () => {
+    expect(lastAssessmentActiveCount([done, { status_code: "draft" }])).toBe(1);
+  });
+
+  it("is zero without a completed assessment", () => {
+    expect(lastAssessmentActiveCount([{ status_code: "in_progress" }])).toBe(0);
   });
 });

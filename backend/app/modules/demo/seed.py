@@ -22,8 +22,10 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -95,6 +97,7 @@ from app.modules.demo.seed_data_employees import (
 )
 from app.modules.demo.seed_data_exams import MASS_EXAMS
 from app.modules.demo.seed_data_misc import (
+    CONSENT_TEMPLATE,
     CUSTOM_DICTIONARIES,
     NOTIFICATIONS,
 )
@@ -150,7 +153,7 @@ from app.modules.work.models import (
 # matching the ``email`` field in their seed_data specs. Using emails
 # (not display names) means the cv lookup can't be broken by Unicode
 # normalisation drift on names like "Tomás Becker".
-_ELENA_KEY = "elena.volkov@example.com"
+_ELENA_KEY = "elena.volkova@example.com"
 _TOMAS_KEY = "tomas.becker@example.com"
 # HRP-680: the resume-only analysis lands on Priya — no interview to
 # read, and ``not_recommended`` is a verdict this mode is allowed to
@@ -161,6 +164,8 @@ from app.modules.recruitment.models import (
     AIAssessment,
     Candidate,
     CandidateVacancy,
+    ConsentRequest,
+    ConsentTemplate,
     Interview,
     InterviewSegment,
     Vacancy,
@@ -170,6 +175,10 @@ from app.modules.recruitment.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _translate_optional(text: str | None) -> str | None:
+    return translate(text) if text else text
 
 
 def _seed_salary(amount: int | None) -> int | None:
@@ -1346,7 +1355,11 @@ async def _seed_assessments_and_pdps(
             item = PDPItem(
                 pdp_id=pdp.id,
                 competence_id=competence.id if competence is not None else None,
-                title=item_spec["title"],
+                # HRP-737: an item built from an assessment is the
+                # competence itself, as the HRP-731 button names it.
+                title=item_spec.get("title")
+                or (competence.title if competence is not None else ""),
+                description=item_spec.get("description"),
                 sort_index=idx * 10,
                 is_passed=item_spec.get("is_passed", False),
                 entity_type="competence" if competence is not None else "custom",
@@ -1367,8 +1380,16 @@ async def _seed_assessments_and_pdps(
         from app.modules.assessment.pdp_service import _attach_default_materials
 
         for item, competence_id, competence_key in items_with_competence:
-            target_sort = ladder_level_sort.get(
-                (spec["grade_key"], spec["specialization_key"], competence_key)
+            # HRP-737: a plan built from an assessment stops at the level the
+            # assessment measured, as the HRP-731 button does. The seeded
+            # reviews pin no level, so they ran every indicator up to
+            # Advanced — every material of the competence belongs in it.
+            target_sort = (
+                None
+                if spec.get("from_assessment")
+                else ladder_level_sort.get(
+                    (spec["grade_key"], spec["specialization_key"], competence_key)
+                )
             )
             await _attach_default_materials(
                 db,
@@ -1761,9 +1782,9 @@ async def _seed_recruitment_extras(
             cand_email = internal_user.email
             cand_name = f"{internal_user.first_name} {internal_user.last_name}"
         else:
-            cand_email = spec["email"]
-            # HRP-666: localized display name, ASCII email (see
-            # ``_create_candidates``).
+            # HRP-666 / HRP-1000: name and email both follow the seed
+            # locale (see ``_create_candidates``).
+            cand_email = translate(spec["email"])
             cand_name = translate(f"{spec['first_name']} {spec['last_name']}")
         existing_cand = (
             await db.execute(
@@ -1819,8 +1840,8 @@ async def _seed_recruitment_extras(
                 "full_name": cand_name,
                 "contacts": {
                     "email": cand_email,
-                    "phone": spec.get("phone"),
-                    "linkedin": spec.get("linkedin"),
+                    "phone": _translate_optional(spec.get("phone")),
+                    "linkedin": _translate_optional(spec.get("linkedin")),
                 },
             }
         db.add(candidate)
@@ -2217,6 +2238,94 @@ async def _seed_work(
     return (mapped, container_count)
 
 
+async def _seed_consents(
+    db: AsyncSession, tenant_id: uuid.UUID, *, now: datetime
+) -> int:
+    """Every seeded candidate has signed the consent (HRP-979).
+
+    Recruitment refuses AI processing for a candidate without a signed,
+    unrevoked ``ConsentRequest``; the demo's analysed candidates would
+    otherwise fail on the first re-run. One signed request per seeded
+    candidate on the tenant's active template (seeded when there is
+    none — the table allows one active row per tenant), and the
+    candidate's interviews carry the signature the way signing a real
+    link stamps them. Signed a month back, before any seeded interview.
+    """
+    template = (
+        await db.execute(
+            select(ConsentTemplate).where(
+                ConsentTemplate.tenant_id == tenant_id,
+                ConsentTemplate.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if template is None:
+        spec = localize(CONSENT_TEMPLATE)
+        template = ConsentTemplate(
+            tenant_id=tenant_id,
+            name=spec["name"],
+            body=spec["body"],
+            language=seed_locale(),
+            is_active=True,
+        )
+        db.add(template)
+        await db.flush()
+
+    signed_at = now - timedelta(days=30)
+    seeded = (
+        (
+            await db.execute(
+                select(Candidate).where(
+                    Candidate.tenant_id == tenant_id,
+                    Candidate.source == INVESTOR_MARKER,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for candidate in seeded:
+        db.add(
+            ConsentRequest(
+                tenant_id=tenant_id,
+                candidate_id=candidate.id,
+                template_id=template.id,
+                token=secrets.token_urlsafe(32),
+                email=candidate.email or "",
+                status="signed",
+                signed_at=signed_at,
+                last_sent_at=signed_at - timedelta(hours=2),
+                created_at=signed_at - timedelta(hours=2),
+                # The signing link of a request signed long ago; a year
+                # keeps it from reading as about to lapse in any demo.
+                expires_at=now + timedelta(days=365),
+            )
+        )
+    interviews = (
+        (
+            await db.execute(
+                select(Interview)
+                .join(
+                    CandidateVacancy,
+                    CandidateVacancy.id == Interview.candidate_vacancy_id,
+                )
+                .join(Candidate, Candidate.id == CandidateVacancy.candidate_id)
+                .where(
+                    Interview.tenant_id == tenant_id,
+                    Candidate.source == INVESTOR_MARKER,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for interview in interviews:
+        interview.consent_signed_at = signed_at
+        interview.consent_template_id = template.id
+    await db.flush()
+    return len(seeded)
+
+
 async def _already_seeded(db: AsyncSession, tenant_id: uuid.UUID) -> bool:
     found = (
         await db.execute(
@@ -2399,15 +2508,18 @@ async def _create_candidates(
             person_id=None,
             # HRP-666: candidate names are display text, same as employee
             # names — a ru/de demo staffed by a Latin cast reads as a bug.
-            # The catalog carries the whole name; the ASCII email stays
-            # the structural key (lookups, dedupe, the analysis killswitch).
+            # HRP-1000: so is everything else on the card that names the
+            # person — email, phone, LinkedIn follow the localized name
+            # through explicit catalog entries, the way employee emails
+            # do (HRP-647). The *spec* email stays the fixture's key
+            # (``cv_by_email``, the resume lookup).
             full_name=translate(f"{spec['first_name']} {spec['last_name']}"),
-            email=spec["email"],
-            phone=spec.get("phone"),
+            email=translate(spec["email"]),
+            phone=_translate_optional(spec.get("phone")),
             location=spec.get("location"),
             current_position=spec.get("current_position"),
             years_of_experience=spec.get("years"),
-            linkedin_url=spec.get("linkedin"),
+            linkedin_url=_translate_optional(spec.get("linkedin")),
             source=INVESTOR_MARKER,
             notes=translate("Investor demo candidate ({key}).").format(
                 key=spec["vacancy_key"]
@@ -2424,9 +2536,9 @@ async def _create_candidates(
                 **localize(resume),
                 "full_name": candidate.full_name,
                 "contacts": {
-                    "email": spec["email"],
-                    "phone": spec.get("phone"),
-                    "linkedin": spec.get("linkedin"),
+                    "email": candidate.email,
+                    "phone": candidate.phone,
+                    "linkedin": candidate.linkedin_url,
                 },
             }
         db.add(candidate)
@@ -2576,7 +2688,7 @@ def _build_elena_interview(
         interview_date=now - timedelta(days=2),
         duration_minutes=47,
         duration_seconds=47 * 60,
-        title=translate("Technical + system design — Elena Volkov"),
+        title=translate("Technical + system design — Elena Volkova"),
         type="technical",
         status="completed",
         transcript=transcript,
@@ -2588,12 +2700,71 @@ def _build_elena_interview(
     )
 
 
+# HRP-980: the one seeded interview with a recording, so a click on one of
+# its citations seeks real media to the quoted place. The demo ships a
+# transcript, not a voice: this is a silent AAC track (8 kHz mono, under
+# 100 KB) the length of the interview, so the player, the seek and the
+# transcript's follow-along highlight all work on stage.
+_ELENA_RECORDING = (
+    Path(__file__).resolve().parent / "seed_assets" / "interview-recording-elena.m4a"
+)
+
+
+async def _attach_seed_recording(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview: Interview,
+    *,
+    owner_user_id: uuid.UUID,
+) -> bool:
+    """Upload the seed recording for this tenant and attach it as audio.
+
+    Stored under ``tenants/<id>/`` — the prefix the demo purge sweeps
+    (``demo.tasks._purge_tenant_s3_assets``) — so it leaves with the
+    tenant. Without object storage, or without the asset, the interview
+    simply stays a text transcript and its citations render as text.
+    """
+    import asyncio
+
+    from app.core.s3 import upload_file
+    from app.modules.storage.models import File
+
+    try:
+        data = _ELENA_RECORDING.read_bytes()
+    except OSError:
+        return False
+    key = f"tenants/{tenant_id}/interviews/{interview.id}/recording.m4a"
+    if await asyncio.to_thread(upload_file, data, key, "audio/mp4") is None:
+        return False
+    file_row = File(
+        tenant_id=tenant_id,
+        name="recording.m4a",
+        original_name="interview-recording.m4a",
+        path=key,
+        size=len(data),
+        mime_type="audio/mp4",
+        uploaded_by=owner_user_id,
+        entity_type="interview",
+        entity_id=interview.id,
+    )
+    db.add(file_row)
+    await db.flush()
+    interview.audio_file_id = file_row.id
+    interview.file_s3_key = key
+    interview.file_size_bytes = len(data)
+    interview.file_mime = "audio/mp4"
+    # A file the seed generated itself; there is nothing to scan.
+    interview.av_status = "skipped"
+    return True
+
+
 def _build_tomas_interview(
     *,
     tenant_id: uuid.UUID,
     cv: CandidateVacancy,
     owner_user_id: uuid.UUID,
     now: datetime,
+    transcript: str,
 ) -> Interview:
     return Interview(
         tenant_id=tenant_id,
@@ -2605,7 +2776,7 @@ def _build_tomas_interview(
         title=translate("Recruiter screen — Tomás Becker"),
         type="screen",
         status="completed",
-        transcript=translate("[Transcript redacted for demo brevity.]"),
+        transcript=transcript,
         transcription_status="completed",
         transcription_provider="seeded",
         analysis_status="completed",
@@ -2826,8 +2997,8 @@ async def _seed_spec_analysis(
     )
     db.add(interview)
     await db.flush()
+    analysis = await _seed_segments_and_citations(db, tenant_id, interview)
     _seed_ai_assessments(db, tenant_id, interview)
-    _seed_interview_segments(db, tenant_id, interview)
     _seed_analysis_run(
         db,
         tenant_id,
@@ -2845,7 +3016,7 @@ def _seed_interview_segments(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     interview: Interview,
-) -> int:
+) -> list[InterviewSegment]:
     """Lay down the diarized segments of a seeded interview (HRP-275).
 
     The demo ships a transcript, not a recording, so nothing ever ran a
@@ -2853,19 +3024,62 @@ def _seed_interview_segments(
     back to one undifferentiated blob and the progress checklist leaves
     "Diarization" unticked on an interview it calls transcribed.
     """
-    rows = parse_transcript_segments(interview.transcript or "")
-    for row in rows:
-        db.add(
-            InterviewSegment(
-                tenant_id=tenant_id,
-                interview_id=interview.id,
-                speaker=row["speaker"],
-                start_sec=row["start_sec"],
-                end_sec=row["end_sec"],
-                text=row["text"],
-            )
+    segments = [
+        InterviewSegment(
+            tenant_id=tenant_id,
+            interview_id=interview.id,
+            speaker=row["speaker"],
+            start_sec=row["start_sec"],
+            end_sec=row["end_sec"],
+            text=row["text"],
         )
-    return len(rows)
+        for row in parse_transcript_segments(interview.transcript or "")
+    ]
+    db.add_all(segments)
+    return segments
+
+
+async def _seed_segments_and_citations(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview: Interview,
+) -> dict:
+    """Lay down the segments, then anchor the analysis on them (HRP-980).
+
+    The fixtures name each citation by its verbatim quote only — segment
+    ids do not exist before this point. The same check the real analysis
+    runs (HRP-981) gives every quote its segment and that segment's own
+    timecodes, so a click on a demo citation lands where the quote is.
+    Returns the anchored analysis, which every later writer (AI rows,
+    the run, the cache) must use instead of the raw fixture.
+    """
+    from app.modules.recruitment.prompts_interview import check_analysis_citations
+
+    segments = _seed_interview_segments(db, tenant_id, interview)
+    await db.flush()
+    analysis = deepcopy(interview.analysis_data or {})
+    stats = check_analysis_citations(
+        analysis,
+        [
+            {
+                "id": segment.id,
+                "start_sec": segment.start_sec,
+                "end_sec": segment.end_sec,
+                "text": segment.text,
+            }
+            for segment in segments
+        ],
+        interview.transcript,
+    )
+    if stats["dropped"]:
+        logger.warning(
+            "demo seed: %d of %d citations on interview %s are not in its transcript",
+            stats["dropped"],
+            stats["total"],
+            interview.id,
+        )
+    interview.analysis_data = analysis
+    return analysis
 
 
 async def _maybe_seed_analysis_cache(
@@ -2896,9 +3110,10 @@ async def _maybe_seed_analysis_cache(
     if cache_key is None:
         return
 
-    # Localized copy so the cache-hit payload matches the localized
-    # ``analysis_data`` stored on the seeded Interview row.
-    elena_analysis = localize(ELENA_INTERVIEW_ANALYSIS)
+    # The payload stored on the seeded row — localized, and with its
+    # citations anchored on this interview's segments (HRP-980) — so a
+    # cache hit replays exactly what the demo opened on.
+    elena_analysis = interview.analysis_data or {}
     assessments = _build_seed_assessment_rows(elena_analysis)
 
     try:
@@ -2908,6 +3123,7 @@ async def _maybe_seed_analysis_cache(
             cache_key,
             elena_analysis,
             assessments,
+            candidate_vacancy_id=interview.candidate_vacancy_id,
         )
     except Exception:  # noqa: BLE001
         logger.exception(
@@ -2954,7 +3170,7 @@ async def clone_seed_into_demo_tenant(
         When True (default) raise ``ValueError`` if the target tenant is
         not flagged ``is_demo=True``. The hosted ``POST /api/demo/start``
         flow (D3) leaves this on — a misrouted call must NOT pollute a
-        real customer tenant with fake candidates named "Elena Volkov".
+        real customer tenant with fake candidates named "Elena Volkova".
         The self-hosted CLI seeds on top of the long-lived Pulsar
         Technologies tenant and explicitly passes False.
 
@@ -3132,10 +3348,20 @@ async def clone_seed_into_demo_tenant(
                 cv=tomas_cv,
                 owner_user_id=owner_user_id,
                 now=now,
+                transcript=next(
+                    spec["transcript"]
+                    for spec in localize(candidates())
+                    if spec["email"] == _TOMAS_KEY
+                ),
             )
             db.add(tomas_interview)
             interview_count += 1
         await db.flush()
+
+        if elena_interview is not None:
+            await _attach_seed_recording(
+                db, tenant_id, elena_interview, owner_user_id=owner_user_id
+            )
 
         # HRP-250: both seeded interviews already carry
         # ``analysis_status='completed'``; give them the AIAssessment
@@ -3143,8 +3369,8 @@ async def clone_seed_into_demo_tenant(
         # AI evaluation with citations instead of an empty matrix.
         for seeded_interview in (elena_interview, tomas_interview):
             if seeded_interview is not None:
+                await _seed_segments_and_citations(db, tenant_id, seeded_interview)
                 _seed_ai_assessments(db, tenant_id, seeded_interview)
-                _seed_interview_segments(db, tenant_id, seeded_interview)
 
         # HRP-666: the AI Insights block on the candidate card reads
         # ``AIAnalysisRun`` rows, not the interview. Without one the demo
@@ -3189,6 +3415,10 @@ async def clone_seed_into_demo_tenant(
         now=now,
         with_interviews=with_completed_interviews,
     )
+
+    # HRP-979: after every candidate and interview exists — each seeded
+    # candidate has signed the consent AI processing requires.
+    await _seed_consents(db, tenant_id, now=now)
 
     # HRP-281 / S8: small page-finishers — custom DictionaryItem rows
     # in the language / certification / office_location types, plus

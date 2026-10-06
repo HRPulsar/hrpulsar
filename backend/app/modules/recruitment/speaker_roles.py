@@ -27,10 +27,6 @@ from app.modules.recruitment.transcription_service import TranscriptSegment
 
 logger = logging.getLogger(__name__)
 
-# A cheap pass over the turns, not an analysis: the output is a list of
-# integers, and the transcript itself dominates the token count.
-_MAX_TOKENS = 4000
-
 _SYSTEM_PROMPT = (
     "You label the turns of a job interview transcript. The recording has "
     "no speaker separation, so you decide which numbered turns were spoken "
@@ -68,6 +64,7 @@ def label_speakers_sync(
     from app.modules.ai.llm_client import generate_json
     from app.modules.ai.model_catalog_service import resolve_dispatch_model_sync
     from app.modules.ai.providers import resolve_generation_target_sync
+    from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
 
     # Redacted before it travels: the stored transcript is redacted too, so
     # the model sees exactly what the analysis will later read.
@@ -90,7 +87,12 @@ def label_speakers_sync(
                 system=_SYSTEM_PROMPT,
                 schema=_InterviewerTurns,
                 temperature=0.0,
-                max_tokens=_MAX_TOKENS,
+                # The answer is a short list of integers, but a thinking
+                # model spends the output budget on reasoning first: 4000
+                # left long transcripts single-voiced (HRP-993). The same
+                # budget as every other recruitment call; llm_client clamps
+                # it per model.
+                max_tokens=RECRUITMENT_MAX_TOKENS,
                 credentials=creds,
                 model=resolve_dispatch_model_sync(db, creds.model),
             )

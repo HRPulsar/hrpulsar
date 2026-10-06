@@ -27,7 +27,10 @@ import { VacancyCandidatesSection } from "../_components/VacancyCandidatesSectio
 import { ALERT_TONE } from "@/lib/badge-tones";
 import {
   VACANCY_STATUS_COLORS,
+  vacancyLocks,
+  vacancyResolutionLabel,
   vacancyStatusBadgeLabel,
+  vacancyStatusOptionLabel,
 } from "@/lib/vacancy-status";
 
 // Legacy ?tab=profile / ?tab=candidates → single-page anchors.
@@ -121,14 +124,18 @@ export default function VacancyDetailPage() {
     );
   }
 
+  // HRP-836: a closed or cancelled vacancy is read-only as a whole.
+  const statusReadOnly = vacancyLocks(vacancy.status, "vacancy");
   // HRP-830: editing the vacancy is running hiring - `manage` on
   // recruitment; a `view` holder reads the same page. Attachments
   // upload/delete ask the same level (`runs_hiring`), so a reader gets
   // the block read-only instead of a 403.
   const canEdit =
-    canManageSection("recruitment") &&
-    !vacancy.archived_at &&
-    vacancy.status !== "closed";
+    canManageSection("recruitment") && !vacancy.archived_at && !statusReadOnly;
+  const resolution =
+    vacancy.status === "closed"
+      ? vacancyResolutionLabel(t, vacancy.close_resolution)
+      : null;
 
   function handleSaved(next: Vacancy, nextEtag: string | null) {
     setVacancy(next);
@@ -161,6 +168,14 @@ export default function VacancyDetailPage() {
                 ? t("vacancyBadgeArchived")
                 : vacancyStatusBadgeLabel(t, vacancy.status)}
             </Badge>
+            {resolution && (
+              <span
+                className="text-sm text-muted-foreground"
+                data-testid="vacancy-detail-resolution"
+              >
+                {resolution}
+              </span>
+            )}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             {[
@@ -199,6 +214,16 @@ export default function VacancyDetailPage() {
           data-testid="vacancy-archived-banner"
         >
           {t("vacancyArchivedBanner")}
+        </div>
+      )}
+      {statusReadOnly && !vacancy.archived_at && (
+        <div
+          className={`rounded-md border p-3 text-sm ${ALERT_TONE.yellow}`}
+          data-testid="vacancy-status-readonly-banner"
+        >
+          {t("vacancyStatusReadOnlyBanner", {
+            status: vacancyStatusOptionLabel(t, vacancy.status),
+          })}
         </div>
       )}
 
@@ -261,6 +286,7 @@ export default function VacancyDetailPage() {
                   }
                 ).assessment_scale_snapshot ?? null,
             }}
+            readOnly={statusReadOnly}
           />
 
           {/* HRP-846: context files for the profile prompt, back where the
@@ -280,6 +306,11 @@ export default function VacancyDetailPage() {
             vacancyId={vacancy.id}
             count={vacancy.candidates_count ?? 0}
             internalReloadToken={libraryCompetencesToken}
+            readOnly={statusReadOnly}
+            onCountChange={(n) => {
+              // HRP-427: the first candidate opens a draft vacancy.
+              if (n > 0 && vacancy.status === "draft") void loadVacancy();
+            }}
           />
         </TabsContent>
 

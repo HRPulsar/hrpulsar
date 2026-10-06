@@ -118,6 +118,27 @@ class TestListSpecializations:
         items = await service.list_specializations(db, tenant.id)
         assert next(s for s in items if s["title"] == "Statused")["is_active"] is False
 
+    async def test_list_and_detail_carry_the_catalog_key(self, db, tenant):
+        """HRP-912: the Specializations section names a row through the same
+        catalog key as the dictionary picker of the position form."""
+        from app.modules.dictionary.models import DictionaryItem
+
+        keyed = DictionaryItem(
+            type="specialization",
+            tenant_id=tenant.id,
+            title="QA Engineer",
+            i18n_key="qa_engineer",
+        )
+        db.add(keyed)
+        await db.commit()
+        plain = await _make_spec(db, tenant.id, "Own Spec")
+
+        items = {s["id"]: s for s in await service.list_specializations(db, tenant.id)}
+        assert items[keyed.id]["i18n_key"] == "qa_engineer"
+        assert items[plain["id"]]["i18n_key"] is None
+        detail = await service.get_specialization_detail(db, tenant.id, keyed.id)
+        assert detail["i18n_key"] == "qa_engineer"
+
     async def test_tenant_isolation(self, db, tenant):
         from app.modules.company.models import Tenant
 

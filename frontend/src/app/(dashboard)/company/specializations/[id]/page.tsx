@@ -44,6 +44,7 @@ import {
   activeAiSessionsKey,
   useActiveAiSessions,
 } from "@/hooks/use-active-ai-sessions";
+import { specializationLabel } from "@/lib/reference-labels";
 
 // HRP-57 §3.1 (E4): four logical surfaces on a Specialization. The deep-link
 // query-param keeps direct URLs stable across reloads and shareable.
@@ -75,6 +76,7 @@ function flattenCompetences(tree: CompetenceGroupTree[]): Competence[] {
 export default function SpecializationDetailPage() {
   const t = useTranslations("company");
   const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -288,7 +290,7 @@ export default function SpecializationDetailPage() {
     setDeleteBusy(true);
     try {
       await api.delete(`/dictionaries/items/${id}`);
-      toast.success(t("toastSpecDeleted", { title: detail.title }));
+      toast.success(t("toastSpecDeleted", { title: specializationLabel(tRef, detail) }));
       router.replace("/company/specializations");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("toastDeleteFailed"));
@@ -398,7 +400,7 @@ export default function SpecializationDetailPage() {
               data-testid="specialization-detail-title"
               className="text-2xl font-semibold tracking-tight"
             >
-              {detail.title}
+              {specializationLabel(tRef, detail)}
             </h1>
             {specLevelSessions.length > 0 && (
               <ActiveAiSessionBadge
@@ -663,8 +665,8 @@ export default function SpecializationDetailPage() {
         description={
           detail
             ? deleteHasReferences
-              ? t("deleteSpecReferenced", { title: detail.title })
-              : t("deleteSpecConfirm", { title: detail.title })
+              ? t("deleteSpecReferenced", { title: specializationLabel(tRef, detail) })
+              : t("deleteSpecConfirm", { title: specializationLabel(tRef, detail) })
             : ""
         }
         onConfirm={handleDelete}

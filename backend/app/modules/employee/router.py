@@ -24,6 +24,7 @@ from app.modules.auth.dependencies import (
 from app.modules.auth.models import User
 from app.modules.auth.router import invitations_limiter
 from app.modules.employee import service
+from app.modules.employee.alerts import FilterableAlertCode
 from app.modules.employee.issues import IssueCode
 from app.modules.employee.schemas import (
     AvailableUser,
@@ -110,7 +111,7 @@ async def list_employees(
     unassigned_only: bool = Query(default=False),
     with_alerts: bool = Query(default=False),
     # HRP-638: the dashboard links here with the cohort it just counted.
-    issue: list[IssueCode] | None = Query(default=None),
+    issue: list[IssueCode | FilterableAlertCode] | None = Query(default=None),
     # HRP-729: severity ordering. Default when ``issue`` is set, so the list a
     # dashboard chip opens leads with the same person the chip named.
     sort: Literal["severity", "created"] | None = Query(default=None),

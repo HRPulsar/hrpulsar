@@ -17,6 +17,7 @@ from app.core.errors import AppError, exception_summary
 from app.modules.recruitment.analysis_language import resolve_analysis_language
 from app.modules.recruitment.common import (
     _get_vacancy,
+    ensure_vacancy_unlocked,
     normalize_competence_id,
 )
 from app.modules.recruitment.models import (
@@ -209,6 +210,7 @@ async def generate_profile_now(
     # Verify the vacancy belongs to the tenant before writing the session
     # row — otherwise a 404 would leave behind an orphan running session.
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     # HRP-235 REDO (QA case 2): one generation session per vacancy at a
     # time. The row-level lock on the vacancy serialises concurrent
@@ -576,6 +578,7 @@ async def apply_profile_session(
     from app.modules.recruitment.models import VacancyProfileSession
 
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     session_row = (
         await db.execute(
@@ -668,6 +671,7 @@ async def save_profile(
 ) -> dict:
     """Save/update vacancy profile. If profile exists, increment version."""
     await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     # HRP-348: manual PUT edits must keep competences addressable by the
     # same stable UUIDs the generate path assigns — assessment sheets and

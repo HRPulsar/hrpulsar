@@ -2,13 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import * as Popover from "@radix-ui/react-popover";
 import { Command } from "cmdk";
 import { api } from "@/lib/api";
 import { usePermissions } from "@/hooks/use-permissions";
 import type { Position, PositionList } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Check, ChevronsUpDown, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { gradeTitleLabel } from "@/lib/reference-labels";
@@ -148,137 +152,133 @@ export function PositionCombobox({
   }
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild disabled={disabled}>
-        <button
-          type="button"
-          role="combobox"
-          aria-expanded={open}
-          aria-controls="position-combobox-list"
-          aria-label={t("selectPosition")}
-          data-testid={testId}
-          className={cn(
-            "flex h-8 w-full items-center justify-between rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50",
-            !selectedTitle && "text-muted-foreground",
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        disabled={disabled}
+        type="button"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls="position-combobox-list"
+        aria-label={t("selectPosition")}
+        data-testid={testId}
+        className={cn(
+          "flex h-8 w-full items-center justify-between rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50",
+          !selectedTitle && "text-muted-foreground",
+        )}
+      >
+        <span className="flex-1 truncate text-left">
+          {selectedTitle || resolvedPlaceholder}
+        </span>
+        <span className="flex items-center gap-1">
+          {selectedTitle && (
+            <span
+              role="button"
+              tabIndex={-1}
+              onClick={handleClear}
+              className="rounded-sm p-0.5 hover:bg-muted"
+              aria-label={t("clearPosition")}
+            >
+              <X className="h-3 w-3" />
+            </span>
           )}
-        >
-          <span className="flex-1 truncate text-left">
-            {selectedTitle || resolvedPlaceholder}
-          </span>
-          <span className="flex items-center gap-1">
-            {selectedTitle && (
-              <span
-                role="button"
-                tabIndex={-1}
-                onClick={handleClear}
-                className="rounded-sm p-0.5 hover:bg-muted"
-                aria-label={t("clearPosition")}
-              >
-                <X className="h-3 w-3" />
-              </span>
-            )}
-            <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
-          </span>
-        </button>
-      </Popover.Trigger>
+          <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
+        </span>
+      </PopoverTrigger>
 
-      <Popover.Portal>
-        <Popover.Content
-          align="start"
-          sideOffset={4}
-          className="z-50 w-(--radix-popover-trigger-width) rounded-lg border bg-popover shadow-md outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
-          onOpenAutoFocus={(e) => e.preventDefault()}
-        >
-          <Command shouldFilter={false} className="flex flex-col">
-            <div className="flex items-center border-b px-3">
-              <Command.Input
-                value={search}
-                onValueChange={setSearch}
-                placeholder={t("searchPositionsPlaceholder")}
-                className="flex h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-              />
-            </div>
-            <Command.List id="position-combobox-list" className="max-h-52 overflow-y-auto p-1">
-              {loading && (
-                <Command.Loading>
-                  <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-                    {tc("loading")}
-                  </div>
-                </Command.Loading>
-              )}
-              <Command.Empty className="px-2 py-3 text-center text-xs text-muted-foreground">
-                {t("noPositionsFound")}
-              </Command.Empty>
-              {positions.map((pos) => (
-                <Command.Item
-                  key={pos.id}
-                  value={pos.id}
-                  onSelect={() => handleSelect(pos)}
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm aria-selected:bg-accent aria-selected:text-accent-foreground"
-                >
-                  <Check
-                    className={cn(
-                      "h-4 w-4 shrink-0",
-                      value === pos.id ? "opacity-100" : "opacity-0",
-                    )}
-                  />
-                  <span className="flex-1 truncate">{pos.title}</span>
-                  {pos.grade_title && (
-                    <span className="text-xs text-muted-foreground">
-                      {gradeTitleLabel(tRef, pos.grade_title)}
-                    </span>
-                  )}
-                </Command.Item>
-              ))}
-            </Command.List>
-
-            {/* Quick create */}
-            {canCreate && (
-            <div className="border-t p-2">
-              {showCreate ? (
-                <div className="flex gap-1">
-                  <Input
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                    placeholder={t("positionTitlePlaceholder")}
-                    className="h-7 flex-1 text-sm"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleQuickCreate();
-                      }
-                      if (e.key === "Escape") setShowCreate(false);
-                    }}
-                    autoFocus
-                  />
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-2"
-                    onClick={handleQuickCreate}
-                    disabled={creating || !newTitle.trim()}
-                  >
-                    {creating ? "..." : t("add")}
-                  </Button>
+      <PopoverContent
+        align="start"
+        className="w-(--anchor-width) data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+        initialFocus={false}
+      >
+        <Command shouldFilter={false} className="flex flex-col">
+          <div className="flex items-center border-b px-3">
+            <Command.Input
+              value={search}
+              onValueChange={setSearch}
+              placeholder={t("searchPositionsPlaceholder")}
+              className="flex h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+          <Command.List id="position-combobox-list" className="max-h-52 overflow-y-auto p-1">
+            {loading && (
+              <Command.Loading>
+                <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+                  {tc("loading")}
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setNewTitle(search);
-                    setShowCreate(true);
-                  }}
-                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  {t("createNewPosition")}
-                </button>
-              )}
-            </div>
+              </Command.Loading>
             )}
-          </Command>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+            <Command.Empty className="px-2 py-3 text-center text-xs text-muted-foreground">
+              {t("noPositionsFound")}
+            </Command.Empty>
+            {positions.map((pos) => (
+              <Command.Item
+                key={pos.id}
+                value={pos.id}
+                onSelect={() => handleSelect(pos)}
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm aria-selected:bg-accent aria-selected:text-accent-foreground"
+              >
+                <Check
+                  className={cn(
+                    "h-4 w-4 shrink-0",
+                    value === pos.id ? "opacity-100" : "opacity-0",
+                  )}
+                />
+                <span className="flex-1 truncate">{pos.title}</span>
+                {pos.grade_title && (
+                  <span className="text-xs text-muted-foreground">
+                    {gradeTitleLabel(tRef, pos.grade_title)}
+                  </span>
+                )}
+              </Command.Item>
+            ))}
+          </Command.List>
+
+          {/* Quick create */}
+          {canCreate && (
+          <div className="border-t p-2">
+            {showCreate ? (
+              <div className="flex gap-1">
+                <Input
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  placeholder={t("positionTitlePlaceholder")}
+                  className="h-7 flex-1 text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleQuickCreate();
+                    }
+                    if (e.key === "Escape") setShowCreate(false);
+                  }}
+                  autoFocus
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2"
+                  onClick={handleQuickCreate}
+                  disabled={creating || !newTitle.trim()}
+                >
+                  {creating ? "..." : t("add")}
+                </Button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setNewTitle(search);
+                  setShowCreate(true);
+                }}
+                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {t("createNewPosition")}
+              </button>
+            )}
+          </div>
+          )}
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }

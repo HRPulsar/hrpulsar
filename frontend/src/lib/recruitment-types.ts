@@ -144,6 +144,8 @@ export interface CandidateVacancyApplication {
   cv_id: string;
   vacancy_id: string;
   vacancy_title: string | null;
+  // HRP-836: the card's blocks go read-only per vacancy status.
+  vacancy_status?: string | null;
   stage_id: string | null;
   stage_name: string | null;
   stage_type: StageType | null;

@@ -3,6 +3,7 @@
 import logging
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import setup_logging as celery_setup_logging
 from celery.signals import worker_init
 
@@ -57,6 +58,14 @@ def on_worker_init(**kwargs):
             # to fight here). Skip silently — autodiscover still runs.
             continue
 
+    # HRP-982: the upload -> transcribe -> analyze auto chain calls the same
+    # recruitment service functions as the API, so it needs the same audit
+    # wrappers. Installed here, after `extend_celery` put the billing ones
+    # on at import time, so audit wraps outside billing as in the API.
+    from app.modules.recruitment.audit_registry import register_audit_hooks
+
+    register_audit_hooks()
+
 
 celery = Celery(
     "hrpulsar",
@@ -82,7 +91,11 @@ celery.conf.update(
     broker_transport_options={"visibility_timeout": 7200},
     task_soft_time_limit=6600,
     task_time_limit=6900,
-    # Beat schedule for periodic tasks
+    # Beat schedule for periodic tasks. Anything daily or rarer is a UTC
+    # wall-clock crontab, never an interval: beat keeps no schedule file
+    # across deploys, so an 86400.0 entry restarts its 24 h wait on every
+    # deploy and can skip a day outright (HRP-994). Times are spread so the
+    # nightly jobs do not all start at once.
     beat_schedule={
         "send-assessment-reminders": {
             "task": "app.modules.assessment.tasks.send_deadline_reminders",
@@ -90,14 +103,14 @@ celery.conf.update(
         },
         "check-certificate-expiry": {
             "task": "app.modules.employee.tasks.check_certificate_expiry",
-            "schedule": 86400.0,  # every 24 hours
+            "schedule": crontab(hour=2, minute=10),
         },
         "refresh-model-catalog": {
             # HRP-466: daily AI model discovery — core on purpose, so
             # community installs with provider keys also pick up new
             # models without a redeploy.
             "task": "app.modules.ai.tasks.refresh_model_catalog_task",
-            "schedule": 86400.0,  # every 24 hours
+            "schedule": crontab(hour=3, minute=20),
         },
         "write-celery-heartbeat": {
             "task": "app.core.tasks.write_celery_heartbeat",
@@ -116,13 +129,20 @@ celery.conf.update(
             # that the recording is dropped from object storage while the
             # row stays for audit. Window enforced inside the task.
             "task": "app.modules.recruitment.tasks.purge_archived_interviews_task",
-            "schedule": 86400.0,  # daily
+            "schedule": crontab(hour=1, minute=40),
         },
         "cleanup-detached-resume-files": {
             # HRP-181 REDO Stage 3: bulk-upload resumes the user never
             # finalised. 7-day retention window enforced inside the task.
             "task": "app.modules.recruitment.tasks.cleanup_detached_resume_files_task",
-            "schedule": 86400.0,  # daily
+            "schedule": crontab(hour=4, minute=10),
+        },
+        "apply-recruitment-retention": {
+            # HRP-983: each tenant's recruitment retention settings. A
+            # wall-clock crontab in UTC (an interval restarts its wait on
+            # every deploy); 02:40 is clear of the other nightly jobs.
+            "task": "app.modules.recruitment.tasks.apply_recruitment_retention_task",
+            "schedule": crontab(hour=2, minute=40),
         },
         "reap-stuck-compgen-sessions": {
             # HRP-163: counterpart for the AI competence-generation worker.
@@ -140,31 +160,38 @@ celery.conf.update(
             "task": "work.reap_stuck_sessions",
             "schedule": 300.0,  # every 5 minutes
         },
+        "purge-expired-public-checks": {
+            # HRP-923: anonymous check results past their 10-day term go,
+            # with their sandbox containers. A wall-clock crontab, not
+            # 86400.0 (HRP-994); 04:20 UTC is clear of the other daily jobs.
+            "task": "public_check.purge_expired",
+            "schedule": crontab(hour=4, minute=20),
+        },
     },
 )
 
 # HRP-391: the public-demo sandbox is enterprise-only — its purge/reconcile
 # beat entries are scheduled only in SaaS. Community deployments have no
-# demo tenants to reap, and the tasks stay importable either way.
+# demo tenants to reap, and the tasks stay importable either way. Named so
+# the schedule tests can see the SaaS entries in an on-prem test run.
+SAAS_BEAT_SCHEDULE = {
+    "purge-expired-demo-tenants": {
+        # HRP-249 (D1): drop public-demo sandboxes whose hard TTL or
+        # sliding inactivity window has elapsed. The tenant row's
+        # cascade FKs do the rest of the data wipe.
+        "task": "app.modules.demo.tasks.purge_expired_demo_tenants",
+        "schedule": 300.0,  # every 5 minutes
+    },
+    "purge-orphan-demo-blobs": {
+        # HRP-276 / M6: nightly reconciler — drop S3 prefixes whose
+        # tenants table row is gone (transient S3 failures during
+        # the per-tenant purge can leave blobs behind).
+        "task": "app.modules.demo.tasks.purge_orphan_demo_blobs",
+        "schedule": crontab(hour=4, minute=40),
+    },
+}
 if settings.deployment_mode == "saas":
-    celery.conf.beat_schedule.update(
-        {
-            "purge-expired-demo-tenants": {
-                # HRP-249 (D1): drop public-demo sandboxes whose hard TTL or
-                # sliding inactivity window has elapsed. The tenant row's
-                # cascade FKs do the rest of the data wipe.
-                "task": "app.modules.demo.tasks.purge_expired_demo_tenants",
-                "schedule": 300.0,  # every 5 minutes
-            },
-            "purge-orphan-demo-blobs": {
-                # HRP-276 / M6: nightly reconciler — drop S3 prefixes whose
-                # tenants table row is gone (transient S3 failures during
-                # the per-tenant purge can leave blobs behind).
-                "task": "app.modules.demo.tasks.purge_orphan_demo_blobs",
-                "schedule": 86400.0,  # daily
-            },
-        }
-    )
+    celery.conf.beat_schedule.update(SAAS_BEAT_SCHEDULE)
 
 # Auto-discover tasks across core + module-level task packages.
 # `on_worker_init` also glob-imports every `app/modules/*/tasks.py`, but the
@@ -181,6 +208,7 @@ celery.autodiscover_tasks(
         "app.modules.demo",
         "app.modules.employee",
         "app.modules.primitives",
+        "app.modules.public_check",
         "app.modules.recruitment",
         "app.modules.talent_market",
         "app.modules.work",

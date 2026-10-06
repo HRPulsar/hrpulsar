@@ -257,6 +257,16 @@ async def get_card_detail(
         reacted_by_me=reacted_by_me,
         can_manage=scope.writable(card) if scope is not None else True,
     )
+    if not employee_view:
+        # HRP-693: Details names the requisition the card was posted from.
+        # An applicant reads the card for their own sake and is not told
+        # about the hire running outside. Lazy import: the two modules
+        # import each other.
+        from app.modules.recruitment.vacancy_service import vacancy_behind_card
+
+        detail["source_vacancy"] = await vacancy_behind_card(
+            db, tenant_id, card.id, current_user
+        )
     if employee_view:
         # HRP-765: an employee reads the card for their own sake — they get
         # their row and their match breakdown, not the shortlist they are

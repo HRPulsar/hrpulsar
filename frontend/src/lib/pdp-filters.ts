@@ -20,7 +20,8 @@ export type PdpFlag = (typeof PDP_FLAGS)[number];
 // Mirrors DEV_LOOP_STUCK_REVIEW_DAYS in backend/app/modules/employee/issues.py.
 const STUCK_REVIEW_DAYS = 14;
 
-const STUCK_STATUSES = ["review", "returned"];
+// HRP-941: in review only — a returned plan waits on its author.
+const STUCK_STATUSES = ["review"];
 
 export interface PdpFilters {
   searchQuery: string;

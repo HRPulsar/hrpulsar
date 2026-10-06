@@ -37,6 +37,7 @@ from app.modules.recruitment.tasks.generation import (
     generate_questions_task,
 )
 from app.modules.recruitment.tasks.maintenance import (
+    apply_recruitment_retention_task,
     cleanup_detached_resume_files_task,
     cleanup_orphan_upload_sessions_task,
     cleanup_stuck_recruitment_tasks_task,
@@ -47,6 +48,7 @@ from app.modules.recruitment.tasks.reporting import generate_report_task
 
 __all__ = [
     "analyze_interview_task",
+    "apply_recruitment_retention_task",
     "analyze_resume_only_task",
     "cleanup_detached_resume_files_task",
     "cleanup_orphan_upload_sessions_task",

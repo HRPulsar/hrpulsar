@@ -32,9 +32,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, get_args
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.assessment.models import PDP, Assessment, AssessmentStatus
@@ -57,6 +57,17 @@ ALERT_PRIORITY: tuple[AlertCode, ...] = (
     "assessment_pending",
     "pdp_pending_review",
 )
+
+# HRP-729 REDO: the hygiene codes the ``?issue=`` employee filter accepts next
+# to the development-loop ones. Each has a "since when" that orders the list
+# oldest first (see ``scan_employee_alerts``); ``user_inactive`` and
+# ``assessment_pending`` stay display-only.
+FilterableAlertCode = Literal[
+    "profile_incomplete",
+    "pdp_pending_review",
+    "assessment_overdue",
+]
+FILTERABLE_ALERT_CODES: tuple[FilterableAlertCode, ...] = get_args(FilterableAlertCode)
 
 # Assessment status codes the alerts depend on.
 _OVERDUE_STATUS_CODES = ("sent", "in_progress")
@@ -121,6 +132,27 @@ async def compute_employee_alerts_bulk_all(
     the top one for the single-badge callers (position and specialization
     drill-downs), whose contract is unchanged.
     """
+    scan = await scan_employee_alerts(db, tenant_id, employees, now=now)
+    return {emp_id: list(found) for emp_id, found in scan.items()}
+
+
+async def scan_employee_alerts(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    employees: list[Employee],
+    *,
+    now: datetime | None = None,
+) -> dict[uuid.UUID, dict[AlertCode, datetime | None]]:
+    """Every alert per employee, in ``ALERT_PRIORITY`` order, with since when.
+
+    The date is what the ``?issue=`` list orders a filterable code by, oldest
+    first (HRP-729 REDO): the earliest missed end date for
+    ``assessment_overdue``, the earliest last move of a plan in review for
+    ``pdp_pending_review`` (the clock ``pdp_stuck_review`` already uses), and
+    the date the employee was added for ``profile_incomplete``. The other two
+    codes carry ``None``. Same three round-trips — the dates are aggregates
+    of the rows the predicates already select.
+    """
     if not employees:
         return {}
 
@@ -129,12 +161,12 @@ async def compute_employee_alerts_bulk_all(
     # the priority scan — same defence-in-depth principle as the SQL filters.
     cohort = [e for e in employees if e.tenant_id == tenant_id]
     if not cohort:
-        return {e.id: [] for e in employees}
+        return {e.id: {} for e in employees}
     employee_ids = [e.id for e in cohort]
 
     # --- Round-trip 1: employees with overdue assessments. ---
     overdue_rows = await db.execute(
-        select(Assessment.employee_id)
+        select(Assessment.employee_id, func.min(Assessment.ended_at))
         .join(AssessmentStatus, AssessmentStatus.id == Assessment.status_id)
         .where(
             Assessment.tenant_id == tenant_id,
@@ -145,7 +177,7 @@ async def compute_employee_alerts_bulk_all(
         )
         .group_by(Assessment.employee_id)
     )
-    overdue_ids: set[uuid.UUID] = {row[0] for row in overdue_rows.all()}
+    overdue_since: dict[uuid.UUID, datetime | None] = dict(overdue_rows.tuples().all())
 
     # --- Round-trip 2: employees with pending-approval assessments. ---
     pending_rows = await db.execute(
@@ -162,7 +194,7 @@ async def compute_employee_alerts_bulk_all(
 
     # --- Round-trip 3: employees with PDPs in review. ---
     pdp_rows = await db.execute(
-        select(PDP.employee_id)
+        select(PDP.employee_id, func.min(PDP.updated_at))
         .where(
             PDP.tenant_id == tenant_id,
             PDP.employee_id.in_(employee_ids),
@@ -170,29 +202,29 @@ async def compute_employee_alerts_bulk_all(
         )
         .group_by(PDP.employee_id)
     )
-    pdp_ids: set[uuid.UUID] = {row[0] for row in pdp_rows.all()}
+    review_since: dict[uuid.UUID, datetime | None] = dict(pdp_rows.tuples().all())
 
-    result: dict[uuid.UUID, list[AlertCode]] = {}
+    result: dict[uuid.UUID, dict[AlertCode, datetime | None]] = {}
     for emp in employees:
         if emp.tenant_id != tenant_id:
             # Off-tenant employees never get an alert — they were excluded
             # from the SQL filters above, so we can't reason about their state.
-            result[emp.id] = []
+            result[emp.id] = {}
             continue
-        codes: list[AlertCode] = []
+        found: dict[AlertCode, datetime | None] = {}
         if _user_inactive(emp):
-            codes.append("user_inactive")
+            found["user_inactive"] = None
         if is_incomplete(emp):
-            codes.append("profile_incomplete")
-        if emp.id in overdue_ids:
-            codes.append("assessment_overdue")
+            found["profile_incomplete"] = emp.created_at
+        if emp.id in overdue_since:
+            found["assessment_overdue"] = overdue_since[emp.id]
         if emp.id in pending_ids:
-            codes.append("assessment_pending")
-        if emp.id in pdp_ids:
-            codes.append("pdp_pending_review")
-        # Appended in ALERT_PRIORITY order above, so the list is already
-        # sorted and its head is what the single-alert callers expect.
-        result[emp.id] = codes
+            found["assessment_pending"] = None
+        if emp.id in review_since:
+            found["pdp_pending_review"] = review_since[emp.id]
+        # Inserted in ALERT_PRIORITY order above, so the keys are already
+        # sorted and the first is what the single-alert callers expect.
+        result[emp.id] = found
 
     return result
 

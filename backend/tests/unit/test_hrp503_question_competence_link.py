@@ -31,6 +31,8 @@ from app.modules.recruitment.schemas import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit._consent import sign_consent
+
 pytestmark = pytest.mark.asyncio
 
 COMPETENCE_SLUG = "senior-python-skills"
@@ -52,6 +54,7 @@ async def _bootstrap(db: AsyncSession, tenant, user) -> dict:
             email=f"{uuid.uuid4().hex[:6]}@example.com",
         ),
     )
+    await sign_consent(db, tenant.id, cand["id"])  # HRP-979
     cv = await service.attach_candidate(
         db,
         tenant.id,

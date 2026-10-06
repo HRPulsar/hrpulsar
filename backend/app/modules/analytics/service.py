@@ -639,6 +639,7 @@ async def dev_loop(
     visible_employee_ids: set[uuid.UUID] | None,
     *,
     days: int = DEV_LOOP_DEFAULT_DYNAMICS_DAYS,
+    include_drafts: bool = True,
 ) -> dict:
     """Development-loop stages + actionable findings for the dashboard.
 
@@ -708,7 +709,12 @@ async def dev_loop(
             {
                 "code": "pdp_stuck_review",
                 "severity": "warn",
-                "count": len(facts.stuck_employees),
+                # HRP-941: "N plans stuck in review" counts plans — the rows
+                # ``?flag=stuck_review`` lists — and names their owners; one
+                # person can hold two of them, hence the separate head count
+                # the "+N more" tail is measured against.
+                "count": facts.stuck_plan_count,
+                "employee_count": len(facts.stuck_employees),
                 "employees": _employees_for(facts.stuck_employees, "pdp_stuck_review"),
                 "href": "/development?flag=stuck_review",
             }
@@ -745,7 +751,11 @@ async def dev_loop(
                 "without_plan": len(cohorts["gaps_without_plan"]),
             },
             "developing": {
-                "open_pdps": facts.open_pdp_count,
+                # HRP-844: the rows the tile's link opens, drafts included
+                # only for a reader the development list shows drafts to.
+                "open_pdps": issues.open_plan_count(
+                    facts, include_drafts=include_drafts
+                ),
                 "gap_employees_with_plan": len(
                     facts.gap_employees & facts.open_pdp_employees
                 ),
@@ -985,6 +995,7 @@ async def dev_loop_ai_summary(
     *,
     visible_employee_ids: set[uuid.UUID] | None,
     client_fingerprint: str | None = None,
+    include_drafts: bool = True,
 ) -> dict:
     """Cache dispatcher: one generation per distinct loop state.
 
@@ -1015,7 +1026,10 @@ async def dev_loop_ai_summary(
                 "data_version": client_fingerprint,
             }
 
-    payload = await dev_loop(db, tenant_id, visible_employee_ids)
+    # Same reading as the GET the client fingerprinted, drafts rule included.
+    payload = await dev_loop(
+        db, tenant_id, visible_employee_ids, include_drafts=include_drafts
+    )
     fingerprint = payload["data_version"]
     key = _ai_summary_cache_key(tenant_id, language, fingerprint, user_id=user_id)
 

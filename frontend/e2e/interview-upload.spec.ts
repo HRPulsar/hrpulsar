@@ -13,9 +13,12 @@
  * /auth/dev/auto-register).
  */
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import {
+  API_BASE,
+  registerUser,
+  setAuthTokens,
+  signCandidateConsent,
+} from "./helpers";
 
 interface CreatedSetup {
   candidateId: string;
@@ -91,6 +94,8 @@ test.describe("Recruitment interview upload (HRP-202)", () => {
     const admin = await registerUser(page);
     const setup = await createSetup(page, admin.accessToken);
     const authHeader = { Authorization: `Bearer ${admin.accessToken}` };
+    // HRP-979: a pasted transcript goes to AI analysis — consent first.
+    await signCandidateConsent(page, admin.accessToken, setup.candidateId);
 
     // Schedule an interview on the candidate-vacancy link.
     const ivResp = await page.request.post(

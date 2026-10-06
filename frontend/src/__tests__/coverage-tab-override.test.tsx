@@ -260,24 +260,65 @@ it("returns the computed value with a null", async () => {
   expect(updateStep).toHaveBeenCalledWith("s-1", { manual_mode: null });
 });
 
+const PACKS = [
+  { id: "p-1", code: "drafting", title_en: "Drafting", tenant_id: null },
+  { id: "p-2", code: "pack_not_in_the_catalog", title_en: "Unknown", tenant_id: null },
+  // HRP-911: the tenant's own pack with a built-in one's code.
+  { id: "p-3", code: "drafting", title_en: "Contract drafting", tenant_id: "t-1" },
+];
+
 it("loads the packs on the first open and saves the picked one", async () => {
   getCoverage.mockResolvedValue(coverageOf({ ...STEP, mode: "draft_then_review" }));
-  listPacks.mockResolvedValue([
-    { id: "p-1", code: "drafting" },
-    { id: "p-2", code: "own_pack_not_in_the_catalog" },
-  ]);
-  updateStep.mockResolvedValue({ id: "s-1", manual_pack_code: "drafting" });
+  listPacks.mockResolvedValue(PACKS);
+  updateStep.mockResolvedValue({ id: "s-1", manual_pack_id: "p-1" });
 
   await render(true);
   await click("coverage-btn-change-pack-s-1");
 
   expect(listPacks).toHaveBeenCalledTimes(1);
-  // A pack of the tenant's own reads as its code, never as a message path.
-  const own = byId("coverage-btn-change-pack-s-1-option-own_pack_not_in_the_catalog")!;
-  expect(own.textContent).toBe("own_pack_not_in_the_catalog");
+  // A pack the catalog does not know reads as its code, never as a message path.
+  const unknown = byId("coverage-btn-change-pack-s-1-option-pack_not_in_the_catalog")!;
+  expect(unknown.textContent).toBe("pack_not_in_the_catalog");
 
   await click("coverage-btn-change-pack-s-1-option-drafting");
-  expect(updateStep).toHaveBeenCalledWith("s-1", { manual_pack_code: "drafting" });
+  expect(updateStep).toHaveBeenCalledWith("s-1", { manual_pack_id: "p-1" });
+});
+
+it("tells the tenant's own pack from the built-in one of the same code and saves it by id", async () => {
+  getCoverage.mockResolvedValue(coverageOf({ ...STEP, mode: "draft_then_review" }));
+  listPacks.mockResolvedValue(PACKS);
+  updateStep.mockResolvedValue({ id: "s-1", manual_pack_id: "p-3" });
+
+  await render(true);
+  await click("coverage-btn-change-pack-s-1");
+
+  const builtin = byId("coverage-btn-change-pack-s-1-option-drafting")!;
+  const own = byId("coverage-btn-change-pack-s-1-option-own-drafting")!;
+  expect(own.textContent).toBe("Contract drafting (your own)");
+  expect(own.textContent).not.toBe(builtin.textContent);
+
+  await click("coverage-btn-change-pack-s-1-option-own-drafting");
+  expect(updateStep).toHaveBeenCalledWith("s-1", { manual_pack_id: "p-3" });
+});
+
+it("ticks the pack the step names by id, not every pack of its code", async () => {
+  getCoverage.mockResolvedValue(
+    coverageOf({
+      ...STEP,
+      mode: "draft_then_review",
+      verdict: "agent",
+      gap_label: null,
+      agent: { pack_id: "p-3", pack_code: "drafting", pack_manual: true, agent_id: null, agent_name: null },
+    }),
+  );
+  listPacks.mockResolvedValue(PACKS);
+
+  await render(true);
+  await click("coverage-btn-change-pack-s-1");
+
+  const ticked = (id: string) => !byId(id)!.querySelector("svg")!.classList.contains("invisible");
+  expect(ticked("coverage-btn-change-pack-s-1-option-own-drafting")).toBe(true);
+  expect(ticked("coverage-btn-change-pack-s-1-option-drafting")).toBe(false);
 });
 
 it("says so when the packs cannot be loaded, and asks again on the next open", async () => {

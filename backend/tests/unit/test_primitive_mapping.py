@@ -722,6 +722,9 @@ class TestSurface:
         resp = await auth_client.get("/api/primitives")
         assert resp.status_code == 200
         assert len(resp.json()) == 17
+        # HRP-850: no merge path writes the hook, so the API does not carry
+        # a field that could only read null.
+        assert not any("merged_into_id" in row for row in resp.json())
 
         captured: dict = {}
 

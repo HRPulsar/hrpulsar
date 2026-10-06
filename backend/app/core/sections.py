@@ -25,7 +25,9 @@ from typing import Literal
 from fastapi import Depends
 from fastapi.dependencies.models import Dependant
 from fastapi.security.utils import get_authorization_scheme_param
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import ORMExecuteState, Session
 from starlette.requests import HTTPConnection
 from starlette.routing import BaseRoute
 
@@ -248,10 +250,12 @@ SECTIONS_BY_CODE: dict[str, Section] = {s.code: s for s in SECTIONS}
 # the search (left so in HRP-832).
 # ``/v1`` is the API-key surface; recruitment's own ``/v1`` routes are
 # claimed by the section above (longest prefix wins).
+# ``/public-check`` is the anonymous process check (HRP-922): no account, no
+# role, nothing of a tenant's.
 ALLOWLIST_PREFIXES: tuple[str, ...] = (
     "/auth", "/v1", "/platform", "/billing", "/ee", "/blog", "/ai", "/notifications",
     "/settings/notifications", "/settings/email-logs", "/webhooks", "/files", "/api-keys",
-    "/demo", "/signup-request", "/public", "/tasks", "/feedback",
+    "/demo", "/signup-request", "/public", "/tasks", "/feedback", "/public-check",
 )
 
 # One's own profile, loop and exams stay reachable whatever the matrix says.
@@ -382,18 +386,55 @@ def denies(section: Section, level: Level, method: str) -> bool:
     return level == "view" and method not in _READ_METHODS
 
 
+# HRP-1018: ``db.info`` key of the per-session memo below,
+# ``{(user id, role codes): levels}``. A session is a request (``get_db``).
+_MEMO = "section_matrix_levels"
+
+
+@event.listens_for(Session, "after_flush")
+@event.listens_for(Session, "after_soft_rollback")
+def _forget(session: Session, _context: object) -> None:
+    session.info.pop(_MEMO, None)
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _forget_on_write(state: ORMExecuteState) -> None:
+    # A bulk or Core write never flushes; any non-SELECT counts as one. A raw
+    # ``text()`` read is not a SELECT to SQLAlchemy either and drops the memo
+    # too - an extra read, never a stale one.
+    if not state.is_select:
+        state.session.info.pop(_MEMO, None)
+
+
 async def matrix_levels(db: AsyncSession, user: User) -> dict[str, Level]:
     """What the tenant's matrix alone says per section: the caller's roles,
     the overrides and the lockout floor. The gate and
-    ``require_section`` read this."""
+    ``require_section`` read this.
+
+    Read once per session and kept in ``db.info`` (HRP-1018): the gate,
+    ``require_section`` and the modules' scopes ask several times a request.
+    Any write in the session - pending, flushed or rolled back - drops the
+    memo, so a request, or a test that shares one session across requests,
+    never reads a level it has just changed or undone. The role codes are
+    part of the key, so a role change is a new key. Returns a copy: callers
+    may narrow it (``levels_for``)."""
     codes = {r.code for r in user.roles}
     if PLATFORM_ROLE in codes:
         return dict.fromkeys(SECTIONS_BY_CODE, "manage")
-    # Imported here: core sits under every module.
-    from app.modules.company.service import get_section_overrides
+    key = (user.id, frozenset(codes))
+    if db.new or db.dirty or db.deleted:
+        # Pending rows reach the overrides only through the autoflush the
+        # read below triggers; the memo would answer before it.
+        db.info.pop(_MEMO, None)
+    levels = db.info.get(_MEMO, {}).get(key)
+    if levels is None:
+        # Imported here: core sits under every module.
+        from app.modules.company.service import get_section_overrides
 
-    overrides, hidden = await get_section_overrides(db, user.tenant_id)
-    return effective_levels(codes, overrides, hidden)
+        overrides, hidden = await get_section_overrides(db, user.tenant_id)
+        levels = effective_levels(codes, overrides, hidden)
+        db.info.setdefault(_MEMO, {})[key] = levels
+    return dict(levels)
 
 
 async def levels_for(db: AsyncSession, user: User) -> dict[str, Level]:
@@ -490,10 +531,10 @@ async def section_gate(conn: HTTPConnection, db: AsyncSession = Depends(get_db))
     if user is None:
         return
     # ponytail: a gated authenticated request re-resolves the caller here
-    # (user + roles + employee status) and reads the tenant's two override
-    # tables, all again/on top of the route's own get_current_user; stash
-    # the resolved user on request.state and let get_current_user reuse it
-    # if this shows up in profiles.
+    # (user + roles + employee status) on top of the route's own
+    # get_current_user; the override tables are read once per request
+    # (matrix_levels' memo). Stash the resolved user on request.state and
+    # let get_current_user reuse it if this shows up in profiles.
     level = (await matrix_levels(db, user))[section.code]
     if denies(section, level, conn.scope["method"]):
         raise AppError("auth_insufficient_permissions", 403)

@@ -1,6 +1,9 @@
+# Images are pinned to an explicit version (HRP-990): a floating tag lets a
+# routine `docker compose pull` swap the proxy, the database or the cache
+# underneath an installation. Upgrade by editing the tag here.
 services:
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11-alpine
     ports:
       - "80:80"
       - "443:443"
@@ -198,7 +201,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:0.8.7-pg17
     environment:
       POSTGRES_DB: hrpulsar
       POSTGRES_USER: hrpulsar
@@ -213,7 +216,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     restart: unless-stopped
 
   minio:

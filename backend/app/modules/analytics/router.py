@@ -36,8 +36,9 @@ from app.modules.auth.models import User
 
 router = APIRouter(tags=["analytics"])
 
-_view = require_section("analytics", "view")
-_manage = require_section("analytics", "manage")
+# The section gate answers for ``view`` on the reads and ``manage`` on the
+# exports and the AI summary (HRP-1018).
+
 # Payroll is a data class of its own, not a level of the section: the same
 # actors read it here as read an employee's own compensation rows -
 # ``admin`` and a division manager inside their subtree, HR deliberately
@@ -62,7 +63,7 @@ class AiSummaryRequest(BaseModel):
 @router.get("/analytics/assessments")
 async def assessment_stats(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view),
+    current_user: User = Depends(get_current_user),
 ):
     return await service.assessment_stats(
         db, current_user.tenant_id, await get_visible_employee_ids(db, current_user)
@@ -91,7 +92,7 @@ async def dev_loop(
     # reporting a window nobody asked for.
     days: service.DynamicsPeriod = service.DynamicsPeriod.quarter,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view),
+    current_user: User = Depends(get_current_user),
 ):
     # HRP-638: the loop used to aggregate the whole tenant for every
     # manager — counts and finding names included — while /employees
@@ -103,6 +104,9 @@ async def dev_loop(
         current_user.tenant_id,
         await get_visible_employee_ids(db, current_user),
         days=int(days),
+        # HRP-844: drafts count only for whoever the development list
+        # shows them to (``hide_drafts`` on GET /pdp).
+        include_drafts=await runs_plans(db, current_user),
     )
 
 
@@ -110,7 +114,7 @@ async def dev_loop(
 async def hr_metrics(
     days: service.DynamicsPeriod = service.DynamicsPeriod.quarter,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view),
+    current_user: User = Depends(get_current_user),
 ):
     """HRP-732: HR metrics over a period, each tagged with how exact it is.
 
@@ -129,7 +133,7 @@ async def hr_metrics(
 async def dev_loop_ai_summary(
     body: AiSummaryRequest | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
 ):
     """On-demand AI summary of the development loop; cached per data state."""
     return await service.dev_loop_ai_summary(
@@ -138,6 +142,7 @@ async def dev_loop_ai_summary(
         current_user.id,
         visible_employee_ids=await get_visible_employee_ids(db, current_user),
         client_fingerprint=body.data_version if body else None,
+        include_drafts=await runs_plans(db, current_user),
     )
 
 
@@ -192,7 +197,7 @@ async def my_loop_ai_summary(
 @router.get("/analytics/compensation")
 async def compensation_stats(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view),
+    current_user: User = Depends(get_current_user),
     _pay: User = Depends(_compensation),
 ):
     """HRP-822: salary figures for the caller's scope.
@@ -210,7 +215,7 @@ async def compensation_stats(
 @router.get("/analytics/compensation/benchmark")
 async def compensation_benchmark(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view),
+    current_user: User = Depends(get_current_user),
     _pay: User = Depends(_compensation),
 ):
     return await service.compensation_benchmark(
@@ -221,7 +226,7 @@ async def compensation_benchmark(
 @router.get("/analytics/division-matrix")
 async def division_matrix(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view),
+    current_user: User = Depends(get_current_user),
 ):
     """HRP-822: the headcount matrix for the divisions the caller manages.
 
@@ -239,7 +244,7 @@ async def cpa_comparison(
     cpa_id_1: uuid.UUID = Query(...),
     cpa_id_2: uuid.UUID = Query(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view),
+    current_user: User = Depends(get_current_user),
 ):
     return await service.compare_cpa_rounds(
         db,
@@ -263,7 +268,7 @@ async def pdp_progress(
 @router.post("/analytics/export/assessments")
 async def export_assessments(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
 ):
     return await service.export_assessments_xlsx(
         db, current_user.tenant_id, await get_visible_employee_ids(db, current_user)
@@ -273,7 +278,7 @@ async def export_assessments(
 @router.post("/analytics/export/assessments/async", response_model=TaskAccepted)
 async def export_assessments_async(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
 ):
     """Queue XLSX report generation as background task. Returns task_id for polling."""
     from app.core.task_enqueue import enqueue_task

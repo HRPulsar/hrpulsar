@@ -25,6 +25,7 @@ from app.modules.recruitment import (
     question_service,
     service,
 )
+from app.modules.recruitment.common import ensure_vacancy_unlocked
 from app.modules.recruitment.routers.common import (
     evaluates,
     recruitment_public_limiter,
@@ -178,6 +179,11 @@ async def generate_questions(
     """Queue AI question generation task."""
     await service.get_candidate(db, current_user.tenant_id, candidate_id)
     await service.get_vacancy(db, current_user.tenant_id, vacancy_id)
+    # No service layer here - the route queues the task itself.
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "questions", vacancy_id=vacancy_id
+    )
+    await service.require_active_consent(db, current_user.tenant_id, candidate_id)
     from app.modules.recruitment.tasks import generate_questions_task
 
     result = generate_questions_task.delay(
@@ -698,6 +704,9 @@ async def generate_question_set(
     HRP-471: answers at once with the set in ``generating`` (or the target
     in ``regenerating``); the block polls the list until it is ``ready``.
     """
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "questions", cv_id=cv_id
+    )
     return await question_service.enqueue_question_set_generation(
         db,
         current_user.tenant_id,

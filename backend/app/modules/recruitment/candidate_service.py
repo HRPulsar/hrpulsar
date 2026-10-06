@@ -27,6 +27,7 @@ from app.models import Person
 from app.modules.auth.models import User
 from app.modules.demo.utils import is_demo_tenant
 from app.modules.employee.models import Employee
+from app.modules.recruitment import consent_service
 from app.modules.recruitment.assessment_service import (
     get_assessment_matrix,
 )
@@ -37,6 +38,7 @@ from app.modules.recruitment.common import (
     _publish_event,
     _stage_to_read_dict,
     candidate_display_name,
+    ensure_vacancy_unlocked,
 )
 from app.modules.recruitment.manager_assessment_models import AssessmentRound
 from app.modules.recruitment.models import (
@@ -49,6 +51,7 @@ from app.modules.recruitment.models import (
     HumanAssessment,
     Interview,
     QuestionSet,
+    RecruitmentAuditLog,
     Vacancy,
     VacancyStage,
 )
@@ -143,6 +146,22 @@ async def _employee_person_ids(
     return {row[0] for row in rows}
 
 
+async def _add_candidate(
+    db: AsyncSession, tenant_id: uuid.UUID, candidate: Candidate, *, is_demo: bool
+) -> None:
+    """Every candidate creation path goes through here (HRP-979).
+
+    In a demo workspace the new candidate is consented at once, so the AI
+    features open for it; elsewhere this is a plain add + flush. Callers
+    resolve ``is_demo`` once per request, not once per candidate.
+    """
+    db.add(candidate)
+    await db.flush()
+    await consent_service.auto_sign_demo_consent(
+        db, tenant_id, candidate, is_demo=is_demo
+    )
+
+
 async def _check_is_employee(
     db: AsyncSession, tenant_id: uuid.UUID, person_id: uuid.UUID | None
 ) -> bool:
@@ -162,7 +181,8 @@ async def create_candidate(
     5. Check if person is linked to a user who is an employee in this tenant -> set is_employee flag
     """
     existing_person = None
-    if data.email and not await is_demo_tenant(db, tenant_id):
+    is_demo = await is_demo_tenant(db, tenant_id)
+    if data.email and not is_demo:
         # Cross-tenant Person dedup is disabled for demo tenants: a public
         # demo session must never resolve emails to real users' Person rows
         # (that would leak their first/last name + phone via the candidate
@@ -216,7 +236,7 @@ async def create_candidate(
         source=data.source,
         notes=data.notes,
     )
-    db.add(candidate)
+    await _add_candidate(db, tenant_id, candidate, is_demo=is_demo)
     await db.commit()
     await db.refresh(candidate, ["person", "files"])
 
@@ -383,6 +403,51 @@ async def update_person(
 # ---------------------------------------------------------------------------
 
 
+async def _link_candidate(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    vacancy_id: uuid.UUID,
+    stage_id: uuid.UUID | None,
+    user_id: uuid.UUID,
+) -> CandidateVacancy:
+    """Add the candidate to the vacancy's funnel - every attach path ends here.
+
+    HRP-427: the first candidate on a draft vacancy publishes it (no
+    competence check, unlike the Publish command). Removing candidates
+    later never sends it back to draft. The status change leaves the same
+    trail as the command - a ``vacancy.change_status`` row and a new
+    version - written in the caller's transaction, so it lands with the
+    candidate or not at all.
+    """
+    cv = CandidateVacancy(
+        tenant_id=tenant_id,
+        candidate_id=candidate_id,
+        vacancy_id=vacancy_id,
+        stage_id=stage_id,
+        status="new",
+        status_history=[],
+        attached_by=user_id,
+    )
+    db.add(cv)
+    vacancy = await db.get(Vacancy, vacancy_id)
+    if vacancy is not None and vacancy.status == "draft":
+        vacancy.status = "open"
+        vacancy.version = vacancy.version + 1
+        db.add(
+            RecruitmentAuditLog(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="vacancy.change_status",
+                entity_type="vacancy",
+                entity_id=vacancy_id,
+                payload_diff={"status": {"before": "draft", "after": "open"}},
+            )
+        )
+    return cv
+
+
 async def attach_candidate(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -396,6 +461,7 @@ async def attach_candidate(
     # Validate candidate and vacancy belong to tenant
     await _get_candidate(db, tenant_id, data.candidate_id)
     await _get_vacancy(db, tenant_id, data.vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=data.vacancy_id)
 
     # Check not already linked
     result = await db.execute(
@@ -420,16 +486,14 @@ async def attach_candidate(
             non_terminal.sort(key=lambda s: s.sort_order)
             stage_id = non_terminal[0].id
 
-    cv = CandidateVacancy(
+    cv = await _link_candidate(
+        db,
         tenant_id=tenant_id,
         candidate_id=data.candidate_id,
         vacancy_id=data.vacancy_id,
         stage_id=stage_id,
-        status="new",
-        status_history=[],
-        attached_by=user_id,
+        user_id=user_id,
     )
-    db.add(cv)
     await db.commit()
     await db.refresh(cv, ["candidate", "vacancy", "stage"])
 
@@ -455,17 +519,48 @@ async def attach_candidate(
     return _cv_to_read(cv)
 
 
+def _history_entry(
+    old_stage_id: uuid.UUID | None,
+    new_stage_id: uuid.UUID,
+    comment: str | None,
+    user_id: uuid.UUID | None,
+) -> dict:
+    """One ``status_history`` row. HRP-982: ``changed_by`` names who moved
+    the candidate - from / to / when alone could not say."""
+    return {
+        "from_stage_id": str(old_stage_id) if old_stage_id else None,
+        "to_stage_id": str(new_stage_id),
+        "changed_at": datetime.now(timezone.utc).isoformat(),
+        "comment": comment,
+        "changed_by": str(user_id) if user_id else None,
+    }
+
+
+def _note_stage_move(old: VacancyStage | None, new: VacancyStage) -> None:
+    """HRP-982: the stage before and after, for the audit row."""
+    from app.modules.recruitment.audit_registry import annotate
+
+    def ref(stage: VacancyStage | None) -> dict | None:
+        return {"id": str(stage.id), "name": stage.name} if stage else None
+
+    annotate(payload_diff={"stage": {"before": ref(old), "after": ref(new)}})
+
+
 async def change_candidate_status(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     cv_id: uuid.UUID,
     data: CandidateVacancyStatusUpdate,
+    *,
+    user_id: uuid.UUID | None = None,
 ) -> dict:
     """Change candidate-vacancy status.
 
     Append to status_history JSONB array:
-    {"from_stage_id": old, "to_stage_id": new, "changed_at": now, "comment": data.comment}
+    {"from_stage_id": old, "to_stage_id": new, "changed_at": now,
+    "comment": data.comment, "changed_by": user_id}
     """
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", cv_id=cv_id)
     result = await db.execute(
         select(CandidateVacancy)
         .options(
@@ -484,21 +579,18 @@ async def change_candidate_status(
     # HRP-830: the same check as the sibling PATCH - a stage of another
     # vacancy's funnel (or no stage at all) is refused, not written.
     applicable = await _get_applicable_stages(db, tenant_id, cv.vacancy_id)
-    if not any(s.id == data.stage_id for s in applicable):
+    target = next((s for s in applicable if s.id == data.stage_id), None)
+    if target is None:
         raise AppError("stage_not_found_for_vacancy", status.HTTP_404_NOT_FOUND)
 
     old_stage_id = cv.stage_id
-
-    history_entry = {
-        "from_stage_id": str(old_stage_id) if old_stage_id else None,
-        "to_stage_id": str(data.stage_id),
-        "changed_at": datetime.now(timezone.utc).isoformat(),
-        "comment": data.comment,
-    }
+    old_stage = cv.stage
 
     # Must create a new list to trigger JSONB update detection
     updated_history = list(cv.status_history or [])
-    updated_history.append(history_entry)
+    updated_history.append(
+        _history_entry(old_stage_id, data.stage_id, data.comment, user_id)
+    )
     cv.status_history = updated_history
     cv.stage_id = data.stage_id
 
@@ -507,10 +599,12 @@ async def change_candidate_status(
 
     stage_changed = str(old_stage_id) != str(data.stage_id)
     if stage_changed:
+        _note_stage_move(old_stage, target)
         candidate_name = None
         if cv.candidate and cv.candidate.person:
             person = cv.candidate.person
             candidate_name = f"{person.first_name} {person.last_name}".strip()
+        actor = await db.get(User, user_id) if user_id else None
         await _publish_event(
             "recruitment.candidate.stage_changed",
             {
@@ -526,7 +620,13 @@ async def change_candidate_status(
                     if cv.vacancy and cv.vacancy.owner_id
                     else None
                 ),
-                "actor_id": str(cv.attached_by) if cv.attached_by else None,
+                # HRP-982: the author is whoever moved the candidate. The
+                # recruiter who attached them stays a recipient, as before.
+                "actor_id": str(user_id) if user_id else None,
+                "actor_name": (
+                    f"{actor.first_name} {actor.last_name}".strip() if actor else None
+                ),
+                "attached_by_id": str(cv.attached_by) if cv.attached_by else None,
             },
         )
     return _cv_to_read(cv)
@@ -552,6 +652,8 @@ def _cv_to_read(cv: CandidateVacancy) -> dict:
         "stage_name": cv.stage.name if cv.stage else None,
         "candidate_name": candidate_name,
         "vacancy_title": cv.vacancy.title if cv.vacancy else None,
+        # HRP-836: the interview page goes read-only per vacancy status.
+        "vacancy_status": cv.vacancy.status if cv.vacancy else None,
         "created_at": cv.created_at,
     }
 
@@ -1161,6 +1263,7 @@ async def add_candidate_to_vacancy_manual(
     created ``candidate_vacancy_id`` and ``etag``.
     """
     await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     if not data.email and not data.phone:
         raise AppError(
@@ -1207,8 +1310,9 @@ async def add_candidate_to_vacancy_manual(
             source=data.source,
             notes=data.notes,
         )
-        db.add(candidate)
-        await db.flush()
+        await _add_candidate(
+            db, tenant_id, candidate, is_demo=await is_demo_tenant(db, tenant_id)
+        )
 
     # Refuse to re-link the same candidate to the same vacancy — the spec
     # only allows one row per (candidate, vacancy) pair.
@@ -1226,16 +1330,14 @@ async def add_candidate_to_vacancy_manual(
         )
 
     stage_id = await _first_non_terminal_stage_id(db, tenant_id, vacancy_id)
-    cv = CandidateVacancy(
+    cv = await _link_candidate(
+        db,
         tenant_id=tenant_id,
         candidate_id=candidate.id,
         vacancy_id=vacancy_id,
         stage_id=stage_id,
-        status="new",
-        status_history=[],
-        attached_by=user_id,
+        user_id=user_id,
     )
-    db.add(cv)
     await db.commit()
     await db.refresh(candidate, ["files"])
     await db.refresh(cv, ["candidate", "vacancy", "stage"])
@@ -1444,6 +1546,7 @@ async def add_internal_candidate_to_vacancy(
     from app.modules.talent_market.models import TalentCandidate
 
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     roster = None
     if vacancy.talent_card_id is not None:
@@ -1529,8 +1632,9 @@ async def add_internal_candidate_to_vacancy(
             parsed_resume_jsonb=parsed,
             **_denorm_from_parsed(parsed),
         )
-        db.add(candidate)
-        await db.flush()
+        await _add_candidate(
+            db, tenant_id, candidate, is_demo=await is_demo_tenant(db, tenant_id)
+        )
     elif candidate.person_id != person.id and not await _person_belongs_to_a_user(
         db, tenant_id, candidate.person_id
     ):
@@ -1557,16 +1661,14 @@ async def add_internal_candidate_to_vacancy(
             status.HTTP_409_CONFLICT,
         )
 
-    cv = CandidateVacancy(
+    cv = await _link_candidate(
+        db,
         tenant_id=tenant_id,
         candidate_id=candidate.id,
         vacancy_id=vacancy_id,
         stage_id=await _first_non_terminal_stage_id(db, tenant_id, vacancy_id),
-        status="new",
-        status_history=[],
-        attached_by=user_id,
+        user_id=user_id,
     )
-    db.add(cv)
     await db.commit()
     # ``updated_at`` too, not just the relationship: rebinding an existing
     # row's Person makes this an UPDATE, and the server-side onupdate
@@ -1605,6 +1707,7 @@ async def finalize_candidates_from_parsed(
     with per-file outcomes so the modal can render the import summary.
     """
     await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     if not data.files:
         return {"created": [], "linked": [], "skipped": []}
@@ -1626,6 +1729,7 @@ async def finalize_candidates_from_parsed(
     files_by_id = {f.id: f for f in file_rows}
 
     stage_id = await _first_non_terminal_stage_id(db, tenant_id, vacancy_id)
+    is_demo = await is_demo_tenant(db, tenant_id)
 
     created: list[dict] = []
     linked: list[dict] = []
@@ -1736,8 +1840,7 @@ async def finalize_candidates_from_parsed(
                 parsed_resume_jsonb=parsed if isinstance(parsed, dict) else None,
                 **denorm,
             )
-            db.add(candidate)
-            await db.flush()
+            await _add_candidate(db, tenant_id, candidate, is_demo=is_demo)
             cf.candidate_id = candidate.id
             if email:
                 batch_emails_seen[email.lower()] = candidate.id
@@ -1754,16 +1857,14 @@ async def finalize_candidates_from_parsed(
             )
         ).scalar_one_or_none()
         if already is None:
-            cv = CandidateVacancy(
+            cv = await _link_candidate(
+                db,
                 tenant_id=tenant_id,
                 candidate_id=candidate.id,
                 vacancy_id=vacancy_id,
                 stage_id=stage_id,
-                status="new",
-                status_history=[],
-                attached_by=user_id,
+                user_id=user_id,
             )
-            db.add(cv)
             await db.flush()
         else:
             cv = already
@@ -1879,6 +1980,7 @@ async def patch_candidate_vacancy(
     data: CandidateVacancyPatch,
     *,
     if_match: str | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> dict:
     """Apply a stage / status / manager_score change with optimistic
     locking.
@@ -1887,6 +1989,7 @@ async def patch_candidate_vacancy(
     the same shape vacancy PATCH uses (HRP-177). Terminal-stage moves
     are allowed; the UI confirms with the recruiter beforehand.
     """
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", cv_id=cv_id)
     cv = (
         await db.execute(
             select(CandidateVacancy)
@@ -1923,16 +2026,9 @@ async def patch_candidate_vacancy(
         if target is None:
             raise AppError("stage_not_found_for_vacancy", status.HTTP_404_NOT_FOUND)
 
-        old_stage_id = cv.stage_id
+        _note_stage_move(cv.stage, target)
         history = list(cv.status_history or [])
-        history.append(
-            {
-                "from_stage_id": str(old_stage_id) if old_stage_id else None,
-                "to_stage_id": str(new_stage_id),
-                "changed_at": datetime.now(timezone.utc).isoformat(),
-                "comment": comment,
-            }
-        )
+        history.append(_history_entry(cv.stage_id, new_stage_id, comment, user_id))
         cv.status_history = history
         cv.stage_id = new_stage_id
         cv.stage = target
@@ -1978,13 +2074,18 @@ async def patch_candidate_vacancy(
 
 
 async def delete_candidate_vacancy(
-    db: AsyncSession, tenant_id: uuid.UUID, cv_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cv_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID | None = None,  # HRP-982: the audit row's author
 ) -> None:
     """HRP-181 REDO: remove the candidate from this vacancy's funnel.
 
     The canonical Candidate row stays so other vacancies can keep
     referring to it. Only the ``candidate_vacancies`` link is dropped.
     """
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", cv_id=cv_id)
     cv = (
         await db.execute(
             select(CandidateVacancy)
@@ -2084,6 +2185,7 @@ async def get_candidate_full_card(
                 "cv_id": cv.id,
                 "vacancy_id": cv.vacancy_id,
                 "vacancy_title": cv.vacancy.title if cv.vacancy else None,
+                "vacancy_status": cv.vacancy.status if cv.vacancy else None,
                 "stage_id": cv.stage_id,
                 "stage_name": cv.stage.name if cv.stage else None,
                 "stage_type": cv.stage.stage_type if cv.stage else None,
@@ -2207,7 +2309,11 @@ async def patch_candidate(
 
 
 async def archive_candidate(
-    db: AsyncSession, tenant_id: uuid.UUID, candidate_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID | None = None,  # HRP-982: the audit row's author
 ) -> None:
     """Soft-delete by stamping ``archived_at`` (FR-04 "delete row").
 
@@ -2297,6 +2403,7 @@ async def bulk_upload_resumes(
     from app.modules.recruitment.tasks import parse_resume_task
 
     await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     if not files:
         raise AppError("resume_file_required", status.HTTP_400_BAD_REQUEST)

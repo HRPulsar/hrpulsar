@@ -6,9 +6,15 @@ import { useTranslations } from "next-intl";
 import {
   Archive,
   ArchiveRestore,
+  CircleCheck,
+  CircleX,
   MoreVertical,
+  Pause,
   Pencil,
+  Play,
+  Send,
   Trash2,
+  type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,9 +25,27 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api";
 import type { Vacancy } from "@/lib/types";
+import {
+  VACANCY_STATUS_COMMANDS,
+  vacancyLocks,
+  type VacancyStatusCommand,
+} from "@/lib/vacancy-status";
 import { toast } from "sonner";
 import { VacancyArchiveDialog } from "./VacancyArchiveDialog";
 import { VacancyDeleteDialog } from "./VacancyDeleteDialog";
+import { VacancyStatusDialog } from "./VacancyStatusDialog";
+
+// HRP-427 / HRP-836: label and icon of each lifecycle command.
+const COMMAND_ITEMS: Record<
+  VacancyStatusCommand,
+  { labelKey: string; icon: LucideIcon }
+> = {
+  publish: { labelKey: "actionPublish", icon: Send },
+  pause: { labelKey: "actionPause", icon: Pause },
+  reopen: { labelKey: "actionReopen", icon: Play },
+  close: { labelKey: "actionCloseVacancy", icon: CircleCheck },
+  cancel: { labelKey: "actionCancelVacancy", icon: CircleX },
+};
 
 type Props = {
   vacancy: Vacancy;
@@ -33,8 +57,15 @@ export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
   const router = useRouter();
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [command, setCommand] = useState<VacancyStatusCommand | null>(null);
 
   const isArchived = !!vacancy.archived_at;
+  // HRP-836: a closed or cancelled vacancy is read-only — no Edit, and no
+  // status command leads anywhere from there.
+  const canEdit = !isArchived && !vacancyLocks(vacancy.status, "vacancy");
+  const commands = isArchived
+    ? []
+    : (VACANCY_STATUS_COMMANDS[vacancy.status] ?? []);
   const candidatesCount = vacancy.candidates_count ?? 0;
   const canDelete =
     vacancy.status === "draft" && candidatesCount === 0 && !vacancy.has_profile;
@@ -66,7 +97,7 @@ export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
           <MoreVertical />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          {!isArchived && (
+          {canEdit && (
             <DropdownMenuItem
               data-testid={`vacancy-actions-menu-edit-${vacancy.id}`}
               onClick={(e) => {
@@ -78,6 +109,22 @@ export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
               {t("actionEdit")}
             </DropdownMenuItem>
           )}
+          {commands.map((cmd) => {
+            const { labelKey, icon: Icon } = COMMAND_ITEMS[cmd];
+            return (
+              <DropdownMenuItem
+                key={cmd}
+                data-testid={`vacancy-actions-menu-${cmd}-${vacancy.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCommand(cmd);
+                }}
+              >
+                <Icon />
+                {t(labelKey)}
+              </DropdownMenuItem>
+            );
+          })}
           {!isArchived && (
             <DropdownMenuItem
               data-testid={`vacancy-actions-menu-archive-${vacancy.id}`}
@@ -129,6 +176,14 @@ export function VacancyActionsMenu({ vacancy, onChanged }: Props) {
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         onDeleted={onChanged}
+      />
+      <VacancyStatusDialog
+        vacancy={vacancy}
+        command={command}
+        onOpenChange={(open) => {
+          if (!open) setCommand(null);
+        }}
+        onChanged={onChanged}
       />
     </>
   );

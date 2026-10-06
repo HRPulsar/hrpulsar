@@ -20,7 +20,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-import bcrypt
 import pytest
 import pytest_asyncio
 from app.core.security import hash_password
@@ -74,13 +73,6 @@ from app.modules.talent_market.models import (
 )
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-
-@pytest.fixture(autouse=True)
-def _fast_bcrypt(monkeypatch):
-    """Drop bcrypt cost for the ~50 demo users the seed hashes."""
-    real_gensalt = bcrypt.gensalt
-    monkeypatch.setattr(bcrypt, "gensalt", lambda: real_gensalt(rounds=4))
 
 
 @pytest_asyncio.fixture

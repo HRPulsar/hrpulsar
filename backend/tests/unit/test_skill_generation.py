@@ -281,6 +281,30 @@ class TestGeneration:
         result = await coverage.compute(db, tenant.id, c.id)
         assert result["steps"][0]["skill_status"] == "failed"
 
+    async def test_a_model_refusal_says_why(
+        self, db, tenant, user, seeded, session_factory
+    ):
+        # HRP-987: a model gone with no replacement is refused before the
+        # call; the row carries the reason, not the class name "AppError".
+        from app.modules.ai_settings import service as ai_settings_service
+
+        c = await _container(db, tenant, user)
+        step = await _step(db, tenant, c, ["P1"])
+        refusal = AppError("ai_model_unavailable", 409, model="gpt-gone")
+        fake = _Fake()
+        with (
+            patch.object(
+                ai_settings_service, "get_effective_model_async", side_effect=refusal
+            ),
+            patch.object(llm_client, "generate_json", new=fake),
+        ):
+            row = await _generate(
+                db, tenant, step["id"], user_id=user.id, session_factory=session_factory
+            )
+        assert row.status == "failed"
+        assert row.error_message == refusal.detail
+        assert fake.calls == []
+
     async def test_generation_in_progress_is_409_until_stale(
         self, db, tenant, user, seeded, session_factory
     ):

@@ -17,6 +17,7 @@ import {
   Ruler,
   ScrollText,
   ShieldCheck,
+  ShieldOff,
   UsersRound,
 } from "lucide-react";
 
@@ -71,6 +72,14 @@ const TILES = [
     descriptionKey: "settingsTileConsentTemplatesDesc",
     icon: ScrollText,
     testId: "rec-settings-card-consent-templates",
+  },
+  {
+    // HRP-989: export and erasure run per candidate; the page finds them.
+    href: "/recruitment/gdpr",
+    labelKey: "settingsTileGdpr",
+    descriptionKey: "settingsTileGdprDesc",
+    icon: ShieldOff,
+    testId: "rec-settings-card-gdpr",
   },
   {
     href: "/recruitment/audit-log",

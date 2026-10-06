@@ -100,3 +100,71 @@ async def test_widening_reaches_me_and_require_section(auth_client, client, db, 
     with pytest.raises(AppError) as exc:
         await require_section("roles", "view")(db=db, current_user=recruiter)
     assert exc.value.status_code == 403
+
+
+async def test_matrix_levels_reads_the_tenant_once_per_session(db, user):
+    # HRP-1018: the gate, require_section and the scopes all ask; one read.
+    from sqlalchemy import event
+
+    statements: list[str] = []
+
+    def count(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    engine = db.bind.sync_engine
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        first = await sections.matrix_levels(db, user)
+        assert statements, "the first call reads the overrides"
+        statements.clear()
+        first["coverage"] = "none"  # a caller narrowing its own copy
+        second = await sections.matrix_levels(db, user)
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert statements == []
+    assert second["coverage"] == "manage"
+
+
+async def test_a_write_in_the_session_drops_the_memo(db, tenant, user):
+    from app.modules.auth.models import User
+    from app.modules.company.models import TenantSectionAccess
+    from sqlalchemy import delete, select
+    from sqlalchemy.orm import selectinload
+
+    user_id, tenant_id = user.id, tenant.id
+
+    assert (await sections.matrix_levels(db, user))["coverage"] == "manage"
+    db.add(
+        TenantSectionAccess(
+            tenant_id=tenant.id, section="coverage", role_code="admin", level="view"
+        )
+    )
+    await db.commit()  # an ORM write: after_flush
+    assert (await sections.matrix_levels(db, user))["coverage"] == "view"
+    await db.execute(
+        delete(TenantSectionAccess).where(TenantSectionAccess.tenant_id == tenant.id)
+    )
+    # a Core write never flushes: do_orm_execute
+    assert (await sections.matrix_levels(db, user))["coverage"] == "manage"
+    await db.commit()
+    db.add(
+        TenantSectionAccess(
+            tenant_id=tenant.id, section="coverage", role_code="admin", level="none"
+        )
+    )
+    await db.flush()
+    assert (await sections.matrix_levels(db, user))["coverage"] == "none"
+    await db.rollback()  # the write is undone, and so is the memo
+    user = await db.scalar(
+        select(User).options(selectinload(User.roles)).where(User.id == user_id)
+    )
+    assert (await sections.matrix_levels(db, user))["coverage"] == "manage"
+    # A pending row, not flushed yet: the read autoflushes it, the memo must
+    # not answer first.
+    db.add(
+        TenantSectionAccess(
+            tenant_id=tenant_id, section="coverage", role_code="admin", level="view"
+        )
+    )
+    assert (await sections.matrix_levels(db, user))["coverage"] == "view"
+    await db.commit()

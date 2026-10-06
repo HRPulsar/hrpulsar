@@ -6,6 +6,7 @@ namespace -- they are a public contract (beat schedule, queued messages,
 the task_failure status map).
 """
 
+import copy
 import logging
 import uuid as _uuid
 
@@ -56,9 +57,12 @@ def _apply_demo_killswitch_analysis(db, interview, tenant_id: _uuid.UUID) -> dic
                 )
                 candidate_email = direct_email or person_email
 
-    if candidate_email == "tomas.becker@example.com":
+    # HRP-1000: the seeded rows carry the email in the seed locale.
+    from app.modules.demo.seed_i18n import translate
+
+    if candidate_email == translate("tomas.becker@example.com").lower():
         seed_src: dict = TOMAS_INTERVIEW_ANALYSIS
-    elif candidate_email == DEMO_FIRST_SCREEN_CANDIDATE_EMAIL.lower():
+    elif candidate_email == translate(DEMO_FIRST_SCREEN_CANDIDATE_EMAIL).lower():
         seed_src = ELENA_INTERVIEW_ANALYSIS
     else:
         # Unknown demo candidate — Elena is the canonical fallback so the
@@ -74,10 +78,36 @@ def _apply_demo_killswitch_analysis(db, interview, tenant_id: _uuid.UUID) -> dic
     # HRP-598: the fixture already carries the shape the real LLM path
     # writes (``InterviewAnalysisResult``), so it goes onto the row as-is
     # — the coercion pass that used to sit here existed only because the
-    # seed held a legacy shape. Still copied: on the English locale
+    # seed held a legacy shape. Deep-copied: on the English locale
     # ``localize`` hands back the module-level fixture itself, which must
     # never become the JSONB value some later writer could mutate.
-    seed = dict(seed_src)
+    seed = copy.deepcopy(seed_src)
+
+    # HRP-980 / HRP-981: the fixture names its citations by quote only.
+    # Anchor them on this interview's own segments with the check the
+    # real path runs — a replay onto a transcript that does not hold the
+    # quotes keeps none, and the panel says "Unconfirmed" rather than
+    # pointing at text that is not there.
+    from sqlalchemy import select
+
+    from app.modules.recruitment.models import InterviewSegment
+    from app.modules.recruitment.prompts_interview import check_analysis_citations
+
+    # In transcript order, like the real analysis: a quote said twice is
+    # anchored on its first occurrence.
+    segments = db.execute(
+        select(InterviewSegment)
+        .where(InterviewSegment.interview_id == interview.id)
+        .order_by(InterviewSegment.start_sec.asc())
+    ).scalars()
+    seed["citation_check"] = check_analysis_citations(
+        seed,
+        [
+            {"id": s.id, "start_sec": s.start_sec, "end_sec": s.end_sec, "text": s.text}
+            for s in segments
+        ],
+        interview.transcript,
+    )
 
     interview.analysis_data = seed
     interview.analysis_status = "completed"

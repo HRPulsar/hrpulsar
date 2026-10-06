@@ -85,6 +85,10 @@ Typ: Technik + Systemdesign
 
 [00:14:50] Recruiter: Gute Fragen. Ich gehe sie der Reihe nach durch...
 
+[00:30:10] Recruiter: Bevor wir zum Schluss kommen — Ihre Probeaufgabe war in Python. Wie würden Sie die asynchrone Seite des Settlement-Service aufbauen?
+
+[00:30:35] Kandidatin: FastAPI an den Rändern, innen reines asyncio. Jeder I/O-Aufruf ist asynchron, und die Gebührenberechnung geht in einen Process-Pool — sie ist CPU-lastig und würde die Event-Loop blockieren. Die Datenbank-Session lebt in einer FastAPI-Dependency mit yield, also wird sie auch geschlossen, wenn der Handler eine Exception wirft. Auch die Fehler sind typisiert: Ein Gateway-Timeout wird wiederholt, ein Validierungsfehler nie. Für Händler-Lookups würde ich aiocache vor Postgres setzen, mit einer TTL, die kürzer ist als das Settlement-Fenster.
+
 [00:32:00] Recruiter: Gut, die letzten fünf Minuten. Gibt es etwas, das wir nicht behandelt haben und das ich wissen sollte?
 
 [00:32:14] Kandidatin: Eine Sache. Ich habe keine Payments-Erfahrung mit EUR-Settlements in dem Volumen, das Sie beschreiben — Klarna ist größer. Wenn Ihre Latte also „sie hat genau das schon im großen Maßstab gemacht“ ist, bin ich es nicht. Aber das Systemdenken überträgt sich. Ich würde sechs Wochen für die Einarbeitung in die Domäne wollen, nicht sechs Monate.

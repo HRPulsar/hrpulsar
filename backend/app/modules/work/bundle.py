@@ -14,7 +14,8 @@ starts a generation and is not a billed action.
 
 The README is written in the tenant's content language, the one the skill
 files in the same archive were generated in, through the backend catalogs
-(``work_bundle.*``); a language without a catalog reads in English.
+(``work_bundle.*``, agent type names included); a language without a
+catalog reads in English.
 
 English only: this file reaches the public tree.
 """
@@ -50,10 +51,12 @@ def agent_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     first step's position settles a tie, so the order is the same on every
     read. The hours are what the group frees - a step that goes to
     review keeps its checker's share with people (HRP-861), so the
-    figure never promises more than the summary does.
-    ``frontend/.../agent-guide.tsx::agentGroups`` is the same rule.
+    figure never promises more than the summary does. One group per pack,
+    not per code: the tenant's own pack may share a built-in one's code
+    (HRP-911). ``frontend/.../agent-guide.tsx::agentGroups`` is the same
+    rule.
     """
-    groups: dict[str, dict[str, Any]] = {}
+    groups: dict[tuple[Any, str], dict[str, Any]] = {}
     for row in rows:
         agent = row["agent"]
         if (
@@ -64,8 +67,9 @@ def agent_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ):
             continue
         group = groups.setdefault(
-            agent["pack_code"],
+            (agent["pack_id"], agent["pack_code"]),
             {
+                "pack_id": agent["pack_id"],
                 "pack_code": agent["pack_code"],
                 "agent_names": set(),
                 "steps": [],
@@ -112,11 +116,26 @@ def skill_paths(
     return paths
 
 
+def pack_label(code: str, pack: dict[str, Any] | None, locale: str) -> str:
+    """An agent type by the name the interface gives it (HRP-912): the
+    ``work_bundle.pack.*`` catalogs carry the labels of
+    ``reference.agentPack.*`` in the frontend catalogs. A pack no catalog
+    names reads by its stored title, then its code; so does the tenant's
+    own, whatever its code - the catalogs name the built-in pack (HRP-911)."""
+    pack = pack or {}
+    if not pack.get("own"):
+        key = f"work_bundle.pack.{code}"
+        label = translate(key, locale)
+        if label != key:
+            return label
+    return pack.get("title") or code
+
+
 def build_readme(
     title: str,
     groups: list[dict[str, Any]],
     paths: dict[uuid.UUID, str],
-    pack_titles: dict[str, str],
+    packs: dict[Any, dict[str, Any]],
     locale: str,
 ) -> str:
     lines = [
@@ -128,10 +147,8 @@ def build_readme(
     ]
     for number, group in enumerate(groups, start=1):
         code = group["pack_code"]
-        # ponytail: the pack reads by its English title - the only name the
-        # backend holds; the localized labels live in the interface
-        # catalog. Move them here when a second backend surface needs them.
-        lines += ["", f"## {number}. {pack_titles.get(code, code)} (`{code}`)", ""]
+        label = pack_label(code, packs.get(group["pack_id"]), locale)
+        lines += ["", f"## {number}. {label} (`{code}`)", ""]
         names = ", ".join(sorted(group["agent_names"]))
         lines.append(
             "- "
@@ -239,7 +256,7 @@ async def build(
         result["title"],
         groups,
         paths,
-        result["pack_titles"],
+        result["packs"],
         settings.content_language,
     )
     files = {"README.md": readme}

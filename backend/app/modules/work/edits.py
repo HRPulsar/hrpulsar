@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from typing import Any
 
 from sqlalchemy import select
@@ -51,13 +51,22 @@ MODEL_ADDED = "model_added"
 
 
 async def outcomes(
-    db: AsyncSession, tenant_id: uuid.UUID | None = None
+    db: AsyncSession,
+    tenant_id: uuid.UUID | None = None,
+    *,
+    container_ids: Collection[uuid.UUID] | None = None,
 ) -> list[dict[str, Any]]:
     """One row per (step, code) of every applied proposal that still has
     its step: ``{tenant_id, container_id, step_id, code, outcome,
     confidence, reclassified}``. ``confidence`` is the model's, ``None`` for
     a code added afterwards. ``confirmed`` is an explicit act - a chip
-    click, the picker saved, a code added by hand - never accept alone."""
+    click, the picker saved, a code added by hand - never accept alone.
+
+    ``container_ids`` narrows the read to those containers in SQL (HRP-968:
+    the platform analytics passes the containers of its period); empty
+    reads nothing."""
+    if container_ids is not None and not container_ids:
+        return []
     stmt = (
         select(WorkDecompositionSession)
         .where(WorkDecompositionSession.status == "applied")
@@ -69,6 +78,10 @@ async def outcomes(
     )
     if tenant_id is not None:
         stmt = stmt.where(WorkDecompositionSession.tenant_id == tenant_id)
+    if container_ids is not None:
+        stmt = stmt.where(
+            WorkDecompositionSession.container_id.in_(list(container_ids))
+        )
     newest: dict[uuid.UUID, WorkDecompositionSession] = {}
     for sess in (await db.execute(stmt)).scalars().all():
         newest.setdefault(sess.container_id, sess)

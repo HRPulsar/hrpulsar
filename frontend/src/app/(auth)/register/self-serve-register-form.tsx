@@ -15,12 +15,12 @@ import { register, login, getLoginRedirect } from "@/lib/auth";
 // account via POST /api/auth/register. When the backend auto-verifies
 // (no email provider configured), the user is logged in right away;
 // otherwise they land on the check-your-email screen.
-export function SelfServeRegisterForm() {
+export function SelfServeRegisterForm({ defaultEmail = "" }: { defaultEmail?: string }) {
   const t = useTranslations("auth");
   const tc = useTranslations("common");
   const router = useRouter();
   const [form, setForm] = useState({
-    email: "",
+    email: defaultEmail,
     password: "",
     first_name: "",
     last_name: "",

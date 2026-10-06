@@ -20,7 +20,8 @@ class PrimitiveRead(BaseModel):
     sort_index: int
     introduced_in: str
     retired_in: str | None
-    merged_into_id: uuid.UUID | None
+    # ``merged_into_id`` is left out on purpose (HRP-850): nothing merges
+    # codes yet, so the field would only ever read null.
 
     model_config = {"from_attributes": True}
 

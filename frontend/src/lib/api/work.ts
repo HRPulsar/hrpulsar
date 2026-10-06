@@ -114,9 +114,10 @@ export interface WorkStep {
   /** HRP-861: percent of a reviewed step's hours that stays with the
    * checker; null is the default share. */
   review_human_share: number | null;
-  /** HRP-863: the company's override of the computed mode and agent pack. */
+  /** HRP-863: the company's override of the computed mode and agent pack;
+   * the pack by id (HRP-911) - the tenant's own may share a built-in code. */
   manual_mode: AutomationMode | null;
-  manual_pack_code: string | null;
+  manual_pack_id: string | null;
   /** HRP-868: the step's own hourly rate; null falls back to the tenant's. */
   hourly_rate: number | null;
   primitive_codes: string[];
@@ -162,7 +163,7 @@ export type StepPatch = Partial<
     | "accountable_employee_id"
     | "review_human_share"
     | "manual_mode"
-    | "manual_pack_code"
+    | "manual_pack_id"
     | "hourly_rate"
   >
 >;
@@ -399,6 +400,9 @@ export interface Gap {
 export interface AgentPack {
   id: string;
   code: string;
+  title_en: string;
+  /** null for a built-in pack; set on the tenant's own. */
+  tenant_id: string | null;
 }
 
 export interface HireNeed {

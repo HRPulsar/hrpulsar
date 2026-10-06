@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from io import BytesIO
@@ -273,6 +274,10 @@ async def add_question(
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
         raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
+    if me.status != "draft":
+        raise AppError(
+            "exam_questions_editable_in_draft_only", status.HTTP_400_BAD_REQUEST
+        )
 
     q = ExamQuestion(
         mass_exam_id=mass_exam_id,
@@ -1119,6 +1124,40 @@ async def submit_answer(
 # ---------------------------------------------------------------------------
 
 
+MAX_EXAM_IMPORT_ROWS = 1000
+
+
+def _read_exam_import_rows(file_data: bytes) -> list[tuple[int, tuple]]:
+    """``(line number, cells)`` of each non-blank question row of the upload.
+
+    Blocking (openpyxl): the caller runs it off the event loop. Rows are
+    streamed and capped, so a huge sheet is refused, not held in memory.
+    """
+    rows: list[tuple[int, tuple]] = []
+    # An untrusted upload: whatever openpyxl fails with means the file cannot
+    # be read, never a 500 (same contract as data_import.read_rows). Its own
+    # code: this import takes the XLSX template only, not CSV.
+    try:
+        wb = load_workbook(BytesIO(file_data), read_only=True)
+        for row_num, row in enumerate(
+            wb.active.iter_rows(min_row=2, values_only=True), start=2
+        ):
+            if not any(cell is not None for cell in row):
+                continue
+            if len(rows) >= MAX_EXAM_IMPORT_ROWS:
+                raise AppError(
+                    "exam_import_too_many_rows",
+                    status.HTTP_400_BAD_REQUEST,
+                    max=MAX_EXAM_IMPORT_ROWS,
+                )
+            rows.append((row_num, row))
+    except AppError:
+        raise
+    except Exception:  # noqa: BLE001
+        raise AppError("exam_import_file_unreadable", status.HTTP_400_BAD_REQUEST)
+    return rows
+
+
 async def import_questions_from_excel(
     db: AsyncSession, tenant_id: uuid.UUID, mass_exam_id: uuid.UUID, file_data: bytes
 ) -> dict:
@@ -1126,14 +1165,19 @@ async def import_questions_from_excel(
 
     Expected columns: question_text, question_type, option_1, option_2, ..., option_6,
     correct_options (comma-separated indices 1-based), weight.
+
+    Each row error carries a ``code`` the exam page words in the viewer's
+    language (HRP-1014); ``error`` stays the English detail.
     """
     me = await db.get(MassExam, mass_exam_id)
     if not me or me.tenant_id != tenant_id:
         raise AppError("exam_mass_exam_not_found", status.HTTP_404_NOT_FOUND)
+    if me.status != "draft":
+        raise AppError(
+            "exam_questions_editable_in_draft_only", status.HTTP_400_BAD_REQUEST
+        )
 
-    wb = load_workbook(BytesIO(file_data), read_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    rows = await asyncio.to_thread(_read_exam_import_rows, file_data)
 
     imported = 0
     errors: list[dict] = []
@@ -1154,14 +1198,20 @@ async def import_questions_from_excel(
     )
     sort_index = (max_idx_result.scalar() or 0) + 1
 
-    for row_num, row in enumerate(rows, start=2):
+    for row_num, row in rows:
         try:
             if not row or not row[0]:
                 continue
 
             question_text = str(row[0]).strip()
             if not question_text:
-                errors.append({"row": row_num, "error": "Empty question text"})
+                errors.append(
+                    {
+                        "row": row_num,
+                        "code": "empty_question",
+                        "error": "Empty question text",
+                    }
+                )
                 continue
 
             # Duplicate check
@@ -1169,6 +1219,7 @@ async def import_questions_from_excel(
                 errors.append(
                     {
                         "row": row_num,
+                        "code": "duplicate_question",
                         "error": f"Duplicate question: {question_text[:50]}",
                     }
                 )
@@ -1177,7 +1228,11 @@ async def import_questions_from_excel(
             question_type = str(row[1]).strip().lower() if row[1] else "single_choice"
             if question_type not in ("single_choice", "multiple_choice", "essay"):
                 errors.append(
-                    {"row": row_num, "error": f"Invalid question type: {question_type}"}
+                    {
+                        "row": row_num,
+                        "code": "invalid_question_type",
+                        "error": f"Invalid question type: {question_type}",
+                    }
                 )
                 continue
 
@@ -1197,7 +1252,11 @@ async def import_questions_from_excel(
                     }
                 except ValueError:
                     errors.append(
-                        {"row": row_num, "error": "Invalid correct_options format"}
+                        {
+                            "row": row_num,
+                            "code": "invalid_correct_options",
+                            "error": "Invalid correct_options format",
+                        }
                     )
                     continue
 
@@ -1220,6 +1279,7 @@ async def import_questions_from_excel(
                 errors.append(
                     {
                         "row": row_num,
+                        "code": "too_few_options",
                         "error": "Choice questions require at least 2 options",
                     }
                 )
@@ -1252,7 +1312,7 @@ async def import_questions_from_excel(
             imported += 1
 
         except Exception as e:  # noqa: BLE001 - per-row import isolation, recorded
-            errors.append({"row": row_num, "error": str(e)})
+            errors.append({"row": row_num, "code": "row_failed", "error": str(e)})
 
     await db.commit()
     return {

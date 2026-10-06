@@ -39,6 +39,8 @@ from app.modules.recruitment.tasks import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit._consent import sign_consent
+
 
 async def _make_demo_setup(
     db: AsyncSession,
@@ -84,6 +86,7 @@ async def _make_demo_setup(
     db.add(candidate)
     await db.commit()
     await db.refresh(candidate)
+    await sign_consent(db, tenant.id, candidate.id)  # HRP-979
 
     cv = CandidateVacancy(
         tenant_id=tenant.id,
@@ -129,6 +132,18 @@ async def test_analyze_killswitch_uses_seed_for_demo_tenant(
     db: AsyncSession, killswitch_on, monkeypatch
 ):
     interview, tenant = await _make_demo_setup(db, is_demo=True)
+    # HRP-980: the replay keeps only citations the transcript holds, so the
+    # interview carries what the killswitch transcribe step writes — the
+    # bundled Elena transcript and its segments.
+    from app.modules.demo.seed_data import load_transcript, parse_transcript_segments
+
+    interview.transcript = load_transcript()
+    segments = [
+        InterviewSegment(tenant_id=tenant.id, interview_id=interview.id, **row)
+        for row in parse_transcript_segments(interview.transcript)
+    ]
+    db.add_all(segments)
+    await db.commit()
 
     # ``generate_json`` must NOT be called when the kill-switch fires.
     def _explode(*args, **kwargs):
@@ -178,6 +193,38 @@ async def test_analyze_killswitch_uses_seed_for_demo_tenant(
     assert scored, "the seeded analysis scored nothing"
     assert all(r.citations for r in scored)
     assert all(not r.citations for r in rows if r.status != "assessed")
+    # Each citation sits on the segment that holds its quote.
+    by_id = {str(s.id): s for s in segments}
+    for row in scored:
+        for citation in row.citations:
+            segment = by_id[citation["segment_id"]]
+            assert citation["start_sec"] == segment.start_sec
+            assert citation["quote"].casefold() in segment.text.casefold()
+
+
+@pytest.mark.asyncio
+async def test_killswitch_replay_onto_another_transcript_keeps_no_citations(
+    db: AsyncSession, killswitch_on
+):
+    """HRP-980 / HRP-981: Elena's fixture replayed onto an interview whose
+    transcript does not say any of it must not pretend it does."""
+    interview, tenant = await _make_demo_setup(db, is_demo=True)
+
+    result = analyze_interview_task.run(str(interview.id), str(tenant.id))
+    assert result["status"] == "completed"
+
+    rows = (
+        (
+            await db.execute(
+                select(AIAssessment)
+                .where(AIAssessment.interview_id == interview.id)
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows and all(not r.citations for r in rows)
 
 
 @pytest.mark.asyncio
@@ -746,6 +793,45 @@ async def test_transcribe_empty_chain_marks_interview_failed(
     ).scalar_one()
     assert refreshed.transcription_status == "failed"
     assert refreshed.transcription_error
+
+
+@pytest.mark.asyncio
+async def test_the_chain_runs_inside_the_interviews_call_context(
+    db: AsyncSession, killswitch_off, monkeypatch
+):
+    """HRP-970: every provider attempt is a call-log row, attributed by the
+    context the task binds before the chain runs — the interview and the
+    transcription action, not ``unattributed``."""
+    from app.core import ai_usage_hooks
+    from app.modules.recruitment import transcription_service
+
+    interview, tenant = await _make_demo_setup(db, is_demo=False)
+    interview.transcription_status = "pending"
+    await db.commit()
+    await _attach_media(db, interview, tenant.id)
+    result = _stub_real_transcription(monkeypatch)
+
+    seen: list = []
+
+    async def _chain(*_args, **_kwargs):
+        seen.append(ai_usage_hooks.current())
+        return result, None
+
+    monkeypatch.setattr(transcription_service, "transcribe_with_chain", _chain)
+
+    # The real branch calls ``asyncio.run``: it needs a thread of its own.
+    await asyncio.to_thread(
+        transcribe_interview_task.run, str(interview.id), str(tenant.id)
+    )
+
+    (ctx,) = seen
+    assert (ctx.tenant_id, ctx.entity_type, ctx.entity_id) == (
+        tenant.id,
+        "interview",
+        interview.id,
+    )
+    assert ctx.action == "recruitment.transcribe_interview_min"
+    assert ctx.work_unit_id is not None
 
 
 @pytest.mark.asyncio

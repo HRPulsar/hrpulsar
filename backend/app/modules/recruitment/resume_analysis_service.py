@@ -30,6 +30,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
+from app.modules.recruitment import consent_service
 from app.modules.recruitment.models import (
     AIAnalysisRun,
     CandidateFile,
@@ -38,7 +39,10 @@ from app.modules.recruitment.models import (
     Vacancy,
     VacancyProfile,
 )
-from app.modules.recruitment.resume_presence import candidate_ids_with_resume
+from app.modules.recruitment.resume_presence import (
+    candidate_ids_with_resume,
+    load_parsed_resume,
+)
 from app.modules.recruitment.schemas import (
     AIAnalysisRunRead,
     ResumeExcerptRead,
@@ -186,10 +190,11 @@ async def current_resume_hash_for_candidate(
     Returns ``None`` when no parsed resume exists yet. Read-only, safe
     to call from any GET handler.
     """
-    latest = await _latest_parsed_resume(db, tenant_id, candidate_id)
-    if latest is None:
-        return None
-    return _compute_resume_snapshot_hash(latest.parsed_data)
+    # HRP-443: the HRP-704 loader, as on enqueue — a resume entered by hand
+    # has no file, and its edits must still flag the analysis as outdated.
+    return _compute_resume_snapshot_hash(
+        await load_parsed_resume(db, tenant_id, candidate_id)
+    )
 
 
 async def current_resume_hash_for_cv(
@@ -253,12 +258,16 @@ async def _enqueue_resume_only_unbilled(
     from app.modules.recruitment.tasks import analyze_resume_only_task
 
     cv = await _get_cv_or_404(db, tenant_id, candidate_vacancy_id)
+    await consent_service.require_active_consent(db, tenant_id, cv.candidate_id)
 
     if await _pending_run(db, tenant_id, candidate_vacancy_id):
         raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
 
+    # HRP-443: the HRP-704 loader — the latest parsed resume file, else the
+    # parsed resume entered by hand on the candidate card.
     resume = await _latest_parsed_resume(db, tenant_id, cv.candidate_id)
-    if resume is None or not (resume.parsed_data or {}):
+    parsed_resume = await load_parsed_resume(db, tenant_id, cv.candidate_id)
+    if not parsed_resume:
         raise AppError(
             "resume_parsing_required",
             status.HTTP_409_CONFLICT,
@@ -289,14 +298,14 @@ async def _enqueue_resume_only_unbilled(
         candidate_vacancy_id=cv.id,
         mode="resume_only",
         status="pending",
-        candidate_file_id=resume.id,
+        candidate_file_id=resume.id if resume is not None else None,
         vacancy_profile_id=profile.id,
         vacancy_profile_version=profile.version,
         # HRP-272: stamp the parsed-resume snapshot at enqueue time so
         # the GET handler can flag the active run as outdated when the
         # candidate uploads a fresh resume between this run and the
         # banner render.
-        resume_snapshot_hash=_compute_resume_snapshot_hash(resume.parsed_data),
+        resume_snapshot_hash=_compute_resume_snapshot_hash(parsed_resume),
         created_by_id=actor_user_id,
         analysis_data={},
     )
@@ -622,6 +631,7 @@ async def enqueue_topup_to_full(
         )
 
     cv = await _get_cv_or_404(db, tenant_id, candidate_vacancy_id)
+    await consent_service.require_active_consent(db, tenant_id, cv.candidate_id)
 
     await _acquire_cv_lock(db, cv.id)
 

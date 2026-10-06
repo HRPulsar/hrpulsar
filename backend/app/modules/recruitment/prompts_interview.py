@@ -12,6 +12,8 @@ transcript and free-form vacancy text) must be ignored.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from itertools import pairwise
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -104,6 +106,152 @@ class InterviewAnalysisResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# HRP-981: citation check
+# ---------------------------------------------------------------------------
+
+
+# Typographic quotes and apostrophes read as their straight forms, and an
+# ellipsis as three dots — models and transcription providers mix both.
+# Mirrored by ``normalizeQuote`` in interview-analysis.tsx; keep in step.
+_QUOTE_CHARS = str.maketrans(
+    {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201a": "'",
+        "\u201b": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u201e": '"',
+        "\u201f": '"',
+        "\u00ab": '"',
+        "\u00bb": '"',
+        "\u2039": '"',
+        "\u203a": '"',
+        "\u2026": "...",
+    }
+)
+
+
+def _normalize_text(text: str | None) -> str:
+    """Whitespace collapsed, lower-cased (as JS ``toLowerCase``), quotes
+    and ellipses unified — the only slack a quote gets."""
+    return " ".join((text or "").translate(_QUOTE_CHARS).split()).lower()
+
+
+def _normalize_quote(text: str | None) -> str:
+    """A quote additionally loses the quote marks and ellipses around it:
+    "...we keyed every transfer..." quotes the words, not the dots."""
+    return _normalize_text(text).strip(" \"'.")
+
+
+def _checked_citation(
+    citation: dict, segments: list[dict], transcript: str
+) -> dict | None:
+    """The citation re-anchored on the segment it quotes, or None.
+
+    A cited ``segment_id`` must exist and contain the quote. A citation
+    without one (the prompt allows that) is located in the first segment
+    that contains it. A quote crossing the seam of two neighbouring
+    segments is found in the pair joined and spans both. Timecodes always
+    come from the segment rows, never from the model. Only an interview
+    without any segments falls back to the plain transcript text, with no
+    timecodes to offer.
+    """
+    quote = _normalize_quote(citation.get("quote"))
+    if not quote:
+        return None
+    segment_id = citation.get("segment_id")
+    anchor = str(segment_id) if segment_id else None
+    window = next(
+        (
+            w
+            for w in _segment_windows(segments, anchor)
+            if quote in _normalize_text(" ".join(s["text"] or "" for s in w))
+        ),
+        None,
+    )
+    if window is None:
+        if anchor or segments or quote not in _normalize_text(transcript):
+            return None
+        return {**citation, "segment_id": None, "start_sec": None, "end_sec": None}
+    return {
+        **citation,
+        "segment_id": str(window[0]["id"]),
+        "start_sec": window[0]["start_sec"],
+        "end_sec": window[-1]["end_sec"],
+    }
+
+
+def _segment_windows(segments: list[dict], anchor: str | None) -> Iterator[list[dict]]:
+    """Every segment alone, then every two neighbours (ordered by start):
+    a quote may cross the seam. With ``anchor`` only the windows holding
+    that segment."""
+    for segment in segments:
+        if anchor is None or str(segment["id"]) == anchor:
+            yield [segment]
+    for first, second in pairwise(segments):
+        if anchor is None or anchor in (str(first["id"]), str(second["id"])):
+            yield [first, second]
+
+
+def check_analysis_citations(
+    analysis: dict, segments: list[dict], transcript: str | None
+) -> dict:
+    """Drop every citation the transcript does not back (in place).
+
+    ``analysis`` is an ``InterviewAnalysisResult``-shaped dict;
+    ``segments`` carry ``id`` / ``start_sec`` / ``end_sec`` / ``text``.
+    Covers the competence citations and the process-finding citations —
+    both quote the interview. Red-flag ``evidence`` may quote the resume
+    and is left alone. Returns the counts for the run record.
+    """
+    total = dropped = 0
+    for holder in _citation_holders(analysis):
+        if not holder.get("citations"):
+            continue  # nothing to check; leave the holder exactly as stored
+        kept = []
+        for citation in holder.get("citations") or []:
+            total += 1
+            checked = _checked_citation(citation, segments, transcript or "")
+            if checked is None:
+                dropped += 1
+            else:
+                kept.append(checked)
+        holder["citations"] = kept
+    return {
+        "total": total,
+        "dropped": dropped,
+        "dropped_ratio": round(dropped / total, 3) if total else 0.0,
+    }
+
+
+def _citation_holders(analysis: dict) -> list[dict]:
+    return [
+        *(analysis.get("competence_assessments") or []),
+        *(analysis.get("process_findings") or []),
+    ]
+
+
+def reanchor_analysis_citations(
+    analysis: dict, segments: list[dict], transcript: str | None
+) -> dict:
+    """Check a stored analysis against *another* interview's segments.
+
+    A cache hit replays an analysis made on a different interview with
+    the same transcript text: its segment ids belong to that interview.
+    An id this interview does not have is dropped first, so the quote is
+    located again by its text and takes this interview's segment and
+    timecodes; then the usual check runs (in place).
+    """
+    known = {str(segment["id"]) for segment in segments}
+    for holder in _citation_holders(analysis):
+        for citation in holder.get("citations") or []:
+            if str(citation.get("segment_id")) not in known:
+                citation["segment_id"] = None
+    return check_analysis_citations(analysis, segments, transcript)
+
+
+# ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
 
@@ -127,7 +275,10 @@ INTERVIEW_ANALYSIS_SYSTEM_PROMPT = (
     "use any other scale (no 1..5, no 0..10, no percentages).\n"
     "2. Each assessment must be backed by 1-3 citations with segment "
     "timecodes (start_sec, end_sec). When a segment reference is not "
-    "possible, leave segment_id=null and provide a verbatim quote.\n"
+    "possible, leave segment_id=null and provide a verbatim quote. A "
+    "quote is copied word for word from the cited segment's text, in the "
+    "transcript's own language — never paraphrased or translated; a "
+    "citation whose quote is not found in its segment is discarded.\n"
     "3. Process findings — observations about the interview process "
     "(bias / leading_question / emotional_pressure / overloaded_question / "
     "too_detailed). For each one provide both full_description (full) "

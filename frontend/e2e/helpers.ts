@@ -826,3 +826,25 @@ export async function seedBelowBarResult(
     assessmentId: assessment.id,
   };
 }
+
+/**
+ * HRP-979: record a signed consent for a candidate through the E2E_MODE
+ * seam, so specs reach the AI paths that need it. Returns the consent
+ * link token for the public page.
+ */
+export async function signCandidateConsent(
+  page: Page,
+  accessToken: string,
+  candidateId: string,
+): Promise<string> {
+  const resp = await page.request.post(
+    `${API_BASE}/recruitment/_test/candidates/${candidateId}/consent`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!resp.ok()) {
+    throw new Error(
+      `signCandidateConsent failed (${resp.status()}): ${await resp.text()}`,
+    );
+  }
+  return (await resp.json()).token;
+}

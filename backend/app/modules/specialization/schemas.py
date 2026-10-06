@@ -47,6 +47,10 @@ class SpecializationGradeRead(BaseModel):
 class SpecializationRead(BaseModel):
     id: uuid.UUID
     title: str
+    # HRP-912: origin specializations localize via
+    # reference.dictionary.specialization.*, the same label the dictionary
+    # pickers show.
+    i18n_key: str | None = None
     description: str | None = None
     is_active: bool = True
     grade_count: int = 0

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
 import pytest_asyncio
 from app.modules.ai_competence_generation import tasks
 from app.modules.ai_competence_generation.models import (
@@ -158,8 +159,12 @@ class TestReapStuckSessions:
 
 
 class TestForceTerminateKeepsAProcessorRefusal:
+    # HRP-987: a model gone with no replacement is the same kind of refusal.
+    @pytest.mark.parametrize(
+        "code", ["ai_no_allowed_processor", "ai_model_unavailable"]
+    )
     async def test_no_allowed_processor_is_its_own_code(
-        self, db: AsyncSession, tenant, user, session_factory
+        self, db: AsyncSession, tenant, user, session_factory, code
     ):
         # Review 01.10 (HRP-1005): a workspace whose processor list allows no
         # provider ended as service_error - "try later" - which no retry fixes.
@@ -169,7 +174,7 @@ class TestForceTerminateKeepsAProcessorRefusal:
             db, tenant, user, status="running", updated_at=datetime.now(timezone.utc)
         )
         await tasks._force_terminate_running(
-            session_factory, sess.id, AppError("ai_no_allowed_processor", 409)
+            session_factory, sess.id, AppError(code, 409, model="m")
         )
         async with session_factory() as fresh:
             row = await fresh.get(CompetenceGenerationSession, sess.id)

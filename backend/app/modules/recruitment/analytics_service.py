@@ -18,6 +18,7 @@ permission checks; the service layer never trusts an implicit
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from statistics import median
 
@@ -93,16 +94,20 @@ async def vacancy_analytics(
                 )
                 medians.setdefault(cv.stage_id, []).append(delta)
 
+    conversion = funnel_conversion(stages, cv_rows)
     funnel = []
     for stage in stages:
         bucket = counts.get(stage.id, 0)
         ms = medians.get(stage.id, [])
+        reached, percent = conversion.get(stage.id, (None, None))
         funnel.append(
             {
                 "stage_id": stage.id,
                 "stage_name": stage.name,
                 "candidate_count": bucket,
                 "median_seconds_in_stage": median(ms) if ms else None,
+                "reached_count": reached,
+                "conversion_percent": percent,
             }
         )
 
@@ -185,7 +190,71 @@ async def vacancy_analytics(
             stage.name for stage in stages if stage.stage_type == "terminal_neutral"
         ],
         "total_candidates": len(cv_rows),
+        # HRP-785: (candidates on a terminal-positive stage / all
+        # candidates) x 100 - the ticket's formula, read off the current
+        # stage like the tiles.
+        "overall_conversion_percent": _percent(
+            sum(
+                1
+                for cv in cv_rows
+                if cv.stage_id and stage_types.get(cv.stage_id) == "terminal_positive"
+            ),
+            len(cv_rows),
+        ),
     }
+
+
+_PROGRESS_TYPES = ("active", "terminal_positive")
+
+
+def _percent(part: int, whole: int) -> int | None:
+    """Whole percent, half up; ``None`` when there is nothing to divide by."""
+    return (200 * part + whole) // (2 * whole) if whole else None
+
+
+def funnel_conversion(
+    stages: Sequence[VacancyStage], cv_rows: Sequence[CandidateVacancy]
+) -> dict[uuid.UUID, tuple[int, int | None]]:
+    """Per-stage conversion of the vacancy funnel (HRP-785).
+
+    The funnel counts who *stands* on a stage now; conversion needs who
+    *got there*. A candidate reached every progress stage (type
+    ``active`` / ``terminal_positive``) up to the furthest one in their
+    current stage and their ``status_history`` (both ends of each move) -
+    so someone rejected after the tech interview still counts as having
+    reached it:
+
+        max_reached(c) = max sort_order of progress stages in c's current
+                         stage and history
+        reached(s)     = #candidates with max_reached >= s.sort_order
+        conversion(s)  = reached(s) / reached(prev) x 100, whole percent,
+
+    where ``prev`` is the previous progress stage. Returns ``{stage_id:
+    (reached, percent)}`` for progress stages; ``percent`` is ``None`` for
+    the first one and when ``reached(prev)`` is 0. Rejected / withdrew-type
+    stages are not in the map - they take no conversion.
+    """
+    progress = [s for s in stages if (s.stage_type or "active") in _PROGRESS_TYPES]
+    order = {str(s.id): s.sort_order for s in progress}
+
+    furthest: list[int] = []
+    for cv in cv_rows:
+        seen: list[str | None] = [str(cv.stage_id)] if cv.stage_id else []
+        for entry in cv.status_history or []:
+            if isinstance(entry, dict):
+                seen += [entry.get("from_stage_id"), entry.get("to_stage_id")]
+        orders = [order[sid] for sid in seen if sid is not None and sid in order]
+        if orders:
+            furthest.append(max(orders))
+
+    out: dict[uuid.UUID, tuple[int, int | None]] = {}
+    prev_reached: int | None = None
+    for stage in progress:
+        reached = sum(1 for f in furthest if f >= stage.sort_order)
+        percent = _percent(reached, prev_reached) if prev_reached is not None else None
+        out[stage.id] = (reached, percent)
+        prev_reached = reached
+    return out
 
 
 def _safe_uuid(value: str) -> uuid.UUID | None:

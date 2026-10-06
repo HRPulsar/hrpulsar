@@ -15,6 +15,7 @@ import type { Competence, CompetenceGroupTree, SkillLevel } from "@/lib/types";
 import { useCompetenceTree } from "@/hooks/use-competence-tree";
 import { MatrixEditor } from "@/components/specialization/matrix-editor";
 import { usePermissions } from "@/hooks/use-permissions";
+import { specializationLabel } from "@/lib/reference-labels";
 
 function flattenCompetences(tree: CompetenceGroupTree[]): Competence[] {
   const out: Competence[] = [];
@@ -33,6 +34,7 @@ export default function SpecializationMatrixPage() {
   // HRP-631: the matrix is a workspace-wide catalogue — admin / HR write it.
   const { canManageCatalogues } = usePermissions();
   const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const params = useParams<{ id: string }>();
   const search = useSearchParams();
   const id = params?.id;
@@ -111,7 +113,7 @@ export default function SpecializationMatrixPage() {
             href={`/company/specializations/${id}`}
             className="text-xs text-muted-foreground hover:underline"
           >
-            ← {detail.title}
+            ← {specializationLabel(tRef, detail)}
           </Link>
         )}
         <h1 className="text-2xl font-semibold tracking-tight">
@@ -143,7 +145,7 @@ export default function SpecializationMatrixPage() {
             href={`/company/specializations/${id}`}
             className="text-xs text-muted-foreground hover:underline"
           >
-            ← {detail.title}
+            ← {specializationLabel(tRef, detail)}
           </Link>
         )}
         <h1

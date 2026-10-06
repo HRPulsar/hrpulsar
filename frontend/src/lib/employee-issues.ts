@@ -9,16 +9,18 @@
 import type { EmployeeIssueCode } from "@/lib/types";
 
 // The subset ``GET /employees?issue=`` accepts — the development-loop codes
-// the dashboard tiles and findings are built from. The hygiene codes are
-// display-only: filtering by them would need a tenant-wide profile scan for
-// a question `unassigned_only` and the status filter already answer.
-// ponytail: display/filter split, widen the API literal if HR asks for it.
+// the dashboard tiles and findings are built from, plus three hygiene codes
+// (HRP-729 REDO) mirrored from FILTERABLE_ALERT_CODES in employee/alerts.py.
+// ``user_inactive`` and ``assessment_pending`` stay display-only.
 export const FILTERABLE_ISSUE_CODES = [
   "gaps_without_plan",
   "competence_gap",
   "pdp_overdue",
   "pdp_stuck_review",
   "assessment_stale",
+  "profile_incomplete",
+  "pdp_pending_review",
+  "assessment_overdue",
 ] as const;
 
 // Badge tone by how urgent the problem is: rose blocks, amber needs

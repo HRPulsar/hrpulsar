@@ -166,13 +166,44 @@ async def apply_cached_analysis(
     dropped *every* profile-derived assessment (the demo cache-hit flow
     wrote a completed analysis with an empty matrix).
     """
-    interview.analysis_data = cached.analysis_data
+    # HRP-981: the cached citations name the segments of the interview the
+    # cache was filled from. Re-anchor them on this interview's own
+    # segments, so a click lands here and nothing is kept that this
+    # transcript does not hold.
+    from copy import deepcopy
+
+    from app.modules.recruitment.models import InterviewSegment
+    from app.modules.recruitment.prompts_interview import (
+        reanchor_analysis_citations,
+    )
+
+    segments = [
+        {"id": s.id, "start_sec": s.start_sec, "end_sec": s.end_sec, "text": s.text}
+        for s in (
+            await db.execute(
+                select(InterviewSegment)
+                .where(
+                    InterviewSegment.interview_id == interview.id,
+                    InterviewSegment.tenant_id == tenant_id,
+                )
+                .order_by(InterviewSegment.start_sec.asc())
+            )
+        ).scalars()
+    ]
+    analysis = deepcopy(cached.analysis_data or {})
+    reanchor_analysis_citations(analysis, segments, interview.transcript)
+    cached_rows = deepcopy(list(cached.assessments or []))
+    reanchor_analysis_citations(
+        {"competence_assessments": cached_rows}, segments, interview.transcript
+    )
+
+    interview.analysis_data = analysis
     interview.analysis_status = "completed"
     interview.analysis_error = None
     interview.version = (interview.version or 0) + 1
 
     raw_competence_ids: set[uuid.UUID] = set()
-    for row in cached.assessments or []:
+    for row in cached_rows:
         comp_id = row.get("competence_id")
         if not comp_id:
             continue
@@ -215,7 +246,7 @@ async def apply_cached_analysis(
             AIAssessment.tenant_id == tenant_id,
         )
     )
-    for row in cached.assessments or []:
+    for row in cached_rows:
         comp_id = row.get("competence_id")
         if not comp_id:
             continue
@@ -378,6 +409,7 @@ async def store_cached_analysis(
     cache_key: str,
     analysis_data: dict,
     assessments: list[dict[str, Any]],
+    candidate_vacancy_id: uuid.UUID | None = None,
 ) -> None:
     """Async twin of :func:`store_cached_analysis_sync`.
 
@@ -388,6 +420,7 @@ async def store_cached_analysis(
     stmt = pg_insert(InterviewAnalysisCache).values(
         tenant_id=tenant_id,
         cache_key=cache_key,
+        candidate_vacancy_id=candidate_vacancy_id,
         analysis_data=analysis_data,
         assessments=assessments,
     )
@@ -407,6 +440,7 @@ def store_cached_analysis_sync(
     cache_key: str,
     analysis_data: dict,
     assessments: list[dict[str, Any]],
+    candidate_vacancy_id: uuid.UUID | None = None,
 ) -> None:
     """Insert or refresh a cache row from inside a Celery task (sync ORM).
 
@@ -419,6 +453,7 @@ def store_cached_analysis_sync(
     stmt = pg_insert(InterviewAnalysisCache).values(
         tenant_id=tenant_id,
         cache_key=cache_key,
+        candidate_vacancy_id=candidate_vacancy_id,
         analysis_data=analysis_data,
         assessments=assessments,
     )

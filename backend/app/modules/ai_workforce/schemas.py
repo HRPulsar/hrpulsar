@@ -15,7 +15,7 @@ SecurityReviewStatus = Literal["not_reviewed", "in_review", "approved", "rejecte
 RiskLevel = Literal["minimal", "limited", "high", "unacceptable"]
 OverrideMode = Literal["add", "remove"]
 SupervisionLevel = Literal["autonomous", "human_review_required", "human_approval_gate"]
-AssignmentStatus = Literal["pending", "active", "rejected", "revoked"]
+AssignmentStatus = Literal["pending", "active", "rejected", "revoked", "needs_owner"]
 HumanRole = Literal["orchestrator", "executor", "reviewer", "observer"]
 StepType = Literal["human", "ai", "hybrid"]
 AuditTargetType = Literal["ai_agent", "ai_usage_assignment", "agent_workflow"]
@@ -247,8 +247,11 @@ class WorkflowCreate(BaseModel):
 
 class WorkflowUpdate(BaseModel):
     # ``steps`` is NOT NULL too, but a null there is an accepted way to say
-    # "leave the steps alone" - update_workflow drops it.
-    _reject_null = field_validator("name", "human_role", mode="before")(_not_null)
+    # "leave the steps alone" - update_workflow drops it. The owner changes
+    # hands, never clears (HRP-988), like the assignment's accountable owner.
+    _reject_null = field_validator("name", "human_role", "owner_id", mode="before")(
+        _not_null
+    )
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None

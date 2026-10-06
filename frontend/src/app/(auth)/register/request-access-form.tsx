@@ -29,12 +29,12 @@ const ROLE_LABEL_KEY: Record<(typeof ROLE_VALUES)[number], string> = {
   other: "roleOther",
 };
 
-export function RequestAccessForm() {
+export function RequestAccessForm({ defaultEmail = "" }: { defaultEmail?: string }) {
   const t = useTranslations("auth");
   const tc = useTranslations("common");
   const router = useRouter();
   const [form, setForm] = useState({
-    email: "",
+    email: defaultEmail,
     first_name: "",
     last_name: "",
     company_name: "",

@@ -150,11 +150,14 @@ def effective_mode(step: WorkStep, primitives: Sequence[Primitive]) -> str | Non
     )
 
 
-def manual_pack(code: str | None, packs: Sequence[dict[str, Any]]) -> dict | None:
+def manual_pack(
+    pack_id: uuid.UUID | None, packs: Sequence[dict[str, Any]]
+) -> dict | None:
     """HRP-863: the pack the company named on the step, out of the packs
     visible to the tenant; None when it named none, or the one it named is
-    gone (deleted or deactivated) - the step then reads as without it."""
-    return next((p for p in packs if p["code"] == code), None) if code else None
+    deactivated - the step then reads as without it. By id (HRP-911): the
+    tenant's own pack may share a built-in one's code."""
+    return next((p for p in packs if p["id"] == pack_id), None) if pack_id else None
 
 
 def step_quality(primitives: Sequence[Primitive]) -> str | None:
@@ -290,6 +293,7 @@ async def _agent_layer(
             "id": p["id"],
             "code": p["code"],
             "title": p["title_en"],
+            "own": p["tenant_id"] is not None,
             "codes": set(p["primitive_codes"]),
         }
         for p in await agents_service.list_packs(db, tenant_id)
@@ -646,7 +650,7 @@ async def _schedule_mapping(
 
 
 def _match_agent(
-    codes: set[str], packs, agents, manual_pack_code: str | None = None
+    codes: set[str], packs, agents, manual_pack_id: uuid.UUID | None = None
 ) -> dict[str, Any] | None:
     # Several agents of the registry may cover the step: the same one has
     # to win every read, or the coverage tab renames the owner of a step
@@ -655,7 +659,7 @@ def _match_agent(
     def first(found):
         return min(found, key=lambda a: (a["name"], str(a["id"])), default=None)
 
-    named = manual_pack(manual_pack_code, packs)
+    named = manual_pack(manual_pack_id, packs)
     if named is not None:
         # HRP-863: the company named the agent type, so the codes are not
         # asked - the row reads as matched by this pack, with the tenant's
@@ -819,7 +823,7 @@ async def compute(
                 codes,
                 packs,
                 agents,
-                step.manual_pack_code if mode in CANDIDATE_MODES else None,
+                step.manual_pack_id if mode in CANDIDATE_MODES else None,
             )
             if executor:
                 verdict = "human"
@@ -965,7 +969,8 @@ async def compute(
         "container_id": container.id,
         "title": container.title,
         # For the skills bundle's README; the packs are loaded here anyway.
-        "pack_titles": {p["code"]: p["title"] for p in packs},
+        # By id (HRP-911): the tenant's own pack may share a built-in code.
+        "packs": {p["id"]: {"title": p["title"], "own": p["own"]} for p in packs},
         "status": container.status,
         "mapping_pending": mapping_pending,
         "candidate_step_ids": [r["step_id"] for r in candidates],
@@ -1090,25 +1095,32 @@ async def _hire_need_of_step(
 
 
 def redact_people(
-    result: dict[str, Any], *, visible: set[uuid.UUID] | None = None
+    result: dict[str, Any],
+    *,
+    visible: set[uuid.UUID] | None,
+    reveal_leave: bool,
 ) -> dict[str, Any]:
-    """HRP-810: the coverage of a reader whose HR scope is ``visible`` (the
-    employee ids ``access_scope.get_visible_employee_ids`` allows; None for
-    nobody). A matched colleague outside it is dropped, the verdict stays;
-    an assignee stays named - the company made that choice, no assessment
-    did - but without the capabilities they lack."""
-    def outside(person: dict[str, Any]) -> bool:
-        return visible is None or person["employee_id"] not in visible
+    """The coverage as one reader may see it.
 
+    ``visible`` is their HR scope (``access_scope.get_visible_employee_ids``,
+    None for no limit), which answers for what comes from assessments
+    (HRP-810, HRP-623): a matched colleague outside it is dropped, the
+    verdict stays; an assignee stays named - the company made that choice,
+    no assessment did - but without the capabilities they lack.
+
+    ``reveal_leave`` is ``manage`` on the section (HRP-1020): the rule the
+    owner and the people list follow, so leave reads the same on every
+    Coverage path."""
     for row in result["steps"]:
-        accountable = row.get("accountable")
-        if accountable is not None and outside(accountable):
-            row["accountable"] = _without_leave(accountable)
+        if not reveal_leave:
+            for key in ("human", "accountable"):
+                if row.get(key) is not None:
+                    row[key] = _without_leave(row[key])
         human = row["human"]
-        if human is None or not outside(human):
+        if visible is None or human is None or human["employee_id"] in visible:
             continue
         if human["label"] == "assigned":
-            row["human"] = {**_without_leave(human), "missing_codes": []}
+            row["human"] = {**human, "missing_codes": []}
         else:
             row["human"] = None
             row["human_backup"] = False
@@ -1116,9 +1128,9 @@ def redact_people(
 
 
 def _without_leave(person: dict[str, Any]) -> dict[str, Any]:
-    """Leave is HR data the directory withholds outside one's HR scope
-    (HRP-623): such a reader sees the assignee at work. Gone stays gone -
-    the step cannot be done by them either way."""
+    """Leave is HR data the directory withholds (HRP-623): a reader who does
+    not manage the section sees the person at work. Gone stays gone - the
+    step cannot be done by them either way."""
     if person.get("status") == "on_leave":
         return {**person, "status": "active"}
     return person

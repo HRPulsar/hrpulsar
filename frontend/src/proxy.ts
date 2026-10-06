@@ -6,6 +6,7 @@ import {
   normalizeLocale,
   resolveRequestLocale,
 } from "@/i18n/config";
+import { appOrigin, hostnameOf, publicCheckHost } from "@/lib/public-check-host";
 
 const MARKETING_DOMAIN = process.env.NEXT_PUBLIC_MARKETING_DOMAIN || "";
 
@@ -143,6 +144,64 @@ function publicAssessmentResponse(request: NextRequest) {
   return response;
 }
 
+// Public process check (HRP-924/925): the app serves its pages under /check;
+// the check host addresses them as "/", "/r/<token>", the pages of a saved
+// check (HRP-926), "/gallery" and "/gallery/<slug>" (HRP-930).
+const CHECK_RESULT_PATH = /^\/r\/[^/]+$/;
+const CHECK_GALLERY_PATH = /^\/gallery(\/[^/]+)?$/;
+// HRP-928: the link-preview cards keep the /check paths Next gives them;
+// the pages' metadata points crawlers at them on the check host.
+const CHECK_CARD_PATH = /^\/check(\/r\/[^/]+|\/gallery(\/[^/]+)?)?\/opengraph-image/;
+// Saving a result by email (HRP-926): the links of its letters (confirm,
+// unsubscribe), "my checks" ("/my", "/my/<link>", "/my/<link>/<check id>").
+const CHECK_SAVE_PATH = /^\/(?:confirm\/[^/]+|unsubscribe\/[^/]+|my(?:\/[^/]+){0,2})$/;
+
+function isCheckPath(pathname: string): boolean {
+  return pathname === "/check" || pathname.startsWith("/check/");
+}
+
+/**
+ * The check host (HRP-920) serves the check and nothing else. "/",
+ * "/r/<token>", the saved-check pages and the gallery are rewritten, not
+ * redirected, onto the /check routes: the short URL stays in the address
+ * bar - it is the canonical one that emails and shares carry
+ * (HRP-926/928). Any other page
+ * of the product belongs to the app host: 307 there, same path. Null hands
+ * the request to the normal routing - RSC requests outside the check,
+ * robots.txt and sitemap.xml (they answer per host), the share cards, and a
+ * site that names no app host.
+ */
+function checkHostResponse(
+  request: NextRequest,
+  isRscRequest: boolean,
+): NextResponse | null {
+  const { pathname, search } = request.nextUrl;
+  const target =
+    pathname === "/"
+      ? "/check"
+      : CHECK_RESULT_PATH.test(pathname) ||
+          CHECK_SAVE_PATH.test(pathname) ||
+          CHECK_GALLERY_PATH.test(pathname)
+        ? `/check${pathname}`
+        : null;
+  if (target) {
+    // A client-side navigation needs the rewrite too (next() would 404).
+    const response = NextResponse.rewrite(new URL(`${target}${search}`, request.url));
+    return isRscRequest ? response : withLocaleCookie(request, response);
+  }
+  const app = appOrigin();
+  if (
+    isRscRequest ||
+    !app ||
+    pathname === "/robots.txt" ||
+    pathname === "/sitemap.xml" ||
+    CHECK_CARD_PATH.test(pathname)
+  ) {
+    return null;
+  }
+  return safeRedirect(`${app}${pathname}${search}`);
+}
+
 function getProtocol(host: string): string {
   // Local dev uses http, production uses https
   return host.includes("localhost") || host.includes(".local") ? "http" : "https";
@@ -251,6 +310,17 @@ export function proxy(request: NextRequest) {
     request.headers.get("rsc") === "1" ||
     request.headers.get("next-router-prefetch") === "1" ||
     request.headers.get("next-router-segment-prefetch") !== null;
+
+  // Before the RSC guard: on the check host a client-side navigation needs
+  // its rewrite as much as a document load does. Off (no env) → skipped.
+  const checkHost = publicCheckHost();
+  if (checkHost && hostnameOf(host) === checkHost) {
+    const localeRedirect = isRscRequest ? null : consumeLocaleParam(request);
+    if (localeRedirect) return localeRedirect;
+    const response = checkHostResponse(request, isRscRequest);
+    if (response) return response;
+  }
+
   if (isRscRequest) {
     return NextResponse.next();
   }
@@ -271,9 +341,9 @@ export function proxy(request: NextRequest) {
     );
   }
 
-  // robots.txt must reach the disallow-all app/robots.ts route — bouncing a
-  // crawler to /login reads as "no robots.txt at all". /sitemap.xml has no
-  // route in the product frontend; an honest 404 beats a login redirect.
+  // robots.txt must reach app/robots.ts — disallow-all here, bouncing a
+  // crawler to /login reads as "no robots.txt at all". app/sitemap.ts is a
+  // 404 off the check host (HRP-930); an honest 404 beats a login redirect.
   if (pathname === "/robots.txt" || pathname === "/sitemap.xml") {
     return NextResponse.next();
   }
@@ -304,6 +374,13 @@ export function proxy(request: NextRequest) {
     return withLocaleCookie(request, NextResponse.next());
   }
 
+  // The check pages on the app host: public while the service is on (handy
+  // for local debugging); off, they go the way of any app path and the
+  // pages answer 404 themselves.
+  if (checkHost && isCheckPath(pathname)) {
+    return withLocaleCookie(request, NextResponse.next());
+  }
+
   // Public and token-gated public paths (company profiles, recruiting
   // evaluator invite, demo handoff, etc.)
   if (isPublicCompanyPath(pathname) || isTokenPublicPath(pathname)) {
@@ -327,6 +404,12 @@ export function proxy(request: NextRequest) {
 
   const response = NextResponse.next();
   response.headers.set("X-Robots-Tag", "noindex, nofollow");
+  // The import of saved public checks carries their bearer link (HRP-927):
+  // in the fragment, which no Referer sends, and no-referrer on top, as for
+  // the evaluator page above.
+  if (pathname === "/coverage/saved-checks") {
+    response.headers.set("Referrer-Policy", "no-referrer");
+  }
   return withLocaleCookie(request, response);
 }
 

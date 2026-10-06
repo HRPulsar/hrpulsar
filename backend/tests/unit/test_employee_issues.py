@@ -220,10 +220,16 @@ async def test_finished_plan_past_deadline_is_not_overdue(
 async def test_pdp_stuck_in_review(db: AsyncSession, tenant, loop_fixtures):
     fresh = await _make_employee(db, tenant, last_name="Fresh")
     stale = await _make_employee(db, tenant, last_name="Stale")
+    # HRP-941: back with its author, however long ago — not stuck in review.
+    returned = await _make_employee(db, tenant, last_name="Returned")
     await _add_pdp(db, tenant, fresh, status="review")
     plan = await _add_pdp(db, tenant, stale, status="review")
+    returned_plan = await _add_pdp(db, tenant, returned, status="returned")
     # updated_at is server-managed; age it explicitly past the 14-day line.
-    plan.updated_at = datetime.now(UTC) - timedelta(days=issues.STUCK_REVIEW_DAYS + 1)
+    for aged in (plan, returned_plan):
+        aged.updated_at = datetime.now(UTC) - timedelta(
+            days=issues.STUCK_REVIEW_DAYS + 1
+        )
     await db.commit()
 
     cohorts = await _cohorts(db, tenant)
@@ -264,6 +270,63 @@ async def test_terminated_employees_are_out_of_scope(
     cohorts = await _cohorts(db, tenant)
 
     assert gone.id not in cohorts["assessment_stale"]
+
+
+@pytest.mark.asyncio
+async def test_plans_of_people_who_are_not_active_raise_no_issue(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    """HRP-844 review: plan rows load for the whole scope, because the In
+    development tile counts what the development list shows — but no
+    per-person cohort may pick a leaver or someone on leave up from them.
+
+    Both paths: unscoped (admin / HR) and scoped (a manager whose people
+    include them). The tile still counts their open plans.
+    """
+    from app.modules.analytics.service import dev_loop
+    from app.modules.employee.service import list_employees
+
+    now = datetime.now(UTC)
+    # Someone active keeps the loop running; without them both paths would
+    # return early and a leak could not show.
+    here = await _make_employee(db, tenant, last_name="Here")
+    gone = await _make_employee(db, tenant, last_name="Gone", status="terminated")
+    away = await _make_employee(db, tenant, last_name="Away", status="on_leave")
+    for emp in (gone, away):
+        await _add_pdp(
+            db, tenant, emp, status="in_progress", deadline=now - timedelta(days=30)
+        )
+        stuck = await _add_pdp(db, tenant, emp, status="review")
+        stuck.updated_at = now - timedelta(days=issues.STUCK_REVIEW_DAYS + 10)
+    await db.commit()
+
+    for scope in (None, {here.id, gone.id, away.id}):
+        facts = await issues.collect_issue_facts(
+            db, tenant.id, visible_employee_ids=scope
+        )
+        cohorts = issues.issue_cohorts(facts)
+        assert cohorts["pdp_overdue"] == set()
+        assert cohorts["pdp_stuck_review"] == set()
+        assert facts.stuck_plan_count == 0
+        # The tile is the one reader of the scope-wide rows: 2 people x 2 open.
+        assert issues.open_plan_count(facts) == 4
+
+        # Badges on the list page, the ?issue= filter and the queue agree.
+        items, _ = await list_employees(
+            db, tenant.id, visible_employee_ids=scope, with_alerts=True
+        )
+        badges = {c["code"] for i in items for c in i["issues"] or []}
+        assert not badges & {"pdp_overdue", "pdp_stuck_review"}
+        for code in ("pdp_overdue", "pdp_stuck_review"):
+            _, total = await list_employees(
+                db, tenant.id, visible_employee_ids=scope, issue=[code]
+            )
+            assert total == 0
+        loop = await dev_loop(db, tenant.id, scope)
+        assert {f["code"] for f in loop["findings"]}.isdisjoint(
+            {"pdp_overdue", "pdp_stuck_review"}
+        )
+        assert loop["stages"]["developing"]["open_pdps"] == 4
 
 
 # ---------------------------------------------------------------------------
@@ -520,8 +583,9 @@ async def test_review_codes_carry_the_reviewed_plan_deadline(
 async def test_pending_review_reads_only_the_plan_in_review(
     db: AsyncSession, tenant, loop_fixtures
 ):
-    """``pdp_pending_review`` fires on a ``review`` plan alone; a ``returned``
-    plan belongs to the stuck set and must not lend it an earlier date."""
+    """``pdp_pending_review`` and ``pdp_stuck_review`` both read the plan in
+    ``review``; a ``returned`` plan waits on its author (HRP-941) and must not
+    lend either code an earlier date."""
     from app.modules.employee.service import get_employee
 
     emp = await _make_employee(db, tenant, last_name="Returned")
@@ -539,7 +603,7 @@ async def test_pending_review_reads_only_the_plan_in_review(
     by_code = {i["code"]: i["deadline"] for i in card["issues"]}
 
     assert by_code["pdp_pending_review"] == review_due.date()
-    assert by_code["pdp_stuck_review"] == returned_due.date()
+    assert by_code["pdp_stuck_review"] == review_due.date()
 
 
 @pytest.mark.asyncio

@@ -226,37 +226,56 @@ async def fenced_users(
     and ``manage``. None of them interviews or evaluates on it: they could
     open neither the interview nor the sheet, and would sit on their own or
     a rival's."""
-    # Imported here: the employee module sits above this one.
+    # Imported here: the employee and company modules sit above this one.
+    from app.modules.company.service import get_section_overrides
     from app.modules.employee.models import Employee
 
-    cands = (
-        await db.execute(
-            select(Candidate.person_id, Candidate.email)
-            .join(CandidateVacancy, CandidateVacancy.candidate_id == Candidate.id)
-            .where(CandidateVacancy.vacancy_id == vacancy_id)
+    # ``own_candidacy`` correlated with ``User`` instead of asked per user
+    # (HRP-1018): the same keys - their Person, their email in SQL lower
+    # case (an empty one matches nothing), their employee row of the
+    # tenant ``get_current_employee`` reads - so no second check is needed.
+    candidacy = (
+        select(Candidate.id)
+        .join(CandidateVacancy, CandidateVacancy.candidate_id == Candidate.id)
+        .where(
+            CandidateVacancy.vacancy_id == vacancy_id,
+            or_(
+                Candidate.person_id == User.person_id,
+                and_(
+                    User.email != "",
+                    func.lower(Candidate.email) == func.lower(User.email),
+                ),
+            ),
         )
-    ).all()
-    reactors = (
-        select(Employee.user_id)
+    )
+    reaction = (
+        select(Employee.id)
         .join(TalentCandidate, TalentCandidate.employee_id == Employee.id)
         .join(Vacancy, Vacancy.talent_card_id == TalentCandidate.card_id)
-        .where(Vacancy.id == vacancy_id, TalentCandidate.response_at.isnot(None))
-    )
-    users = (
-        await db.execute(
-            select(User)
-            .options(selectinload(User.roles))
-            .where(
-                User.tenant_id == tenant_id,
-                or_(
-                    User.person_id.in_({p for p, _ in cands if p is not None}),
-                    func.lower(User.email).in_({e.lower() for _, e in cands if e}),
-                    User.id.in_(reactors),
-                ),
-            )
+        .where(
+            Employee.user_id == User.id,
+            Employee.tenant_id == User.tenant_id,
+            Vacancy.id == vacancy_id,
+            TalentCandidate.response_at.isnot(None),
         )
-    ).scalars()
-    return [u for u in users if await fenced_off_vacancy(db, u, vacancy_id)]
+    )
+    rows = await db.scalars(
+        select(User)
+        .options(selectinload(User.roles))
+        .where(User.tenant_id == tenant_id, or_(candidacy.exists(), reaction.exists()))
+    )
+    # The admin level (``platform_admin`` included) and ``manage`` stay
+    # unfenced, as in ``fenced_off_vacancy``; the matrix is read once.
+    codes = [(u, {r.code for r in u.roles}) for u in rows]
+    codes = [(u, c) for u, c in codes if not c & ADMIN_ROLE_CODES]
+    if not codes:
+        return []
+    overrides, hidden = await get_section_overrides(db, tenant_id)
+    return [
+        u
+        for u, c in codes
+        if effective_levels(c, overrides, hidden)["recruitment"] != "manage"
+    ]
 
 
 async def refuse_fenced_assignees(

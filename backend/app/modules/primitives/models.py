@@ -5,8 +5,10 @@ client UI never shows the word. The catalog is a platform reference with no
 tenant scope: rows are seeded by migration ``v2prim01`` from
 ``catalog_data.PRIMITIVES`` and never deleted — a retired code keeps its row
 with ``retired_in`` set so existing step and competence links keep
-rendering. ``merged_into_id`` is the hook for a future code merge: coverage
-counts a merged code as its target.
+rendering. ``merged_into_id`` is the hook for a future code merge (decision
+O10, 2026-08-31: the one merge planned, B4 into P7, was dropped): nothing
+writes it and nothing reads it, so the API leaves it out (HRP-850). Whoever
+merges a code first makes coverage count it as its target.
 """
 
 import uuid

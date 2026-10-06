@@ -2,6 +2,8 @@
 tenant's matrix - and nothing else changes: personal paths, the allowlist,
 token links and platform admins pass."""
 
+import inspect
+
 import pytest
 from app.core.sections import gated_section, section_for_path
 from app.main import app
@@ -77,6 +79,7 @@ def test_the_gate_skips_exactly_the_known_token_links_and_personal_paths():
         "/api/recruitment/invite/{token}/context",
         "/api/recruitment/consent/{token}",
         "/api/recruitment/consent/{token}/sign",
+        "/api/recruitment/consent/{token}/revoke",
         # HRP-827: catalogue reads other sections are built on (their GET
         # only - the writes on the same paths stay gated).
         "/api/competence-tree",
@@ -237,3 +240,79 @@ async def test_matrix_narrowing_closes_coverage(auth_client, client, db, tenant)
 
     await _save(auth_client, hidden=["coverage"])
     assert (await auth_client.get("/api/work/containers")).status_code == 403
+
+
+
+def _section_checks(dependant):
+    for dep in dependant.dependencies:
+        if getattr(dep.call, "__name__", "") == "section_checker":
+            bound = inspect.getclosurevars(dep.call).nonlocals
+            yield bound["section"].code, bound["level"]
+        yield from _section_checks(dep)
+
+
+def test_no_route_asks_again_what_the_gate_answers():
+    # HRP-1018: a route's own ``require_section`` on the section the gate
+    # narrows it by repeats the gate when the gate denies the same - ``view``
+    # anywhere, ``manage`` on a write outside a self-guarded section.
+    repeated = []
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or (section := gated_section(route)) is None:
+            continue
+        writes = bool(route.methods - {"GET", "HEAD", "OPTIONS"})
+        for code, level in _section_checks(route.dependant):
+            if code == section.code and (
+                level == "view" or (writes and not section.self_guarded)
+            ):
+                repeated.append(f"{sorted(route.methods)} {route.path}")
+    assert repeated == []
+
+
+# HRP-1018: the sections whose routes leave ``view`` and the writes to the
+# gate - a role at ``view`` cannot write, at ``none`` cannot read. Roles
+# answers its one read itself (a shared read, see test_settings_section_access),
+# dictionaries' reads are shared.
+GATED_ONLY = [
+    ("import", "hr", "/api/import/jobs", ("POST", "/api/import/employees")),
+    ("invitations", "hr", "/api/invitations", ("POST", "/api/invitations")),
+    ("roles", "hr", None, ("POST", "/api/roles")),
+    (
+        "ai-settings",
+        "hr",
+        "/api/admin/ai-settings",
+        ("PATCH", "/api/admin/ai-settings"),
+    ),
+    ("dictionaries", "hr", None, ("POST", "/api/dictionaries/grade")),
+    (
+        "exams",
+        "manager",
+        "/api/mass-exams/import-template",
+        ("POST", "/api/mass-exams"),
+    ),
+    (
+        "analytics",
+        "hr",
+        "/api/analytics/assessments",
+        ("POST", "/api/analytics/export/assessments"),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("code", "role", "read", "write"), GATED_ONLY, ids=[g[0] for g in GATED_ONLY]
+)
+async def test_the_gate_refuses_writes_at_view_and_reads_at_none(
+    auth_client, client, db, tenant, code, role, read, write
+):
+    headers = await _headers(db, tenant, role)
+    await _save(auth_client, levels={code: {role: "view"}})
+    r = await client.request(*write, json={}, headers=headers)
+    assert (
+        r.status_code == 403 and r.json()["code"] == "auth_insufficient_permissions"
+    ), r.text
+    if read is not None:
+        await _save(auth_client, levels={code: {role: "none"}})
+        r = await client.get(read, headers=headers)
+        assert (
+            r.status_code == 403 and r.json()["code"] == "auth_insufficient_permissions"
+        ), r.text

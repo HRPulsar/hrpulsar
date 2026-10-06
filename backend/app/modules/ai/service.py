@@ -1,6 +1,8 @@
 import logging
 import uuid
 
+import httpx
+import openai
 from fastapi import status
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -420,6 +422,20 @@ async def generate_positions(
 # --- Vector Search ---
 
 
+async def _embed(text_content: str) -> list[float]:
+    """Embedding vector, or a localized 502 when the provider fails (HRP-1010).
+
+    Not ``llm_generation_failed``: that one echoes the provider's message.
+    This code carries none - the log and the call journal keep the details.
+    Only the provider and the transport fail this way; a bug stays a 500.
+    """
+    try:
+        return await llm_client.get_embedding(text_content)
+    except (openai.OpenAIError, httpx.HTTPError):
+        logger.exception("Embedding provider call failed")
+        raise AppError("ai_embedding_failed", status.HTTP_502_BAD_GATEWAY) from None
+
+
 async def create_embedding(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -432,7 +448,7 @@ async def create_embedding(
     HRP-954: the upsert key is ``(tenant, entity_type, entity_id)`` — the
     same entity key in another tenant is a different row.
     """
-    vector = await llm_client.get_embedding(text_content)
+    vector = await _embed(text_content)
 
     # Upsert on the tenant-scoped unique key: a racing pair of writers ends
     # up updating one row instead of inserting two (or failing on the unique).
@@ -472,7 +488,7 @@ async def semantic_search(
     the search never leaves it.
     """
 
-    query_vector = await llm_client.get_embedding(query)
+    query_vector = await _embed(query)
 
     # pgvector cosine distance search
     sql = """

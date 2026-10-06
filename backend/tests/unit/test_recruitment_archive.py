@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 from app.modules.recruitment import service
-from app.modules.recruitment.models import AssessmentInvite
+from app.modules.recruitment.models import AssessmentInvite, Vacancy
 from app.modules.recruitment.schemas import (
     CandidateCreate,
     CandidateVacancyCreate,
@@ -58,7 +58,7 @@ class TestArchiveRestore:
         )
         # v is a draft — a different status filter excludes it.
         assert (
-            await service.count_archived_vacancies(db, tenant.id, status="published")
+            await service.count_archived_vacancies(db, tenant.id, status="open")
             == 0
         )
 
@@ -134,9 +134,10 @@ class TestDeletePermanent:
         self, db: AsyncSession, tenant, user
     ):
         v = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data())
-        await service.update_vacancy(
-            db, tenant.id, v["id"], VacancyUpdate(status="open")
-        )
+        # HRP-836: status no longer moves through the edit payload.
+        row = await db.get(Vacancy, v["id"])
+        row.status = "open"
+        await db.commit()
         with pytest.raises(HTTPException) as exc_info:
             await service.delete_vacancy(db, tenant.id, v["id"])
         assert exc_info.value.status_code == 409

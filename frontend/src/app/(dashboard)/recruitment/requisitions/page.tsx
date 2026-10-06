@@ -36,6 +36,7 @@ import { VacancyActionsMenu } from "./_components/VacancyActionsMenu";
 import {
   VACANCY_STATUS_COLORS,
   VACANCY_STATUS_OPTIONS,
+  vacancyResolutionLabel,
   vacancyStatusBadgeLabel,
   vacancyStatusOptionLabel,
 } from "@/lib/vacancy-status";
@@ -267,6 +268,11 @@ export default function VacancyListPage() {
               <TableBody>
                 {filtered.map((vacancy) => {
                   const isArchived = !!vacancy.archived_at;
+                  // HRP-836: the close resolution rides next to the status.
+                  const resolution =
+                    vacancy.status === "closed"
+                      ? vacancyResolutionLabel(t, vacancy.close_resolution)
+                      : null;
                   return (
                     <TableRow
                       key={vacancy.id}
@@ -301,6 +307,14 @@ export default function VacancyListPage() {
                             ? t("vacancyBadgeArchived")
                             : vacancyStatusBadgeLabel(t, vacancy.status)}
                         </Badge>
+                        {resolution && (
+                          <span
+                            className="ml-2 text-xs text-muted-foreground"
+                            data-testid={`vacancy-list-row-${vacancy.id}-resolution`}
+                          >
+                            {resolution}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {vacancy.candidates_count ?? 0}

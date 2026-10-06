@@ -96,11 +96,19 @@ const templates: Record<string, { columns: string[]; required: string[]; example
   },
 };
 
+// HRP-806: Excel reads a CSV with the separator of its locale, so a German or
+// Russian Excel put the comma template into one column. This line tells Excel
+// the separator; the backend reader skips it.
+const EXCEL_SEPARATOR_HINT = "sep=,";
+
 function downloadTemplate(type: string) {
   const tmpl = templates[type];
   if (!tmpl) return;
   const rows = [tmpl.columns, ...tmpl.example];
-  const csv = rows.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
+  const csv = [
+    EXCEL_SEPARATOR_HINT,
+    ...rows.map((r) => r.map((c) => `"${c}"`).join(",")),
+  ].join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -110,98 +118,21 @@ function downloadTemplate(type: string) {
   URL.revokeObjectURL(url);
 }
 
-/** A German Excel saves CSV with semicolons; the backend picks the delimiter
- * the same way (`read_rows` in data_import/service.py). */
-function detectDelimiter(text: string): "," | ";" {
-  const header = text.split("\n").find((line) => line.trim()) ?? "";
-  return header.split(";").length > header.split(",").length ? ";" : ",";
-}
-
-function parseCSV(text: string): string[][] {
-  const delimiter = detectDelimiter(text);
-  const rows: string[][] = [];
-  let current = "";
-  let inQuotes = false;
-  let row: string[] = [];
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (ch === '"' && text[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else if (ch === '"') {
-        inQuotes = false;
-      } else {
-        current += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === delimiter) {
-      row.push(current.trim());
-      current = "";
-    } else if (ch === "\n" || (ch === "\r" && text[i + 1] === "\n")) {
-      row.push(current.trim());
-      if (row.some((c) => c !== "")) rows.push(row);
-      row = [];
-      current = "";
-      if (ch === "\r") i++;
-    } else {
-      current += ch;
-    }
-  }
-  row.push(current.trim());
-  if (row.some((c) => c !== "")) rows.push(row);
-  return rows;
-}
-
-// ISO, or DD.MM.YYYY as a German Excel writes dates into CSV — the formats
-// the import task reads.
-const DATE_RE = /^(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{4})$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-/** Validation problems are stored as codes and rendered through the
- * message catalog, so the preview grid stays translatable. */
+/** Problem codes are rendered through the message catalog, so the preview
+ * grid stays translatable. */
 type CellErrorCode = "required" | "email" | "date";
 
-interface CellError {
-  row: number;
-  col: number;
-  code: CellErrorCode;
-  column: string;
-}
-
-function validatePreview(
-  rows: string[][],
-  headers: string[],
-  type: string,
-): CellError[] {
-  const tmpl = templates[type];
-  if (!tmpl) return [];
-  const errors: CellError[] = [];
-
-  for (let r = 0; r < rows.length; r++) {
-    for (let c = 0; c < headers.length; c++) {
-      const col = headers[c];
-      const val = rows[r]?.[c] ?? "";
-
-      if (tmpl.required.includes(col) && !val) {
-        errors.push({ row: r, col: c, code: "required", column: col });
-        continue;
-      }
-
-      if (!val) continue;
-
-      if (col === "email" && !EMAIL_RE.test(val)) {
-        errors.push({ row: r, col: c, code: "email", column: col });
-      }
-      if (col === "hire_date" && !DATE_RE.test(val)) {
-        errors.push({ row: r, col: c, code: "date", column: col });
-      }
-    }
-  }
-
-  return errors;
+/** The file as the import will read it - `POST /import/{type}/preview`:
+ * its first rows, and the counts for the whole file. */
+interface ImportPreview {
+  columns: string[];
+  rows: {
+    line: number;
+    cells: string[];
+    problem: { code: CellErrorCode; column: number } | null;
+  }[];
+  total_rows: number;
+  problem_rows: number;
 }
 
 export default function ImportPage() {
@@ -218,6 +149,9 @@ export default function ImportPage() {
   const [loading, setLoading] = useState(true);
   const [importType, setImportType] = useState("employees");
   const [uploading, setUploading] = useState(false);
+  // Reading a file for the preview is not importing it: the Import button
+  // keeps its own label, only the file picker waits.
+  const [previewing, setPreviewing] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [errorJob, setErrorJob] = useState<ImportJob | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -225,9 +159,7 @@ export default function ImportPage() {
 
   // GF9: Preview state
   const [previewFile, setPreviewFile] = useState<File | null>(null);
-  const [previewHeaders, setPreviewHeaders] = useState<string[]>([]);
-  const [previewRows, setPreviewRows] = useState<string[][]>([]);
-  const [previewErrors, setPreviewErrors] = useState<CellError[]>([]);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
 
   const loadJobs = useCallback(async (p?: number) => {
     try {
@@ -268,39 +200,35 @@ export default function ImportPage() {
     };
   }, [jobs, loadJobs]);
 
-  function handleFilePreview(file: File) {
-    // HRP-806: an XLSX is a zip — reading it as text used to fill the
-    // preview with garbage. The backend reads and validates it on import.
-    if (!file.name.toLowerCase().endsWith(".csv")) {
-      clearPreview();
-      setPreviewFile(file);
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target?.result;
-      if (typeof text !== "string") return;
-      const parsed = parseCSV(text.replace(/^\uFEFF/, ""));
-      if (parsed.length < 2) {
+  // HRP-806: the backend reads the file for the preview with the import's
+  // own reader and row check - a page-side parser once called a file valid
+  // that the import then refused row by row.
+  async function handleFilePreview(file: File) {
+    // The previous file's table goes first: a refused or empty file must
+    // not leave it standing under the new name.
+    clearPreview();
+    setPreviewing(true);
+    try {
+      const result = await api.upload<ImportPreview>(
+        `/import/${importType}/preview`,
+        file,
+      );
+      if (result.total_rows === 0) {
         toast.error(t("importFileNeedsRows"));
         return;
       }
-      const headers = parsed[0];
-      const dataRows = parsed.slice(1);
-      const errors = validatePreview(dataRows, headers, importType);
       setPreviewFile(file);
-      setPreviewHeaders(headers);
-      setPreviewRows(dataRows);
-      setPreviewErrors(errors);
-    };
-    reader.readAsText(file);
+      setPreview(result);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("importFailed"));
+    } finally {
+      setPreviewing(false);
+    }
   }
 
   function clearPreview() {
     setPreviewFile(null);
-    setPreviewHeaders([]);
-    setPreviewRows([]);
-    setPreviewErrors([]);
+    setPreview(null);
   }
 
   async function confirmImport() {
@@ -342,15 +270,13 @@ export default function ImportPage() {
     setDragOver(false);
   }
 
-  function getCellError(row: number, col: number): CellError | undefined {
-    return previewErrors.find((e) => e.row === row && e.col === col);
-  }
-
-  function cellErrorMessage(error: CellError): string {
-    if (error.code === "required") {
-      return t("importRequiredColumn", { column: error.column });
+  function cellErrorMessage(code: CellErrorCode, column: number): string {
+    if (code === "required") {
+      return t("importRequiredColumn", {
+        column: templates[importType]?.columns[column] ?? "",
+      });
     }
-    if (error.code === "email") return t("importInvalidEmail");
+    if (code === "email") return t("importInvalidEmail");
     return t("importInvalidDate");
   }
 
@@ -362,10 +288,18 @@ export default function ImportPage() {
     );
   }
 
-  const errorCount = previewErrors.length;
+  const errorCount = preview?.problem_rows ?? 0;
   const hasErrors = errorCount > 0;
-  // An XLSX gets no preview table — see handleFilePreview.
-  const hasPreviewTable = previewHeaders.length > 0;
+  // The import reads columns by position: the first `required` ones are the
+  // required ones, whatever the file's header calls them, and a column the
+  // file lacks is shown under the template's name.
+  const requiredCount = templates[importType]?.required.length ?? 0;
+  const previewColumns = preview
+    ? Array.from(
+        { length: Math.max(preview.columns.length, requiredCount) },
+        (_, i) => preview.columns[i] || templates[importType]?.columns[i] || "",
+      )
+    : [];
 
   return (
     <RequireSection code="import">
@@ -436,7 +370,7 @@ export default function ImportPage() {
                       type="button"
                       className="text-primary underline underline-offset-2"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={uploading}
+                      disabled={uploading || previewing}
                     >
                       {chunks}
                     </button>
@@ -452,7 +386,7 @@ export default function ImportPage() {
                 accept=".xlsx,.csv"
                 className="hidden"
                 onChange={onFileSelect}
-                disabled={uploading}
+                disabled={uploading || previewing}
               />
             </div>
           ) : null}
@@ -510,23 +444,17 @@ export default function ImportPage() {
                 {t("importPreviewTitle", { name: previewFile.name })}
               </CardTitle>
               <CardDescription>
-                {!hasPreviewTable ? (
-                  t("importPreviewCsvOnly")
+                {t("importRowsFound", { count: preview?.total_rows ?? 0 })}
+                {hasErrors ? (
+                  <span className="ml-2 text-destructive">
+                    <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
+                    {t("importErrorsDetected", { count: errorCount })}
+                  </span>
                 ) : (
-                  <>
-                    {t("importRowsFound", { count: previewRows.length })}
-                    {hasErrors ? (
-                      <span className="ml-2 text-destructive">
-                        <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
-                        {t("importErrorsDetected", { count: errorCount })}
-                      </span>
-                    ) : (
-                      <span className="ml-2 text-green-600">
-                        <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
-                        {t("importAllValid")}
-                      </span>
-                    )}
-                  </>
+                  <span className="ml-2 text-green-600">
+                    <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
+                    {t("importAllValid")}
+                  </span>
                 )}
               </CardDescription>
             </div>
@@ -541,17 +469,17 @@ export default function ImportPage() {
               </Button>
             </div>
           </CardHeader>
-          {hasPreviewTable && (
+          {preview && (
             <CardContent>
               <div className="max-h-96 overflow-auto rounded-lg border">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-12 text-center">#</TableHead>
-                      {previewHeaders.map((h, i) => (
+                      {previewColumns.map((h, i) => (
                         <TableHead key={i}>
                           {h}
-                          {templates[importType]?.required.includes(h) && (
+                          {i < requiredCount && (
                             <span className="ml-0.5 text-destructive">*</span>
                           )}
                         </TableHead>
@@ -559,26 +487,26 @@ export default function ImportPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {previewRows.map((row, ri) => {
-                      const rowHasError = previewErrors.some((e) => e.row === ri);
+                    {preview.rows.map((row) => {
+                      const problem = row.problem;
                       return (
-                        <TableRow key={ri} className={rowHasError ? "bg-destructive/5" : ""}>
+                        <TableRow key={row.line} className={problem ? "bg-destructive/5" : ""}>
                           <TableCell className="text-center text-xs text-muted-foreground">
-                            {ri + 2}
+                            {row.line}
                           </TableCell>
-                          {previewHeaders.map((_, ci) => {
-                            const cellErr = getCellError(ri, ci);
+                          {previewColumns.map((_, ci) => {
+                            const cellErr = problem?.column === ci ? problem : null;
                             return (
                               <TableCell
                                 key={ci}
                                 className={cellErr ? "relative" : ""}
                               >
                                 <span className={cellErr ? "text-destructive font-medium" : ""}>
-                                  {row[ci] || ""}
+                                  {row.cells[ci] || ""}
                                 </span>
                                 {cellErr && (
                                   <span className="block text-xs text-destructive mt-0.5">
-                                    {cellErrorMessage(cellErr)}
+                                    {cellErrorMessage(cellErr.code, ci)}
                                   </span>
                                 )}
                               </TableCell>
@@ -590,6 +518,17 @@ export default function ImportPage() {
                   </TableBody>
                 </Table>
               </div>
+              {preview.rows.length < preview.total_rows && (
+                <p
+                  className="mt-3 text-xs text-muted-foreground"
+                  data-testid="import-preview-truncated"
+                >
+                  {t("importPreviewTruncated", {
+                    shown: preview.rows.length,
+                    total: preview.total_rows,
+                  })}
+                </p>
+              )}
               {hasErrors && (
                 <p className="mt-3 text-xs text-muted-foreground">
                   {t("importErrorsWarning")}

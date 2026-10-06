@@ -337,6 +337,126 @@ async def test_pdp_stuck_in_review_flagged(db: AsyncSession, tenant):
 
 
 @pytest.mark.asyncio
+async def test_stuck_review_counts_plans_and_leaves_returned_out(
+    db: AsyncSession, tenant
+):
+    """HRP-941: "N plans stuck in review" — plans in review past the threshold.
+
+    Two stale plans of one person are two plans and one name; a returned plan
+    is back with its author, however old, and is neither counted nor named.
+    """
+    stale = datetime.now(UTC) - timedelta(days=30)
+    twice = await _make_employee(db, tenant, last_name="Twice")
+    once = await _make_employee(db, tenant, last_name="Once")
+    sent_back = await _make_employee(db, tenant, last_name="SentBack")
+    db.add_all(
+        [
+            _pdp(tenant, twice, status="review", updated_at=stale),
+            _pdp(tenant, twice, status="review", updated_at=stale),
+            _pdp(tenant, once, status="review", updated_at=stale),
+            _pdp(tenant, sent_back, status="returned", updated_at=stale),
+        ]
+    )
+    await db.commit()
+
+    finding = _finding(
+        await analytics_service.dev_loop(db, tenant.id, None), "pdp_stuck_review"
+    )
+    assert finding is not None
+    assert finding["count"] == 3
+    assert finding["employee_count"] == 2
+    assert {e["id"] for e in finding["employees"]} == {str(twice.id), str(once.id)}
+
+
+@pytest.mark.asyncio
+async def test_no_stuck_row_for_returned_plans_alone(db: AsyncSession, tenant):
+    emp = await _make_employee(db, tenant)
+    stale = datetime.now(UTC) - timedelta(days=90)
+    db.add(_pdp(tenant, emp, status="returned", updated_at=stale))
+    await db.commit()
+
+    payload = await analytics_service.dev_loop(db, tenant.id, None)
+    assert _finding(payload, "pdp_stuck_review") is None
+
+
+# HRP-844: what the In development tile's link presets on /development —
+# DEVELOPING_HREF in the dashboard page. Every status except Done / Cancelled.
+_OPEN_PLAN_STATUSES = ("draft", "sent", "in_progress", "review", "returned")
+
+
+@pytest.mark.asyncio
+async def test_developing_tile_equals_the_list_it_opens(db: AsyncSession, tenant):
+    from app.modules.assessment import pdp_service
+
+    active = await _make_employee(db, tenant, last_name="Active")
+    away = await _make_employee(db, tenant, last_name="Away", status="on_leave")
+    other = await _make_employee(db, tenant, last_name="Other")
+    statuses = (*_OPEN_PLAN_STATUSES, "done", "cancelled")
+    for emp in (active, away, other):
+        db.add_all([_pdp(tenant, emp, status=status) for status in statuses])
+    await db.commit()
+
+    async def tile_and_list(visible: set[uuid.UUID] | None) -> tuple[int, int]:
+        loop = await analytics_service.dev_loop(db, tenant.id, visible)
+        plans = await pdp_service.list_pdps(db, tenant.id, visible_employee_ids=visible)
+        listed = [p for p in plans if p["status"] in _OPEN_PLAN_STATUSES]
+        return loop["stages"]["developing"]["open_pdps"], len(listed)
+
+    # Admin / HR: the whole workspace — 3 people x 5 open plans.
+    assert await tile_and_list(None) == (15, 15)
+    # A division manager whose people include one on leave: the list shows
+    # that person's plans, so the tile counts them too.
+    assert await tile_and_list({active.id, away.id}) == (10, 10)
+
+
+@pytest.mark.asyncio
+async def test_developing_tile_follows_the_lists_draft_rule(
+    client, auth_client, db: AsyncSession, tenant
+):
+    """HRP-844 review: GET /pdp hides other people's drafts from whoever does
+    not run plans, so the tile must not count them for that reader either.
+
+    Through the routes, so both sides take the rule from the access matrix.
+    """
+    from app.modules.company.models import Division
+
+    from tests.unit.test_analytics_manager_scope import _headers, _user
+    from tests.unit.test_section_gate import _save
+
+    head = await _user(db, tenant, "manager")
+    head_emp = Employee(
+        user_id=head.id, tenant_id=tenant.id, hire_date=date(2024, 1, 1)
+    )
+    db.add(head_emp)
+    await db.commit()
+    await db.refresh(head_emp)
+    division = Division(
+        tenant_id=tenant.id, name=f"Ops {uuid.uuid4().hex[:4]}", manager_id=head_emp.id
+    )
+    db.add(division)
+    await db.commit()
+    for status in ("active", "on_leave"):
+        emp = await _make_employee(db, tenant, last_name=status, status=status)
+        emp.division_id = division.id
+        db.add_all([_pdp(tenant, emp, status=s) for s in _OPEN_PLAN_STATUSES])
+    await db.commit()
+
+    async def tile_and_list() -> tuple[int, int]:
+        h = _headers(head)
+        loop = (await client.get("/api/analytics/dev-loop", headers=h)).json()
+        plans = (await client.get("/api/pdp", headers=h)).json()
+        listed = [p for p in plans if p["status"] in _OPEN_PLAN_STATUSES]
+        return loop["stages"]["developing"]["open_pdps"], len(listed)
+
+    # Runs plans: drafts on both sides — 2 people x 5 open statuses.
+    await _save(auth_client, levels={"development": {"manager": "manage"}})
+    assert await tile_and_list() == (10, 10)
+    # Reads plans only: the list drops the two drafts, and so does the tile.
+    await _save(auth_client, levels={"development": {"manager": "view"}})
+    assert await tile_and_list() == (8, 8)
+
+
+@pytest.mark.asyncio
 async def test_stale_assessment_counts_as_uncovered(
     db: AsyncSession, tenant, status_done, type_self
 ):

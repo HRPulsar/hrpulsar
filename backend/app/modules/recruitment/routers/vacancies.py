@@ -45,6 +45,7 @@ from app.modules.recruitment.schemas import (
     VacancyStageRead,
     VacancyStagesReplace,
     VacancyStageUpdate,
+    VacancyStatusChange,
     VacancyUpdate,
 )
 from app.modules.recruitment.scope import (
@@ -221,7 +222,22 @@ async def close_vacancy(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
-    return await service.close_vacancy(db, current_user.tenant_id, vacancy_id, data)
+    return await service.close_vacancy(
+        db, current_user.tenant_id, vacancy_id, data, user_id=current_user.id
+    )
+
+
+@router.post("/recruitment/vacancies/{vacancy_id}/status", response_model=VacancyRead)
+async def change_vacancy_status(
+    vacancy_id: uuid.UUID,
+    data: VacancyStatusChange,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(runs_hiring),
+):
+    """HRP-427 / HRP-836: Publish, Pause, Reopen, Cancel (Close is ``/close``)."""
+    return await service.change_vacancy_status(
+        db, current_user.tenant_id, vacancy_id, data, user_id=current_user.id
+    )
 
 
 @router.post("/recruitment/vacancies/{vacancy_id}/profile/generate")

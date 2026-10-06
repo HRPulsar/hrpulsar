@@ -452,6 +452,13 @@ def load_rows_sync(db: Session, tenant_id: uuid.UUID) -> list[Any]:
     return list(db.execute(_rows_query(tenant_id)).scalars().all())
 
 
+def row_target(row: Any) -> GenerationTarget | None:
+    """The target generation dispatches this one config row to, or None
+    when dispatch skips it (no own key and no base_url). The connection
+    probe calls exactly this (HRP-986)."""
+    return _pick_target([row], None)
+
+
 def byok_models(rows: list[Any]) -> dict[str, str | None]:
     """Providers the tenant reaches through its own credentials (a BYOK key
     or its own base_url), with that row's model. The tenant's processor list

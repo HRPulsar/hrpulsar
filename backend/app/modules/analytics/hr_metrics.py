@@ -32,6 +32,9 @@ from app.modules.employee import issues
 from app.modules.employee.models import Employee, EmployeeEvent
 from app.modules.talent_market.models import TalentCandidate, TalentCard
 
+# Statuses that count as employed for turnover: a leave is not an exit.
+_ON_THE_BOOKS = ("active", "on_leave")
+
 EXACT = "exact"
 APPROX = "approx"
 NO_DATA = "no_data"
@@ -220,15 +223,25 @@ async def hr_metrics(
         )
 
         exits = [e for e in events if e.event_type == "termination"]
+        # HRP-732 REDO: someone on leave is still employed — not an exit, and
+        # part of the base like anyone active. ``headcount`` (the loop's active
+        # set) left them out, so sending a person on leave raised turnover.
+        staff_q = select(func.count(Employee.id)).where(
+            Employee.tenant_id == tenant_id,
+            Employee.status.in_(_ON_THE_BOOKS),
+        )
+        if visible_employee_ids is not None:
+            staff_q = staff_q.where(Employee.id.in_(visible_employee_ids))
+        staff = (await db.execute(staff_q)).scalar() or 0
 
         def _turnover(lo: date, hi: date) -> int | None:
             # Exits dated in [lo, hi] over the people on the books at ``lo``:
-            # today's headcount plus everyone who has left since. Dividing
-            # both buckets by today's headcount alone made the earlier rate,
-            # and the trend between the two, drift with every later exit —
-            # and reconstructing the base from today's state is what makes
-            # this an estimate rather than a reading.
-            on_books = headcount + sum(1 for e in exits if lo <= e.event_date <= today)
+            # today's staff plus everyone who has left since. Dividing both
+            # buckets by today's staff alone made the earlier rate, and the
+            # trend between the two, drift with every later exit — and
+            # reconstructing the base from today's state is what makes this
+            # an estimate rather than a reading.
+            on_books = staff + sum(1 for e in exits if lo <= e.event_date <= today)
             if not on_books:
                 return None
             left = sum(1 for e in exits if lo <= e.event_date <= hi)

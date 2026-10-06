@@ -32,6 +32,7 @@ from app.modules.recruitment import (
 from app.modules.recruitment import (
     manager_assessment_service as service,
 )
+from app.modules.recruitment.common import ensure_vacancy_unlocked
 from app.modules.recruitment.manager_assessment_schemas import (
     CompetenceScoreIn,
     ExtendInviteIn,
@@ -162,6 +163,9 @@ async def create_round_endpoint(
     current_user: User = Depends(runs_rounds),
     _scope: None = Depends(cv_scope),
 ) -> dict[str, Any]:
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "manager_assessments", cv_id=cv_id
+    )
     return await service.create_round(
         db, current_user.tenant_id, current_user.id, cv_id, payload
     )
@@ -175,6 +179,9 @@ async def update_round_endpoint(
     current_user: User = Depends(runs_rounds),
     _scope: None = Depends(round_scope),
 ) -> dict[str, Any]:
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "manager_assessments", round_id=round_id
+    )
     # HRP-376: the kebab sends an explicit action ("restore" cannot be
     # expressed as a target status — it lands on complete or in_progress
     # depending on where the round was archived from). The older
@@ -210,6 +217,9 @@ async def add_evaluator_endpoint(
     current_user: User = Depends(runs_rounds),
     _scope: None = Depends(round_scope),
 ) -> dict[str, Any]:
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "manager_assessments", round_id=round_id
+    )
     return await service.add_evaluator(
         db, current_user.tenant_id, current_user.id, round_id, payload.user_id
     )

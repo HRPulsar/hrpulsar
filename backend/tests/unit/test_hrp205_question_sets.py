@@ -46,6 +46,8 @@ from app.modules.recruitment.schemas import (
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit._consent import sign_consent
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -84,7 +86,7 @@ async def _make_vacancy(db: AsyncSession, tenant, user, title: str = "BE") -> di
 
 
 async def _make_candidate(db: AsyncSession, tenant, user) -> dict:
-    return await service.create_candidate(
+    candidate = await service.create_candidate(
         db,
         tenant.id,
         user.id,
@@ -94,6 +96,8 @@ async def _make_candidate(db: AsyncSession, tenant, user) -> dict:
             email=f"{uuid.uuid4().hex[:6]}@example.com",
         ),
     )
+    await sign_consent(db, tenant.id, candidate["id"])  # HRP-979
+    return candidate
 
 
 async def _attach(db: AsyncSession, tenant, user, candidate_id, vacancy_id) -> dict:

@@ -13,6 +13,7 @@ from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
+from app.modules.auth.router import invitations_limiter
 from app.modules.recruitment import (
     audit_service,
     gdpr_service,
@@ -220,6 +221,23 @@ async def update_llm_provider(
         request=request,
     )
     return settings_service.llm_provider_to_read(cfg)
+
+
+@router.post("/recruitment/settings/llm-providers/{config_id}/test")
+# The project's per-user limiter: every press is an outbound call on the
+# tenant's key or to the tenant's server.
+@invitations_limiter.limit("10/minute")
+async def probe_llm_provider(
+    request: Request,
+    config_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    """HRP-986: one minimal call through this row's own key/base_url/model -
+    ``{"status": "ok"}`` or a localized error code."""
+    return await settings_service.probe_llm_provider(
+        db, current_user.tenant_id, config_id, current_user.id
+    )
 
 
 @router.delete("/recruitment/settings/llm-providers/{config_id}", status_code=204)

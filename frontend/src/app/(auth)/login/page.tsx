@@ -24,6 +24,14 @@ function safeNextParam(raw: string | null): string | null {
   return raw;
 }
 
+// The proxy's redirect here keeps the fragment of the page it bounced
+// (browsers carry it over a redirect without one), and a fragment can hold
+// a token kept out of the query on purpose - the import of saved public
+// checks (`/coverage/saved-checks#link=`). Hand it on with `next`.
+function withFragment(next: string): string {
+  return next.includes("#") ? next : next + window.location.hash;
+}
+
 export default function LoginPage() {
   return (
     <Suspense fallback={null}>
@@ -54,7 +62,7 @@ function LoginContent() {
       if (isTenantSelection(result)) {
         setTenants(result.tenants);
       } else {
-        router.push(nextParam ?? getLoginRedirect(result));
+        router.push(nextParam ? withFragment(nextParam) : getLoginRedirect(result));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("loginFailed"));
@@ -68,7 +76,7 @@ function LoginContent() {
     setLoading(true);
     try {
       const result = await selectTenant(email, password, tenantId);
-      router.push(nextParam ?? getLoginRedirect(result));
+      router.push(nextParam ? withFragment(nextParam) : getLoginRedirect(result));
     } catch (err) {
       setError(
         err instanceof Error ? err.message : t("selectTenantFailed"),

@@ -25,6 +25,7 @@ from __future__ import annotations
 import inspect
 import logging
 import uuid
+from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
@@ -50,6 +51,8 @@ AUDITED: dict[str, list[tuple[str, str]]] = {
         ("create_vacancy", "vacancy.create"),
         ("update_vacancy", "vacancy.update"),
         ("close_vacancy", "vacancy.close"),
+        # HRP-427 / HRP-836: Publish, Pause, Reopen, Cancel.
+        ("change_vacancy_status", "vacancy.change_status"),
         ("archive_vacancy", "vacancy.archive"),
         ("restore_vacancy", "vacancy.restore"),
         ("delete_vacancy", "vacancy.delete"),
@@ -168,10 +171,10 @@ AUDITED: dict[str, list[tuple[str, str]]] = {
 AUDIT_EXEMPT: set[str] = {
     # The audit writer itself — wrapping it would recurse.
     "app.modules.recruitment.audit_service:record_event",
-    # HRP-252: cache-aware analyze wrapper — the inner ``enqueue_analyze``
-    # is already audited (``interview.analyze``); the cache shim must not
-    # double-record. A cache hit returns synchronously without business
-    # mutations beyond copying the cached payload onto the interview row.
+    # HRP-252: cache-aware analyze wrapper — a cache miss falls through to
+    # the audited ``enqueue_analyze`` (``interview.analyze``), and a cache
+    # hit writes that same row itself, flagged ``cached`` (HRP-982); a
+    # wrapper here would record each analysis twice.
     "app.modules.recruitment.interview_service:enqueue_analyze_or_cached",
     # HRP-204: helpers in resume_analysis_service — these are pure
     # read-checks and bookkeeping invoked by the audited entry points
@@ -192,7 +195,11 @@ AUDIT_EXEMPT: set[str] = {
     # generic wrapper can't see it, so each of these calls
     # ``audit_service.record_event`` in-body after the tenant is known.
     "app.modules.recruitment.consent_service:sign_consent",
+    "app.modules.recruitment.consent_service:revoke_consent",
     "app.modules.recruitment.assessment_service:record_invite_assessment",
+    # HRP-979: demo auto-consent rides on candidate creation, which is
+    # audited itself; there is no actor to record but the creator.
+    "app.modules.recruitment.consent_service:auto_sign_demo_consent",
     # Settings hub: writes are audited explicitly by settings_router so the
     # decorator stays out of the way (router emits redacted payload_diff).
     "app.modules.recruitment.settings_service:create_scale",
@@ -201,6 +208,8 @@ AUDIT_EXEMPT: set[str] = {
     "app.modules.recruitment.settings_service:create_llm_provider",
     "app.modules.recruitment.settings_service:update_llm_provider",
     "app.modules.recruitment.settings_service:delete_llm_provider",
+    # HRP-986: the connection check changes no state - nothing to audit.
+    "app.modules.recruitment.settings_service:probe_llm_provider",
     "app.modules.recruitment.settings_service:create_transcription_provider",
     "app.modules.recruitment.settings_service:update_transcription_provider",
     "app.modules.recruitment.settings_service:delete_transcription_provider",
@@ -215,6 +224,9 @@ AUDIT_EXEMPT: set[str] = {
     # confuse the timeline.
     "app.modules.recruitment.gdpr_service:gdpr_export",
     "app.modules.recruitment.gdpr_service:gdpr_erase",
+    # HRP-983: retention sweep — runs from celery beat with no actor; each
+    # tenant run writes its own ``gdpr_erasure_log`` row instead.
+    "app.modules.recruitment.gdpr_service:apply_retention",
     # Functionally read-only (returns bytes/url) — billed because the work
     # is non-trivial but the data state is not mutated.
     "app.modules.recruitment.assessment_service:export_questions_pdf",
@@ -260,7 +272,43 @@ AUDIT_EXEMPT: set[str] = {
 # Argument introspection
 # ---------------------------------------------------------------------------
 
-_USER_ID_PARAMS = ("user_id", "initiator_id", "author_id", "inviter_id")
+# Same names ``ee/billing.py`` reads for the charge's "Who" (HRP-982: the
+# AI entry points name their caller ``actor_user_id`` / ``current_user_id``,
+# so their audit rows had no author).
+_USER_ID_PARAMS = (
+    "user_id",
+    "initiator_id",
+    "author_id",
+    "inviter_id",
+    "current_user_id",
+    "actor_user_id",
+)
+
+# HRP-982: what only the wrapped call itself knows - the before/after of the
+# change it made, or an author it had to resolve on its own (the worker's
+# upload -> transcribe -> analyze chain runs with no request user). Each
+# wrapped call gets a fresh dict; a nested wrapped call gets its own.
+_annotations: ContextVar[dict[str, Any] | None] = ContextVar(
+    "recruitment_audit_annotations", default=None
+)
+
+
+def annotate(
+    *, user_id: uuid.UUID | None = None, payload_diff: dict | None = None
+) -> None:
+    """Hand the enclosing audit wrapper an author or a payload diff.
+
+    A no-op outside a wrapped call. ``user_id`` only fills in for a call
+    whose own arguments carry none.
+    """
+    notes = _annotations.get()
+    if notes is None:
+        return
+    if user_id is not None:
+        notes["user_id"] = user_id
+    if payload_diff is not None:
+        notes["payload_diff"] = payload_diff
+
 
 # Common id-suffix arg names we use when the result lacks an id.
 _ENTITY_ID_FALLBACK_PARAMS = (
@@ -357,9 +405,12 @@ def _wrap_with_audit(func: Any, action: str) -> Any:
         except Exception:  # pragma: no cover — defence in depth
             log.exception("audit_hook.bind_failed", extra={"action": action})
 
+        notes: dict[str, Any] = {}
+        token = _annotations.set(notes)
         try:
             result = await func(*args, **kwargs)
         except Exception:
+            user_id = user_id or _coerce_uuid(notes.get("user_id"))
             if db is not None and tenant_id is not None:
                 try:
                     # The service raised mid-transaction, so the caller's
@@ -388,6 +439,9 @@ def _wrap_with_audit(func: Any, action: str) -> Any:
                         extra={"action": action},
                     )
             raise
+        finally:
+            _annotations.reset(token)
+        user_id = user_id or _coerce_uuid(notes.get("user_id"))
 
         if db is None or tenant_id is None:
             log.debug(
@@ -413,7 +467,7 @@ def _wrap_with_audit(func: Any, action: str) -> Any:
             action=action,
             entity_type=entity_type,
             entity_id=entity_id,
-            payload_diff=None,
+            payload_diff=notes.get("payload_diff"),
         )
         return result
 

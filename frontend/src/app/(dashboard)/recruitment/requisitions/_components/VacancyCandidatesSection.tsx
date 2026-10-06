@@ -25,12 +25,19 @@ interface VacancyCandidatesSectionProps {
   /** HRP-687: bumped by the competences section when its library-linked
    *  set changes — the internal block re-reads the posting precondition. */
   internalReloadToken?: number;
+  /** HRP-836: a closed or cancelled vacancy's candidates are read-only. */
+  readOnly?: boolean;
+  /** HRP-427: the first candidate opens a draft vacancy — the page re-reads
+   *  its status when the count moves. */
+  onCountChange?: (count: number) => void;
 }
 
 export function VacancyCandidatesSection({
   vacancyId,
   count,
   internalReloadToken,
+  readOnly = false,
+  onCountChange,
 }: VacancyCandidatesSectionProps) {
   const t = useTranslations("recruitment");
   const router = useRouter();
@@ -40,7 +47,8 @@ export function VacancyCandidatesSection({
   const [currentCount, setCurrentCount] = useState(count);
   // HRP-830: the funnel and the candidate list are `manage` on
   // recruitment; a `view` holder reads the table.
-  const canManage = usePermissions().canManageSection("recruitment");
+  const canManage =
+    usePermissions().canManageSection("recruitment") && !readOnly;
 
   const triggerReload = useCallback(() => {
     setReloadToken((n) => n + 1);
@@ -82,11 +90,16 @@ export function VacancyCandidatesSection({
           vacancyId={vacancyId}
           reloadToken={internalReloadToken}
           onAdded={triggerReload}
+          readOnly={readOnly}
         />
         <VacancyCandidatesTable
           vacancyId={vacancyId}
           reloadToken={reloadToken}
-          onRowCountChange={setCurrentCount}
+          onRowCountChange={(n) => {
+            setCurrentCount(n);
+            onCountChange?.(n);
+          }}
+          readOnly={readOnly}
         />
       </CardContent>
 

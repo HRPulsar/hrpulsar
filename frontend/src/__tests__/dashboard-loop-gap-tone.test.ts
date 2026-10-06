@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMyStages, buildStages } from "@/app/(dashboard)/dashboard/page";
+import {
+  buildMyStages,
+  buildStages,
+  DEVELOPING_HREF,
+} from "@/app/(dashboard)/dashboard/page";
+import { matchesPdpFilters } from "@/lib/pdp-filters";
+import { isTerminalPDPStatus, PDP_STATUS_OPTIONS } from "@/lib/pdp-status";
+import type { PDP } from "@/lib/types";
 
 // HRP-656: on both loop heroes red means "nobody owns this". A gap that an
 // open development plan already covers is the loop doing its job and gets
@@ -235,5 +242,35 @@ describe("the completed tile", () => {
       tArgs,
     ).find((s) => s.key === "closed");
     expect(tile).toMatchObject({ value: "0", progress: 0, tone: undefined });
+  });
+});
+
+// HRP-844: the In development tile counts open plans — anything not Done or
+// Cancelled — and must open the list on exactly that set, or the number on
+// the tile and the number of rows it opens drift apart.
+describe("company loop hero: the In development tile", () => {
+  it("opens the plans list preset to every open status", () => {
+    const developing = companyStages(1, 0).find((s) => s.key === "developing");
+    expect(developing?.href).toBe(DEVELOPING_HREF);
+    const statuses = new URLSearchParams(DEVELOPING_HREF.split("?")[1]).getAll(
+      "status",
+    );
+    expect(new Set(statuses)).toEqual(
+      new Set(PDP_STATUS_OPTIONS.filter((s) => !isTerminalPDPStatus(s))),
+    );
+  });
+
+  it("lists exactly the plans the tile counted", () => {
+    const statuses = new URLSearchParams(DEVELOPING_HREF.split("?")[1]).getAll(
+      "status",
+    );
+    const plans = PDP_STATUS_OPTIONS.map(
+      (status, i) => ({ id: `p-${i}`, title: "Plan", status }) as PDP,
+    );
+    const counted = plans.filter((p) => !isTerminalPDPStatus(p.status)).length;
+    const listed = plans.filter((p) =>
+      matchesPdpFilters(p, { searchQuery: "", filterStatuses: statuses }),
+    ).length;
+    expect(listed).toBe(counted);
   });
 });

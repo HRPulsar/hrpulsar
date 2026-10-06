@@ -92,7 +92,11 @@ export interface TurnstileGate {
  *     Submit
  *   </button>
  */
-export function useTurnstileGate(): TurnstileGate {
+export function useTurnstileGate(
+  /** The widget's ``action``, checked by a server that expects one (the
+   * public check: a token solved for one form passes no other). */
+  action?: string,
+): TurnstileGate {
   const instanceRef = useRef<TurnstileInstance | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -126,7 +130,7 @@ export function useTurnstileGate(): TurnstileGate {
     <Turnstile
       ref={instanceRef}
       siteKey={siteKey}
-      options={{ appearance: "interaction-only" }}
+      options={{ appearance: "interaction-only", ...(action ? { action } : {}) }}
       onBeforeInteractive={() => setInteractive(true)}
       onSuccess={(value) => {
         setToken(value);

@@ -8,6 +8,7 @@ to a tenant that legitimately has no items of that type.
 import uuid
 
 import pytest
+from app.config import settings
 from app.main import app
 from app.modules.dictionary import service as dictionary_service
 from app.modules.dictionary.models import DictionaryItem
@@ -16,6 +17,10 @@ from app.modules.public_api import service as public_api_service
 from fastapi import HTTPException
 
 DICTIONARIES_PATH = "/api/v1/dictionaries/{item_type}"
+
+
+def _limit_count(rate: str) -> int:
+    return int(rate.split("/")[0])
 
 
 async def _api_key(db, tenant_id, user_id):
@@ -56,6 +61,73 @@ class TestPublicDictionaryTypeValidation:
         detail = resp.json()["detail"]
         assert detail["valid_types"] == sorted(VALID_TYPES)
         assert "not_a_type" in detail["message"]
+
+    async def test_the_error_format_is_pinned_and_documented(
+        self, db, client, tenant, user
+    ):
+        """HRP-583 (c): the one public API error whose ``detail`` is an
+        object. Integrations read it, so the shape is fixed and described in
+        the API's own spec rather than unified with the string ones."""
+        key = await _api_key(db, tenant.id, user.id)
+
+        body = (
+            await client.get(
+                "/api/v1/dictionaries/not_a_type", headers={"X-API-Key": key}
+            )
+        ).json()
+        assert body["code"] == "invalid_dictionary_type"
+        assert set(body["detail"]) == {"code", "message", "valid_types"}
+        assert body["detail"]["code"] == "invalid_dictionary_type"
+
+        other = (
+            await client.get(
+                "/api/v1/dictionaries/grade", headers={"X-API-Key": "nope"}
+            )
+        ).json()
+        assert other["code"] == "invalid_api_key"
+        assert isinstance(other["detail"], str)
+
+        spec = (
+            await client.get("/api/v1/openapi.json", headers={"X-API-Key": key})
+        ).json()
+        errors = spec["info"]["description"].split("## Errors")[1]
+        assert "`invalid_dictionary_type`" in errors
+        assert "`valid_types`" in errors
+        assert "`422`" in errors and "`429`" in errors
+
+    async def test_the_framework_errors_keep_the_shapes_the_spec_names(
+        self, db, client, tenant, user
+    ):
+        """The ``## Errors`` section names two responses without ``code``:
+        FastAPI's validation error and slowapi's rate limit. Pinned here so
+        the description and the wire do not drift apart."""
+        from app.modules.public_api.router import limiter
+
+        key = await _api_key(db, tenant.id, user.id)
+        for resp in (
+            await client.get("/api/v1/employees?limit=0", headers={"X-API-Key": key}),
+            await client.get("/api/v1/dictionaries/grade"),  # no X-API-Key
+        ):
+            assert resp.status_code == 422
+            body = resp.json()
+            assert "code" not in body
+            assert {"loc", "msg", "type"} <= set(body["detail"][0])
+
+        # The suite runs with this limiter off (tests/conftest.py); a fresh
+        # key is a fresh counter.
+        limiter.enabled = True
+        try:
+            for _ in range(_limit_count(settings.public_api_rate_limit) + 1):
+                resp = await client.get(
+                    "/api/v1/dictionaries/grade?limit=1", headers={"X-API-Key": key}
+                )
+                if resp.status_code == 429:
+                    break
+        finally:
+            limiter.enabled = False
+        assert resp.status_code == 429
+        assert list(resp.json()) == ["error"]
+        assert resp.json()["error"].startswith("Rate limit exceeded")
 
     @pytest.mark.parametrize("item_type", sorted(VALID_TYPES))
     async def test_every_valid_type_still_returns_a_page(

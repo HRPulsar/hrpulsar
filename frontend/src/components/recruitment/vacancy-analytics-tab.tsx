@@ -5,7 +5,10 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { VacancyAnalytics } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Hint } from "@/components/ui/hint";
 import { Loader2 } from "lucide-react";
+
+const EM_DASH = "—";
 
 interface Props {
   vacancyId: string;
@@ -29,6 +32,14 @@ function formatDuration(
       value: (seconds / 3600).toFixed(1),
     });
   return t("analyticsTabDurationDays", { value: (seconds / 86400).toFixed(1) });
+}
+
+/** Whole percent, or an em dash where nothing is calculated (HRP-785). */
+function formatPercent(
+  t: (key: string, values?: Record<string, string | number>) => string,
+  value: number | null | undefined,
+): string {
+  return value == null ? EM_DASH : t("analyticsTabPercent", { value });
 }
 
 export function VacancyAnalyticsTab({ vacancyId }: Props) {
@@ -162,10 +173,29 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between gap-3">
           <CardTitle>{t("analyticsTabFunnel")}</CardTitle>
+          {/* HRP-785: (terminal-positive candidates / all candidates) x 100. */}
+          <span
+            className="text-sm text-muted-foreground"
+            data-testid="recruitment-vacancy-analytics-overall-conversion"
+          >
+            {t("analyticsTabOverallConversion", {
+              value: formatPercent(t, data.overall_conversion_percent),
+            })}
+          </span>
         </CardHeader>
         <CardContent>
+          {/* HRP-785: the Conversion column; the formula lives in the hint. */}
+          {data.funnel.length > 0 && (
+            <div className="mb-1 flex items-center justify-end gap-1 text-xs text-muted-foreground">
+              {t("analyticsTabConversion")}
+              <Hint
+                text={t("analyticsTabConversionHint")}
+                data-testid="recruitment-vacancy-analytics-conversion-hint"
+              />
+            </div>
+          )}
           {data.funnel.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {t("analyticsTabNoStages")}
@@ -188,6 +218,12 @@ export function VacancyAnalyticsTab({ vacancyId }: Props) {
                   </div>
                   <span className="w-20 text-right text-xs text-muted-foreground">
                     {formatDuration(t, stage.median_seconds_in_stage)}
+                  </span>
+                  <span
+                    className="w-16 text-right text-xs font-medium tabular-nums"
+                    data-testid={`recruitment-vacancy-analytics-conversion-${stage.stage_id}`}
+                  >
+                    {formatPercent(t, stage.conversion_percent)}
                   </span>
                 </li>
               ))}

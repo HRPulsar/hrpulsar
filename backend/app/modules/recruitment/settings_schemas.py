@@ -153,6 +153,10 @@ class LLMProviderRead(BaseModel):
 
 # ─── Transcription provider config ──────────────────────────────────
 
+# ``faster_whisper`` is not implemented: still parsed here so the service
+# refuses it with its own ``transcription_provider_not_supported`` code
+# rather than a bare literal error (HRP-985). A Whisper row may carry
+# ``settings["base_url"]`` — the tenant's own OpenAI-compatible server.
 TranscriptionProviderName = Literal[
     "whisper", "deepgram", "assemblyai", "yandex_speechkit", "faster_whisper"
 ]

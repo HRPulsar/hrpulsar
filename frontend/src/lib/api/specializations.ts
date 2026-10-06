@@ -3,6 +3,8 @@ import { api } from "@/lib/api";
 export type SpecializationListItem = {
   id: string;
   title: string;
+  // HRP-912: origin rows localize via reference.dictionary.specialization.*.
+  i18n_key?: string | null;
   description: string | null;
   is_active: boolean;
   grade_count: number;

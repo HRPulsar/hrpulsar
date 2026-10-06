@@ -13,11 +13,15 @@ import enMessages from "../../messages/en.json";
 
 const questionSets: unknown[] = [];
 const posted: string[] = [];
+// HRP-979: the candidate's consent, as `consent/latest` reports it.
+const SIGNED = { status: "signed", active: true };
+let consent: { status: string; active: boolean } | null = SIGNED;
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {},
   api: {
     get: vi.fn((url: string) => {
+      if (url.includes("consent/latest")) return Promise.resolve(consent);
       if (url.includes("/question-sets")) return Promise.resolve(questionSets);
       if (url.includes("/profile")) return Promise.resolve({ profile_data: {} });
       return Promise.resolve([]);
@@ -146,6 +150,33 @@ async function mount() {
 
 const byTestId = (id: string) =>
   container.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+
+describe("Interview questions — candidate consent (HRP-979)", () => {
+  it("keeps Generate off and says why without consent", async () => {
+    consent = null;
+    try {
+      await mount();
+      const generate = byTestId(
+        "recruitment-interview-questions-generate-btn",
+      ) as HTMLButtonElement;
+      expect(generate.disabled).toBe(true);
+      expect(
+        byTestId("recruitment-interview-questions-consent-hint"),
+      ).not.toBeNull();
+    } finally {
+      consent = SIGNED;
+    }
+  });
+
+  it("offers Generate once consent is in force", async () => {
+    await mount();
+    const generate = byTestId(
+      "recruitment-interview-questions-generate-btn",
+    ) as HTMLButtonElement;
+    expect(generate.disabled).toBe(false);
+    expect(byTestId("recruitment-interview-questions-consent-hint")).toBeNull();
+  });
+});
 
 describe("Interview questions — generation in progress (HRP-471)", () => {
   it("case 1: the first set keeps the empty state, disabled button and a Cancel", async () => {

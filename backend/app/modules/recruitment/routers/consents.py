@@ -24,6 +24,7 @@ from app.modules.recruitment.routers.common import (
 )
 from app.modules.recruitment.schemas import (
     ConsentRequestRead,
+    ConsentRevokeResult,
     ConsentSendRequest,
     ConsentSignResult,
     ConsentTemplateCreate,
@@ -159,3 +160,18 @@ async def sign_consent(
         signed_ip=client_ip,
         signed_user_agent=user_agent,
     )
+
+
+@router.post(
+    "/recruitment/consent/{token}/revoke",
+    response_model=ConsentRevokeResult,
+)
+@recruitment_public_limiter.limit("10/minute")
+async def revoke_consent(
+    request: Request,
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint — the candidate withdraws their consent (HRP-979)."""
+
+    return await service.revoke_consent(db, token)

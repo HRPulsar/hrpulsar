@@ -21,6 +21,7 @@ from app.modules.auth.models import User
 from app.modules.recruitment import (
     service,
 )
+from app.modules.recruitment.common import ensure_vacancy_unlocked
 from app.modules.recruitment.routers.common import runs_hiring
 from app.modules.recruitment.schemas import (
     AbortUploadRequest,
@@ -87,6 +88,7 @@ async def create_interview(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
+    await ensure_vacancy_unlocked(db, current_user.tenant_id, "interviews", cv_id=cv_id)
     return await service.create_interview(
         db, current_user.tenant_id, current_user.id, cv_id, data
     )
@@ -143,6 +145,9 @@ async def update_interview(
     the service returns ``412 Precondition Failed`` and the client must
     reload.
     """
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "interviews", interview_id=interview_id
+    )
 
     expected_version: int | None = None
     if if_match:
@@ -170,6 +175,9 @@ async def update_transcript(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "interviews", interview_id=interview_id
+    )
     return await service.update_transcript(
         db, current_user.tenant_id, interview_id, data
     )
@@ -186,6 +194,9 @@ async def update_interview_segment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "interviews", interview_id=interview_id
+    )
     return await service.update_segment(
         db, current_user.tenant_id, interview_id, segment_id, data
     )
@@ -201,6 +212,9 @@ async def init_interview_upload(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "interviews", interview_id=interview_id
+    )
     return await service.init_interview_upload(
         db,
         current_user.tenant_id,
@@ -423,6 +437,9 @@ async def paste_text_transcript(
     current_user: User = Depends(runs_hiring),
 ):
     """HRP-202: inline-paste a transcript (no media file)."""
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "interviews", interview_id=interview_id
+    )
     return await service.paste_text_transcript(
         db, current_user.tenant_id, interview_id, data
     )
@@ -438,6 +455,9 @@ async def archive_interview(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "interviews", interview_id=interview_id
+    )
     return await service.archive_interview(
         db,
         current_user.tenant_id,
@@ -456,6 +476,9 @@ async def restore_interview(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "interviews", interview_id=interview_id
+    )
     return await service.restore_interview(
         db,
         current_user.tenant_id,
@@ -473,6 +496,9 @@ async def replace_interview_file(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "interviews", interview_id=interview_id
+    )
     return await service.replace_interview_file(
         db, current_user.tenant_id, interview_id
     )
@@ -502,6 +528,9 @@ async def enqueue_transcribe(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "interviews", interview_id=interview_id
+    )
     return await service.enqueue_transcribe(
         db, current_user.tenant_id, interview_id, user_id=current_user.id
     )
@@ -515,6 +544,9 @@ async def enqueue_analyze(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "interviews", interview_id=interview_id
+    )
     from fastapi.responses import JSONResponse
 
     result = await service.enqueue_analyze_or_cached(
@@ -551,6 +583,12 @@ async def enqueue_ai_analysis(
     ``mode='full'`` — redirect to the legacy interview-page entry point
     (40 cr); ``interview_id`` required.
     """
+    await ensure_vacancy_unlocked(
+        db,
+        current_user.tenant_id,
+        "ai_insights",
+        cv_id=candidate_vacancy_id,
+    )
 
     from app.modules.recruitment import resume_analysis_service
 
@@ -722,6 +760,9 @@ async def bulk_analyze_resume_only(
     """Fan-out resume-only analysis over a recruiter selection. Hiring
     Manager role is **not** allowed (bulk × 20 cr is a budget risk —
     spec §14 RBAC)."""
+    await ensure_vacancy_unlocked(
+        db, current_user.tenant_id, "ai_insights", vacancy_id=vacancy_id
+    )
 
     from app.modules.recruitment import resume_analysis_service
 

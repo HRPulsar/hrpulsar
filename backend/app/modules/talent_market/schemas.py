@@ -101,11 +101,22 @@ class TalentCardRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SourceVacancy(BaseModel):
+    """HRP-693: the recruitment vacancy a card was posted from."""
+
+    # Set only when the viewer may open the vacancy's page in recruitment.
+    id: uuid.UUID | None
+    title: str
+    can_open: bool
+
+
 class TalentCardDetail(TalentCardRead):
     specializations: list[SpecializationLink] = []
     competences: list[CompetenceLink] = []
     requirements: list[RequirementRead] = []
     candidates: list[CandidateRead] = []
+    # Left out for an applicant reading the card for their own sake.
+    source_vacancy: SourceVacancy | None = None
 
 
 class SearchRequest(BaseModel):

@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 from app.config import settings
+from app.core.errors import AppError
 from app.modules.ai import (
     llm_client,
     model_catalog_service,
@@ -1076,10 +1077,11 @@ class TestCatalogAsSourceOfTruth:
         assert resolved == substitute_id
         assert ai_settings_service.get_effective_provider(row) == "openai"
 
-    async def test_no_same_provider_substitute_keeps_the_pinned_model(
+    async def test_no_same_provider_substitute_refuses_the_pinned_model(
         self, db: AsyncSession, tenant
     ) -> None:
-        # Better an honest (deprecated) model than a silent provider swap.
+        # No silent provider swap - and no call to the disabled model
+        # either (HRP-987): the dispatch is refused with a clear code.
         suffix = uuid.uuid4().hex[:6]
         tier = f"tier-{suffix}"
         pinned_id = f"gemini-pinned-{suffix}"
@@ -1104,9 +1106,12 @@ class TestCatalogAsSourceOfTruth:
         row.effort_level = "custom"
         await db.commit()
 
-        with patch.object(settings, "llm_provider", "anthropic"):
-            resolved = await ai_settings_service.get_effective_model_async(db, row)
-        assert resolved == pinned_id
+        with (
+            patch.object(settings, "llm_provider", "anthropic"),
+            pytest.raises(AppError) as exc,
+        ):
+            await ai_settings_service.get_effective_model_async(db, row)
+        assert exc.value.code == "ai_model_unavailable"
 
     async def test_get_entry_is_provider_scoped_and_deterministic(
         self, db: AsyncSession

@@ -136,7 +136,9 @@ class TestTileLabels:
     ) -> None:
         vacancy_id = await _vacancy_with_stages(db, tenant, user)
         data = await analytics_service.vacancy_analytics(db, tenant.id, vacancy_id)
-        assert data["positive_stage_names"] == ["Hired"]
+        # HRP-790: Probation completed is the default funnel's second
+        # terminal-positive stage.
+        assert data["positive_stage_names"] == ["Hired", "Probation completed"]
         assert data["negative_stage_names"] == ["Rejected"]
         # The Withdrew tile is labelled the same way (QA follow-up).
         assert data["neutral_stage_names"] == ["Withdrew"]

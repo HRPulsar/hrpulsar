@@ -119,6 +119,8 @@ interface VacancyOption {
   id: string;
   vacancy_id: string;
   vacancy_title: string | null;
+  /** HRP-836: the vacancy's status freezes its rounds. */
+  read_only?: boolean;
 }
 
 // HRP-374: cross-evaluator roll-up for the active round — the round header
@@ -256,7 +258,12 @@ export function ManagerAssessmentSection({
   const t = useTranslations("recruitment");
   // HRP-830: rounds, their evaluators, scores and invites are `manage` on
   // recruitment or the manager role; everyone else reads the round.
-  const { canRunHiringRounds: canRunRounds } = usePermissions();
+  const { canRunHiringRounds } = usePermissions();
+  // HRP-629: below `manage` the manager reads the rounds and fills in only
+  // their own sheet - the one they hold as an evaluator on the round. Making,
+  // closing and staffing rounds and inviting outsiders is `manage`. The UI
+  // only: the API still takes these writes from the manager role (HRP-630).
+  const canManageRecruitment = usePermissions().canManageSection("recruitment");
 
   // HRP-373: the "you were added as an evaluator" email links here with
   // `?round=`. Consumed once — after that the user's tab clicks win, so a
@@ -319,6 +326,9 @@ export function ManagerAssessmentSection({
     () => vacancies.find((v) => v.id === activeCvId) ?? null,
     [vacancies, activeCvId],
   );
+  // HRP-836: a paused, closed or cancelled vacancy reads its rounds only.
+  const canRunRounds = canRunHiringRounds && !activeVacancy?.read_only;
+  const canManageRounds = canManageRecruitment && !activeVacancy?.read_only;
   const activeRound = useMemo(
     () => rounds.find((r) => r.id === activeRoundId) ?? null,
     [rounds, activeRoundId],
@@ -335,7 +345,7 @@ export function ManagerAssessmentSection({
   // HRP-373: a pre-interview round holds exactly one evaluator (HRP-369),
   // and a completed or archived round takes no new ones at all (HRP-376).
   const canAddEvaluator =
-    canRunRounds &&
+    canManageRounds &&
     activeRound !== null &&
     activeRound.type !== "pre_interview" &&
     !roundClosed;
@@ -519,8 +529,9 @@ export function ManagerAssessmentSection({
   // submitted external evaluators.
   const loadAggregate = useCallback(async (roundId: string) => {
     let agg: RoundAggregate | null = null;
-    // The aggregate is read with the round's writes (HRP-830).
-    if (!canRunRounds) {
+    // The aggregate is read with the round's writes (HRP-830) - a read, so
+    // a vacancy frozen by its status still shows it (HRP-836).
+    if (!canRunHiringRounds) {
       if (activeRoundIdRef.current === roundId) setAggregate(null);
       return;
     }
@@ -532,7 +543,7 @@ export function ManagerAssessmentSection({
       agg = null;
     }
     if (activeRoundIdRef.current === roundId) setAggregate(agg);
-  }, [canRunRounds]);
+  }, [canRunHiringRounds]);
 
   // Deliberately keyed on the round alone: `rounds` changes identity on
   // every reload and on every optimistic invite write, and re-running the
@@ -891,7 +902,7 @@ export function ManagerAssessmentSection({
                   hiring order whether or not those rounds exist. */}
               {roundStrip(rounds).map((slot) =>
                 slot.kind === "placeholder" ? (
-                  canRunRounds && (
+                  canManageRounds && (
                     <Button
                       key={`add-${slot.type}`}
                       size="sm"
@@ -929,7 +940,7 @@ export function ManagerAssessmentSection({
                       )}
                     </button>
                     {/* HRP-376: Complete / Reopen / Archive / Restore. */}
-                    {canRunRounds && (
+                    {canManageRounds && (
                       <RoundKebab
                         round={slot.round}
                         onAction={runRoundAction}
@@ -950,7 +961,7 @@ export function ManagerAssessmentSection({
                   </span>
                 ),
               )}
-              {canRunRounds && (
+              {canManageRounds && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -968,7 +979,7 @@ export function ManagerAssessmentSection({
               data-testid="assessment-round-evaluators"
             >
               <div className="flex min-h-6 items-center gap-2">
-                {!sheet && !roundClosed && canRunRounds && (
+                {!sheet && !roundClosed && canManageRounds && (
                   <AddSelfAsEvaluator
                     roundId={activeRoundId}
                     onAdded={(s) => {
@@ -1086,7 +1097,7 @@ export function ManagerAssessmentSection({
                   ) : (
                     // Disabled buttons swallow hover (pointer-events:none),
                     // so the explainer tooltip lives on the wrapper span.
-                    canRunRounds && (
+                    canManageRounds && (
                       <span title={completeHint}>
                         <Button
                           size="sm"
@@ -1136,7 +1147,7 @@ export function ManagerAssessmentSection({
                 <h4 className="text-xs font-semibold uppercase text-muted-foreground">
                   {t("managerAssessmentExternalEvaluators")}
                 </h4>
-                {canRunRounds && (
+                {canManageRounds && (
                   <InviteEvaluatorButton
                     cvId={activeCvId}
                     roundId={activeRoundId}
@@ -1302,8 +1313,9 @@ function InviteKebab({
   const [busy, setBusy] = useState(false);
   const terminal = TERMINAL_INVITE_STATUSES.has(invite.status);
   // HRP-830: resend and revoke are the round's writes; reading a
-  // submission is not.
-  const canWrite = usePermissions().canRunHiringRounds;
+  // submission is not. HRP-629: they are `manage`, like the round's other
+  // staffing writes.
+  const canWrite = usePermissions().canManageSection("recruitment");
   // A bounce is worth retrying even once the evaluator has opened nothing:
   // the mail never arrived, so the lifecycle status is not the whole story.
   const canResend =

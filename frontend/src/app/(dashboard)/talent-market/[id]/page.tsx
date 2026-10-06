@@ -1126,6 +1126,29 @@ export default function TalentCardDetailPage() {
               <p className="text-muted-foreground">{t("fieldCreated")}</p>
               <p className="font-medium">{formatDate(card.created_at)}</p>
             </div>
+            {/* HRP-693: the requisition behind a card posted from
+                recruitment - a link for whoever may open it there. */}
+            {card.source_vacancy && (
+              <div>
+                <p className="text-muted-foreground">{t("fieldSourceVacancy")}</p>
+                {card.source_vacancy.can_open ? (
+                  <Link
+                    href={`/recruitment/requisitions/${card.source_vacancy.id}`}
+                    className="font-medium text-primary underline-offset-2 hover:underline"
+                    data-testid="talent-market-detail-source-vacancy"
+                  >
+                    {card.source_vacancy.title}
+                  </Link>
+                ) : (
+                  <p
+                    className="font-medium"
+                    data-testid="talent-market-detail-source-vacancy"
+                  >
+                    {card.source_vacancy.title}
+                  </p>
+                )}
+              </div>
+            )}
             {/* HRP-178: terminal cards (Completed / Cancelled) drop the
               Dates row from Details — the status-specific date below
               already carries the timestamp. Active cards (Draft /

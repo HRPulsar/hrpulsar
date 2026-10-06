@@ -147,10 +147,10 @@ it("opens a failed regeneration on the skill it kept, with no confirmation", asy
   expect(generateSkill).not.toHaveBeenCalled();
 });
 
-it("says the file is English by design", async () => {
+it("says the file follows the AI content language (HRP-912)", async () => {
   getSkill.mockResolvedValue({ ...SKILL, content: "# Draft the offer" });
 
   await open("ready");
 
-  expect(document.body.textContent).toContain(enMessages.coverage.skillEnglishHint);
+  expect(document.body.textContent).toContain(enMessages.coverage.skillLanguageHint);
 });

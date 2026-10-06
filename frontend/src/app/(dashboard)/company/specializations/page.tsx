@@ -43,10 +43,12 @@ import { ActiveAiSessionBadge } from "@/components/competence-generation/ActiveA
 import { useActiveAiSessions } from "@/hooks/use-active-ai-sessions";
 import { findMatrixSessionForSpec } from "@/lib/active-ai-session-match";
 import { activeSessionRoute } from "@/lib/active-ai-session-route";
+import { specializationLabel } from "@/lib/reference-labels";
 
 export default function SpecializationsPage() {
   const t = useTranslations("company");
   const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [items, setItems] = useState<SpecializationListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -119,7 +121,7 @@ export default function SpecializationsPage() {
     setDeleteBusy(true);
     try {
       await api.delete(`/dictionaries/items/${deleting.id}`);
-      toast.success(t("toastSpecDeleted", { title: deleting.title }));
+      toast.success(t("toastSpecDeleted", { title: specializationLabel(tRef, deleting) }));
       setDeleting(null);
       setDeleteUsage(null);
       await load();
@@ -195,7 +197,7 @@ export default function SpecializationsPage() {
 
   const filtered = search
     ? items.filter((i) =>
-        i.title.toLowerCase().includes(search.toLowerCase()),
+        specializationLabel(tRef, i).toLowerCase().includes(search.toLowerCase()),
       )
     : items;
 
@@ -264,7 +266,7 @@ export default function SpecializationsPage() {
                       href={`/company/specializations/${spec.id}`}
                       className="hover:underline"
                     >
-                      {spec.title}
+                      {specializationLabel(tRef, spec)}
                     </Link>
                     {activeSession ? (
                       <ActiveAiSessionBadge
@@ -377,8 +379,8 @@ export default function SpecializationsPage() {
         description={
           deleting
             ? deleteHasReferences
-              ? t("deleteSpecReferenced", { title: deleting.title })
-              : t("deleteSpecConfirm", { title: deleting.title })
+              ? t("deleteSpecReferenced", { title: specializationLabel(tRef, deleting) })
+              : t("deleteSpecConfirm", { title: specializationLabel(tRef, deleting) })
             : ""
         }
         onConfirm={confirmDelete}

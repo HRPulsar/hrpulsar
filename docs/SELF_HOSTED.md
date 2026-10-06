@@ -79,6 +79,36 @@ starts 8 services:
 - **MinIO** — S3-compatible file storage (plus a one-shot `minio-init`
   container that creates the storage bucket on first boot)
 
+**If the MinIO image does not pull.** MinIO no longer publishes its official
+images on Docker Hub, so `minio` and `minio-init` can fail to pull. Use an
+external S3-compatible storage instead: create the bucket there, then add a
+`docker-compose.local.yml` (see [Upgrading](#upgrading)) that parks the
+bundled storage and points the app at yours — the variables are described
+under [Environment Variables](#environment-variables):
+
+```yaml
+services:
+  minio:
+    profiles: ["bundled-storage"]
+  minio-init:
+    profiles: ["bundled-storage"]
+  backend:
+    environment: &external-s3
+      - S3_ENDPOINT=https://s3.example.com
+      - S3_ACCESS_KEY=your-access-key
+      - S3_SECRET_KEY=your-secret-key
+      - S3_BUCKET=hrpulsar
+      - S3_PUBLIC_ENDPOINT=https://s3.example.com
+    depends_on:
+      minio: { condition: service_healthy, required: false }
+      minio-init: { condition: service_completed_successfully, required: false }
+  celery-worker:
+    environment: *external-s3
+```
+
+and pass both files on every command:
+`docker compose -f docker-compose.self-hosted.yml -f docker-compose.local.yml up -d --build`.
+
 ### 4. Access the application
 
 - **HTTP**: http://your-server-ip
@@ -91,17 +121,46 @@ automatically and you are signed in immediately (see step 2 above).
 
 ## HTTPS with a Domain
 
-To enable automatic HTTPS:
+Out of the box the bundled Caddy serves plain HTTP on port 80. To serve the
+app over HTTPS with a certificate Caddy obtains and renews by itself:
 
-1. Point your domain's A record to your server IP
-2. Edit `deploy/selfhosted/Caddyfile`: replace `:80` with your domain (e.g., `app.yourcompany.com`)
-3. Restart Caddy: `docker compose -f docker-compose.self-hosted.yml restart caddy`
+1. Point your domain's DNS record (A, and AAAA if the server has IPv6) at
+   the server.
+2. Make sure ports **80 and 443** are reachable from the internet. The
+   compose file already publishes both; port 80 stays needed for the
+   certificate challenge and for redirecting HTTP to HTTPS.
+3. Edit `deploy/selfhosted/Caddyfile`: replace `:80` on the site line with
+   your domain, e.g. `hr.yourcompany.com {`.
+4. Set the public URL in `.env` to the `https://` address:
+   `FRONTEND_URL=https://hr.yourcompany.com` (and the same origin in
+   `CORS_ORIGINS` if you set it). Email links and file links are built from
+   it.
+5. Apply both changes:
 
-Caddy will automatically obtain a Let's Encrypt certificate. Remember to
-update `FRONTEND_URL` in `.env` to the new domain — uploaded files (logos,
-media) are served through the proxy at that origin. Set
+   ```bash
+   docker compose -f docker-compose.self-hosted.yml up -d
+   docker compose -f docker-compose.self-hosted.yml restart caddy
+   ```
+
+Caddy obtains a Let's Encrypt certificate for the domain as soon as it
+loads the new config, renews it automatically, and redirects HTTP to HTTPS. Certificates live in the `caddy_data`
+volume — keep it across upgrades, or Caddy has to request them again. Set
 `S3_PUBLIC_ENDPOINT=https://your-domain` only if storage is proxied from
 somewhere other than `FRONTEND_URL`.
+
+### Behind an external proxy or load balancer
+
+If TLS is terminated in front of the server (a corporate reverse proxy, a
+cloud load balancer, Cloudflare):
+
+- keep `:80` in the Caddyfile — Caddy serves plain HTTP to your proxy, and
+  only the proxy needs a certificate;
+- set `FRONTEND_URL` to the public `https://` address users open;
+- forward the original `Host` header unchanged — file download links are
+  signed for that host;
+- if the proxy reaches the server from a public address, list its ranges
+  in `TRUSTED_PROXIES` (see [Environment Variables](#environment-variables)),
+  otherwise per-IP rate limits see the proxy instead of your users.
 
 ## Running Without Docker Compose
 
@@ -132,7 +191,7 @@ the hosted-product entry surface.
 | `ASSEMBLYAI_API_KEY` | No | — | AssemblyAI key for interview transcription (recruiting module) |
 | `DEEPGRAM_API_KEY` | No | — | Deepgram key for interview transcription |
 | `YANDEX_SPEECHKIT_API_KEY` | No | — | Yandex SpeechKit key for interview transcription; falls back to the `YANDEX_API_KEY` service account and uses `YANDEX_FOLDER_ID` |
-| `TRANSCRIPTION_PROVIDER_DEFAULT` | No | `whisper` | Transcription provider tried first (`whisper`, `deepgram`, `assemblyai`, `yandex_speechkit`). Every key configured above joins the fallback chain |
+| `TRANSCRIPTION_PROVIDER_DEFAULT` | No | Empty (measured order) | Platform-keyed transcription provider tried first (`whisper`, `deepgram`, `assemblyai`, `yandex_speechkit`); the others follow in the order AssemblyAI, Deepgram, SpeechKit, Whisper, which is also the order when empty. A workspace's own keys always go first. An unknown value stops the application at startup |
 | `AI_PROCESSORS_DEFAULT` | No | Empty (all allowed) | Comma-separated AI processors every workspace may use on the platform's keys: `anthropic`, `openai`, `gemini`, `yandex`, `jev`, `deepgram`, `assemblyai`. Empty (default) allows all. An unknown name stops the application at startup |
 | `SMTP_HOST` | No | — | SMTP server for email notifications |
 | `SMTP_PORT` | No | `587` | SMTP port |
@@ -286,7 +345,9 @@ docker compose -f docker-compose.self-hosted.yml build
 docker compose -f docker-compose.self-hosted.yml up -d
 ```
 
-Migrations run automatically on backend startup. Building happens while
+Third-party images (Caddy, PostgreSQL, Redis) are pinned to fixed
+versions in the compose file; when a release moves a pin, `up -d` pulls the
+new image. Migrations run automatically on backend startup. Building happens while
 the old version keeps serving; expect well under a minute of downtime
 during the final `up -d` switchover.
 

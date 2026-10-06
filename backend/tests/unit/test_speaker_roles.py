@@ -33,6 +33,7 @@ def llm(monkeypatch):
 
     async def _fake_generate(**kwargs):
         captured["prompt"] = kwargs["prompt"]
+        captured["max_tokens"] = kwargs["max_tokens"]
         return captured["answer"]
 
     monkeypatch.setattr(providers, "resolve_generation_target_sync", _fake_resolve)
@@ -81,3 +82,15 @@ def test_a_failed_llm_call_never_costs_the_transcript(llm, monkeypatch):
 
 def test_no_segments_means_nothing_to_label(llm):
     assert label_speakers_sync(None, None, []) is None
+
+
+def test_the_pass_gets_the_recruitment_output_budget(llm):
+    """HRP-993: a thinking model spends the output budget on reasoning
+    before the integer list, and 4000 left long transcripts single-voiced."""
+    from app.modules.recruitment.ai_service import RECRUITMENT_MAX_TOKENS
+    from app.modules.recruitment.speaker_roles import _InterviewerTurns
+
+    llm["answer"] = _InterviewerTurns(interviewer_turns=[0])
+    label_speakers_sync(None, None, _segments("Question?", "Answer."))
+
+    assert llm["max_tokens"] == RECRUITMENT_MAX_TOKENS == 32768

@@ -1,5 +1,5 @@
 Interview · Senior Backend Engineer — Payments
-Candidate: Elena Volkov
+Candidate: Elena Volkova
 Interviewer: Maxim Berg (Hiring Manager)
 Date: 2026-06-08
 Duration: 47 minutes
@@ -84,6 +84,10 @@ Type: Technical + system design
 [00:14:05] Candidate: A few. One — what's the hardest unsolved problem on the payments roadmap right now? Two — what's the team's relationship with security and compliance? At Klarna it was adversarial; I'd want to know what it's like here. And three — what does the team do that you'd want to keep doing in five years?
 
 [00:14:50] Recruiter: Good questions. Let me take them in order...
+
+[00:30:10] Recruiter: Before we wrap up — your take-home was in Python. How would you structure the async side of the settlement service?
+
+[00:30:35] Candidate: FastAPI at the edges, plain asyncio inside. Every I/O call is async, and the fee calculation goes to a process pool — it is CPU-bound and would block the event loop. The database session lives in a FastAPI dependency with a yield, so it closes even when the handler raises. Errors are typed as well: a gateway timeout is retried, a validation error never is. For merchant lookups I'd put aiocache in front of Postgres, with a TTL shorter than the settlement window.
 
 [00:32:00] Recruiter: All right, last five minutes. Anything we didn't cover that you'd want me to know?
 

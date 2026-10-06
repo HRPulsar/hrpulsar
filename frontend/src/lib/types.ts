@@ -1200,6 +1200,14 @@ export interface TalentCardDetail extends TalentCard {
   specializations: TalentRequiredSpecialization[];
   competences: TalentRequiredCompetence[];
   candidates: TalentCandidate[];
+  /** HRP-693: the recruitment vacancy the card was posted from; absent for
+   *  an applicant reading the card for their own sake. */
+  source_vacancy?: {
+    /** Only when `can_open`: no key to a vacancy the viewer may not follow. */
+    id: string | null;
+    title: string;
+    can_open: boolean;
+  } | null;
 }
 
 export interface Notification {
@@ -1653,6 +1661,8 @@ export interface CandidateVacancy {
   stage_name?: string | null;
   candidate_name?: string | null;
   vacancy_title?: string | null;
+  // HRP-836: drives the read-only interview page.
+  vacancy_status?: string | null;
   created_at: string;
 }
 
@@ -2052,8 +2062,18 @@ export interface InterviewAnalysisCompetence {
    */
   normalized_score?: number | null;
   status: string;
-  citations?: Array<{ start_sec?: number; speaker?: string; quote?: string }>;
+  citations?: InterviewAnalysisCitation[];
   reasoning?: string;
+}
+
+/** Mirrors backend ``Citation`` (prompts_interview.py). Since HRP-981 the
+ *  backend saves only citations whose quote is in the named segment, with
+ *  the segment's own timecodes. */
+export interface InterviewAnalysisCitation {
+  segment_id?: string | null;
+  start_sec?: number | null;
+  end_sec?: number | null;
+  quote?: string;
 }
 
 /** Mirrors backend ``BlindSpot`` (prompts_interview.py). */
@@ -2104,6 +2124,8 @@ export interface Interview {
   duration_minutes?: number | null;
   interviewer_id?: string | null;
   interviewer_ids?: string[];
+  /** HRP-1019: who sits in it, in `interviewer_ids` order, readable at `view`. */
+  interviewers?: InterviewerBrief[];
   interview_date?: string | null;
   duration_seconds?: number | null;
   audio_file_id?: string | null;
@@ -2135,6 +2157,13 @@ export interface Interview {
   segments: InterviewSegment[];
   ai_assessments: InterviewAIAssessment[];
   analysis?: InterviewAnalysis | null;
+}
+
+/** HRP-1019: an interviewer as the company directory shows them. */
+export interface InterviewerBrief {
+  id: string;
+  full_name: string;
+  position_title?: string | null;
 }
 
 /** HRP-386: one entry of the Interviewer(s) multi-select. */
@@ -2178,7 +2207,8 @@ export type ConsentStatus =
   | "pending"
   | "signed"
   | "expired"
-  | "superseded";
+  | "superseded"
+  | "revoked";
 
 export interface ConsentRequest {
   id: string;
@@ -2192,6 +2222,10 @@ export interface ConsentRequest {
   /** HRP-684: when the link last went out — the first send equals
    *  ``created_at``, a resend moves it forward. */
   last_sent_at: string | null;
+  /** HRP-979: the candidate's consent is in force — a signed, not
+   *  withdrawn request. Only ``consent/latest`` reports it; the latest
+   *  request may be a re-send while an older signature still holds. */
+  active?: boolean;
 }
 
 export interface ConsentTemplate {
@@ -2416,6 +2450,10 @@ export interface FunnelStageStat {
   stage_name: string | null;
   candidate_count: number;
   median_seconds_in_stage: number | null;
+  // HRP-785: candidates who got this far, and the share of the previous
+  // progress stage that did; null where the stage takes no conversion.
+  reached_count?: number | null;
+  conversion_percent?: number | null;
 }
 
 export interface VacancyAnalytics {
@@ -2427,6 +2465,8 @@ export interface VacancyAnalytics {
   negative_stage_names: string[];
   neutral_stage_names: string[];
   total_candidates: number;
+  // HRP-785: terminal-positive candidates / all candidates, whole percent.
+  overall_conversion_percent?: number | null;
 }
 
 export interface AnalyticsSummary {

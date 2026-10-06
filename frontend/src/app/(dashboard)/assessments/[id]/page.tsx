@@ -88,7 +88,8 @@ import { CriteriaSheet } from "@/components/assessment/criteria-sheet";
 import { MatchPercentChip } from "@/components/assessment/match-percent-chip";
 import { cn } from "@/lib/utils";
 import { createPdpHref } from "@/lib/employee-actions";
-import { assessmentBar, isGap } from "@/lib/employee-issues";
+import { assessmentBar } from "@/lib/employee-issues";
+import { splitHighlights } from "@/lib/assessment-highlights";
 import { isTerminalPDPStatus } from "@/lib/pdp-status";
 import { isPastDeadline, todayLocalISO } from "@/lib/deadline";
 import { formatDate } from "@/lib/date-format";
@@ -868,12 +869,10 @@ export default function AssessmentDetailPage() {
   // promise something the numbers do not yet support.
   const resultsBar = assessmentBar(assessment.passing_score);
   const isDone = assessment.status_code === "done";
-  // A competence answered entirely with the neutral option has no percent
-  // and therefore no verdict — it belongs in neither list rather than
-  // silently counting as a strength. It still shows in the full table.
-  const measured = assessment.results.filter((r) => r.percent !== null);
-  const growthZones = measured.filter((r) => isGap(r.percent!, resultsBar));
-  const strengths = measured.filter((r) => !isGap(r.percent!, resultsBar));
+  const { growthZones, strengths } = splitHighlights(
+    assessment.results,
+    resultsBar,
+  );
   const showHighlights = isDone && canViewResults && assessment.results.length > 0;
   const competenceTitle = (competenceId: string) =>
     allCompetences.find((c) => c.id === competenceId)?.title ||

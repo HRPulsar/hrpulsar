@@ -174,6 +174,23 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 logger.error("Interview %s not found", interview_id)
                 return {"status": "error", "error": "Interview not found"}
 
+            from app.modules.recruitment.consent_service import (
+                _CONSENT_REQUIRED_MESSAGE,
+            )
+
+            def consent_refused() -> dict | None:
+                if not _consent_withdrawn(
+                    db, tenant_id, interview.candidate_vacancy_id
+                ):
+                    return None
+                interview.transcription_status = "failed"
+                interview.transcription_error = _CONSENT_REQUIRED_MESSAGE
+                db.commit()
+                return {"status": "failed", "error": "consent_required"}
+
+            if (refused := consent_refused()) is not None:
+                return refused
+
             ai_usage_hooks.bind(
                 tenant_id=interview.tenant_id,
                 action="recruitment.transcribe_interview_min",
@@ -375,6 +392,12 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 db.commit()
                 return {"status": "failed", "error": last_error}
 
+            # The STT call may run for minutes: a consent withdrawn (or a
+            # candidate erased) meanwhile stops the job before the speaker
+            # pass and before anything is written.
+            if (refused := consent_refused()) is not None:
+                return refused
+
             # HRP-646: a provider without diarization (Whisper) returns the
             # whole interview as one voice, and the analysis then scores
             # competences unable to tell the candidate's words from the
@@ -391,6 +414,8 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 )
                 if relabelled:
                     result.segments = relabelled
+                if (refused := consent_refused()) is not None:
+                    return refused
 
             db.execute(
                 delete(InterviewSegment).where(
@@ -467,6 +492,29 @@ def transcribe_interview_task(self, interview_id: str, tenant_id: str) -> dict:
         raise self.retry(exc=exc)
     finally:
         engine.dispose()
+
+
+def _consent_withdrawn(db, tenant_id, candidate_vacancy_id) -> bool:
+    """HRP-979: the candidate's consent is no longer in force.
+
+    Checked before every paid stage and before results are written: a
+    consent revoked, or a candidate erased, while the job ran must stop it
+    there. A missing pair is left to the task's own handling, like
+    ``analysis_consent_gate`` does.
+    """
+    from sqlalchemy import select
+
+    from app.modules.recruitment.consent_service import has_active_consent_sync
+    from app.modules.recruitment.models import CandidateVacancy
+
+    candidate_id = db.scalar(
+        select(CandidateVacancy.candidate_id).where(
+            CandidateVacancy.id == candidate_vacancy_id
+        )
+    )
+    if candidate_id is None:
+        return False
+    return not has_active_consent_sync(db, uuid.UUID(str(tenant_id)), candidate_id)
 
 
 def _fail_inflight_full_run(db, tenant_id, interview_id, message: str) -> None:
@@ -615,29 +663,17 @@ def _current_resume_hash_sync(db, tenant_id, candidate_id):
     """Sync twin of ``current_resume_hash_for_candidate`` (HRP-492).
 
     The Celery worker runs on a plain ``Session``; the async helper in
-    ``resume_analysis_service`` cannot be awaited here.
+    ``resume_analysis_service`` cannot be awaited here. Same HRP-704
+    loader (HRP-443): a parsed resume entered by hand counts too.
     """
-    from sqlalchemy import select
-
-    from app.modules.recruitment.models import CandidateFile
     from app.modules.recruitment.resume_analysis_service import (
         _compute_resume_snapshot_hash,
     )
+    from app.modules.recruitment.resume_presence import load_parsed_resume_sync
 
-    latest = db.execute(
-        select(CandidateFile)
-        .where(
-            CandidateFile.tenant_id == tenant_id,
-            CandidateFile.candidate_id == candidate_id,
-            CandidateFile.file_type == "resume",
-            CandidateFile.parse_status == "completed",
-        )
-        .order_by(CandidateFile.created_at.desc(), CandidateFile.id.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-    if latest is None:
-        return None
-    return _compute_resume_snapshot_hash(latest.parsed_data)
+    return _compute_resume_snapshot_hash(
+        load_parsed_resume_sync(db, tenant_id, candidate_id)
+    )
 
 
 def _finalize_full_analysis_run(
@@ -650,6 +686,7 @@ def _finalize_full_analysis_run(
     analysis,
     analysed_transcript_hash: str | None = None,
     had_resume: bool | None = None,
+    citation_check: dict | None = None,
 ) -> None:
     """HRP-204: mirror a successful full analysis into ``ai_analysis_runs``.
 
@@ -752,6 +789,9 @@ def _finalize_full_analysis_run(
         # HRP-685: whether the prompt carried a resume - the run's basis,
         # which a resume uploaded later must not rewrite.
         "had_resume": had_resume,
+        # HRP-981: how many of the model's citations the transcript did
+        # not back and were dropped before saving.
+        "citation_check": citation_check,
         "data_completeness": analysis.data_completeness,
         "competence_assessments": [
             a.model_dump() for a in analysis.competence_assessments
@@ -904,6 +944,12 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
     ``service.get_interview``.
     """
 
+    from app.modules.recruitment.consent_service import analysis_consent_gate
+
+    refused = analysis_consent_gate(tenant_id, interview_id=interview_id)
+    if refused is not None:
+        return refused
+
     import asyncio
     import uuid
 
@@ -932,6 +978,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
         INTERVIEW_ANALYSIS_SYSTEM_PROMPT,
         InterviewAnalysisResult,
         build_interview_analysis_prompt,
+        check_analysis_citations,
     )
     from app.modules.recruitment.resume_presence import load_parsed_resume_sync
 
@@ -1138,18 +1185,25 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 resume_summary=(str(latest_resume)[:4000] if latest_resume else None),
             )
 
+            from app.modules.ai.model_catalog_service import (
+                resolve_dispatch_model_sync,
+            )
+            from app.modules.ai.providers import resolve_generation_target_sync
+
+            # HRP-987: resolved before the stage bump - a model refused
+            # with no replacement fails pre-LLM, where cancel still refunds.
+            creds = resolve_generation_target_sync(db, interview.tenant_id, None)
+            # HRP-500 (review #5): this worker holds a sync Session, so
+            # llm_client cannot run the catalog kill-switch for it —
+            # resolve the dispatched id here instead.
+            model = resolve_dispatch_model_sync(db, creds.model)
+
             if pending_run is not None:
                 # HRP-270: ``competences`` is the first LLM-spending
                 # stage — cancel post-bump refunds 0%.
                 pending_run.current_stage = "competences"
                 db.commit()
 
-            from app.modules.ai.model_catalog_service import (
-                resolve_dispatch_model_sync,
-            )
-            from app.modules.ai.providers import resolve_generation_target_sync
-
-            creds = resolve_generation_target_sync(db, interview.tenant_id, None)
             analysis_raw = asyncio.run(
                 generate_json(
                     prompt=prompt,
@@ -1158,10 +1212,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                     temperature=0.2,
                     max_tokens=RECRUITMENT_MAX_TOKENS,
                     credentials=creds,
-                    # HRP-500 (review #5): this worker holds a sync Session,
-                    # so llm_client cannot run the catalog kill-switch for
-                    # it — resolve the dispatched id here instead.
-                    model=resolve_dispatch_model_sync(db, creds.model),
+                    model=model,
                 )
             )
             assert isinstance(analysis_raw, InterviewAnalysisResult)
@@ -1190,6 +1241,37 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                         "status": "cancelled",
                         "run_id": str(pending_run.id),
                     }
+
+            # HRP-979: consent withdrawn or candidate erased while the LLM
+            # ran — the result is discarded, not written back.
+            if _consent_withdrawn(db, tenant_id, interview.candidate_vacancy_id):
+                from app.modules.recruitment.consent_service import (
+                    _CONSENT_REQUIRED_MESSAGE,
+                )
+
+                interview.analysis_status = "failed"
+                interview.analysis_error = _CONSENT_REQUIRED_MESSAGE
+                _fail_inflight_full_run(
+                    db, uuid.UUID(tenant_id), interview.id, _CONSENT_REQUIRED_MESSAGE
+                )
+                db.commit()
+                return {"status": "failed", "error": "consent_required"}
+
+            # HRP-981: a citation is kept only when its quote is really in
+            # the segment it names; timecodes are re-read from that
+            # segment. Everything below persists the checked result.
+            checked = analysis.model_dump()
+            citation_check = check_analysis_citations(
+                checked, segments_payload, analysed_transcript
+            )
+            analysis = InterviewAnalysisResult.model_validate(checked)
+            if citation_check["dropped"]:
+                logger.warning(
+                    "Interview %s: dropped %d of %d AI citations not found in the transcript",
+                    interview_id,
+                    citation_check["dropped"],
+                    citation_check["total"],
+                )
 
             db.execute(
                 delete(AIAssessment).where(
@@ -1229,6 +1311,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                 "competence_assessments": [
                     a.model_dump() for a in analysis.competence_assessments
                 ],
+                "citation_check": citation_check,
             }
             if pending_run is not None:
                 # HRP-270: clear the active marker so the InFlightCard
@@ -1265,6 +1348,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                         analysis=analysis,
                         analysed_transcript_hash=analysed_transcript_hash,
                         had_resume=bool(latest_resume),
+                        citation_check=citation_check,
                     )
             except Exception:  # noqa: BLE001
                 logger.exception(
@@ -1316,6 +1400,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                         cache_key,
                         interview.analysis_data,
                         assessments_payload,
+                        candidate_vacancy_id=interview.candidate_vacancy_id,
                     )
             except Exception:  # noqa: BLE001
                 logger.exception("analysis cache store failed for %s", interview_id)
@@ -1377,6 +1462,9 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
 
     except Exception as exc:
         logger.exception("analyze_interview_task failed for %s", interview_id)
+        # HRP-987: a model refused with no replacement refuses the same way
+        # on every attempt - this one is the last.
+        model_refused = getattr(exc, "code", None) == "ai_model_unavailable"
         try:
             with Session(engine) as db:
                 row = db.get(Interview, uuid.UUID(interview_id))
@@ -1387,7 +1475,7 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
                     # HRP-494: tell the recruiter the 40-cr run died —
                     # only on the final attempt, so two retries do not
                     # send three identical failure emails.
-                    if self.request.retries >= self.max_retries:
+                    if self.request.retries >= self.max_retries or model_refused:
                         # HRP-492: same guard closes the run row. An
                         # earlier attempt must leave it in flight — the
                         # retry picks the row back up by its pending /
@@ -1416,6 +1504,8 @@ def analyze_interview_task(self, interview_id: str, tenant_id: str) -> dict:
             logger.exception(
                 "Failed to mark interview %s analysis as failed", interview_id
             )
+        if model_refused:
+            raise exc
         raise self.retry(exc=exc)
     finally:
         engine.dispose()
@@ -1445,6 +1535,12 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
     The verdict is post-processed: ``recommended`` (which the prompt
     forbids) is rewritten to ``needs_check`` with an audit entry.
     """
+
+    from app.modules.recruitment.consent_service import analysis_consent_gate
+
+    refused = analysis_consent_gate(tenant_id, run_id=run_id)
+    if refused is not None:
+        return refused
 
     import asyncio
     import uuid
@@ -1476,6 +1572,7 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
     from app.modules.recruitment.resume_analysis_service import (
         apply_resume_only_verdict_guard,
     )
+    from app.modules.recruitment.resume_presence import load_parsed_resume_sync
 
     sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
     engine = create_engine(sync_url)
@@ -1525,7 +1622,12 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                 if run.candidate_file_id
                 else None
             )
-            if profile is None or resume is None or candidate is None:
+            # HRP-443: a resume entered by hand has no file — the HRP-704
+            # loader reads the parsed resume kept on the candidate card.
+            parsed_resume = resume.parsed_data if resume is not None else None
+            if parsed_resume is None and candidate is not None:
+                parsed_resume = load_parsed_resume_sync(db, tenant_id, candidate.id)
+            if profile is None or not parsed_resume or candidate is None:
                 run.status = "failed"
                 run.error_message = "missing inputs (profile/resume/candidate)"
                 db.commit()
@@ -1543,10 +1645,23 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                     db, tenant_id, vacancy
                 ),
                 profile_competences=profile_competences,
-                parsed_resume=resume.parsed_data or {},
-                resume_raw_text=resume.raw_text,
+                parsed_resume=parsed_resume,
+                resume_raw_text=resume.raw_text if resume is not None else None,
                 candidate_name=candidate_name,
             )
+
+            from app.modules.ai.model_catalog_service import (
+                resolve_dispatch_model_sync,
+            )
+            from app.modules.ai.providers import resolve_generation_target_sync
+
+            # HRP-987: resolved before the stage bump - a model refused
+            # with no replacement fails pre-LLM, where cancel still refunds.
+            creds = resolve_generation_target_sync(db, run.tenant_id, None)
+            # HRP-500 (review #5): sync Session — llm_client cannot apply
+            # the catalog kill-switch here, so resolve the dispatched id
+            # up front.
+            model = resolve_dispatch_model_sync(db, creds.model)
 
             # HRP-270: each stage commit is a checkpoint for the cancel
             # endpoint's refund decision. ``competences`` is the first
@@ -1554,12 +1669,6 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
             run.current_stage = "competences"
             db.commit()
 
-            from app.modules.ai.model_catalog_service import (
-                resolve_dispatch_model_sync,
-            )
-            from app.modules.ai.providers import resolve_generation_target_sync
-
-            creds = resolve_generation_target_sync(db, resume.tenant_id, None)
             analysis_raw = asyncio.run(
                 generate_json(
                     prompt=prompt,
@@ -1568,10 +1677,7 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                     temperature=0.2,
                     max_tokens=RECRUITMENT_MAX_TOKENS,
                     credentials=creds,
-                    # HRP-500 (review #5): sync Session — llm_client cannot
-                    # apply the catalog kill-switch here, so resolve the
-                    # dispatched id up front.
-                    model=resolve_dispatch_model_sync(db, creds.model),
+                    model=model,
                 )
             )
             assert isinstance(analysis_raw, ResumeOnlyAnalysisResult)
@@ -1596,6 +1702,17 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                 )
                 db.commit()
                 return {"status": "cancelled", "run_id": run_id}
+            # HRP-979: consent withdrawn or candidate erased mid-LLM.
+            if _consent_withdrawn(db, tenant_id, run.candidate_vacancy_id):
+                from app.modules.recruitment.consent_service import (
+                    _CONSENT_REQUIRED_MESSAGE,
+                )
+
+                locked.status = "failed"
+                locked.error_message = _CONSENT_REQUIRED_MESSAGE
+                locked.current_stage = None
+                db.commit()
+                return {"status": "failed", "error": "consent_required"}
 
             final_verdict, overridden = apply_resume_only_verdict_guard(
                 analysis.verdict
@@ -1749,6 +1866,9 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
 
     except Exception as exc:
         logger.exception("analyze_resume_only_task failed for %s", run_id)
+        # HRP-987: a model refused with no replacement refuses the same way
+        # on every attempt - this one is the last.
+        model_refused = getattr(exc, "code", None) == "ai_model_unavailable"
         try:
             with Session(engine) as db:
                 row = db.get(AIAnalysisRun, uuid.UUID(run_id))
@@ -1757,7 +1877,7 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                     row.error_message = str(exc)[:1000]
                     db.commit()
                     # HRP-494: one failure notice, on the last attempt.
-                    if self.request.retries >= self.max_retries:
+                    if self.request.retries >= self.max_retries or model_refused:
                         _notify_analysis_result(
                             db,
                             tenant_id=uuid.UUID(tenant_id),
@@ -1772,6 +1892,8 @@ def analyze_resume_only_task(self, run_id: str, tenant_id: str) -> dict:
                         )
         except Exception:
             logger.exception("Failed to mark resume-only run %s as failed", run_id)
+        if model_refused:
+            raise exc
         raise self.retry(exc=exc)
     finally:
         engine.dispose()

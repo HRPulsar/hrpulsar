@@ -11,11 +11,15 @@
 // `lib/date-format.ts`.
 
 import * as React from "react";
-import * as Popover from "@radix-ui/react-popover";
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { DATE_PLACEHOLDER } from "@/lib/date-format";
 import {
   applyDateMask,
@@ -188,7 +192,7 @@ export function DatePicker({
     Math.floor(viewMonth.getFullYear() / YEAR_GRID_SIZE) * YEAR_GRID_SIZE;
 
   return (
-    <Popover.Root open={open} onOpenChange={(next) => !disabled && setOpen(next)}>
+    <Popover open={open} onOpenChange={(next) => !disabled && setOpen(next)}>
       <div className={cn("relative w-full", className)}>
         <Input
           id={id}
@@ -221,67 +225,53 @@ export function DatePicker({
           maxLength={10}
           className={cn("pr-9", inputClassName)}
         />
-        <Popover.Trigger asChild>
-          <button
-            type="button"
-            tabIndex={-1}
-            disabled={disabled}
-            aria-label={t("openCalendar")}
-            data-testid={testId ? `${testId}-trigger` : undefined}
-            className={cn(
-              "absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50",
-            )}
-          >
-            <CalendarIcon className="h-4 w-4" />
-          </button>
-        </Popover.Trigger>
+        <PopoverTrigger
+          type="button"
+          tabIndex={-1}
+          disabled={disabled}
+          aria-label={t("openCalendar")}
+          data-testid={testId ? `${testId}-trigger` : undefined}
+          className={cn(
+            "absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50",
+          )}
+        >
+          <CalendarIcon className="h-4 w-4" />
+        </PopoverTrigger>
       </div>
 
-      <Popover.Portal>
-        <Popover.Content
-          align="start"
-          sideOffset={6}
-          className="z-50 rounded-lg border bg-popover p-3 shadow-md outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0"
-        >
-          {/* HRP-152 REDO: header carries two clickable labels that flip
-              the calendar to month/year pickers. Arrows pre-shift by one
-              unit of the active grid (month/year/decade). */}
-          <div className="flex items-center justify-between gap-2 pb-2">
-            <button
-              type="button"
-              onClick={() => {
-                if (viewMode === "days") shiftMonth(-1);
-                else if (viewMode === "months") shiftYear(-1);
-                else shiftYear(-YEAR_GRID_SIZE);
-              }}
-              className="rounded p-1 hover:bg-accent"
-              aria-label={t("previous")}
-              data-testid={testId ? `${testId}-prev` : undefined}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <div className="flex items-center gap-1 text-sm font-medium">
-              {viewMode === "days" && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setViewMode("months")}
-                    className="rounded px-1.5 py-0.5 hover:bg-accent"
-                    data-testid={testId ? `${testId}-month-trigger` : undefined}
-                  >
-                    {monthLabel}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setViewMode("years")}
-                    className="rounded px-1.5 py-0.5 hover:bg-accent"
-                    data-testid={testId ? `${testId}-year-trigger` : undefined}
-                  >
-                    {yearLabel}
-                  </button>
-                </>
-              )}
-              {viewMode === "months" && (
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        className="p-3 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+      >
+        {/* HRP-152 REDO: header carries two clickable labels that flip
+            the calendar to month/year pickers. Arrows pre-shift by one
+            unit of the active grid (month/year/decade). */}
+        <div className="flex items-center justify-between gap-2 pb-2">
+          <button
+            type="button"
+            onClick={() => {
+              if (viewMode === "days") shiftMonth(-1);
+              else if (viewMode === "months") shiftYear(-1);
+              else shiftYear(-YEAR_GRID_SIZE);
+            }}
+            className="rounded p-1 hover:bg-accent"
+            aria-label={t("previous")}
+            data-testid={testId ? `${testId}-prev` : undefined}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <div className="flex items-center gap-1 text-sm font-medium">
+            {viewMode === "days" && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("months")}
+                  className="rounded px-1.5 py-0.5 hover:bg-accent"
+                  data-testid={testId ? `${testId}-month-trigger` : undefined}
+                >
+                  {monthLabel}
+                </button>
                 <button
                   type="button"
                   onClick={() => setViewMode("years")}
@@ -290,139 +280,149 @@ export function DatePicker({
                 >
                   {yearLabel}
                 </button>
-              )}
-              {viewMode === "years" && (
-                <span className="px-1.5 py-0.5">
-                  {yearGridStart}–{yearGridStart + YEAR_GRID_SIZE - 1}
-                </span>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                if (viewMode === "days") shiftMonth(1);
-                else if (viewMode === "months") shiftYear(1);
-                else shiftYear(YEAR_GRID_SIZE);
-              }}
-              className="rounded p-1 hover:bg-accent"
-              aria-label={t("next")}
-              data-testid={testId ? `${testId}-next` : undefined}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
+              </>
+            )}
+            {viewMode === "months" && (
+              <button
+                type="button"
+                onClick={() => setViewMode("years")}
+                className="rounded px-1.5 py-0.5 hover:bg-accent"
+                data-testid={testId ? `${testId}-year-trigger` : undefined}
+              >
+                {yearLabel}
+              </button>
+            )}
+            {viewMode === "years" && (
+              <span className="px-1.5 py-0.5">
+                {yearGridStart}–{yearGridStart + YEAR_GRID_SIZE - 1}
+              </span>
+            )}
           </div>
-          {viewMode === "days" && (
-            <>
-              <div className="grid grid-cols-7 gap-1 text-center text-[11px] uppercase tracking-wide text-muted-foreground">
-                {WEEKDAY_LABELS.map((label) => (
-                  <div key={label} className="py-1">
-                    {label}
-                  </div>
-                ))}
-              </div>
-              <div className="grid grid-cols-7 gap-1">
-                {days.map((day) => {
-                  const iso = toIso(day);
-                  const inMonth = day.getMonth() === viewMonth.getMonth();
-                  const isSelected = selected != null && isSameDay(day, selected);
-                  const isToday = isSameDay(day, new Date());
-                  const bounded = isWithinBounds(iso, min, max);
-                  return (
-                    <button
-                      type="button"
-                      key={iso}
-                      onClick={() => selectDay(day)}
-                      disabled={!bounded}
-                      data-testid={
-                        testId ? `${testId}-day-${iso}` : undefined
-                      }
-                      aria-pressed={isSelected}
-                      aria-label={iso}
-                      className={cn(
-                        "h-8 w-8 rounded text-sm transition-colors",
-                        !inMonth && "text-muted-foreground/40",
-                        inMonth && !isSelected && "hover:bg-accent hover:text-accent-foreground",
-                        isSelected && "bg-primary text-primary-foreground",
-                        isToday && !isSelected && "ring-1 ring-inset ring-ring/40",
-                        !bounded && "cursor-not-allowed opacity-30 hover:bg-transparent",
-                      )}
-                    >
-                      {day.getDate()}
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
-          {viewMode === "months" && (
-            <div className="grid grid-cols-3 gap-2">
-              {MONTH_SHORT.map((label, idx) => {
-                const isSelected =
-                  selected != null &&
-                  selected.getFullYear() === viewMonth.getFullYear() &&
-                  selected.getMonth() === idx;
+          <button
+            type="button"
+            onClick={() => {
+              if (viewMode === "days") shiftMonth(1);
+              else if (viewMode === "months") shiftYear(1);
+              else shiftYear(YEAR_GRID_SIZE);
+            }}
+            className="rounded p-1 hover:bg-accent"
+            aria-label={t("next")}
+            data-testid={testId ? `${testId}-next` : undefined}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+        {viewMode === "days" && (
+          <>
+            <div className="grid grid-cols-7 gap-1 text-center text-[11px] uppercase tracking-wide text-muted-foreground">
+              {WEEKDAY_LABELS.map((label) => (
+                <div key={label} className="py-1">
+                  {label}
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {days.map((day) => {
+                const iso = toIso(day);
+                const inMonth = day.getMonth() === viewMonth.getMonth();
+                const isSelected = selected != null && isSameDay(day, selected);
+                const isToday = isSameDay(day, new Date());
+                const bounded = isWithinBounds(iso, min, max);
                 return (
                   <button
                     type="button"
-                    key={label}
-                    onClick={() => pickMonth(idx)}
+                    key={iso}
+                    onClick={() => selectDay(day)}
+                    disabled={!bounded}
                     data-testid={
-                      testId ? `${testId}-month-${idx + 1}` : undefined
+                      testId ? `${testId}-day-${iso}` : undefined
                     }
+                    aria-pressed={isSelected}
+                    aria-label={iso}
+                    className={cn(
+                      "h-8 w-8 rounded text-sm transition-colors",
+                      !inMonth && "text-muted-foreground/40",
+                      inMonth && !isSelected && "hover:bg-accent hover:text-accent-foreground",
+                      isSelected && "bg-primary text-primary-foreground",
+                      isToday && !isSelected && "ring-1 ring-inset ring-ring/40",
+                      !bounded && "cursor-not-allowed opacity-30 hover:bg-transparent",
+                    )}
+                  >
+                    {day.getDate()}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+        {viewMode === "months" && (
+          <div className="grid grid-cols-3 gap-2">
+            {MONTH_SHORT.map((label, idx) => {
+              const isSelected =
+                selected != null &&
+                selected.getFullYear() === viewMonth.getFullYear() &&
+                selected.getMonth() === idx;
+              return (
+                <button
+                  type="button"
+                  key={label}
+                  onClick={() => pickMonth(idx)}
+                  data-testid={
+                    testId ? `${testId}-month-${idx + 1}` : undefined
+                  }
+                  aria-pressed={isSelected}
+                  className={cn(
+                    "h-9 rounded text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
+                    isSelected && "bg-primary text-primary-foreground hover:bg-primary",
+                  )}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {viewMode === "years" && (
+          <div className="grid grid-cols-3 gap-2">
+            {Array.from({ length: YEAR_GRID_SIZE }, (_, i) => yearGridStart + i).map(
+              (year) => {
+                const isSelected =
+                  selected != null && selected.getFullYear() === year;
+                return (
+                  <button
+                    type="button"
+                    key={year}
+                    onClick={() => pickYear(year)}
+                    data-testid={testId ? `${testId}-year-${year}` : undefined}
                     aria-pressed={isSelected}
                     className={cn(
                       "h-9 rounded text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
                       isSelected && "bg-primary text-primary-foreground hover:bg-primary",
                     )}
                   >
-                    {label}
+                    {year}
                   </button>
                 );
-              })}
-            </div>
-          )}
-          {viewMode === "years" && (
-            <div className="grid grid-cols-3 gap-2">
-              {Array.from({ length: YEAR_GRID_SIZE }, (_, i) => yearGridStart + i).map(
-                (year) => {
-                  const isSelected =
-                    selected != null && selected.getFullYear() === year;
-                  return (
-                    <button
-                      type="button"
-                      key={year}
-                      onClick={() => pickYear(year)}
-                      data-testid={testId ? `${testId}-year-${year}` : undefined}
-                      aria-pressed={isSelected}
-                      className={cn(
-                        "h-9 rounded text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
-                        isSelected && "bg-primary text-primary-foreground hover:bg-primary",
-                      )}
-                    >
-                      {year}
-                    </button>
-                  );
-                },
-              )}
-            </div>
-          )}
-          {clearable && value && (
-            <div className="mt-2 flex justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  onChange("");
-                  setDraft("");
-                  setOpen(false);
-                }}
-                className="text-xs text-muted-foreground hover:text-foreground"
-              >
-                {t("clear")}
-              </button>
-            </div>
-          )}
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+              },
+            )}
+          </div>
+        )}
+        {clearable && value && (
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                onChange("");
+                setDraft("");
+                setOpen(false);
+              }}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
+              {t("clear")}
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }

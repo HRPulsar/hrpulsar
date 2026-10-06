@@ -40,7 +40,7 @@ INVESTOR_MARKER = "demo-investor"
 # seed_data.candidates() below and the analysis killswitch
 # (``recruitment.tasks.demo_analysis``) — keep them in lockstep by
 # importing from here instead of duplicating the string.
-DEMO_FIRST_SCREEN_CANDIDATE_EMAIL = "elena.volkov@example.com"
+DEMO_FIRST_SCREEN_CANDIDATE_EMAIL = "elena.volkova@example.com"
 
 
 # Transcript is packaged alongside the module so an installed wheel
@@ -150,7 +150,7 @@ VACANCIES: list[dict] = [
         "salary_min": 90000,
         "salary_max": 115000,
         "salary_currency": "EUR",
-        "status": "published",
+        "status": "open",
         # HRP-667: the library-linked requirements the internal matcher
         # reads. The ``profile`` block below is what the AI scores a
         # *candidate* against — free-text slugs the talent-market matcher
@@ -230,7 +230,7 @@ VACANCIES: list[dict] = [
         "salary_min": 75000,
         "salary_max": 100000,
         "salary_currency": "EUR",
-        "status": "published",
+        "status": "open",
         # HRP-726: same library-linked requirements the headline role
         # carries, so "search inside first" scores this vacancy too and
         # the recruiter no longer opens on the "add competences" banner.
@@ -265,7 +265,7 @@ VACANCIES: list[dict] = [
         "salary_min": 85000,
         "salary_max": 110000,
         "salary_currency": "EUR",
-        "status": "published",
+        "status": "open",
         "library_competences": [
             {"competence_key": "c-customer-discovery", "skill_level_key": "sl-l3"},
             {"competence_key": "c-cross-fn", "skill_level_key": "sl-l2"},
@@ -340,6 +340,47 @@ Candidate: Aisha Patel
 """
 
 
+# HRP-980: Tomás' recruiter screen used to ship as "[Transcript redacted
+# for demo brevity.]" while his analysis cited six competences — evidence
+# with nothing behind it. A real, short transcript gives every citation a
+# segment to stand on (and the red flag its "eighteen months").
+_TOMAS_TRANSCRIPT = """Interview - Senior Backend Engineer - Payments
+Candidate: Tomás Becker
+
+[00:00:15] Recruiter: Thanks for joining, Tomás. Let's start with what you do at Adyen today.
+
+[00:00:40] Candidate: I am on the merchant settlement team. We compute what every merchant is owed at the end of the day and push the payouts. I have been on that pipeline for about a year and a half.
+
+[00:03:10] Recruiter: What would you say about scale, how the on-call rotation works there, and how you reconcile settlements?
+
+[00:03:45] Candidate: Reconciliation runs against the bank statements every night, and anything that does not match opens a ticket for the morning shift.
+
+[00:07:20] Recruiter: Say a payout write succeeds and the message to the transfer service is lost. What happens?
+
+[00:07:55] Candidate: That is why we write the transfer request into an outbox table in the same transaction as the settlement row. A relay reads the outbox and publishes it, so either both happen or neither does.
+
+[00:12:30] Recruiter: Which stack is the settlement service on?
+
+[00:12:58] Candidate: Python, FastAPI, async all the way down. The one trap is a blocking call inside a coroutine - we had a sync HTTP client in there once and the whole worker stalled.
+
+[00:17:40] Recruiter: How comfortable are you with Postgres?
+
+[00:18:05] Candidate: I can read a query plan and spot a sequential scan. Schema migrations were always owned by the platform team, so I have not run one myself.
+
+[00:23:15] Recruiter: Walk me through designing payouts for a new market.
+
+[00:23:50] Candidate: Aggregate per merchant, apply the fee table, create the transfer, mark the settlement paid. If the bank rejects a transfer I would probably just retry it.
+
+[00:30:05] Recruiter: Have you been on call for it?
+
+[00:30:30] Candidate: Yes, I carry the settlement pager one week in four. When a fix needed a design change I wrote it up and took it to the staff engineer rather than deciding alone.
+
+[00:36:40] Recruiter: Anything you want to ask us?
+
+[00:37:05] Candidate: How fast can you move? I am talking to two other companies and expect offers in the next couple of weeks.
+"""
+
+
 def candidates() -> list[dict]:
     """Return the candidate fixtures.
 
@@ -352,13 +393,13 @@ def candidates() -> list[dict]:
         {
             "vacancy_key": "senior-backend",
             "first_name": "Elena",
-            "last_name": "Volkov",
+            "last_name": "Volkova",
             "email": DEMO_FIRST_SCREEN_CANDIDATE_EMAIL,
             "phone": "+49 30 1234 5678",
             "location": "Berlin, Germany",
             "current_position": "Staff Engineer @ Klarna",
             "years": 9,
-            "linkedin": "linkedin.com/in/elenavolkov",
+            "linkedin": "linkedin.com/in/elenavolkova",
             "status": "offer",
             "ai_score": 0.92,
             "ai_verdict": "recommended",
@@ -427,6 +468,7 @@ def candidates() -> list[dict]:
             "ai_risk": "Likely to receive competing offers; comp negotiation may stretch.",
             "ai_mitigation": "Move fast; involve VP Engineering early to close.",
             "interview": True,
+            "transcript": _TOMAS_TRANSCRIPT,
             # HRP-666: the demo's "the two sides disagree" row. The AI
             # rated the Adyen payments background near the top; the
             # manager who talked to him did not, so the Divergence badge
@@ -478,6 +520,9 @@ def candidates() -> list[dict]:
                     "competence_id": "product-design",
                     "score": 0.88,
                     "status": "assessed",
+                    "quotes": [
+                        "We assumed it was the form; the research said it was the price changing between search and checkout.",
+                    ],
                     "reasoning": (
                         "Framed the checkout problem from research rather than "
                         "from the form, and carried it through to a shipped "
@@ -488,6 +533,10 @@ def candidates() -> list[dict]:
                     "competence_id": "design-systems",
                     "score": 0.9,
                     "status": "assessed",
+                    "quotes": [
+                        "Twelve components at first, then adoption across four squads.",
+                        "We fixed it by making the system easier to use than the fork, not by writing a rule.",
+                    ],
                     "reasoning": (
                         "Built the FlixBus system from scratch and solved "
                         "adoption by making it easier to use than the fork."
@@ -497,6 +546,9 @@ def candidates() -> list[dict]:
                     "competence_id": "user-research",
                     "score": 0.7,
                     "status": "assessed",
+                    "quotes": [
+                        "Eleven session recordings and six interviews. I ran them myself, a researcher helped me synthesise.",
+                    ],
                     "reasoning": (
                         "Runs her own interviews and recordings, but hands "
                         "synthesis to a researcher."
@@ -623,6 +675,10 @@ def candidates() -> list[dict]:
                     "competence_id": "saas-cs",
                     "score": 0.9,
                     "status": "assessed",
+                    "quotes": [
+                        "We stopped treating renewal as a date and started treating it as a quarter.",
+                        "No executive sponsor after two attempts, and usage flat for a quarter.",
+                    ],
                     "reasoning": (
                         "Treats renewal as a quarter, not a date, and has a "
                         "written rule for when to stop rescuing an account."
@@ -632,6 +688,10 @@ def candidates() -> list[dict]:
                     "competence_id": "enterprise-accounts",
                     "score": 0.85,
                     "status": "assessed",
+                    "quotes": [
+                        "And we let go of the accounts we could not save, early enough to reinvest the time.",
+                        "I would spend the first month on the twenty-five accounts we already have",
+                    ],
                     "reasoning": (
                         "Carried eighteen enterprise accounts and the "
                         "retention number attached to them."
@@ -682,6 +742,22 @@ def candidates() -> list[dict]:
 # through the profile, and the killswitch mints the same UUID the Canvas /
 # Compact matrix looks up. Scores are on the canonical 0..1 raw AI scale.
 
+
+def _cite(*quotes: str) -> list[dict]:
+    """Citations given by their quote alone (HRP-980).
+
+    Each quote is a verbatim fragment of the seeded transcript; the seed
+    anchors it on the segment that holds it — ``segment_id`` and the
+    segment's own timecodes — through the same check the real analysis
+    runs (``check_analysis_citations``), so a quote the transcript does
+    not hold can never reach the demo.
+    """
+    return [
+        {"segment_id": None, "start_sec": None, "end_sec": None, "quote": quote}
+        for quote in quotes
+    ]
+
+
 ELENA_INTERVIEW_ANALYSIS: dict = {
     "data_completeness": "full",
     "verdict": "recommended",
@@ -709,98 +785,70 @@ ELENA_INTERVIEW_ANALYSIS: dict = {
             "competence_id": "python-advanced",
             "score": 0.9,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Designed async pipeline boundaries on the fly, type-aware error handling, mentioned aiocache and FastAPI internals.",
-                }
-            ],
+            "citations": _cite(
+                "the fee calculation goes to a process pool — it is CPU-bound and would block the event loop",
+                "a gateway timeout is retried, a validation error never is",
+            ),
             "reasoning": "Designed async pipeline boundaries on the fly, type-aware error handling, mentioned aiocache and FastAPI internals.",
         },
         {
             "competence_id": "distributed-systems",
             "score": 0.9,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Articulated idempotency keys, exactly-once semantics, reconciliation loop, divergence detection.",
-                }
-            ],
+            "citations": _cite(
+                "Each transfer gets a deterministic key derived from settlement_id plus merchant_id.",
+                "Then we need a reconciliation job that runs every few hours and compares our outbox to the gateway's statement.",
+            ),
             "reasoning": "Articulated idempotency keys, exactly-once semantics, reconciliation loop, divergence detection.",
         },
         {
             "competence_id": "postgres-advanced",
             "score": 0.85,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Discussed monthly partitioning, archive strategy, anti-pattern of partitioning by merchant_id.",
-                }
-            ],
+            "citations": _cite(
+                "Partitioning by month is the obvious move.",
+                "One trap I'd avoid is partitioning by merchant_id.",
+            ),
             "reasoning": "Discussed monthly partitioning, archive strategy, anti-pattern of partitioning by merchant_id.",
         },
         {
             "competence_id": "system-design",
             "score": 0.9,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Led the design problem from clarifying questions to operational concerns (reconciliation, DST bug).",
-                }
-            ],
+            "citations": _cite(
+                "First question — what's the volume?",
+                "So I'd think of this as three stages — aggregation, settlement, transfer initiation. Each stage idempotent.",
+            ),
             "reasoning": "Led the design problem from clarifying questions to operational concerns (reconciliation, DST bug).",
         },
         {
             "competence_id": "payments-domain",
             "score": 0.6,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Worked on Klarna payments reconciliation but not EUR merchant settlements specifically.",
-                }
-            ],
+            "citations": _cite(
+                "I don't have payments-domain experience in EUR settlements at the volume you're describing",
+                "One was a Norwegian VAT rule that only applied to merchants who registered before 2019.",
+            ),
             "reasoning": "Worked on Klarna payments reconciliation but not EUR merchant settlements specifically.",
         },
         {
             "competence_id": "ownership",
             "score": 0.85,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Concrete DST-incident story including post-mortem and process change.",
-                }
-            ],
+            "citations": _cite(
+                "I rolled back the deploy, then we manually reconciled. Wrote the post-mortem the next day.",
+                "we now require any date logic to ship with explicit timezone tests.",
+            ),
             "reasoning": "Concrete DST-incident story including post-mortem and process change.",
         },
         {
             "competence_id": "mentorship",
             "score": 0.8,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Differentiated approach for mid-level vs junior, honest about lacking a clean metric.",
-                }
-            ],
+            "citations": _cite(
+                "With her I do more pair programming — once a week, two hours, working on a real ticket.",
+                "Honestly I don't have a clean metric.",
+            ),
             "reasoning": "Differentiated approach for mid-level vs junior, honest about lacking a clean metric.",
         },
         {
@@ -858,84 +906,58 @@ TOMAS_INTERVIEW_ANALYSIS: dict = {
             "competence_id": "python-advanced",
             "score": 0.8,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Async-await fluency, comfortable with FastAPI tradeoffs.",
-                }
-            ],
+            "citations": _cite(
+                "Python, FastAPI, async all the way down.",
+                "The one trap is a blocking call inside a coroutine",
+            ),
             "reasoning": "Async-await fluency, comfortable with FastAPI tradeoffs.",
         },
         {
             "competence_id": "distributed-systems",
             "score": 0.8,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Walked through outbox pattern unprompted.",
-                }
-            ],
+            "citations": _cite(
+                "we write the transfer request into an outbox table in the same transaction as the settlement row",
+            ),
             "reasoning": "Walked through outbox pattern unprompted.",
         },
         {
             "competence_id": "payments-domain",
             "score": 0.9,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Adyen merchant settlement experience.",
-                }
-            ],
+            "citations": _cite(
+                "We compute what every merchant is owed at the end of the day and push the payouts.",
+            ),
             "reasoning": "Adyen merchant settlement experience.",
         },
         {
             "competence_id": "postgres-advanced",
             "score": 0.6,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Reads a query plan; has not owned a schema migration.",
-                }
-            ],
+            "citations": _cite(
+                "I can read a query plan and spot a sequential scan.",
+                "Schema migrations were always owned by the platform team",
+            ),
             "reasoning": "Reads a query plan; has not owned a schema migration.",
         },
         {
             "competence_id": "system-design",
             "score": 0.65,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Sound on the happy path, thin on failure modes.",
-                }
-            ],
+            "citations": _cite(
+                "Aggregate per merchant, apply the fee table, create the transfer, mark the settlement paid.",
+                "If the bank rejects a transfer I would probably just retry it.",
+            ),
             "reasoning": "Sound on the happy path, thin on failure modes.",
         },
         {
             "competence_id": "ownership",
             "score": 0.7,
             "status": "assessed",
-            "citations": [
-                {
-                    "segment_id": None,
-                    "start_sec": None,
-                    "end_sec": None,
-                    "quote": "Carried the settlement pager, escalated the design calls.",
-                }
-            ],
+            "citations": _cite(
+                "I carry the settlement pager one week in four.",
+                "I wrote it up and took it to the staff engineer rather than deciding alone.",
+            ),
             "reasoning": "Carried the settlement pager, escalated the design calls.",
         },
         {
@@ -1573,8 +1595,8 @@ def build_candidate_analysis(spec: dict) -> dict:
     (``competence_notes``).
 
     ``mode="full"`` produces an ``InterviewAnalysisResult`` whose
-    citations quote the reasoning (the Elena pattern — one catalog entry
-    covers both). Any other mode produces a ``ResumeOnlyAnalysisResult``
+    citations are the note's ``quotes`` — verbatim fragments of the spec's
+    transcript, which the seed anchors on their segments (HRP-980). Any other mode produces a ``ResumeOnlyAnalysisResult``
     whose excerpts anchor on the resume: the experience section matches
     on ``source_company`` + ``source_period`` and the optional ``skill``
     adds a second section, so a citation chip still lands on a real
@@ -1600,18 +1622,9 @@ def build_candidate_analysis(spec: dict) -> dict:
         # must not carry any (pinned by the shape guard).
         covered = note["status"] != "not_covered"
         if full:
-            row["citations"] = (
-                [
-                    {
-                        "segment_id": None,
-                        "start_sec": None,
-                        "end_sec": None,
-                        "quote": note["reasoning"],
-                    }
-                ]
-                if covered
-                else []
-            )
+            # HRP-980: verbatim transcript fragments, anchored on their
+            # segments by the seed — never the reasoning restated.
+            row["citations"] = _cite(*note.get("quotes", [])) if covered else []
         else:
             excerpts: list[dict] = []
             if covered:

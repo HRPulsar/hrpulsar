@@ -214,9 +214,20 @@ function HrMetrics() {
           className="mt-3 text-[12px] text-muted-foreground"
           data-testid="analytics-hr-metrics-missing"
         >
-          {t("hrMetricsNoData", {
-            codes: missing.map((m) => t(`hrMetric_${m.code}`)).join(", "),
-          })}
+          {/* HRP-732 REDO: each name carries the same hint its card would,
+              so "no data" comes with what the metric needs to appear. */}
+          {t("hrMetricsNoDataLead")}{" "}
+          {missing.map((m, index) => (
+            <span key={m.code} className="inline-flex items-center gap-1">
+              {index > 0 && ", "}
+              {t(`hrMetric_${m.code}`)}
+              <Hint
+                text={t(`hrMetricWhy_${m.code}`)}
+                title={t(`hrMetric_${m.code}`)}
+                data-testid={`analytics-hr-metric-${m.code}-hint`}
+              />
+            </span>
+          ))}
         </p>
       )}
     </div>

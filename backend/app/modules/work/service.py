@@ -87,7 +87,7 @@ NON_CONTENT_FIELDS = (
             "runs_per_year",
             "review_human_share",
             "manual_mode",
-            "manual_pack_code",
+            "manual_pack_id",
             "hourly_rate",
         }
     )
@@ -108,7 +108,7 @@ STEP_FIELDS = (
     "accountable_employee_id",
     "review_human_share",
     "manual_mode",
-    "manual_pack_code",
+    "manual_pack_id",
     "hourly_rate",
 )
 
@@ -944,7 +944,7 @@ async def update_step(
     for key in ASSIGNEE_FIELDS & changes.keys():
         if changes[key] is not None:
             await _ensure_active_employee(db, tenant_id, changes[key])
-    if changes.get("manual_pack_code") is not None:
+    if changes.get("manual_pack_id") is not None:
         # HRP-863: a built-in pack or the tenant's own, active - the same
         # list coverage matches against. One answer for a stranger's pack
         # and a missing one.
@@ -952,7 +952,7 @@ async def update_step(
         from app.modules.work import coverage
 
         packs = await agents_service.list_packs(db, tenant_id)
-        if coverage.manual_pack(changes["manual_pack_code"], packs) is None:
+        if coverage.manual_pack(changes["manual_pack_id"], packs) is None:
             raise AppError("work_step_pack_invalid", 422)
     if changes:
         for key, value in changes.items():
@@ -1394,7 +1394,26 @@ async def apply_session(
     idempotency_key: str,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Materialise the draft as the container's steps, ``system_suggested``
+    """The tenant's apply: ``materialise_session`` under the EE billing
+    wrapper, which patches this name on the module."""
+    return await materialise_session(
+        db, tenant_id, session_id, idempotency_key=idempotency_key, force=force
+    )
+
+
+async def materialise_session(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    idempotency_key: str,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Apply without billing - called directly only by the public check
+    (HRP-922), whose sandbox is never charged; a tenant's path goes through
+    ``apply_session``.
+
+    Materialise the draft as the container's steps, ``system_suggested``
     with ``system_suggested`` links, replacing whatever steps the container
     had; the container goes back to ``draft`` for a new accept. A code
     retired between ``ready`` and apply is dropped like the worker drops an
@@ -1718,7 +1737,7 @@ async def start_step_skill(
         raise AppError("work_skill_not_applicable", 422, mode=mode or "no capability")
     packs = await agents_service.list_packs(db, tenant_id)
     # HRP-863: the skill is written for the pack the coverage row shows.
-    pack = coverage.manual_pack(step.manual_pack_code, packs) or skills.pack_for_step(
+    pack = coverage.manual_pack(step.manual_pack_id, packs) or skills.pack_for_step(
         {p.code for p in primitives}, packs
     )
     if pack is None:

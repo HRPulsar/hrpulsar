@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 //
-// HRP-667 — the "post to the internal talent market" offer is shown to
-// every recruitment viewer, but POST /talent-card is `manage` on
-// recruitment (HRP-830). The project rule (REDO checklist) is to show an
-// action a caller cannot take as disabled with the reason, never to let
-// it 403.
+// HRP-667 — the "post to the internal talent market" offer. POST
+// /talent-card is `manage` on recruitment (HRP-830) and needs the market
+// open to the caller (HRP-824). HRP-629: whoever cannot post sees no offer
+// at all - only the vacancy's candidates - until a card exists.
 
 import { NextIntlClientProvider } from "next-intl";
 import { act } from "react";
@@ -103,32 +102,43 @@ describe("Internal candidates offer — who may post (HRP-667)", () => {
     expect(postButton()!.disabled).toBe(false);
   });
 
-  it("greys the button out with its own reason when the market is closed for the caller (HRP-824)", async () => {
+  const offer = () =>
+    container.querySelector('[data-testid="vacancy-internal-candidates-offer"]');
+
+  it("shows no offer when the market is closed for the caller (HRP-824, HRP-629)", async () => {
     // The API refuses a posting into a section the tenant closed for the
-    // recruiter's role, and the role reason would be false here.
+    // recruiter's role.
     await render(["recruiter"], NOT_POSTED, { recruitment: "manage" });
-    expect(postButton()!.disabled).toBe(true);
-    expect(container.textContent).toContain(
-      "The talent market is closed for your role",
-    );
-    expect(container.textContent).not.toContain("needs Manage on Recruitment");
+    expect(offer()).toBeNull();
   });
 
-  it("shows a view holder the button disabled with the reason, not a 403", async () => {
-    await render(["hr"], NOT_POSTED, READS_HIRING);
-    const btn = postButton();
-    // Visible on purpose — hiding it would leave the role wondering why
-    // colleagues see an action they do not.
-    expect(btn).not.toBeNull();
-    expect(btn!.disabled).toBe(true);
-    expect(container.textContent).toContain(
-      "Posting this vacancy to the internal talent market needs Manage on Recruitment",
-    );
+  it("shows a view holder no offer, whatever the role (HRP-629)", async () => {
+    // The rule is the right to post, not the role's name: a manager, hr or
+    // a hiring manager at `view` sees just the vacancy's candidates - with
+    // the switch off or no competences alike.
+    for (const role of ["manager", "hr", "hiring_manager"]) {
+      for (const data of [
+        NOT_POSTED,
+        { ...NOT_POSTED, internal_search_allowed: false },
+        { ...NOT_POSTED, has_library_competences: false },
+      ]) {
+        await render([role], data, READS_HIRING);
+        expect(offer(), role).toBeNull();
+        expect(container.textContent).toBe("");
+      }
+    }
   });
 
-  it("does the same for a hiring manager", async () => {
-    await render(["hiring_manager"], NOT_POSTED, READS_HIRING);
-    expect(postButton()!.disabled).toBe(true);
+  it("keeps the posted card's shortlist for a view holder (HRP-629 case 1)", async () => {
+    await render(["manager"], ROSTER(null), READS_HIRING);
+    expect(
+      container.querySelector('[data-testid="vacancy-internal-candidates"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[data-testid="vacancy-internal-candidates-card-link"]',
+      ),
+    ).not.toBeNull();
   });
 });
 

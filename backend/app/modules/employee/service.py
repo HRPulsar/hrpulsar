@@ -27,6 +27,7 @@ from app.core.s3 import get_presigned_url
 # exam / talent_market rows. All model modules are leaves (they import only
 # app.models), so these imports cannot cycle. Service-to-service imports
 # remain forbidden; cross-domain writes go through events.
+from app.modules.ai_workforce.service import ensure_not_an_owner
 from app.modules.assessment.models import PDP, Assessment
 from app.modules.auth.models import Invitation, Role, User, user_roles
 from app.modules.auth.roles import BASELINE_ROLE_CODE, ensure_baseline_employee_role
@@ -35,8 +36,10 @@ from app.modules.company.models import Division
 from app.modules.employee.alerts import (
     ALERT_LABELS,
     ALERT_PRIORITY,
+    FILTERABLE_ALERT_CODES,
     AlertCode,
     compute_employee_alerts_bulk_all,
+    scan_employee_alerts,
 )
 from app.modules.employee.competence_overview import compute_competence_overview
 from app.modules.employee.duration import compute_duration
@@ -457,31 +460,67 @@ async def list_employees(
     # and handed to Postgres as a rank — paging stays in SQL.
     severity_order: list[uuid.UUID] = []
     if issue_codes:
-        facts = await collect_issue_facts(
-            db, tenant_id, visible_employee_ids=visible_employee_ids
-        )
-        cohorts = issue_cohorts(facts)
-        matched: set[uuid.UUID] = set()
-        for code in issue_codes:
-            matched |= cohorts.get(code, set())
-        if not matched:
-            return [], 0
-        query = query.where(Employee.id.in_(matched))
-        count_query = count_query.where(Employee.id.in_(matched))
         # One code only. Severity is a score within a kind of problem, not
         # across kinds: ranking a mixed list by each person's worst code would
         # compare "3 competences below the bar" against "21 days in review",
         # and park every never-assessed employee on top for good. The UI hides
         # the control in that case; the API falls back the same way.
-        if sort in (None, SORT_SEVERITY) and len(issue_codes) == 1:
-            severity_order = [
-                e.id
-                for e in sort_by_severity(
-                    facts,
-                    [facts.active_by_id[i] for i in matched if i in facts.active_by_id],
-                    issue_codes,
-                )
-            ]
+        by_severity = sort in (None, SORT_SEVERITY) and len(issue_codes) == 1
+        matched: set[uuid.UUID] = set()
+        loop_codes = [c for c in issue_codes if c not in FILTERABLE_ALERT_CODES]
+        alert_codes = [c for c in issue_codes if c in FILTERABLE_ALERT_CODES]
+        if loop_codes:
+            facts = await collect_issue_facts(
+                db, tenant_id, visible_employee_ids=visible_employee_ids
+            )
+            cohorts = issue_cohorts(facts)
+            for code in loop_codes:
+                matched |= cohorts.get(code, set())
+            if by_severity:
+                severity_order = [
+                    e.id
+                    for e in sort_by_severity(
+                        facts,
+                        [
+                            facts.active_by_id[i]
+                            for i in matched
+                            if i in facts.active_by_id
+                        ],
+                        issue_codes,
+                    )
+                ]
+        if alert_codes:
+            # HRP-729 REDO: the hygiene badges answer the filter through the
+            # very scan that draws them, over every employee in scope — the
+            # badges are not limited to active people, so neither is the list.
+            # ponytail: one IN list of the scope's ids; chunk the scan if a
+            # tenant ever nears asyncpg's 32767 bind parameters.
+            scope_q = select(Employee).where(Employee.tenant_id == tenant_id)
+            if visible_employee_ids is not None:
+                scope_q = scope_q.where(Employee.id.in_(visible_employee_ids))
+            scope = list((await db.execute(scope_q)).scalars().all())
+            scan = await scan_employee_alerts(db, tenant_id, scope)
+            hits = [e for e in scope if any(c in scan[e.id] for c in alert_codes)]
+            matched |= {e.id for e in hits}
+            if by_severity:
+                # Oldest first: added longest ago, in review longest, missed
+                # its end date earliest. Same tie-break as ``sort_by_severity``.
+                code = alert_codes[0]
+                severity_order = [
+                    e.id
+                    for e in sorted(
+                        hits,
+                        key=lambda e: (
+                            scan[e.id][code],
+                            e.user.last_name if e.user else "",
+                            str(e.id),
+                        ),
+                    )
+                ]
+        if not matched:
+            return [], 0
+        query = query.where(Employee.id.in_(matched))
+        count_query = count_query.where(Employee.id.in_(matched))
 
     if division_ids:
         query = query.where(Employee.division_id.in_(division_ids))
@@ -850,6 +889,13 @@ async def update_employee(
 
     for field, value in updates.items():
         setattr(emp, field, value)
+    if "status" in updates:
+        # HRP-984: AI agent grants this employee answers for wait for a new owner.
+        from app.modules.ai_workforce import service as ai_workforce_service
+
+        await ai_workforce_service.release_dismissed_owner(
+            db, emp, user_id=current_user.id
+        )
     await db.commit()
     await db.refresh(emp)
     return _employee_to_read(emp)
@@ -907,6 +953,7 @@ async def delete_employee(
             detail_code="has_connections",
             full_name=full_name,
         )
+    await ensure_not_an_owner(db, emp.id)  # HRP-988: AI agent ownership first
 
     snapshot = _employee_to_read(emp)
     await db.delete(emp)

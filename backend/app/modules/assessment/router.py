@@ -1,5 +1,5 @@
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel, Field
@@ -84,6 +84,19 @@ from app.modules.auth.models import User
 
 router = APIRouter(tags=["assessments"])
 
+# HRP-907: the seeded ``assessment_statuses`` codes. A closed set, so a typo in
+# ``GET /assessments?status=`` answers 422 instead of a silent total of 0.
+AssessmentStatusCode = Literal[
+    "draft",
+    "sent",
+    "in_progress",
+    "on_review",
+    "summarizing",
+    "await_result",
+    "done",
+    "cancelled",
+]
+
 # HRP-826: running assessments - single and mass, calibration, external
 # reviewers, detailed results, CPA - asks the tenant's ``assessments`` row
 # for ``manage`` in place of the admin/manager role list; whose assessment
@@ -113,6 +126,9 @@ async def list_assessments(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     employee_id: uuid.UUID | None = None,
+    # HRP-907: the dashboard's Active assessments block reads ``total`` per
+    # status — a page of 100 rows capped every count at 100.
+    status: list[AssessmentStatusCode] | None = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -129,6 +145,7 @@ async def list_assessments(
         visible_employee_ids=visible_ids,
         participant_user_id=current_user.id,
         restrict_to_active=respondent,
+        status_codes=status,
     )
     return {"items": items, "total": total}
 

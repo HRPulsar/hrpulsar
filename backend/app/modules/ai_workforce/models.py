@@ -61,9 +61,11 @@ SECURITY_REVIEW_STATUSES = ("not_reviewed", "in_review", "approved", "rejected")
 EU_AI_ACT_RISK_LEVELS = ("minimal", "limited", "high", "unacceptable")
 PRIMITIVE_OVERRIDE_MODES = ("add", "remove")
 SUPERVISION_LEVELS = ("autonomous", "human_review_required", "human_approval_gate")
-# pending: self-service request awaiting approval; the other three are final
-# for the row — a revoked or rejected assignment is re-created, not revived.
-ASSIGNMENT_STATUSES = ("pending", "active", "rejected", "revoked")
+# pending: self-service request awaiting approval; needs_owner: an active
+# grant whose accountable owner left the company (HRP-984) - suspended until
+# a new active owner is named, which makes it active again; rejected and
+# revoked are final for the row - re-created, not revived.
+ASSIGNMENT_STATUSES = ("pending", "active", "rejected", "revoked", "needs_owner")
 # The person's part in a workflow (conductor vs. violinist), not an RBAC role:
 # the name stays clear of the *_ROLES suffix test_rbac_role_codes.py scans.
 HUMAN_ROLE_KINDS = ("orchestrator", "executor", "reviewer", "observer")

@@ -24,7 +24,7 @@ from app.core.dev_guard import dev_endpoints_enabled, require_dev_endpoint
 from app.core.errors import AppError
 from app.core.i18n import resolve_locale_from_request
 from app.core.rate_limit import make_limiter
-from app.core.sections import matrix_levels, require_section
+from app.core.sections import matrix_levels
 from app.core.security import decode_token
 from app.core.upload_validation import assert_declared_size_within_limit
 from app.database import get_db
@@ -418,9 +418,7 @@ async def dev_seed_origin_group(
 # read (``SHARED_READS``) because the invitation form is built on it, so
 # it answers whoever opens roles or invitations at ``view`` or better -
 # not every signed-in caller: it carries how many people hold each role.
-# Writing a role asks for ``manage``.
-
-_manage_roles = require_section("roles", "manage")
+# Writing a role asks for ``manage``: the section gate's rule (HRP-1018).
 
 
 def _role_to_dict(role, user_count: int | None = None):
@@ -451,7 +449,7 @@ async def list_roles(
 async def create_role(
     data: RoleCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage_roles),
+    current_user: User = Depends(get_current_user),
 ):
     role = await service.create_role(db, current_user.tenant_id, data)
     return _role_to_dict(role)
@@ -462,7 +460,7 @@ async def update_role(
     role_id: uuid.UUID,
     data: RoleUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage_roles),
+    current_user: User = Depends(get_current_user),
 ):
     role = await service.update_role(db, current_user.tenant_id, role_id, data)
     return _role_to_dict(role)
@@ -472,7 +470,7 @@ async def update_role(
 async def delete_role(
     role_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage_roles),
+    current_user: User = Depends(get_current_user),
 ):
     await service.delete_role(db, current_user.tenant_id, role_id)
 
@@ -490,10 +488,8 @@ async def delete_role(
 # invitation is sending it, so a ``manage`` holder edits, cancels and
 # resends only the invitations they could have sent (review round 1: hr
 # re-addressing an admin invitation to themselves). Changing the role of a
-# sent invitation stays the admin level's (``update_invitation``).
-
-_view_invitations = require_section("invitations", "view")
-_manage_invitations = require_section("invitations", "manage")
+# sent invitation stays the admin level's (``update_invitation``). The
+# levels themselves are the section gate's (HRP-1018).
 
 
 async def _invitation_in_reach(
@@ -525,7 +521,7 @@ async def _seat_division(
 async def create_invitation(
     data: InvitationCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage_invitations),
+    current_user: User = Depends(get_current_user),
 ):
     seat = await _seat_division(db, data.position_id, current_user.tenant_id)
     await assert_division_write_scope(
@@ -545,7 +541,7 @@ async def create_invitation(
 async def bulk_create_invitations(
     data: InvitationBulkCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage_invitations),
+    current_user: User = Depends(get_current_user),
 ):
     """Create a batch of invitations, reporting per-address outcomes.
 
@@ -613,7 +609,7 @@ async def list_invitations(
     limit: int = Query(50, ge=1, le=100),
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view_invitations),
+    current_user: User = Depends(get_current_user),
 ):
     items, total = await service.list_invitations(
         db,
@@ -631,7 +627,7 @@ async def update_invitation(
     invitation_id: uuid.UUID,
     data: InvitationUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage_invitations),
+    current_user: User = Depends(get_current_user),
 ):
     await _invitation_in_reach(db, current_user, invitation_id)
     if "division_id" in data.model_fields_set:
@@ -657,7 +653,7 @@ async def update_invitation_email(
     invitation_id: uuid.UUID,
     data: InvitationEmailUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage_invitations),
+    current_user: User = Depends(get_current_user),
 ):
     await _invitation_in_reach(db, current_user, invitation_id)
     return await service.update_invitation_email(
@@ -669,7 +665,7 @@ async def update_invitation_email(
 async def cancel_invitation(
     invitation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage_invitations),
+    current_user: User = Depends(get_current_user),
 ):
     await _invitation_in_reach(db, current_user, invitation_id)
     return await service.cancel_invitation(db, current_user.tenant_id, invitation_id)
@@ -681,7 +677,7 @@ async def resend_invitation(
     request: Request,
     invitation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage_invitations),
+    current_user: User = Depends(get_current_user),
 ):
     await _invitation_in_reach(db, current_user, invitation_id)
     return await service.resend_invitation(db, current_user.tenant_id, invitation_id)

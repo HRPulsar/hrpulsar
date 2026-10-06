@@ -451,10 +451,12 @@ async def _resolve_candidate_attached(
 async def _resolve_candidate_stage(
     db: AsyncSession, tenant_id: uuid.UUID, data: dict[str, Any]
 ) -> list[User]:
+    # HRP-982: ``actor_id`` now names who moved the candidate; the
+    # recipients stay the owner and the recruiter who attached them.
     ids = _dedupe(
         [
             _coerce_uuid(data.get("owner_id")),
-            _coerce_uuid(data.get("actor_id")),
+            _coerce_uuid(data.get("attached_by_id")),
         ]
     )
     return await _async_resolve_users_by_ids(db, tenant_id, ids)

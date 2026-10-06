@@ -21,11 +21,19 @@ from sqlalchemy.orm import selectinload
 
 from app.core import billing_hooks
 from app.core.errors import AppError
+from app.modules.auth.models import User
+from app.modules.employee.models import Employee
 
 # Role constants live in recruitment.common because resolve_user_role()
 # (also kept there) shares them with compare_candidates. Import here to
 # keep the RBAC filter local to interview reads.
-from app.modules.recruitment.common import _FULL_ROLES, _HM_ROLES, _publish_event
+from app.modules.recruitment import consent_service
+from app.modules.recruitment.common import (
+    _FULL_ROLES,
+    _HM_ROLES,
+    _publish_event,
+    ensure_vacancy_unlocked,
+)
 from app.modules.recruitment.models import (
     AIAnalysisRun,
     AIAssessment,
@@ -344,13 +352,60 @@ async def _interview_read(
     role: str | None = None,
     ai_assessments: list[AIAssessment] | None = None,
 ) -> dict:
-    """``_interview_to_read`` plus the tenant scale for analysis enrichment."""
+    """``_interview_to_read`` plus the tenant scale for analysis enrichment
+    and the interviewers' names."""
     scale_max = None
     if interview.analysis_data:
         scale_max = await _active_scale_max(db, interview.tenant_id)
     return _interview_to_read(
-        interview, role=role, ai_assessments=ai_assessments, scale_max=scale_max
+        interview,
+        role=role,
+        ai_assessments=ai_assessments,
+        scale_max=scale_max,
+        briefs=await _interviewer_briefs(db, interview.tenant_id, [interview]),
     )
+
+
+def _interviewer_ids(interview: Interview) -> list[uuid.UUID]:
+    """The link table in order, the legacy primary first when only it has it."""
+    ids = [link.user_id for link in (interview.interviewers or [])]
+    if interview.interviewer_id and interview.interviewer_id not in ids:
+        ids.insert(0, interview.interviewer_id)
+    return ids
+
+
+async def _interviewer_briefs(
+    db: AsyncSession, tenant_id: uuid.UUID, interviews: list[Interview]
+) -> dict[uuid.UUID, dict]:
+    """HRP-1019: name and position of every interviewer of ``interviews``
+    in one query - what the company directory shows everyone, so a caller
+    the section opens to ``view`` reads them without the picker's list.
+    A user outside the tenant is left out."""
+    ids = {uid for i in interviews for uid in _interviewer_ids(i)}
+    if not ids:
+        return {}
+    rows = await db.execute(
+        select(
+            User.id,
+            User.first_name,
+            User.last_name,
+            User.email,
+            Employee.position_title,
+        )
+        .outerjoin(
+            Employee,
+            and_(Employee.user_id == User.id, Employee.tenant_id == User.tenant_id),
+        )
+        .where(User.id.in_(ids), User.tenant_id == tenant_id)
+    )
+    return {
+        r.id: {
+            "id": r.id,
+            "full_name": f"{r.first_name} {r.last_name}".strip() or r.email,
+            "position_title": r.position_title,
+        }
+        for r in rows
+    }
 
 
 def _interview_to_read(
@@ -359,6 +414,7 @@ def _interview_to_read(
     role: str | None = None,
     ai_assessments: list[AIAssessment] | None = None,
     scale_max: float | None = None,
+    briefs: dict[uuid.UUID, dict] | None = None,
 ) -> dict:
     segments = sorted((interview.segments or []), key=lambda s: (s.start_sec, s.id))
     ai_payload: list[dict] = []
@@ -379,9 +435,8 @@ def _interview_to_read(
                 }
             )
 
-    interviewer_ids = [link.user_id for link in (interview.interviewers or [])]
-    if interview.interviewer_id and interview.interviewer_id not in interviewer_ids:
-        interviewer_ids.insert(0, interview.interviewer_id)
+    interviewer_ids = _interviewer_ids(interview)
+    briefs = briefs or {}
 
     return {
         "id": interview.id,
@@ -393,6 +448,7 @@ def _interview_to_read(
         "duration_minutes": interview.duration_minutes,
         "interviewer_id": interview.interviewer_id,
         "interviewer_ids": interviewer_ids,
+        "interviewers": [briefs[uid] for uid in interviewer_ids if uid in briefs],
         "interview_date": interview.interview_date,
         "duration_seconds": interview.duration_seconds,
         "audio_file_id": interview.audio_file_id,
@@ -908,7 +964,11 @@ async def list_interviews(
     scale_max = None
     if any(i.analysis_data for i in rows):
         scale_max = await _active_scale_max(db, tenant_id)
-    return [_interview_to_read(i, role=role, scale_max=scale_max) for i in rows]
+    briefs = await _interviewer_briefs(db, tenant_id, list(rows))
+    return [
+        _interview_to_read(i, role=role, scale_max=scale_max, briefs=briefs)
+        for i in rows
+    ]
 
 
 async def get_interview(
@@ -1015,6 +1075,7 @@ async def paste_text_transcript(
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     if interview.archived_at is not None:
         raise AppError("interview_archived", status.HTTP_409_CONFLICT)
+    await consent_service.require_interview_consent(db, tenant_id, interview)
 
     await _apply_text_transcript(db, tenant_id, interview, redact_pii(data.text))
 
@@ -1140,8 +1201,7 @@ async def init_interview_upload(
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     if interview.archived_at is not None:
         raise AppError("interview_archived", status.HTTP_409_CONFLICT)
-    if interview.consent_signed_at is None:
-        raise AppError("consent_required", status.HTTP_409_CONFLICT)
+    await consent_service.require_interview_consent(db, tenant_id, interview)
     is_demo = await is_demo_tenant(db, tenant_id)
     _validate_upload_payload(
         data.mime_type, data.size_bytes, data.kind, is_demo=is_demo
@@ -1299,6 +1359,9 @@ async def ack_uploaded_chunk(
     """
 
     await _get_interview_with_relations(db, tenant_id, interview_id)
+    await ensure_vacancy_unlocked(
+        db, tenant_id, "interviews", interview_id=interview_id
+    )
     session = await _get_active_session(db, tenant_id, interview_id, upload_id)
     if not session:
         raise AppError("upload_session_not_found", status.HTTP_404_NOT_FOUND)
@@ -1338,6 +1401,9 @@ async def get_upload_part_url(
     from app.core.s3 import get_part_presigned_url
 
     await _get_interview_with_relations(db, tenant_id, interview_id)
+    await ensure_vacancy_unlocked(
+        db, tenant_id, "interviews", interview_id=interview_id
+    )
 
     key = _interview_storage_key(tenant_id, interview_id)
     url = get_part_presigned_url(key, data.upload_id, data.part_number)
@@ -1369,6 +1435,9 @@ async def complete_interview_upload(
 
     from app.core.s3 import complete_multipart_upload, head_object
     from app.modules.demo.utils import is_demo_tenant
+    await ensure_vacancy_unlocked(
+        db, tenant_id, "interviews", interview_id=interview_id
+    )
 
     if kind not in {"audio", "video", "text_transcript"}:
         raise AppError("invalid_upload_kind", status.HTTP_422_UNPROCESSABLE_ENTITY)
@@ -1395,8 +1464,7 @@ async def complete_interview_upload(
         raise AppError("interview_not_found", status.HTTP_404_NOT_FOUND)
     if interview.archived_at is not None:
         raise AppError("interview_archived", status.HTTP_409_CONFLICT)
-    if interview.consent_signed_at is None:
-        raise AppError("consent_required", status.HTTP_409_CONFLICT)
+    await consent_service.require_interview_consent(db, tenant_id, interview)
 
     key = _interview_storage_key(tenant_id, interview_id)
     parts_payload = [{"PartNumber": p.part_number, "ETag": p.etag} for p in data.parts]
@@ -1924,8 +1992,6 @@ async def list_interviewer_options(
     fence keeps off its vacancy (HRP-971).
     """
 
-    from app.modules.auth.models import User
-
     rows = (
         (
             await db.execute(
@@ -2083,6 +2149,19 @@ async def cleanup_orphan_upload_sessions(
 # ---------------------------------------------------------------------------
 
 
+async def _uploader_id(db: AsyncSession, interview: Interview) -> uuid.UUID | None:
+    """HRP-982: the author of the worker's upload -> transcribe -> analyze
+    chain, which runs without a request user - whoever uploaded the media
+    (the interview's creator when the file row names nobody)."""
+    file_id = interview.audio_file_id or interview.video_file_id
+    uploaded_by = (
+        await db.scalar(select(File.uploaded_by).where(File.id == file_id))
+        if file_id
+        else None
+    )
+    return uploaded_by or interview.created_by
+
+
 async def enqueue_transcribe(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -2097,6 +2176,10 @@ async def enqueue_transcribe(
     # regardless of tenant class — keeps the demo gate from leaking a
     # 409-vs-404 oracle to an attacker enumerating interview ids.
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
+    if user_id is None:
+        from app.modules.recruitment.audit_registry import annotate
+
+        annotate(user_id=await _uploader_id(db, interview))
 
     # HRP-253 (D5): defense-in-depth. The upload gate already prevents
     # demo tenants from attaching media, but if a caller stitches an
@@ -2107,6 +2190,7 @@ async def enqueue_transcribe(
 
     if not (interview.audio_file_id or interview.video_file_id):
         raise AppError("interview_no_uploaded_media", status.HTTP_409_CONFLICT)
+    await consent_service.require_interview_consent(db, tenant_id, interview)
     if interview.transcription_status == "processing":
         raise AppError("transcription_already_in_progress", status.HTTP_409_CONFLICT)
     # HRP-1005: the billing wrapper charges the minutes once this returns,
@@ -2192,6 +2276,7 @@ async def enqueue_analyze(
         raise AppError("analysis_requires_transcription", status.HTTP_409_CONFLICT)
     if interview.analysis_status == "processing":
         raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
+    await consent_service.require_interview_consent(db, tenant_id, interview)
     # One in-flight run per pair, whichever surface started it: a pending
     # resume-only run, or this interview's own run as seen by a second
     # concurrent POST. Same check + advisory lock + re-check as
@@ -2247,10 +2332,13 @@ async def enqueue_analyze_or_cached(
     )
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
+    if user_id is None:
+        user_id = await _uploader_id(db, interview)  # HRP-982: the auto chain
     if interview.transcription_status != "completed":
         raise AppError("analysis_requires_transcription", status.HTTP_409_CONFLICT)
     if interview.analysis_status == "processing":
         raise AppError("analysis_already_in_progress", status.HTTP_409_CONFLICT)
+    await consent_service.require_interview_consent(db, tenant_id, interview)
 
     cache_key = await compute_cache_key_for_interview(db, tenant_id, interview)
     if cache_key is not None:
@@ -2291,6 +2379,19 @@ async def enqueue_analyze_or_cached(
             interviewer_id = interview.interviewer_id
             await apply_cached_analysis(db, tenant_id, interview, cached)
             await db.commit()
+            # HRP-982: a cache hit is an analysis someone asked for too; the
+            # audited ``enqueue_analyze`` below is never reached on this path.
+            from app.modules.recruitment import audit_service
+
+            await audit_service.record_event(
+                db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="interview.analyze",
+                entity_type="interview",
+                entity_id=interview_id,
+                payload_diff={"cached": True},
+            )
             # Mirror the real-path N-06 fan-out so demo / repeat-analyze
             # users still get the "analysis_ready" signal — without it
             # the UI silently leaves the activity feed empty after a

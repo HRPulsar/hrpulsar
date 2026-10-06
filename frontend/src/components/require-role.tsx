@@ -13,25 +13,10 @@ interface RequireRoleProps {
   manage?: boolean;
   /** Require admin role */
   admin?: boolean;
-  /** HRP-810: /auth/me opens Coverage. */
-  coverage?: boolean;
-  /** HRP-810: may create a process. */
-  coverageManage?: boolean;
 }
 
-export function RequireRole({
-  children,
-  manage,
-  admin,
-  coverage,
-  coverageManage,
-}: RequireRoleProps) {
-  const {
-    canManage,
-    isAdmin,
-    canViewCoverage,
-    canCreateCoverage,
-  } = usePermissions();
+export function RequireRole({ children, manage, admin }: RequireRoleProps) {
+  const { canManage, isAdmin } = usePermissions();
   const { user, loading } = useAuth();
   const router = useRouter();
   const t = useTranslations("common");
@@ -41,15 +26,7 @@ export function RequireRole({
   // "no roles" as "not permitted" would bounce an entitled admin off the page.
   const undecided = loading || !user;
   // First match wins: pass exactly one flag, or the page gets the loosest gate.
-  const allowed = admin
-    ? isAdmin
-    : coverageManage
-      ? canCreateCoverage
-      : coverage
-        ? canViewCoverage
-        : manage
-          ? canManage
-          : true;
+  const allowed = admin ? isAdmin : manage ? canManage : true;
 
   useEffect(() => {
     if (!undecided && !allowed) {

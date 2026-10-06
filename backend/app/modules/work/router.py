@@ -333,7 +333,8 @@ async def get_coverage(
     does not start a model run. A matched colleague and what an assignee
     lacks come from assessments, so they are named within the reader's HR
     scope: everyone for admin / hr, the managed subtree for a manager, the
-    reader themselves for anyone else (HRP-810, HRP-623)."""
+    reader themselves for anyone else (HRP-810, HRP-623). Leave is the
+    section's managers' to see, like on the owner (HRP-1020)."""
     result = await coverage.compute(
         db,
         actor.tenant_id,
@@ -348,9 +349,7 @@ async def get_coverage(
     # HRP-862: the list shows these figures without computing anything. Before
     # the redaction on purpose - the summary carries no people to redact.
     await coverage.remember_summary(db, actor.tenant_id, container_id, result)
-    return (
-        result if visible is None else coverage.redact_people(result, visible=visible)
-    )
+    return coverage.redact_people(result, visible=visible, reveal_leave=actor.manage)
 
 
 @router.get("/containers/{container_id}/gaps", response_model=list[GapRead])

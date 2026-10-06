@@ -21,7 +21,6 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@marsidev/react-turnstile": "^1.5.3",
-    "@radix-ui/react-popover": "^1.1.15",
     "@sentry/nextjs": "^10.49.0",
     "@tanstack/react-virtual": "^3.13.24",
     "class-variance-authority": "^0.7.1",

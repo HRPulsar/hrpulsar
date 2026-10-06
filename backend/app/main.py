@@ -257,6 +257,7 @@ from app.modules.primitives.router import (  # noqa: E402
 )
 from app.modules.primitives.router import router as primitives_router  # noqa: E402
 from app.modules.public_api.router import router as public_api_router  # noqa: E402
+from app.modules.public_check.router import router as public_check_router  # noqa: E402
 from app.modules.recruitment.manager_assessment_router import (
     public_router as recruitment_public_assessment_router,  # noqa: E402
 )
@@ -300,6 +301,7 @@ app.include_router(ai_settings_router, prefix="/api")
 app.include_router(ai_compgen_router, prefix="/api")
 app.include_router(data_import_router, prefix="/api")
 app.include_router(public_api_router, prefix="/api")
+app.include_router(public_check_router, prefix="/api")
 app.include_router(recruitment_router, prefix="/api")
 app.include_router(recruitment_settings_router, prefix="/api")
 app.include_router(recruitment_manager_assessment_router, prefix="/api")
@@ -369,6 +371,8 @@ _HIDDEN_TAGS = {
     "work-internal",
     # Enterprise CMS (ee/blog) — only the landing consumes it.
     "blog",
+    # HRP-922: the check host's own pages call it; not an integration API.
+    "public-check",
 }
 _HIDDEN_PATH_PREFIXES = ("/api/auth/dev/",)
 _original_openapi = app.openapi

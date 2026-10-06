@@ -157,8 +157,7 @@ class TestReadme:
         if not missing:
             names[rows[1]["step_id"]] = "draft-the-note"
         paths = bundle.skill_paths(groups, names)
-        titles = {"extraction": "Extraction", "drafting": "Drafting"}
-        return bundle.build_readme("Month-end close", groups, paths, titles, locale)
+        return bundle.build_readme("Month-end close", groups, paths, {}, locale)
 
     def test_names_the_agents_the_steps_and_the_files(self):
         text = self._render("en")
@@ -188,6 +187,55 @@ class TestReadme:
             rendered[locale] = text
         assert rendered["de"] != rendered["en"]
         assert translate("work_bundle.todo_heading", "de") in rendered["de"]
+
+    def test_agent_types_read_in_the_archive_language(self):
+        """HRP-912: the agent type headings speak the language of the rest of
+        the README - in en the stored title, in de the interface label."""
+        en = self._render("en")
+        assert "## 1. Extraction (`extraction`)" in en
+        assert "## 2. Drafting (`drafting`)" in en
+        de = self._render("de")
+        assert "## 1. Extraktion (`extraction`)" in de
+        assert "## 2. Entwurf (`drafting`)" in de
+
+    def test_a_pack_no_catalog_names_keeps_its_own_title(self):
+        own = {"title": "Contract triage", "own": True}
+        assert bundle.pack_label("own_pack", own, "de") == "Contract triage"
+        assert bundle.pack_label("own_pack", None, "de") == "own_pack"
+        # A locale without a catalog reads in English, like the rest.
+        assert bundle.pack_label("drafting", None, "fr") == "Drafting"
+
+    def test_the_tenants_pack_with_a_built_in_code_is_its_own_agent_type(self):
+        """HRP-911: the step named the tenant's own pack by id, so the README
+        lists it apart from the built-in one of the same code, by its title."""
+        mine, builtin = uuid.uuid4(), uuid.uuid4()
+        rows = [_row(1, "drafting", hours=100), _row(2, "drafting", hours=50)]
+        rows[0]["agent"]["pack_id"] = builtin
+        rows[1]["agent"]["pack_id"] = mine
+        groups = bundle.agent_groups(rows)
+        assert [g["pack_id"] for g in groups] == [builtin, mine]
+        packs = {
+            builtin: {"title": "Drafting", "own": False},
+            mine: {"title": "Contract drafting", "own": True},
+        }
+        text = bundle.build_readme("Close", groups, {}, packs, "de")
+        assert "## 1. Entwurf (`drafting`)" in text
+        assert "## 2. Contract drafting (`drafting`)" in text
+
+    def test_pack_labels_match_the_interface_catalog(self):
+        """One name per agent type: the README labels are the frontend's
+        ``reference.agentPack.*.label`` for every shipped catalog (ru ships
+        only with the enterprise catalogs on both sides)."""
+        import json
+
+        messages = BACKEND.parent / "frontend" / "messages"
+        for path in sorted(messages.glob("*.json")):
+            packs = json.loads(path.read_text(encoding="utf-8"))["reference"][
+                "agentPack"
+            ]
+            for code, entry in packs.items():
+                label = bundle.pack_label(code, {}, path.stem)
+                assert label == entry["label"], (path.stem, code)
 
     def test_the_todo_list_asks_only_for_what_applies(self):
         full = self._render("en")

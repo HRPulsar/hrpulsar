@@ -963,6 +963,15 @@ class InterviewAnalysisCache(BaseModel, TenantMixin):
     # 64-char lowercase hex sha256 digest. No standalone index: the
     # (tenant_id, cache_key) UQ btree above covers every lookup.
     cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    # The key hashes the pair in, so a row belongs to one candidate on one
+    # vacancy; a GDPR erase deletes the pair's rows by it (review 05.10).
+    # Rows written before the column carry NULL.
+    candidate_vacancy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("candidate_vacancies.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     analysis_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
     assessments: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default="[]"
@@ -1462,6 +1471,18 @@ class GDPRErasureLog(BaseModel, TenantMixin):
     subject_type: Mapped[str] = mapped_column(String(50), nullable=False)
     subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     affected: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class GDPRPendingBlobDelete(BaseModel, TenantMixin):
+    """Object-storage key an erasure could not delete; the nightly
+    retention sweep retries it until the storage confirms."""
+
+    __tablename__ = "gdpr_pending_blob_deletes"
+
+    path: Mapped[str] = mapped_column(String(600), nullable=False)
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
 
 
 # ---------------------------------------------------------------------------

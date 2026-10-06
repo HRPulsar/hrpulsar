@@ -223,3 +223,120 @@ async def test_clone_seed_localizes_content_de(
         )
     ).scalar_one()
     assert (persona.first_name, persona.last_name) == ("Volker", "Lücke")
+
+
+# ---------------------------------------------------------------------------
+# HRP-1000 — a candidate's email, phone and LinkedIn follow the localized name
+# ---------------------------------------------------------------------------
+
+# Lower-case Cyrillic a..ya is the contiguous block U+0430..U+044F (yo sits
+# apart); spelt out the way the catalog spells the addresses. Code points,
+# not letters: core sources stay ASCII for the public repo.
+# fmt: off
+_RU_SPELLING = [
+    "a", "b", "v", "g", "d", "e", "zh", "z", "i", "y", "k", "l", "m",
+    "n", "o", "p", "r", "s", "t", "u", "f", "kh", "ts", "ch", "sh",
+    "shch", "", "y", "", "e", "yu", "ya",
+]
+# fmt: on
+_RU_LATIN = dict(
+    zip((chr(code) for code in range(0x430, 0x450)), _RU_SPELLING, strict=True)
+)
+_RU_LATIN["\u0451"] = "e"
+_DE_LATIN = {"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"}
+
+
+def _ascii(word: str) -> str:
+    """How a name is spelt in an address: umlauts and Cyrillic spelt out,
+    accents and apostrophes dropped."""
+    import unicodedata
+
+    spelt = "".join(_DE_LATIN.get(ch, _RU_LATIN.get(ch, ch)) for ch in word.lower())
+    return (
+        unicodedata.normalize("NFKD", spelt)
+        .encode("ascii", "ignore")
+        .decode()
+        .replace("'", "")
+    )
+
+
+@pytest.mark.parametrize("locale", ["en", "de", "ru"])
+def test_candidate_contacts_follow_the_name_in_every_locale(locale: str):
+    """QA saw a localized name next to elena.volkov@example.com on the ru
+    site and "Elena Volkov" on the en one. Every external candidate's
+    email spells their name in the seed locale, the LinkedIn handle is
+    the same spelling, and no two candidates share an address."""
+    from app.modules.demo.seed_data import candidates
+    from app.modules.demo.seed_data_recruitment_extras import EXTRA_CANDIDATES
+
+    if locale != "en" and not seed_i18n._load_catalog(locale):
+        pytest.skip(f"no {locale} seed catalog in this build")
+    emails = []
+    for spec in (*candidates(), *EXTRA_CANDIDATES):
+        if spec.get("employee_index") is not None:
+            continue  # the internal applicant is his employee row (HRP-679)
+        first, last = seed_i18n.translate(
+            f"{spec['first_name']} {spec['last_name']}", locale
+        ).split(" ", 1)
+        email = seed_i18n.translate(spec["email"], locale)
+        local = f"{_ascii(first)}.{_ascii(last)}"
+        assert email == f"{local}@example.com", (locale, first, last, email)
+        if spec.get("linkedin"):
+            assert seed_i18n.translate(spec["linkedin"], locale) == (
+                "linkedin.com/in/" + local.replace(".", "")
+            )
+        emails.append(email)
+    assert len(set(emails)) == len(emails)
+
+
+def test_the_headline_candidate_is_elena_volkova():
+    """The en name QA asked for — a Russian surname takes the feminine form."""
+    from app.modules.demo.seed_data import DEMO_FIRST_SCREEN_CANDIDATE_EMAIL, candidates
+
+    elena = next(c for c in candidates() if c["first_name"] == "Elena")
+    assert (elena["last_name"], DEMO_FIRST_SCREEN_CANDIDATE_EMAIL) == (
+        "Volkova",
+        "elena.volkova@example.com",
+    )
+
+
+@pytest.mark.asyncio
+async def test_clone_seed_builds_the_candidate_card_in_the_seed_locale(
+    db: AsyncSession, tenant, user, monkeypatch
+):
+    """HRP-1000: the stored row and its parsed resume agree with the name."""
+    from app.modules.recruitment.models import Candidate
+
+    monkeypatch.setattr(settings, "available_locales", "de,en")
+    monkeypatch.setattr(settings, "default_locale", "de")
+    tenant.is_demo = True
+    await db.commit()
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    elena = (
+        await db.execute(
+            select(Candidate).where(
+                Candidate.tenant_id == tenant.id,
+                Candidate.full_name == "Elena Vogel",
+            )
+        )
+    ).scalar_one()
+    assert elena.email == "elena.vogel@example.com"
+    assert elena.linkedin_url == "linkedin.com/in/elenavogel"
+    assert elena.location == "Berlin, Deutschland"
+    contacts = elena.parsed_resume_jsonb["contacts"]
+    assert contacts == {
+        "email": "elena.vogel@example.com",
+        "phone": elena.phone,
+        "linkedin": "linkedin.com/in/elenavogel",
+    }
+    # The extras follow the same rule.
+    assert (
+        await db.execute(
+            select(Candidate.email).where(
+                Candidate.tenant_id == tenant.id,
+                Candidate.full_name == "Isabell Färber",
+            )
+        )
+    ).scalar_one() == "isabell.faerber@example.com"

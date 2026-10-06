@@ -2,7 +2,7 @@ import logging
 import math
 import secrets
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -794,9 +794,16 @@ async def list_assessments(
     visible_employee_ids: set[uuid.UUID] | None = None,
     participant_user_id: uuid.UUID | None = None,
     restrict_to_active: bool = False,
+    status_codes: Sequence[str] | None = None,
 ) -> tuple[list[dict], int]:
     base = select(Assessment).where(Assessment.tenant_id == tenant_id)
     count_q = select(func.count(Assessment.id)).where(Assessment.tenant_id == tenant_id)
+    if status_codes:
+        by_status = Assessment.status_id.in_(
+            select(AssessmentStatus.id).where(AssessmentStatus.code.in_(status_codes))
+        )
+        base = base.where(by_status)
+        count_q = count_q.where(by_status)
 
     base = apply_assessment_scope(
         base,

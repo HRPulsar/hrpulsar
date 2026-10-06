@@ -161,9 +161,10 @@ describe("attention flags (HRP-638)", () => {
     expect(match(busy, ["stuck_review"])).toBe(false);
   });
 
-  it("stuck_review counts a returned plan too", () => {
-    const pdp = makePdp({ status: "returned", updated_at: daysAgo(20) });
-    expect(match(pdp, ["stuck_review"])).toBe(true);
+  // HRP-941: a returned plan is back with its author, not stuck in review.
+  it("stuck_review leaves a returned plan out, however old", () => {
+    const pdp = makePdp({ status: "returned", updated_at: daysAgo(200) });
+    expect(match(pdp, ["stuck_review"])).toBe(false);
   });
 
   it("falls back to created_at when the row carries no updated_at", () => {

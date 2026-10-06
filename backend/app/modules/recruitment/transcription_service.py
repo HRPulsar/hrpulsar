@@ -8,20 +8,19 @@ Four providers are implemented:
   all, so the transcript comes back single-voiced and the worker
   recovers the roles with an LLM pass (``speaker_roles``). Whisper also
   caps a request at 25 MB; a recording above it is split into chunks and
-  stitched back together (HRP-646).
+  stitched back together (HRP-646). A tenant row may point it at its own
+  OpenAI-compatible server (``settings["base_url"]``, HRP-985).
 - ``AssemblyAIProvider`` — upload, then a polled transcript job, with
   native diarization.
 - ``YandexSpeechKitProvider`` — v3 asynchronous file recognition with
   speaker labeling, for deployments that cannot send audio abroad.
 
-``FasterWhisperProvider`` stays a stub: self-hosted whisper + pyannote
-is the on-premise answer and has not been built yet.
-
 Every credential a workspace has joins one chain (see
 ``get_transcription_chain_sync``), so a dead key costs a provider, not
 the interview. A recording is only ever chunked for a provider that
 declares ``max_request_bytes`` — the diarizing ones number speakers per
-request, and splitting would rename them halfway through.
+request, and splitting would rename them halfway through. Every attempt
+in the chain is one row of the AI call log (HRP-970).
 """
 
 from __future__ import annotations
@@ -45,6 +44,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core import ai_usage_hooks, url_guard
+from app.core.errors import AppError
 from app.modules.ai.providers import decrypt_row_key
 from app.modules.recruitment.media_prep import split_audio
 from app.modules.recruitment.models import TranscriptionProviderConfig
@@ -72,12 +73,19 @@ class TranscriptionResult:
     language: str | None = None
     duration_seconds: float | None = None
     provider: str = ""
+    # The model that actually ran, when the provider reports it (AssemblyAI
+    # routes between models); the AI call log falls back to the provider's.
+    model: str | None = None
 
 
 class TranscriptionProvider(ABC):
     """Abstract base for speech-to-text providers."""
 
     provider_name: str = ""
+    # For the AI call log (HRP-970): the provider's model, and whose key
+    # the call runs on — platform | byok | local, set by the chain builder.
+    model: str = ""
+    credential_source: str = "platform"
 
     # Hard request-size ceiling of the provider's API, if it has one.
     # A recording above it is split into chunks by the chain (HRP-646);
@@ -147,6 +155,9 @@ async def _file_bytes(path: str) -> AsyncIterator[bytes]:
 # ---------------------------------------------------------------------------
 
 
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+
 class OpenAIWhisperProvider(TranscriptionProvider):
     provider_name = "whisper"
 
@@ -155,9 +166,14 @@ class OpenAIWhisperProvider(TranscriptionProvider):
     # instead of writing the interview off.
     max_request_bytes = 25 * 1024 * 1024
 
-    def __init__(self, api_key: str, model: str = "whisper-1") -> None:
+    def __init__(
+        self, api_key: str, model: str = "whisper-1", base_url: str | None = None
+    ) -> None:
         self._api_key = api_key
-        self._model = model
+        self.model = model
+        # HRP-985: a tenant's own OpenAI-compatible server. Only ever set
+        # off the platform key — see ``_build``.
+        self._base_url = base_url
 
     async def transcribe(
         self,
@@ -186,7 +202,7 @@ class OpenAIWhisperProvider(TranscriptionProvider):
                 )
             }
             data = {
-                "model": self._model,
+                "model": self.model,
                 "response_format": "verbose_json",
                 "timestamp_granularities[]": "segment",
             }
@@ -194,17 +210,54 @@ class OpenAIWhisperProvider(TranscriptionProvider):
             # language itself, and a wrong hint is worse than none.
             if language:
                 data["language"] = language
-            async with httpx.AsyncClient(timeout=600) as http:
-                response = await http.post(
-                    "https://api.openai.com/v1/audio/transcriptions",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+            base_url = (self._base_url or OPENAI_BASE_URL).rstrip("/")
+            # HRP-985: a tenant-set address goes through the same SSRF
+            # layer as an LLM base_url — on saas it is re-resolved, checked
+            # and pinned on every request; None elsewhere (onprem, OpenAI).
+            client = (
+                url_guard.tenant_endpoint_http_client(
+                    base_url,
+                    error_code="llm_base_url_not_public",
+                    timeout=httpx.Timeout(600.0, connect=30.0),
+                )
+                if self._base_url
+                else None
+            ) or httpx.AsyncClient(timeout=600)
+            # A local server may run without auth.
+            headers = (
+                {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+            )
+            async with (
+                client as http,
+                http.stream(
+                    "POST",
+                    f"{base_url}/audio/transcriptions",
+                    headers=headers,
                     data=data,
                     files=files,
-                )
-        response.raise_for_status()
-        body = response.json()
+                ) as response,
+            ):
+                response.raise_for_status()
+                raw = bytearray()
+                async for chunk in response.aiter_bytes():
+                    raw += chunk
+                    if len(raw) > _WHISPER_MAX_RESPONSE_BYTES:
+                        raise ValueError("Whisper response exceeds 20 MB")
+        # A ValueError moves the chain on: a server answering garbage will
+        # answer it again, so a retry would only replay the upload.
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            raise ValueError("Whisper response is not JSON") from None
+        if not isinstance(body, dict):
+            raise ValueError("Whisper response is not a JSON object")
 
         return _whisper_payload_to_result(body, provider=self.provider_name)
+
+
+# A verbose_json transcript of a 25 MB upload is a few MB; the cap keeps a
+# misbehaving tenant server from filling the worker's memory (review B4).
+_WHISPER_MAX_RESPONSE_BYTES = 20 * 1024 * 1024
 
 
 def _whisper_payload_to_result(
@@ -242,7 +295,7 @@ class DeepgramProvider(TranscriptionProvider):
 
     def __init__(self, api_key: str, model: str = "nova-2") -> None:
         self._api_key = api_key
-        self._model = model
+        self.model = model
 
     async def transcribe(
         self,
@@ -252,7 +305,7 @@ class DeepgramProvider(TranscriptionProvider):
         diarization: bool = True,
     ) -> TranscriptionResult:
         params: dict[str, Any] = {
-            "model": self._model,
+            "model": self.model,
             "punctuate": "true",
             "utterances": "true",
         }
@@ -345,6 +398,9 @@ class AssemblyAIProvider(TranscriptionProvider):
     """
 
     provider_name = "assemblyai"
+    # No model is requested: AssemblyAI routes between its own (Universal-3.5
+    # Pro first) and reports the one that ran in ``speech_model_used``.
+    model = "universal-3-5-pro"
 
     _BASE_URL = "https://api.assemblyai.com/v2"
 
@@ -451,6 +507,7 @@ def _assemblyai_payload_to_result(
         language=body.get("language_code"),
         duration_seconds=body.get("audio_duration"),
         provider=provider,
+        model=body.get("speech_model_used"),
     )
 
 
@@ -503,7 +560,7 @@ class YandexSpeechKitProvider(TranscriptionProvider):
         # general:rc and deferred-general returned identical text on a real
         # interview, and "premium" does not exist in v3. Configurable so a
         # new SpeechKit model can be tried without a release.
-        self._model = model
+        self.model = model
 
     async def transcribe(
         self,
@@ -526,7 +583,7 @@ class YandexSpeechKitProvider(TranscriptionProvider):
             os.path.splitext(audio_path)[1].lower(), "MP3"
         )
         model: dict[str, Any] = {
-            "model": self._model,
+            "model": self.model,
             "audioFormat": {"containerAudio": {"containerAudioType": container}},
             "textNormalization": {
                 "textNormalization": "TEXT_NORMALIZATION_ENABLED",
@@ -694,39 +751,10 @@ def _ms_to_seconds(value: Any) -> float:
         return 0.0
 
 
-class FasterWhisperProvider(TranscriptionProvider):
-    """Placeholder — self-hosted faster-whisper + pyannote, Phase R4."""
-
-    provider_name = "faster_whisper"
-
-    def __init__(self, endpoint: str | None = None) -> None:
-        self._endpoint = endpoint
-
-    async def transcribe(
-        self,
-        audio_path: str,
-        *,
-        language: str | None = None,
-        diarization: bool = True,
-    ) -> TranscriptionResult:
-        raise NotImplementedError(
-            "Self-hosted faster-whisper provider is not yet implemented "
-            "(planned for R4)."
-        )
-
-
 # ---------------------------------------------------------------------------
 # Resolver
 # ---------------------------------------------------------------------------
 
-
-_PROVIDER_REGISTRY: dict[str, type[TranscriptionProvider]] = {
-    "whisper": OpenAIWhisperProvider,
-    "deepgram": DeepgramProvider,
-    "assemblyai": AssemblyAIProvider,
-    "yandex_speechkit": YandexSpeechKitProvider,
-    "faster_whisper": FasterWhisperProvider,
-}
 
 # The order the chain tries configured credentials in (HRP-646), set by
 # measuring all four against the same Russian interview.
@@ -777,34 +805,55 @@ def _platform_key_for(provider: str) -> str:
 
 
 def _build(
-    provider: str, api_key: str, config: dict | None = None
+    provider: str,
+    api_key: str,
+    config: dict | None = None,
+    *,
+    source: str = "platform",
 ) -> TranscriptionProvider:
-    if provider not in _PROVIDER_REGISTRY:
-        raise ValueError(f"Unknown transcription provider: {provider}")
+    config = config or {}
+    built: TranscriptionProvider
     if provider == "whisper":
-        return OpenAIWhisperProvider(api_key=api_key)
-    if provider == "deepgram":
-        return DeepgramProvider(api_key=api_key)
-    if provider == "assemblyai":
-        return AssemblyAIProvider(
+        # A platform key never travels to a tenant-set address: the
+        # platform's Whisper is always OpenAI (HRP-985).
+        base_url = str(config.get("base_url") or "").strip()
+        built = OpenAIWhisperProvider(
             api_key=api_key,
-            speakers_expected=int((config or {}).get("speakers_expected") or 0),
+            base_url=base_url if base_url and source != "platform" else None,
         )
-    if provider == "yandex_speechkit":
+    elif provider == "deepgram":
+        built = DeepgramProvider(api_key=api_key)
+    elif provider == "assemblyai":
+        built = AssemblyAIProvider(
+            api_key=api_key,
+            speakers_expected=int(config.get("speakers_expected") or 0),
+        )
+    elif provider == "yandex_speechkit":
         # SpeechKit addresses the account by folder, so the key alone is
         # not a credential: the tenant's row carries its own folder id,
         # and the platform folder is the fallback.
-        folder_id = str((config or {}).get("folder_id") or "") or (
-            settings.yandex_folder_id or ""
-        )
-        return YandexSpeechKitProvider(
+        built = YandexSpeechKitProvider(
             api_key=api_key,
-            folder_id=folder_id,
-            model=str((config or {}).get("model") or "general"),
+            folder_id=str(config.get("folder_id") or "")
+            or (settings.yandex_folder_id or ""),
+            model=str(config.get("model") or "general"),
         )
-    if provider == "faster_whisper":
-        return FasterWhisperProvider(endpoint=api_key or None)
-    raise ValueError(f"Unknown transcription provider: {provider}")
+    else:
+        raise ValueError(f"Unknown transcription provider: {provider}")
+    built.credential_source = source
+    return built
+
+
+def _platform_order() -> tuple[str, ...]:
+    """``_CHAIN_ORDER`` with ``TRANSCRIPTION_PROVIDER_DEFAULT`` moved first.
+
+    Empty keeps the measured order (HRP-1007); config validation has
+    already refused an unknown name at startup.
+    """
+    first = settings.transcription_provider_default
+    if first not in _CHAIN_ORDER:
+        return _CHAIN_ORDER
+    return (first, *(name for name in _CHAIN_ORDER if name != first))
 
 
 def get_transcription_chain_sync(
@@ -817,10 +866,16 @@ def get_transcription_chain_sync(
     (2026-08 Deepgram account deactivation). The chain is the fallback —
     the caller walks it and only gives up when every provider has refused.
 
-    A tenant's own keys come first, in ``_CHAIN_ORDER``, then the
-    platform-keyed providers the tenant has not configured. Stubs are left
-    out: they raise on call and would only mask the real error from the
-    provider that actually tried.
+    The tenant's own credentials come first, in ``_CHAIN_ORDER``. Then
+    everything that runs on a platform key — a row without its own key and
+    the providers the tenant has not configured alike — with
+    ``TRANSCRIPTION_PROVIDER_DEFAULT`` first and the rest in
+    ``_CHAIN_ORDER`` (HRP-1007). Providers that are not implemented are
+    never built: their rows are not in ``_CHAIN_ORDER``.
+
+    A tenant running its own Whisper server gets no platform tail: its
+    audio does not leave its server unless the Whisper row says
+    ``allow_platform_fallback`` (off by default).
     """
 
     rows = list(
@@ -840,6 +895,8 @@ def get_transcription_chain_sync(
     allowed = processors.allowed_processors_sync(db, tenant_id)
 
     chain: list[TranscriptionProvider] = []
+    own: set[str] = set()
+    platform_fallback = True
     for name in _CHAIN_ORDER:
         row = by_provider.get(name)
         if row is None:
@@ -847,24 +904,35 @@ def get_transcription_chain_sync(
         own_key = decrypt_row_key(row, kind="transcription_provider")
         if own_key:
             # BYOK is never restricted by the processor list (HRP-1005 R4).
-            chain.append(_build(name, own_key, row.settings))
-            continue
-        # HRP-1005 (F1 review): no own key decrypted, so this row would
-        # dispatch on the platform key exactly like the fallback loop below
-        # — it must clear the same processor check, not ride in for free
-        # because a row happens to exist.
-        platform_key = _platform_key_for(name)
-        if _CHAIN_PROCESSOR[name] in allowed and platform_key:
-            chain.append(_build(name, platform_key, row.settings))
+            chain.append(_build(name, own_key, row.settings, source="byok"))
+            own.add(name)
+        elif (
+            name == "whisper"
+            and str((row.settings or {}).get("base_url") or "").strip()
+        ):
+            # The tenant's own OpenAI-compatible server without auth: its
+            # audio stays there, never on the platform key (HRP-985).
+            chain.append(_build(name, "", row.settings, source="local"))
+            own.add(name)
+            # Review B3: nor on any other platform key - unless the tenant
+            # opted in on this row (``allow_platform_fallback``).
+            platform_fallback = bool(
+                (row.settings or {}).get("allow_platform_fallback")
+            )
 
-    for name in _CHAIN_ORDER:
-        if name in by_provider or not _platform_key_for(name):
-            continue
+    if not platform_fallback:
+        return chain
+    for name in _platform_order():
+        platform_key = _platform_key_for(name)
         # HRP-1005: a platform key reaches only the processors the tenant
-        # may use — the fallback walk included.
-        if _CHAIN_PROCESSOR[name] not in allowed:
+        # may use — a keyless row (F1 review) and the fallback alike.
+        if name in own or not platform_key or _CHAIN_PROCESSOR[name] not in allowed:
             continue
-        chain.append(_build(name, _platform_key_for(name)))
+        row = by_provider.get(name)
+        # A keyless row keeps its own settings (speakers_expected, folder).
+        chain.append(
+            _build(name, platform_key, row.settings if row else None, source="platform")
+        )
     return chain
 
 
@@ -983,6 +1051,36 @@ def _file_size(path: str) -> int:
         return 0
 
 
+async def _journal(
+    provider: TranscriptionProvider,
+    started: float,
+    *,
+    result: TranscriptionResult | None = None,
+    error_code: str | None = None,
+) -> None:
+    """One provider attempt -> one row of the AI call log (HRP-970).
+
+    Attribution is whatever call context the caller bound (the interview
+    task binds the interview); a call outside any context lands
+    unattributed. ``getattr``: the chain also takes duck-typed providers.
+    """
+    model = (result.model if result else None) or getattr(provider, "model", "")
+    record = ai_usage_hooks.CallRecord(
+        kind="transcription",
+        provider=provider.provider_name,
+        model=model or "",
+        credential_source=getattr(provider, "credential_source", "platform"),
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        status="error" if error_code else "ok",
+        error_code=error_code,
+        audio_seconds=result.duration_seconds if result else None,
+    )
+    try:
+        await ai_usage_hooks.record_call(record)
+    except Exception:  # noqa: BLE001 — the journal must never break a call
+        logger.exception("AI usage record failed (transcription)")
+
+
 async def transcribe_with_chain(
     providers: list[TranscriptionProvider],
     audio_path: str,
@@ -998,29 +1096,36 @@ async def transcribe_with_chain(
     it cannot take this recording at all — SpeechKit without its folder id
     or above the inline-body ceiling, an AssemblyAI job that came back
     failed — and replaying it costs the interview a provider that could
-    have transcribed it. Anything else (429, 5xx, timeouts) propagates,
-    because it is transient and belongs to the caller's retry, not to a
-    silent switch of the provider the tenant chose.
+    have transcribed it. So does an ``AppError``: inside a provider call it
+    is the platform's own refusal — the SSRF layer rejecting a tenant
+    Whisper address that now resolves inside the perimeter or left the
+    operator allowlist — and it will refuse the same way on every retry.
+    Anything else (429, 5xx, timeouts) propagates, because it is transient
+    and belongs to the caller's retry, not to a silent switch of the
+    provider the tenant chose.
+
+    Every provider that was called leaves a journal row, failed or not.
     """
 
     last_error = "no transcription provider configured"
     for provider in providers:
+        started = time.perf_counter()
         try:
             result = await _run_provider(provider, audio_path, language=language)
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code not in _PROVIDER_REFUSALS:
+            code = exc.response.status_code
+            await _journal(provider, started, error_code=f"http_{code}")
+            if code not in _PROVIDER_REFUSALS:
                 raise
-            last_error = (
-                f"{provider.provider_name} refused the request "
-                f"(HTTP {exc.response.status_code})"
-            )
+            last_error = f"{provider.provider_name} refused the request (HTTP {code})"
             logger.warning(
                 "Transcription provider %s refused: HTTP %s",
                 provider.provider_name,
-                exc.response.status_code,
+                code,
             )
             continue
         except ValueError as exc:
+            await _journal(provider, started, error_code=type(exc).__name__)
             last_error = f"{provider.provider_name} could not transcribe it: {exc}"
             logger.warning(
                 "Transcription provider %s could not transcribe the recording: %s",
@@ -1028,14 +1133,29 @@ async def transcribe_with_chain(
                 exc,
             )
             continue
+        except AppError as exc:
+            await _journal(provider, started, error_code=exc.code)
+            last_error = (
+                f"{provider.provider_name} was refused by the platform: {exc.code}"
+            )
+            logger.warning(
+                "Transcription provider %s refused by the platform: %s",
+                provider.provider_name,
+                exc.code,
+            )
+            continue
+        except Exception as exc:
+            await _journal(provider, started, error_code=type(exc).__name__)
+            raise
         if result is None:
             # A size ceiling we could not split around: skip the provider,
-            # not the interview.
+            # not the interview. Nothing was sent, so nothing is journaled.
             last_error = (
                 f"recording exceeds the {provider.provider_name} request size "
                 "limit and could not be split"
             )
             continue
+        await _journal(provider, started, result=result)
         return result, ""
     return None, last_error
 
@@ -1047,7 +1167,6 @@ __all__ = [
     "OpenAIWhisperProvider",
     "DeepgramProvider",
     "AssemblyAIProvider",
-    "FasterWhisperProvider",
     "get_transcription_chain_sync",
     "merge_chunk_results",
     "transcribe_with_chain",

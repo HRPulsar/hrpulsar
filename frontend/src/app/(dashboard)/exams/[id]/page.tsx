@@ -52,11 +52,13 @@ import { toast } from "sonner";
 import {
   ArrowLeft,
   CheckCircle2,
+  Download,
   ImagePlus,
   Pencil,
   Plus,
   Send,
   Trash2,
+  Upload,
   XCircle,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -84,6 +86,21 @@ interface OptionForm {
   title: string;
   is_correct: boolean;
 }
+
+// HRP-1014: what POST /mass-exams/{id}/import-questions answers, and the
+// wording for each row error code it sends.
+interface QuestionImportResult {
+  imported: number;
+  errors: { row: number; code: string }[];
+}
+
+const IMPORT_ROW_ERROR_KEYS: Record<string, string> = {
+  empty_question: "importErrorEmptyQuestion",
+  duplicate_question: "importErrorDuplicate",
+  invalid_question_type: "importErrorQuestionType",
+  invalid_correct_options: "importErrorCorrectOptions",
+  too_few_options: "importErrorTooFewOptions",
+};
 
 export default function ExamDetailGuarded() {
   // HRP-823: every call on this page is a mass exam one, so `view` on the
@@ -117,6 +134,11 @@ function ExamDetailPage() {
     { title: "", is_correct: false },
     { title: "", is_correct: false },
   ]);
+
+  // HRP-1014: import questions from the Excel template
+  const importInput = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<QuestionImportResult | null>(null);
 
   // Question image
   const [qImage, setQImage] = useState<{ id: string; name: string; url: string } | null>(null);
@@ -203,6 +225,38 @@ function ExamDetailPage() {
       toast.error(err instanceof Error ? err.message : t("errorFailed"));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function downloadImportTemplate() {
+    try {
+      const blob = await api.fetchBlob("/mass-exams/import-template");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "question_import_template.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
+    }
+  }
+
+  async function importQuestions(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      setImportResult(
+        await api.upload<QuestionImportResult>(`/mass-exams/${id}/import-questions`, file),
+      );
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("errorFailed"));
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -894,14 +948,74 @@ function ExamDetailPage() {
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle className="text-base">{t("questions")}</CardTitle>
-          {exam.status === "draft" && (
-            <Button size="sm" variant="outline" onClick={() => setQOpen(true)}>
-              <Plus className="mr-1 h-4 w-4" />
-              {t("addQuestion")}
-            </Button>
+          {canEditQuestions && (
+            <div className="flex flex-wrap justify-end gap-2">
+              {/* HRP-1014: same gate as adding a question by hand. */}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={downloadImportTemplate}
+                data-testid="exam-import-template"
+              >
+                <Download className="mr-1 h-4 w-4" />
+                {t("importTemplate")}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={importing}
+                onClick={() => importInput.current?.click()}
+                data-testid="exam-import-questions"
+              >
+                <Upload className="mr-1 h-4 w-4" />
+                {importing ? t("importing") : t("importQuestions")}
+              </Button>
+              <input
+                ref={importInput}
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                onChange={importQuestions}
+                data-testid="exam-import-input"
+              />
+              <Button size="sm" variant="outline" onClick={() => setQOpen(true)}>
+                <Plus className="mr-1 h-4 w-4" />
+                {t("addQuestion")}
+              </Button>
+            </div>
           )}
         </CardHeader>
         <CardContent>
+          {importResult && (
+            <div
+              className="mb-4 rounded-md border bg-muted/40 p-3 text-sm"
+              data-testid="exam-import-result"
+            >
+              <p className="font-medium">
+                {t("importResult", { count: importResult.imported })}
+              </p>
+              {importResult.errors.length > 0 && (
+                <>
+                  <p className="mt-2 text-destructive">
+                    {t("importSkipped", { count: importResult.errors.length })}
+                  </p>
+                  <ul className="mt-1 space-y-0.5 text-destructive">
+                    {importResult.errors.map((err) => (
+                      <li
+                        key={err.row}
+                        data-testid={`exam-import-error-row-${err.row}`}
+                      >
+                        {t("importRowError", {
+                          row: err.row,
+                          error: t(IMPORT_ROW_ERROR_KEYS[err.code] ?? "importErrorRowFailed"),
+                        })}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
           {exam.questions.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">{t("noQuestions")}</p>
           ) : (

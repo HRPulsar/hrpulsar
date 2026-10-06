@@ -391,33 +391,32 @@ async def get_division_subtree_ids(
     dropped rather than raising: this is a read-side widening helper, and
     the caller's own tenant filter stays authoritative.
 
-    The walk keeps a ``visited`` set so a corrupted parent chain (a cycle)
-    degrades to a finite result instead of hanging the request.
+    HRP-572: one recursive query in Postgres instead of loading every
+    division of the tenant. ``UNION`` (not ``UNION ALL``) keeps the rows
+    distinct, so a corrupted parent chain (a cycle) runs out of new rows and
+    ends instead of hanging the request - which is also why the rows carry
+    the id alone: a depth column would make every lap of a cycle a new row.
+
+    The known roots come first, in the order given; the descendants follow
+    in no particular order. Callers use the result as a set.
     """
     roots = list(dict.fromkeys(root_ids))
     if not roots:
         return []
 
-    result = await db.execute(select(Division).where(Division.tenant_id == tenant_id))
-    divisions = result.scalars().all()
-    known = {d.id for d in divisions}
-
-    children_map: dict[uuid.UUID, list[uuid.UUID]] = {}
-    for d in divisions:
-        if d.parent_id:
-            children_map.setdefault(d.parent_id, []).append(d.id)
-
-    subtree: list[uuid.UUID] = []
-    visited: set[uuid.UUID] = set()
-    queue = [r for r in roots if r in known]
-    while queue:
-        current = queue.pop(0)
-        if current in visited:
-            continue
-        visited.add(current)
-        subtree.append(current)
-        queue.extend(children_map.get(current, []))
-    return subtree
+    subtree = (
+        select(Division.id)
+        .where(Division.tenant_id == tenant_id, Division.id.in_(roots))
+        .cte("subtree", recursive=True)
+    )
+    subtree = subtree.union(
+        select(Division.id)
+        .join(subtree, Division.parent_id == subtree.c.id)
+        .where(Division.tenant_id == tenant_id)
+    )
+    found = set((await db.execute(select(subtree.c.id))).scalars().all())
+    head = [r for r in roots if r in found]
+    return head + list(found.difference(head))
 
 
 async def update_division(

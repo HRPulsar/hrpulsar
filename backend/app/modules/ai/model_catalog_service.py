@@ -25,6 +25,7 @@ import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.errors import AppError
 from app.modules.ai import model_registry
 from app.modules.ai.models import ModelCatalogEntry
 
@@ -326,7 +328,8 @@ def resolve_dispatch_model_sync(db: Session, model: str | None) -> str | None:
     preset — that is the id to check.
 
     A model the catalog has never seen (local/BYOK name) is returned as-is:
-    it is not the catalog's call to override it.
+    it is not the catalog's call to override it. A disabled one with no
+    replacement is refused with ``ai_model_unavailable`` (HRP-987).
     """
     from app.modules.ai import llm_client
 
@@ -351,11 +354,13 @@ def resolve_dispatch_model_sync(db: Session, model: str | None) -> str | None:
     if substitute is None:
         logger.warning(
             "model catalog: model %s is disabled and no %s replacement is "
-            "approved — keeping it",
+            "approved — refusing it",
             candidate,
             entry.provider,
         )
-        return candidate
+        raise AppError(
+            "ai_model_unavailable", status.HTTP_409_CONFLICT, model=candidate
+        )
     logger.warning(
         "model catalog: model %s is disabled — falling back to %s",
         candidate,

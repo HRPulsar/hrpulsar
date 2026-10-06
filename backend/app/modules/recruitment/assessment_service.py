@@ -26,6 +26,7 @@ from app.modules.recruitment.common import (
     _get_vacancy,
     _publish_event,
     candidate_display_name,
+    ensure_vacancy_unlocked,
     normalize_competence_id,
 )
 from app.modules.recruitment.models import (
@@ -143,6 +144,7 @@ async def add_question(
     """Add a manual question to candidate's question bank."""
     await _get_candidate(db, tenant_id, candidate_id)
     await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "questions", vacancy_id=vacancy_id)
 
     q = CandidateQuestion(
         tenant_id=tenant_id,
@@ -180,6 +182,7 @@ async def update_question(
     q = result.scalar_one_or_none()
     if not q:
         raise AppError("question_not_found", status.HTTP_404_NOT_FOUND)
+    await ensure_vacancy_unlocked(db, tenant_id, "questions", vacancy_id=q.vacancy_id)
 
     updates = data.model_dump(exclude_unset=True)
     for field, value in updates.items():
@@ -204,6 +207,7 @@ async def delete_question(
     q = result.scalar_one_or_none()
     if not q:
         raise AppError("question_not_found", status.HTTP_404_NOT_FOUND)
+    await ensure_vacancy_unlocked(db, tenant_id, "questions", vacancy_id=q.vacancy_id)
     await db.delete(q)
     await db.commit()
 

@@ -12,7 +12,8 @@ their open development plans:
 * ``competence_gap``     — a result below the passing bar.
 * ``gaps_without_plan``  — ``competence_gap`` and no open PDP.
 * ``pdp_overdue``        — an open PDP past its deadline.
-* ``pdp_stuck_review``   — a PDP sitting in review/returned for 14 days.
+* ``pdp_stuck_review``   — a PDP sitting in review for 14 days without a move
+  (HRP-941: ``returned`` is back with the author, not stuck in review).
 * ``assessment_stale``   — no done assessment in the last 180 days.
 
 Only ``active`` employees participate: the loop is about people the
@@ -135,14 +136,16 @@ class IssueFacts:
     gap_employees: set[uuid.UUID] = field(default_factory=set)
     gap_competences: int = 0
     open_pdp_employees: set[uuid.UUID] = field(default_factory=set)
-    open_pdp_count: int = 0
     overdue_employees: set[uuid.UUID] = field(default_factory=set)
     stuck_employees: set[uuid.UUID] = field(default_factory=set)
+    # HRP-941: the queue row counts plans, not people — one person can have
+    # two plans waiting on a reviewer.
+    stuck_plan_count: int = 0
     plans_done_on_time: int = 0
     gaps_closed: int = 0
     # HRP-720: "when does this resolve?" — per employee, the date of the thing
     # each dated code is about: the earliest missed plan deadline, the earliest
-    # deadline of a plan in the stuck set (review / returned), the earliest
+    # deadline of a plan in the stuck set (in review), the earliest
     # deadline of a plan in review, the earliest missed assessment end date and
     # the next one still ahead. Collected here because the pass already reads
     # both tables; ``issue_deadlines`` picks the dict per code.
@@ -161,9 +164,15 @@ class IssueFacts:
     # key, which would otherwise rescan every plan for every employee.
     pdp_overdue_days: dict[uuid.UUID, int] = field(default_factory=dict)
     pdp_stuck_days: dict[uuid.UUID, int] = field(default_factory=dict)
+    # HRP-729 REDO: when each person's most recent plan was closed (done or
+    # cancelled). ``gaps_without_plan`` ranks never-planned people first and
+    # the rest by how long ago their last plan ended.
+    last_plan_closed: dict[uuid.UUID, datetime] = field(default_factory=dict)
     # HRP-724: the raw plan rows, kept so a caller can ask a window question
     # the fixed 90-day tiles do not answer. Already fetched — dropping them
-    # only bought a second query later.
+    # only bought a second query later. Every plan in the read scope, owners
+    # of any status (HRP-844): readers filter to ``active_by_id`` themselves,
+    # ``open_plan_count`` deliberately does not.
     pdp_rows: Sequence[Row] = ()
     # HRP-724: the competences each finished plan's items were about. The
     # dynamics tile counts a rise only on those, and only when an
@@ -311,6 +320,24 @@ async def collect_issue_facts(
         # under them), not a reason to scan the tenant.
         return IssueFacts()
 
+    pdp_q = select(
+        PDP.id,
+        PDP.employee_id,
+        PDP.status,
+        PDP.deadline,
+        PDP.updated_at,
+        PDP.finished_at,
+        # HRP-732: when the plan started existing — the only way to ask
+        # "did this person have a plan back then?" without a second query.
+        PDP.created_at,
+    ).where(PDP.tenant_id == tenant_id)
+    if cohort is not None:
+        # Plans load for the whole scope (HRP-844): the In development tile
+        # counts what the development list shows, whatever the owner's
+        # status. Every per-person cohort below still reads active people
+        # only, through ``loop_rows``.
+        pdp_q = pdp_q.where(PDP.employee_id.in_(cohort))
+
     active_q = select(Employee).where(
         Employee.tenant_id == tenant_id, Employee.status == "active"
     )
@@ -319,7 +346,9 @@ async def collect_issue_facts(
     active_employees = (await db.execute(active_q)).scalars().all()
     active_by_id = {e.id: e for e in active_employees}
     if not active_by_id:
-        return IssueFacts()
+        # Nobody to run the loop for, but the plans of people on leave or
+        # gone are still on the development list, so the tile counts them.
+        return IssueFacts(pdp_rows=(await db.execute(pdp_q)).all())
 
     done_q = (
         select(
@@ -351,17 +380,6 @@ async def collect_issue_facts(
             AssessmentResult.percent.is_not(None),
         )
     )
-    pdp_q = select(
-        PDP.id,
-        PDP.employee_id,
-        PDP.status,
-        PDP.deadline,
-        PDP.updated_at,
-        PDP.finished_at,
-        # HRP-732: when the plan started existing — the only way to ask
-        # "did this person have a plan back then?" without a second query.
-        PDP.created_at,
-    ).where(PDP.tenant_id == tenant_id)
     # HRP-720: every open assessment's end date. Split below into missed and
     # still ahead — one grouped minimum cannot tell those apart, and a stale
     # badge must not promise a date that has already passed.
@@ -377,11 +395,11 @@ async def collect_issue_facts(
     if cohort is not None:
         # Narrow on the active set actually loaded, not on the requested
         # cohort: a requested id that is terminated or off-tenant carries
-        # no issues, and its rows would only be discarded downstream.
+        # no assessment issues, and its rows would only be discarded
+        # downstream.
         loaded = set(active_by_id)
         done_q = done_q.where(Assessment.employee_id.in_(loaded))
         results_q = results_q.where(Assessment.employee_id.in_(loaded))
-        pdp_q = pdp_q.where(PDP.employee_id.in_(loaded))
         due_q = due_q.where(Assessment.employee_id.in_(loaded))
 
     done_rows = (await db.execute(done_q)).all()
@@ -460,26 +478,39 @@ async def collect_issue_facts(
             plan_comp_q = plan_comp_q.where(PDP.employee_id.in_(set(active_by_id)))
         for pdp_id, competence_id in (await db.execute(plan_comp_q)).all():
             plan_competences.setdefault(pdp_id, set()).add(competence_id)
+    # The loop is about the people the company is developing: every cohort,
+    # severity and badge date below reads active people's plans only, on the
+    # admin path (no scope, every plan loaded) as much as the scoped one. The
+    # scope-wide rows serve ``open_plan_count`` alone.
+    loop_rows = [r for r in pdp_rows if r.employee_id in active_by_id]
     open_pdp_employees = {
-        r.employee_id for r in pdp_rows if r.status not in PDP_FINALIZED_STATUSES
+        r.employee_id for r in loop_rows if r.status not in PDP_FINALIZED_STATUSES
     }
-    open_pdp_count = sum(1 for r in pdp_rows if r.status not in PDP_FINALIZED_STATUSES)
     overdue_employees = {
         r.employee_id
-        for r in pdp_rows
+        for r in loop_rows
         if r.status not in PDP_FINALIZED_STATUSES
         and r.deadline is not None
         and r.deadline < now
     }
-    stuck_employees = {
-        r.employee_id
-        for r in pdp_rows
-        if r.status in {"review", "returned"} and r.updated_at < stuck_cutoff
-    }
+    # HRP-941: in review only. A returned plan waits on its author, and the
+    # reviewer-facing row must not name it.
+    stuck_plans = [
+        r for r in loop_rows if r.status == "review" and r.updated_at < stuck_cutoff
+    ]
+    stuck_employees = {r.employee_id for r in stuck_plans}
     # HRP-729: worst plan per employee, on the same clock as the cohorts above.
     pdp_overdue_days: dict[uuid.UUID, int] = {}
     pdp_stuck_days: dict[uuid.UUID, int] = {}
-    for r in pdp_rows:
+    last_plan_closed: dict[uuid.UUID, datetime] = {}
+    for r in loop_rows:
+        if r.status in PDP_FINALIZED_STATUSES:
+            # ``finished_at`` is stamped on done and cancelled alike; a row
+            # without one falls back to its last touch.
+            closed = r.finished_at or r.updated_at
+            seen = last_plan_closed.get(r.employee_id)
+            if seen is None or closed > seen:
+                last_plan_closed[r.employee_id] = closed
         if (
             r.status not in PDP_FINALIZED_STATUSES
             and r.deadline is not None
@@ -488,13 +519,13 @@ async def collect_issue_facts(
             days = (now - r.deadline).days
             if days > pdp_overdue_days.get(r.employee_id, -1):
                 pdp_overdue_days[r.employee_id] = days
-        if r.status in {"review", "returned"}:
+        if r.status == "review":
             days = (now - r.updated_at).days
             if days > pdp_stuck_days.get(r.employee_id, -1):
                 pdp_stuck_days[r.employee_id] = days
     plans_done_on_time = sum(
         1
-        for r in pdp_rows
+        for r in loop_rows
         if r.status == "done"
         and r.finished_at is not None
         and r.finished_at >= closed_cutoff
@@ -503,15 +534,14 @@ async def collect_issue_facts(
     )
 
     # Per code, the plan that raised it: the overdue code answers with the
-    # earliest missed deadline, the stuck code with the earliest deadline in
-    # its review / returned set, the pending code with a plan in review only
-    # (a returned plan is not awaiting anybody's review). One nearest date
-    # across all open plans handed a stuck review the in-progress plan's date
-    # (review finding).
+    # earliest missed deadline, the stuck and the pending codes with the
+    # earliest deadline of a plan in review (a returned plan is not awaiting
+    # anybody's review — HRP-941). One nearest date across all open plans
+    # handed a stuck review the in-progress plan's date (review finding).
     pdp_overdue_deadline: dict[uuid.UUID, date] = {}
     pdp_stuck_deadline: dict[uuid.UUID, date] = {}
     pdp_pending_deadline: dict[uuid.UUID, date] = {}
-    for r in pdp_rows:
+    for r in loop_rows:
         if r.status in PDP_FINALIZED_STATUSES or r.deadline is None:
             continue
         due = r.deadline.date()
@@ -519,11 +549,10 @@ async def collect_issue_facts(
             pdp_overdue_deadline[r.employee_id] = min(
                 pdp_overdue_deadline.get(r.employee_id, due), due
             )
-        if r.status in {"review", "returned"}:
+        if r.status == "review":
             pdp_stuck_deadline[r.employee_id] = min(
                 pdp_stuck_deadline.get(r.employee_id, due), due
             )
-        if r.status == "review":
             pdp_pending_deadline[r.employee_id] = min(
                 pdp_pending_deadline.get(r.employee_id, due), due
             )
@@ -554,9 +583,9 @@ async def collect_issue_facts(
         gap_employees=gap_employees,
         gap_competences=gap_competences,
         open_pdp_employees=open_pdp_employees,
-        open_pdp_count=open_pdp_count,
         overdue_employees=overdue_employees,
         stuck_employees=stuck_employees,
+        stuck_plan_count=len(stuck_plans),
         plans_done_on_time=plans_done_on_time,
         gaps_closed=gaps_closed,
         pdp_overdue_deadline=pdp_overdue_deadline,
@@ -568,8 +597,26 @@ async def collect_issue_facts(
         gap_worst_depth=gap_worst_depth,
         pdp_overdue_days=pdp_overdue_days,
         pdp_stuck_days=pdp_stuck_days,
+        last_plan_closed=last_plan_closed,
         pdp_rows=pdp_rows,
         plan_competences=plan_competences,
+    )
+
+
+def open_plan_count(facts: IssueFacts, *, include_drafts: bool = True) -> int:
+    """HRP-844: the In development number — the rows its link opens.
+
+    Open plans (not done, not cancelled) across the whole read scope, the
+    owner's status notwithstanding, because the development list shows them
+    all. ``include_drafts`` follows the list's own draft rule: a reader who
+    does not run plans never sees other people's drafts there, so the tile
+    must not count them either.
+    """
+    return sum(
+        1
+        for r in facts.pdp_rows
+        if r.status not in PDP_FINALIZED_STATUSES
+        and (include_drafts or r.status != "draft")
     )
 
 
@@ -834,8 +881,13 @@ def issue_deadlines(
 # Never assessed outranks assessed-long-ago (decision on HRP-729,
 # 06.09.2026): no measurement at all is the worse state. Flipping that is
 # a one-line change to ``_NEVER_ASSESSED_DAYS``.
+#
+# ``gaps_without_plan`` follows the same shape (HRP-729 REDO, QA 01.10):
+# never had a plan first — ranked among themselves by the gap itself —
+# then people whose last plan was closed or cancelled, longest ago first.
 _GAP_COUNT_WEIGHT = 100
 _NEVER_ASSESSED_DAYS = 10**6
+_NEVER_PLANNED = 10**9
 
 
 def issue_severity(
@@ -848,10 +900,21 @@ def issue_severity(
     """Severity of ``code`` for one employee; higher is worse, 0.0 if unknown.
 
     Every branch is a dict lookup: the counting happens once, in the pass that
-    built ``facts``. ``now`` is only consulted for staleness, which is measured
-    against read time rather than collection time.
+    built ``facts``. ``now`` is only consulted for ages (staleness, time since
+    the last plan closed), measured against read time rather than collection
+    time.
     """
-    if code in ("gaps_without_plan", "competence_gap"):
+    if code == "gaps_without_plan":
+        gap = issue_severity(facts, employee_id, "competence_gap")
+        if not gap:
+            return 0.0
+        closed = facts.last_plan_closed.get(employee_id)
+        if closed is None:
+            return _NEVER_PLANNED + gap
+        # Fractional days: two plans closed on one date still rank apart.
+        now = now or datetime.now(UTC)
+        return (now - closed).total_seconds() / 86400
+    if code == "competence_gap":
         count = facts.gap_count.get(employee_id, 0)
         if not count:
             return 0.0

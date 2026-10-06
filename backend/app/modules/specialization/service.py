@@ -143,6 +143,7 @@ async def list_specializations(db: AsyncSession, tenant_id: uuid.UUID) -> list[d
             {
                 "id": item.id,
                 "title": item.title,
+                "i18n_key": item.i18n_key,
                 "description": item.description,
                 "is_active": active_overrides.get(item.id, item.is_active),
                 "grade_count": grade_counts.get(item.id, 0),
@@ -190,6 +191,7 @@ async def get_specialization_detail(
     return {
         "id": spec.id,
         "title": spec.title,
+        "i18n_key": spec.i18n_key,
         "description": spec.description,
         "is_active": detail_overrides.get(spec.id, spec.is_active),
         "grade_count": len(grades),
@@ -519,18 +521,22 @@ async def _validate_visible_competences_levels(
 ) -> None:
     if competence_ids:
         comps_q = await db.execute(
-            select(Competence.id).where(
+            select(Competence.id, Competence.draft_owner_id).where(
                 Competence.id.in_(competence_ids),
                 (Competence.tenant_id == tenant_id) | (Competence.tenant_id.is_(None)),
-                # HRP-632: a personal draft goes into no grade matrix.
-                Competence.draft_owner_id.is_(None),
             )
         )
-        valid = {row[0] for row in comps_q.all()}
-        if len(valid) != len(competence_ids):
+        rows = comps_q.all()
+        if len(rows) != len(competence_ids):
             raise AppError(
                 "spec_competences_not_visible",
                 status.HTTP_400_BAD_REQUEST,
+            )
+        # HRP-632, HRP-1017: a personal draft goes into no grade matrix.
+        if any(owner is not None for _, owner in rows):
+            raise AppError(
+                "spec_matrix_draft_competence",
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
             )
     if level_ids:
         levels_q = await db.execute(

@@ -661,6 +661,10 @@ async def approve_signup(
     await db.refresh(row)
     await db.refresh(user)
     await db.refresh(tenant)
+    # HRP-927 (a): the applicant's saved public checks; never fails here.
+    from app.modules.public_check.move import move_after_signup
+
+    await move_after_signup(db, user)
 
     token = create_magic_login_token(str(user.id), str(tenant.id))
 

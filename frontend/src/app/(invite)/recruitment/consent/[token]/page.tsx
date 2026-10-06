@@ -7,7 +7,7 @@ import { API_BASE } from "@/lib/api";
 import type { ConsentTokenView } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Loader2, ShieldCheck, ShieldAlert, ShieldOff } from "lucide-react";
 import { formatDateTime } from "@/lib/date-format";
 import { ALERT_TONE } from "@/lib/badge-tones";
 
@@ -55,6 +55,11 @@ export default function ConsentSignPage() {
   const [signing, setSigning] = useState(false);
   const [signed, setSigned] = useState<SignResult | null>(null);
   const [signError, setSignError] = useState<string | null>(null);
+  // HRP-979: the candidate can take a signed consent back.
+  const [revoked, setRevoked] = useState(false);
+  const [confirmWithdraw, setConfirmWithdraw] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
   // Public endpoints — no Authorization header. Using fetch directly to
   // avoid the api client's auth-on-401 redirect.
@@ -71,6 +76,7 @@ export default function ConsentSignPage() {
       }
       const data = (await res.json()) as ConsentTokenView;
       setView(data);
+      setRevoked(data.status === "revoked");
       if (data.status === "signed") {
         setSigned({
           signed_at: data.signed_at || new Date().toISOString(),
@@ -120,6 +126,30 @@ export default function ConsentSignPage() {
     }
   }
 
+  async function handleWithdraw() {
+    setWithdrawing(true);
+    setWithdrawError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}/recruitment/consent/${token}/revoke`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          formatDetail(data.detail, t("consentWithdrawFailed")),
+        );
+      }
+      setRevoked(true);
+    } catch (err) {
+      setWithdrawError(
+        err instanceof Error ? err.message : t("consentWithdrawFailed"),
+      );
+    } finally {
+      setWithdrawing(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
@@ -144,17 +174,88 @@ export default function ConsentSignPage() {
     );
   }
 
-  if (signed) {
+  if (revoked) {
     return (
       <div
-        data-testid="consent-page-signed"
-        className={`rounded-lg border p-12 text-center text-sm ${ALERT_TONE.emerald}`}
+        data-testid="consent-page-revoked"
+        className="rounded-lg border p-12 text-center text-sm"
       >
-        <ShieldCheck className="mx-auto mb-3 size-10 text-emerald-600 dark:text-emerald-400" />
-        <p className="text-base font-medium">{t("consentRecorded")}</p>
-        <p className="mt-2">
-          {t("signedOn", { date: formatDateTime(signed.signed_at) })}
+        <ShieldOff className="mx-auto mb-3 size-10 text-muted-foreground" />
+        <p className="text-base font-medium">{t("consentWithdrawn")}</p>
+        <p className="mt-2 text-muted-foreground">
+          {t("consentWithdrawnBody")}
         </p>
+      </div>
+    );
+  }
+
+  if (signed) {
+    return (
+      <div className="space-y-4">
+        <div
+          data-testid="consent-page-signed"
+          className={`rounded-lg border p-12 text-center text-sm ${ALERT_TONE.emerald}`}
+        >
+          <ShieldCheck className="mx-auto mb-3 size-10 text-emerald-600 dark:text-emerald-400" />
+          <p className="text-base font-medium">{t("consentRecorded")}</p>
+          <p className="mt-2">
+            {t("signedOn", { date: formatDateTime(signed.signed_at) })}
+          </p>
+        </div>
+        <div className="space-y-2 rounded-md border bg-card p-3">
+          {withdrawError && (
+            <div
+              data-testid="consent-page-withdraw-error"
+              role="alert"
+              className={`rounded-md border p-2 text-xs ${ALERT_TONE.rose}`}
+            >
+              {withdrawError}
+            </div>
+          )}
+          {confirmWithdraw ? (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                {t("consentWithdrawPrompt")}
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConfirmWithdraw(false)}
+                  disabled={withdrawing}
+                  data-testid="consent-page-withdraw-cancel-btn"
+                >
+                  {t("consentWithdrawKeep")}
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => void handleWithdraw()}
+                  disabled={withdrawing}
+                  data-testid="consent-page-withdraw-confirm-btn"
+                >
+                  {withdrawing && <Loader2 className="size-4 animate-spin" />}
+                  {t("consentWithdrawConfirm")}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                {t("consentWithdrawHint")}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmWithdraw(true)}
+                data-testid="consent-page-btn-withdraw"
+              >
+                <ShieldOff className="size-4" />
+                {t("consentWithdrawBtn")}
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
     );
   }

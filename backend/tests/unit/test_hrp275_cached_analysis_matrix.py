@@ -93,7 +93,8 @@ async def _setup(db: AsyncSession) -> tuple[Tenant, Vacancy, Interview]:
     interview = Interview(
         tenant_id=tenant.id,
         candidate_vacancy_id=cv.id,
-        transcript="Deterministic transcript.",
+        # HRP-981: a cache hit keeps only citations this transcript holds.
+        transcript=" ".join(f"Candidate: evidence for {slug}." for slug in _SLUGS),
         transcription_status="completed",
         analysis_status="pending",
     )

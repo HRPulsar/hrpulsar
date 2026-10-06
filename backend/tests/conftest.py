@@ -26,6 +26,7 @@ os.environ["SMTP_HOST"] = ""
 # outside DEBUG/E2E — pin the same value CI uses so the suite still boots.
 os.environ.setdefault("JWT_SECRET", "test-secret")
 
+import bcrypt
 import pytest
 import pytest_asyncio
 from app.config import settings
@@ -68,6 +69,12 @@ for _event, _handler in _RECRUITMENT_HANDLERS.items():
 # test_no_real_celery_broker_in_tests guards this block.
 _celery.conf.broker_url = "memory://"
 _celery.conf.result_backend = "cache+memory://"
+
+# The production bcrypt cost (12 rounds, ~0.3 s a hash) was about half the
+# suite's runtime: the ``user`` fixture alone hashes a password per test.
+# The cost is stored in the hash, so verify_password gets cheap too.
+_real_gensalt = bcrypt.gensalt
+bcrypt.gensalt = lambda rounds=4, prefix=b"2b": _real_gensalt(rounds, prefix)
 
 # Use a separate test database to avoid clobbering alembic_version in dev DB.
 # ``make_url`` keeps query parameters (``?sslmode=require``) that string

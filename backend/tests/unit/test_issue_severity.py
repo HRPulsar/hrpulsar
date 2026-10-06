@@ -163,8 +163,10 @@ async def test_a_result_exactly_on_the_bar_scores_as_a_zero_depth_gap(
     assert facts.gap_count[on_bar.id] == 1
     # Depth 0 is never stored, so the score falls through to the default.
     assert on_bar.id not in facts.gap_worst_depth
-    assert issues.issue_severity(facts, on_bar.id, "gaps_without_plan") == 100.0
-    assert issues.issue_severity(facts, below.id, "gaps_without_plan") == 105.0
+    # The raw gap score; ``gaps_without_plan`` ranks plan history on top of it
+    # (HRP-729 REDO), and both of these people never had a plan.
+    assert issues.issue_severity(facts, on_bar.id, "competence_gap") == 100.0
+    assert issues.issue_severity(facts, below.id, "competence_gap") == 105.0
 
     ordered = issues.sort_by_severity(facts, [on_bar, below], ["gaps_without_plan"])
     assert [e.id for e in ordered] == [below.id, on_bar.id]
@@ -242,7 +244,7 @@ async def test_longer_stuck_in_review_outranks_shorter(db: AsyncSession, tenant)
     forgotten = await _employee(db, tenant, "Forgotten")
     # updated_at is server-managed, so set it after the insert.
     fresh_plan = await _pdp(db, tenant, fresh, status="review")
-    old_plan = await _pdp(db, tenant, forgotten, status="returned")
+    old_plan = await _pdp(db, tenant, forgotten, status="review")
     fresh_plan.updated_at = now - timedelta(days=20)
     old_plan.updated_at = now - timedelta(days=200)
     await db.commit()
@@ -392,3 +394,166 @@ async def test_issue_list_paginates_in_severity_order(
     assert total == 3
     ordered = [str(i["id"]) for i in page1] + [str(i["id"]) for i in page2]
     assert ordered == [str(e.id) for e in made]
+
+# ---------------------------------------------------------------------------
+# HRP-729 REDO (QA 01.10): "no plan for the gaps" and three hygiene filters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gaps_without_plan_never_planned_first_then_oldest_closed(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    """Never had a plan, worst gap first; then the last plan closed longest ago.
+
+    The plan-holders carry the deeper gaps on purpose: ranked by the gap alone
+    they would lead, so the assertion fails unless "no plan at all" wins.
+    """
+    statuses, types = loop_fixtures
+    now = datetime.now(UTC)
+    never_mild = await _employee(db, tenant, "Aaa")
+    never_bad = await _employee(db, tenant, "Bbb")
+    closed_long_ago = await _employee(db, tenant, "Ccc")
+    cancelled_lately = await _employee(db, tenant, "Ddd")
+    await _assessment_with_gaps(db, tenant, never_mild, statuses, types, [70])
+    await _assessment_with_gaps(db, tenant, never_bad, statuses, types, [10, 20])
+    await _assessment_with_gaps(
+        db, tenant, closed_long_ago, statuses, types, [10, 20, 30]
+    )
+    await _assessment_with_gaps(
+        db, tenant, cancelled_lately, statuses, types, [10, 20, 30, 40]
+    )
+    await _pdp(
+        db,
+        tenant,
+        closed_long_ago,
+        status="done",
+        finished_at=now - timedelta(days=200),
+    )
+    await _pdp(
+        db,
+        tenant,
+        cancelled_lately,
+        status="cancelled",
+        finished_at=now - timedelta(days=5),
+    )
+
+    items, total = await employee_service.list_employees(
+        db, tenant.id, issue=["gaps_without_plan"]
+    )
+    assert total == 4
+    assert [i["id"] for i in items] == [
+        never_bad.id,
+        never_mild.id,
+        closed_long_ago.id,
+        cancelled_lately.id,
+    ]
+    # The dashboard chip reads the same comparator.
+    facts = await issues.collect_issue_facts(db, tenant.id, now=now)
+    chip = issues.sort_by_severity(
+        facts, [cancelled_lately, closed_long_ago, never_mild], ["gaps_without_plan"]
+    )
+    assert [e.id for e in chip] == [
+        never_mild.id,
+        closed_long_ago.id,
+        cancelled_lately.id,
+    ]
+
+
+async def _aged(db: AsyncSession, row, **ages: int) -> None:
+    """Set server-managed timestamps ``days`` back (``created_at=30`` ...)."""
+    for column, days in ages.items():
+        setattr(row, column, datetime.now(UTC) - timedelta(days=days))
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_profile_incomplete_filter_oldest_added_first(db: AsyncSession, tenant):
+    from app.modules.company.models import Division
+
+    division = Division(tenant_id=tenant.id, name="Ops")
+    db.add(division)
+    await db.commit()
+    # The helper leaves the division empty, which is what "incomplete" checks.
+    recent = await _employee(db, tenant, "Aaa")
+    oldest = await _employee(db, tenant, "Bbb")
+    gone = await _employee(db, tenant, "Ccc")
+    complete = await _employee(db, tenant, "Ddd")
+    await _aged(db, recent, created_at=5)
+    await _aged(db, oldest, created_at=400)
+    gone.status = "terminated"  # the badge shows on any status, so does the filter
+    complete.division_id = division.id
+    await _aged(db, gone, created_at=100)
+
+    items, total = await employee_service.list_employees(
+        db, tenant.id, issue=["profile_incomplete"], with_alerts=True
+    )
+    assert total == 3
+    assert [i["id"] for i in items] == [oldest.id, gone.id, recent.id]
+    # Filter and badge are one predicate.
+    assert all("profile_incomplete" in {b["code"] for b in i["issues"]} for i in items)
+
+    items, _ = await employee_service.list_employees(
+        db, tenant.id, issue=["profile_incomplete"], sort="created"
+    )
+    assert [i["id"] for i in items] == [recent.id, gone.id, oldest.id]
+
+
+@pytest.mark.asyncio
+async def test_plan_awaiting_review_filter_longest_in_review_first(
+    db: AsyncSession, tenant
+):
+    lately = await _employee(db, tenant, "Aaa")
+    longest = await _employee(db, tenant, "Bbb")
+    sent_back = await _employee(db, tenant, "Ccc")
+    await _aged(db, await _pdp(db, tenant, lately, status="review"), updated_at=2)
+    await _aged(db, await _pdp(db, tenant, longest, status="review"), updated_at=30)
+    await _aged(db, await _pdp(db, tenant, sent_back, status="returned"), updated_at=90)
+
+    items, total = await employee_service.list_employees(
+        db, tenant.id, issue=["pdp_pending_review"]
+    )
+    assert total == 2
+    assert [i["id"] for i in items] == [longest.id, lately.id]
+
+
+@pytest.mark.asyncio
+async def test_assessment_overdue_filter_earliest_deadline_first(
+    db: AsyncSession, tenant, loop_fixtures
+):
+    statuses, types = loop_fixtures
+    now = datetime.now(UTC)
+    slightly = await _employee(db, tenant, "Aaa")
+    badly = await _employee(db, tenant, "Bbb")
+    on_time = await _employee(db, tenant, "Ccc")
+    for emp, ends in ((slightly, -3), (badly, -40), (on_time, 10)):
+        db.add(
+            Assessment(
+                tenant_id=tenant.id,
+                title=f"Open {uuid.uuid4().hex[:6]}",
+                employee_id=emp.id,
+                type_id=types["self"].id,
+                status_id=statuses["in_progress"].id,
+                initiator_id=emp.user_id,
+                ended_at=now + timedelta(days=ends),
+            )
+        )
+    await db.commit()
+
+    items, total = await employee_service.list_employees(
+        db, tenant.id, issue=["assessment_overdue"]
+    )
+    assert total == 2
+    assert [i["id"] for i in items] == [badly.id, slightly.id]
+
+
+@pytest.mark.asyncio
+async def test_issue_filter_accepts_the_three_hygiene_codes(auth_client):
+    for code in ("profile_incomplete", "pdp_pending_review", "assessment_overdue"):
+        response = await auth_client.get(
+            f"/api/employees?issue={code}&with_alerts=true"
+        )
+        assert response.status_code == 200, (code, response.text)
+    # The two display-only codes stay out of the filter.
+    response = await auth_client.get("/api/employees?issue=user_inactive")
+    assert response.status_code == 422

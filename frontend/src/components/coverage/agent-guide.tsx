@@ -68,10 +68,13 @@ export function agentGroups(steps: CoverageStep[]): AgentGroup[] {
     if (step.verdict !== "agent" || !code || !step.mode || !CANDIDATE_MODES.includes(step.mode)) {
       continue;
     }
-    let group = groups.get(code);
+    // One group per pack, not per code: the tenant's own pack may share a
+    // built-in one's code (HRP-911).
+    const key = step.agent?.pack_id ?? code;
+    let group = groups.get(key);
     if (!group) {
       group = { packCode: code, packId: null, agentNames: [], steps: [], hours: 0, ready: 0 };
-      groups.set(code, group);
+      groups.set(key, group);
     }
     group.steps.push(step);
     group.hours += freedHours(step);
@@ -152,10 +155,13 @@ export function AgentGuide({
       {/* Not numbered: a type's number read as a step's (HRP-866 REDO). */}
       <ul className="space-y-4">
         {groups.map((group) => {
+          // ponytail: the label and the testid go by code, so the tenant's own
+          // pack with a built-in code reads as the built-in one here; the row
+          // carries no title of the pack - add one when tenants get own packs.
           const testId = `coverage-guide-group-${group.packCode}`;
           return (
             <li
-              key={group.packCode}
+              key={group.packId ?? group.packCode}
               className="space-y-2 border-t pt-4 first:border-t-0 first:pt-0"
               data-testid={testId}
               data-hours={group.hours}

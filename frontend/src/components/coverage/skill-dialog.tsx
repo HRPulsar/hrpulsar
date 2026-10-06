@@ -208,9 +208,9 @@ export function SkillDialog({
           <DialogTitle>{t("skillTitle", { title: step.title })}</DialogTitle>
           <DialogDescription>{t("skillText")}</DialogDescription>
         </DialogHeader>
-        {/* The file is written in English on purpose - agents read it, not
-            the company. Without a word here that reads as a bug. */}
-        <p className="text-xs text-muted-foreground">{t("skillEnglishHint")}</p>
+        {/* HRP-912: the file follows the workspace's AI content language,
+            like every other generated text - say where that is set. */}
+        <p className="text-xs text-muted-foreground">{t("skillLanguageHint")}</p>
         {generating && (
           <GenerationProgress
             phase={1}

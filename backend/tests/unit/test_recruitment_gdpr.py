@@ -231,6 +231,44 @@ class TestGDPRExport:
         assert row.file_id is None
 
 
+    async def test_failed_commit_deletes_the_uploaded_file(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """Review 05.10 (E8): the upload precedes the commit; a failed
+        commit must not leave an export no row points at."""
+        from app.config import settings
+        from app.modules.recruitment.models import GDPRExportRequest
+
+        candidate = await _make_candidate_with_data(
+            db, tenant, user, with_interview=False
+        )
+        # No requester: the File row's NOT NULL ``uploaded_by`` fails the
+        # commit after the upload went through.
+        row = GDPRExportRequest(
+            tenant_id=tenant.id,
+            requested_by=None,
+            subject_type="candidate",
+            subject_id=uuid.UUID(str(candidate["id"])),
+            status="processing",
+        )
+        db.add(row)
+        await db.commit()
+        row_id = row.id
+        bucket: set[str] = set()
+        monkeypatch.setattr(settings, "s3_endpoint", "http://fake-s3")
+        monkeypatch.setattr(
+            gdpr_service, "upload_file", lambda _b, path, _t: bucket.add(path) or path
+        )
+        monkeypatch.setattr(
+            gdpr_service, "s3_delete_file", lambda path: bucket.discard(path) or True
+        )
+
+        result = await gdpr_service._perform_gdpr_export(db, row_id)
+
+        assert result["status"] == "failed"
+        assert bucket == set()
+
+
 class TestGDPRErase:
     async def test_soft_erases_pii(
         self, db: AsyncSession, tenant, user

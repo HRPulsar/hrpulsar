@@ -32,6 +32,8 @@ from app.modules.recruitment.interview_service import (
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit._consent import sign_consent
+
 # ---------------------------------------------------------------------------
 # _validate_upload_payload — pure function, no DB / Redis needed
 # ---------------------------------------------------------------------------
@@ -228,6 +230,7 @@ async def test_enqueue_transcribe_refuses_demo_tenant_with_real_interview(
     db.add(candidate)
     await db.commit()
     await db.refresh(candidate)
+    await sign_consent(db, tenant.id, candidate.id)  # HRP-979
     cv = CandidateVacancy(
         tenant_id=tenant.id,
         vacancy_id=vacancy.id,
@@ -298,6 +301,7 @@ async def test_complete_upload_blocks_audio_kind_in_demo(db: AsyncSession):
     await db.commit()
     await db.refresh(vacancy)
     await db.refresh(candidate)
+    await sign_consent(db, tenant.id, candidate.id)  # HRP-979
     cv = CandidateVacancy(
         tenant_id=tenant.id,
         vacancy_id=vacancy.id,
@@ -367,6 +371,7 @@ async def test_complete_upload_rejects_demo_text_over_size_cap(
     await db.commit()
     await db.refresh(vacancy)
     await db.refresh(candidate)
+    await sign_consent(db, tenant.id, candidate.id)  # HRP-979
     cv = CandidateVacancy(
         tenant_id=tenant.id,
         vacancy_id=vacancy.id,

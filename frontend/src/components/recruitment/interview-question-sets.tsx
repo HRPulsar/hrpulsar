@@ -78,6 +78,7 @@ import {
   transcribedInterviews,
 } from "@/lib/new-question-set";
 import { NewQuestionSetDialog } from "./new-question-set-dialog";
+import { ConsentRequiredHint, useCandidateConsent } from "./candidate-consent";
 import { formatDate } from "@/lib/date-format";
 
 // HRP-485 task 2: the ticket pins the custom-question form bounds.
@@ -140,6 +141,8 @@ interface VacancyOption {
   title: string;
   candidate_vacancy_id: string;
   has_parsed_resume?: boolean;
+  /** HRP-836: the vacancy's status freezes its question sets. */
+  questions_read_only?: boolean;
 }
 
 interface Props {
@@ -210,7 +213,7 @@ export function InterviewQuestionSets({
   const tc = useTranslations("common");
   // HRP-830: question sets are evaluation - `manage` on recruitment or the
   // hiring manager; everyone else reads them.
-  const { canEvaluateCandidates: canEvaluate } = usePermissions();
+  const { canEvaluateCandidates } = usePermissions();
   const [vacancyId, setVacancyId] = useState<string | undefined>(
     initialVacancyId || vacancyOptions[0]?.id,
   );
@@ -224,6 +227,8 @@ export function InterviewQuestionSets({
   );
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  // HRP-979: generation sends the resume and transcripts to the AI.
+  const aiConsent = useCandidateConsent(candidateId);
   const {
     isSaas,
     cost: generateCost,
@@ -254,6 +259,9 @@ export function InterviewQuestionSets({
     () => vacancyOptions.find((v) => v.id === vacancyId),
     [vacancyOptions, vacancyId],
   );
+  // HRP-836: a paused, closed or cancelled vacancy reads its sets only.
+  const canEvaluate =
+    canEvaluateCandidates && !currentVacancy?.questions_read_only;
 
   useEffect(() => {
     const cvId = currentVacancy?.candidate_vacancy_id;
@@ -735,6 +743,13 @@ export function InterviewQuestionSets({
         </div>
       </header>
 
+      {canEvaluate && aiConsent.showHint && (
+        <ConsentRequiredHint
+          revoked={aiConsent.revoked}
+          testId="recruitment-interview-questions-consent-hint"
+        />
+      )}
+
       {sets.length > 0 && !sample && !firstSetInFlight && (
         <div
           role="tablist"
@@ -772,7 +787,9 @@ export function InterviewQuestionSets({
               variant="ghost"
               size="sm"
               onClick={() => setNewSetOpen(true)}
-              disabled={busy || resumeMissing || insufficient}
+              disabled={
+                busy || resumeMissing || insufficient || aiConsent.blocked
+              }
               data-testid="recruitment-interview-questions-new-set-btn"
             >
               <Plus className="mr-1 h-4 w-4" />
@@ -787,6 +804,7 @@ export function InterviewQuestionSets({
       ) : (!sets.length || firstSetInFlight) && !sample ? (
         <EmptyState
           resumeMissing={Boolean(resumeMissing)}
+          consentBlocked={aiConsent.blocked}
           insufficient={insufficient}
           generating={busy}
           balance={creditBalance}
@@ -897,7 +915,7 @@ export function InterviewQuestionSets({
                     variant="outline"
                     size="sm"
                     onClick={() => setRegenerateConfirm(true)}
-                    disabled={busy || insufficient}
+                    disabled={busy || insufficient || aiConsent.blocked}
                     data-testid="recruitment-interview-questions-regenerate-btn"
                   >
                     <RefreshCw className="mr-1 h-4 w-4" />
@@ -1068,6 +1086,8 @@ function GenerationProgress({ onCancel }: { onCancel?: () => void }) {
 
 interface EmptyStateProps {
   resumeMissing: boolean;
+  /** HRP-979: no consent in force — the hint above the block says so. */
+  consentBlocked: boolean;
   insufficient: boolean;
   generating: boolean;
   balance: number | null;
@@ -1082,6 +1102,7 @@ interface EmptyStateProps {
 
 function EmptyState({
   resumeMissing,
+  consentBlocked,
   insufficient,
   generating,
   balance,
@@ -1116,7 +1137,9 @@ function EmptyState({
         {canGenerate && (
           <Button
             onClick={onGenerate}
-            disabled={resumeMissing || insufficient || generating}
+            disabled={
+              resumeMissing || consentBlocked || insufficient || generating
+            }
             data-testid="recruitment-interview-questions-generate-btn"
           >
             {generating ? (

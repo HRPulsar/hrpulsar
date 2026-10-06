@@ -51,10 +51,12 @@ class CallContext:
 
 @dataclass(frozen=True)
 class CallRecord:
-    """What ``llm_client`` knows about one provider call."""
+    """What ``llm_client`` (or the transcription chain) knows about one provider call."""
 
-    kind: str  # generate | embedding
-    provider: str  # openai | anthropic | gemini | yandex | openai_compatible
+    kind: str  # generate | embedding | transcription
+    # openai | anthropic | gemini | yandex | openai_compatible; a transcription
+    # call names its chain provider (whisper | deepgram | assemblyai | yandex_speechkit)
+    provider: str
     model: str
     credential_source: str  # platform | byok | local
     latency_ms: int
@@ -64,6 +66,8 @@ class CallRecord:
     output_tokens: int | None = None
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
+    # HRP-970: length of the transcribed audio; a transcription call has no tokens.
+    audio_seconds: float | None = None
 
 
 _context: ContextVar[CallContext | None] = ContextVar("ai_call_context", default=None)

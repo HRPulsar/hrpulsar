@@ -12,9 +12,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import status
-from sqlalchemy import select
+from sqlalchemy import delete, exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
 
 from app.core import billing_hooks
 from app.core.errors import AppError
@@ -25,6 +25,7 @@ from app.modules.recruitment.common import (
     candidate_display_name,
 )
 from app.modules.recruitment.models import (
+    AIAnalysisRun,
     Candidate,
     CandidateVacancy,
     ConsentRequest,
@@ -662,4 +663,285 @@ async def get_latest_consent(
     ).scalar_one_or_none()
     if not request:
         return None
-    return _consent_request_to_read(request)
+    # HRP-979: the latest request may be a pending re-send while an older
+    # signature is still in force, so the AI gates read this, not status.
+    return {
+        **_consent_request_to_read(request),
+        "active": await has_active_consent(db, tenant_id, candidate_id),
+    }
+
+
+# ─── Active consent (HRP-979) ────────────────────────────────────────
+#
+# One rule for every entry point that hands a candidate's data to an AI
+# provider (resume analysis, question generation, transcripts and their
+# analysis, interview recordings): a consent request of this candidate in
+# this tenant that the candidate signed and has not revoked. Revoking
+# flips ``status``, so a signed row is the whole check. Demo and seeded
+# candidates get such a row on creation; nothing beyond it is checked.
+#
+# Deliberate exception: resume parsing (``tasks/parsing.py``) sends the
+# uploaded resume to the LLM without this check. Parsing is what creates
+# the candidate card and finds the email the consent request goes to, so
+# it has to run before any consent can exist. Everything built on the
+# parse (analysis, questions) stays behind the gate.
+
+_DEFAULT_TEMPLATE_NAME = "Candidate consent"
+_DEFAULT_TEMPLATE_BODY = (
+    "I agree that my application, interview recordings and transcripts are "
+    "processed with AI assistance for this recruitment."
+)
+_CONSENT_REQUIRED_MESSAGE = "Candidate consent is required before this action"
+
+
+def _active_consent_stmt(tenant_id: uuid.UUID, candidate_id: uuid.UUID):
+    return (
+        select(ConsentRequest.id)
+        .where(
+            ConsentRequest.tenant_id == tenant_id,
+            ConsentRequest.candidate_id == candidate_id,
+            ConsentRequest.status == "signed",
+            ConsentRequest.signed_at.is_not(None),
+        )
+        .limit(1)
+    )
+
+
+async def has_active_consent(
+    db: AsyncSession, tenant_id: uuid.UUID, candidate_id: uuid.UUID
+) -> bool:
+    result = await db.execute(_active_consent_stmt(tenant_id, candidate_id))
+    return result.first() is not None
+
+
+def has_active_consent_sync(
+    db: Session, tenant_id: uuid.UUID, candidate_id: uuid.UUID
+) -> bool:
+    """Sync twin for the Celery tasks."""
+    return db.execute(_active_consent_stmt(tenant_id, candidate_id)).first() is not None
+
+
+async def require_active_consent(
+    db: AsyncSession, tenant_id: uuid.UUID, candidate_id: uuid.UUID
+) -> None:
+    """409 ``consent_required`` unless the candidate's consent is in force."""
+    if not await has_active_consent(db, tenant_id, candidate_id):
+        raise AppError("consent_required", status.HTTP_409_CONFLICT)
+
+
+async def require_interview_consent(
+    db: AsyncSession, tenant_id: uuid.UUID, interview: Interview
+) -> None:
+    candidate_id = await db.scalar(
+        select(CandidateVacancy.candidate_id).where(
+            CandidateVacancy.id == interview.candidate_vacancy_id
+        )
+    )
+    if candidate_id is None:
+        raise AppError("consent_required", status.HTTP_409_CONFLICT)
+    await require_active_consent(db, tenant_id, candidate_id)
+
+
+def analysis_consent_gate(
+    tenant_id: str, *, interview_id: str | None = None, run_id: str | None = None
+) -> dict | None:
+    """First call of the analysis tasks.
+
+    A consent revoked while the job sat in the queue stops it before any
+    data reaches the AI provider: the interview analysis (and its
+    in-flight run) or the resume-only run is failed with the reason, and
+    the task returns the result handed back here. ``None`` means go on;
+    rows that do not exist are left to the task's own handling.
+    """
+    from sqlalchemy import create_engine
+
+    from app.config import settings
+
+    engine = create_engine(settings.database_url.replace("+asyncpg", "+psycopg2"))
+    try:
+        with Session(engine) as db:
+            tid = uuid.UUID(str(tenant_id))
+            run = db.get(AIAnalysisRun, uuid.UUID(run_id)) if run_id else None
+            interview = (
+                db.get(Interview, uuid.UUID(interview_id)) if interview_id else None
+            )
+            owner = run or interview
+            cv = db.get(CandidateVacancy, owner.candidate_vacancy_id) if owner else None
+            if cv is None or has_active_consent_sync(db, tid, cv.candidate_id):
+                return None
+            if run is not None and run.status in ("pending", "processing"):
+                run.status = "failed"
+                run.error_message = _CONSENT_REQUIRED_MESSAGE
+                run.current_stage = None
+            if interview is not None:
+                from app.modules.recruitment.tasks.analysis import (
+                    _fail_inflight_full_run,
+                )
+
+                interview.analysis_status = "failed"
+                interview.analysis_error = _CONSENT_REQUIRED_MESSAGE
+                _fail_inflight_full_run(
+                    db, tid, interview.id, _CONSENT_REQUIRED_MESSAGE
+                )
+            db.commit()
+            return {"status": "failed", "error": "consent_required"}
+    finally:
+        engine.dispose()
+
+
+async def _record_signed_consent(
+    db: AsyncSession, tenant_id: uuid.UUID, candidate: Candidate
+) -> ConsentRequest:
+    """A consent signed on the candidate's behalf, on the active template.
+
+    Used where no real candidate is there to sign: demo workspaces, the
+    onboarding sample candidates and the E2E seam. Without an active
+    template the default one is used, created on first need and kept
+    inactive, so it never becomes what real consent requests are sent with.
+    """
+    template = await db.scalar(
+        select(ConsentTemplate).where(
+            ConsentTemplate.tenant_id == tenant_id,
+            ConsentTemplate.is_active.is_(True),
+        )
+    )
+    if template is None:
+        template = await db.scalar(
+            select(ConsentTemplate)
+            .where(
+                ConsentTemplate.tenant_id == tenant_id,
+                ConsentTemplate.name == _DEFAULT_TEMPLATE_NAME,
+            )
+            .limit(1)
+        )
+    if template is None:
+        template = ConsentTemplate(
+            tenant_id=tenant_id,
+            name=_DEFAULT_TEMPLATE_NAME,
+            body=_DEFAULT_TEMPLATE_BODY,
+            is_active=False,
+        )
+        db.add(template)
+        await db.flush()
+    now = datetime.now(timezone.utc)
+    request = ConsentRequest(
+        tenant_id=tenant_id,
+        candidate_id=candidate.id,
+        template_id=template.id,
+        token=secrets.token_urlsafe(32),
+        email=candidate.email or "",
+        expires_at=now,
+        signed_at=now,
+        status="signed",
+    )
+    db.add(request)
+    await db.flush()
+    return request
+
+
+async def _drop_unused_default_template(db: AsyncSession, tenant_id: uuid.UUID) -> None:
+    """Remove the inactive default template once no consent uses it.
+
+    Auto-consents make it on demand; when their candidates go (the
+    onboarding samples' cleanup), it has nothing left to stand behind.
+    Matched by name and body, so a template an admin wrote stays.
+    """
+    await db.execute(
+        delete(ConsentTemplate).where(
+            ConsentTemplate.tenant_id == tenant_id,
+            ConsentTemplate.name == _DEFAULT_TEMPLATE_NAME,
+            ConsentTemplate.body == _DEFAULT_TEMPLATE_BODY,
+            ConsentTemplate.is_active.is_(False),
+            ~exists().where(ConsentRequest.template_id == ConsentTemplate.id),
+        )
+    )
+
+
+async def auto_sign_demo_consent(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    candidate: Candidate,
+    *,
+    is_demo: bool | None = None,
+) -> None:
+    """Consent a candidate nobody real stands behind, at creation.
+
+    Demo workspaces (``is_demo`` is looked up when the caller has not
+    resolved it) and the onboarding sample candidates, which the seed
+    passes as ``is_demo=True``: fictional people who cannot receive the
+    consent email, and without consent no AI feature would open for them.
+    A no-op for real candidates of a regular workspace.
+    """
+    if is_demo is None:
+        from app.modules.demo.utils import is_demo_tenant
+
+        is_demo = await is_demo_tenant(db, tenant_id)
+    if is_demo:
+        await _record_signed_consent(db, tenant_id, candidate)
+
+
+async def revoke_consent(db: AsyncSession, token: str) -> dict:
+    """Public endpoint — the candidate withdraws a signed consent.
+
+    Consent is per candidate, so every signed request of the candidate in
+    that tenant is revoked, not just this link's. Interviews lose the
+    consent stamp signing gave them, which closes their upload gate too;
+    AI processing is refused from here on until a new consent is signed.
+    """
+    request = (
+        await db.execute(
+            select(ConsentRequest)
+            .where(ConsentRequest.token == token)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not request:
+        raise AppError("consent_link_not_found", status.HTTP_404_NOT_FOUND)
+    if request.status == "revoked":
+        return {"status": "revoked"}
+    if request.status != "signed":
+        raise AppError("consent_not_signed", status.HTTP_409_CONFLICT)
+
+    signed = list(
+        (
+            await db.execute(
+                select(ConsentRequest).where(
+                    ConsentRequest.tenant_id == request.tenant_id,
+                    ConsentRequest.candidate_id == request.candidate_id,
+                    ConsentRequest.status == "signed",
+                )
+            )
+        ).scalars()
+    )
+    for row in signed:
+        row.status = "revoked"
+    cv_ids = select(CandidateVacancy.id).where(
+        CandidateVacancy.tenant_id == request.tenant_id,
+        CandidateVacancy.candidate_id == request.candidate_id,
+    )
+    await db.execute(
+        update(Interview)
+        .where(
+            Interview.tenant_id == request.tenant_id,
+            Interview.candidate_vacancy_id.in_(cv_ids),
+        )
+        .values(consent_signed_at=None, consent_template_id=None)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+
+    # Same as signing: a token flow with no tenant user, so the audit row
+    # is written here rather than by the generic decorator.
+    await audit_service.record_event(
+        db,
+        tenant_id=request.tenant_id,
+        user_id=None,
+        action="consent.revoke",
+        entity_type="consent",
+        entity_id=request.id,
+        payload_diff={
+            "revoked_at": datetime.now(timezone.utc).isoformat(),
+            "requests": len(signed),
+        },
+    )
+    return {"status": "revoked"}

@@ -419,12 +419,9 @@ def test_every_generated_citation_lands_in_its_source(locale: str):
         for ca in built["competence_assessments"]:
             covered = ca["status"] != "not_covered"
             if spec["analysis_mode"] == "full":
+                # Where a full-mode quote lands is pinned, per locale, by
+                # ``test_every_demo_quote_is_a_fragment_of_its_transcript``.
                 assert bool(ca["citations"]) is covered, ca["competence_id"]
-                for citation in ca["citations"]:
-                    assert citation["quote"] == ca["reasoning"], (
-                        locale,
-                        spec["email"],
-                    )
                 continue
             assert bool(ca["resume_excerpts"]) is covered, ca["competence_id"]
             for excerpt in ca["resume_excerpts"]:
@@ -448,3 +445,75 @@ def test_generated_transcripts_are_diarized():
         segments = parse_transcript_segments(spec["transcript"])
         assert len(segments) >= 8, (spec["email"], len(segments))
         assert {s["speaker"] for s in segments} == {"Recruiter", "Candidate"}
+
+
+# ---------------------------------------------------------------------------
+# HRP-980 — full-mode citations are fragments of the seeded transcripts
+# ---------------------------------------------------------------------------
+
+
+def _full_demo_interviews(locale: str, monkeypatch) -> list[tuple[str, str, dict]]:
+    """``(name, transcript, analysis)`` for every seeded full analysis,
+    localized the way the seeder localizes them."""
+    from app.config import settings
+    from app.modules.demo.seed_data import (
+        ELENA_INTERVIEW_ANALYSIS,
+        TOMAS_INTERVIEW_ANALYSIS,
+        build_candidate_analysis,
+        candidates,
+        load_transcript,
+    )
+    from app.modules.demo.seed_i18n import localize, seed_locale
+
+    monkeypatch.setattr(settings, "default_locale", locale)
+    if seed_locale() != locale:
+        pytest.skip(f"no {locale} seed catalog in this build")
+    specs = {spec["email"]: spec for spec in localize(candidates())}
+    out = [
+        ("elena", load_transcript(), localize(ELENA_INTERVIEW_ANALYSIS)),
+        (
+            "tomas",
+            specs["tomas.becker@example.com"]["transcript"],
+            localize(TOMAS_INTERVIEW_ANALYSIS),
+        ),
+    ]
+    for spec in _generated_specs():
+        if spec["analysis_mode"] == "full":
+            spec = localize(spec)
+            out.append(
+                (spec["email"], spec["transcript"], build_candidate_analysis(spec))
+            )
+    return out
+
+
+@pytest.mark.parametrize("locale", ["en", "de", "ru"])
+def test_every_demo_quote_is_a_fragment_of_its_transcript(locale: str, monkeypatch):
+    """HRP-980 acceptance, in every locale the demo ships: each citation
+    of every seeded full analysis lands on a real segment of its own
+    transcript and passes the HRP-981 check the real analysis runs; a
+    scored competence carries one to three of them, and none restates the
+    reasoning it is meant to back."""
+    import copy
+
+    from app.modules.demo.seed_data import parse_transcript_segments
+    from app.modules.recruitment.prompts_interview import check_analysis_citations
+
+    for name, transcript, fixture in _full_demo_interviews(locale, monkeypatch):
+        segments = [
+            {**row, "id": f"seg-{i}"}
+            for i, row in enumerate(parse_transcript_segments(transcript))
+        ]
+        assert segments, (locale, name)
+        analysis = copy.deepcopy(fixture)
+        stats = check_analysis_citations(analysis, segments, transcript)
+        assert stats["dropped"] == 0, (locale, name, fixture)
+        for ca in analysis["competence_assessments"]:
+            citations = ca["citations"]
+            if ca["status"] == "not_covered":
+                assert not citations, (locale, name, ca["competence_id"])
+                continue
+            assert 1 <= len(citations) <= 3, (locale, name, ca["competence_id"])
+            for citation in citations:
+                assert citation["segment_id"] is not None
+                assert citation["start_sec"] is not None
+                assert citation["quote"].strip() != (ca["reasoning"] or "").strip()

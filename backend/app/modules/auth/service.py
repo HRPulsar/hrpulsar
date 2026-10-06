@@ -298,6 +298,10 @@ async def register(
             "(self-hosted self-serve signup, HRP-390)",
             data.email,
         )
+        # HRP-927 (b): verified now - the saved public checks follow.
+        from app.modules.public_check.move import move_after_signup
+
+        await move_after_signup(db, user)
     else:
         # Self-serve signup: both the tenant and the user were just created
         # in this call, so neither carries a stored preference yet — the
@@ -416,6 +420,10 @@ async def verify_email(db: AsyncSession, token: str) -> dict[str, Any]:
     user.email_verified_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(user)
+    # HRP-927 (b): the saved public checks of the address follow the user.
+    from app.modules.public_check.move import move_after_signup
+
+    await move_after_signup(db, user)
 
     result = await db.execute(
         select(User).options(selectinload(User.roles)).where(User.id == user.id)

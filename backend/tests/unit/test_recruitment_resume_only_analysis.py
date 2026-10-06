@@ -31,6 +31,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit._consent import sign_consent
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -74,6 +76,7 @@ async def candidate_with_resume(db: AsyncSession, tenant, user):
             email=f"anna-{uuid.uuid4().hex[:6]}@x.test",
         ),
     )
+    await sign_consent(db, tenant.id, cand["id"])  # HRP-979
     resume = CandidateFile(
         tenant_id=tenant.id,
         candidate_id=cand["id"],
@@ -214,6 +217,7 @@ class TestEnqueueResumeOnly:
                 email=f"bob-{uuid.uuid4().hex[:6]}@x.test",
             ),
         )
+        await sign_consent(db, tenant.id, cand["id"])  # HRP-979
         cv = await service.attach_candidate(
             db,
             tenant.id,
@@ -588,6 +592,7 @@ class TestBulkResumeOnly:
             user.id,
             CandidateCreate(first_name="C", last_name="D", email=cand2_email),
         )
+        await sign_consent(db, tenant.id, cand2["id"])  # HRP-979
         cv2 = await service.attach_candidate(
             db,
             tenant.id,
@@ -1198,6 +1203,7 @@ class TestCancelReadinessMirror:
                 email=f"bare-{uuid.uuid4().hex[:6]}@x.test",
             ),
         )
+        await sign_consent(db, tenant.id, bare["id"])  # HRP-979
         cv = await service.attach_candidate(
             db,
             tenant.id,
@@ -1206,3 +1212,56 @@ class TestCancelReadinessMirror:
         )
         row = await self._cancel_first_run(db, tenant, user, cv["id"])
         assert row.ai_readiness == "none"
+
+
+class TestRefusedModelFailsBeforeThePaidStage:
+    """HRP-987: a model refused with no replacement fails the run before
+    the first LLM-spending stage (cancel still refunds there) and is not
+    retried - every attempt would refuse the same way."""
+
+    async def test_no_paid_stage_and_no_retry(
+        self, db: AsyncSession, tenant, user, cv_pair, monkeypatch
+    ):
+        import asyncio
+
+        import app.modules.ai.llm_client as llm_client
+        from app.config import settings as app_settings
+        from app.core.errors import AppError
+        from app.modules.ai import model_catalog_service
+        from app.modules.recruitment.tasks import analyze_resume_only_task
+
+        res = await resume_analysis_service.enqueue_resume_only_analysis(
+            db, tenant.id, cv_pair["cv_id"], user.id
+        )
+        await db.commit()
+        refusals: list[str | None] = []
+
+        def _refuse(sync_db, model):
+            refusals.append(model)
+            raise AppError("ai_model_unavailable", 409, model="gpt-gone")
+
+        async def _never(*args, **kwargs):
+            raise AssertionError("a refused model must not be called")
+
+        monkeypatch.setattr(
+            model_catalog_service, "resolve_dispatch_model_sync", _refuse
+        )
+        monkeypatch.setattr(llm_client, "generate_json", _never)
+        test_db_url = app_settings.database_url.rsplit("/", 1)[0] + "/hrpulsar_test"
+        monkeypatch.setattr(app_settings, "database_url", test_db_url)
+
+        outcome = await asyncio.to_thread(
+            analyze_resume_only_task.apply, args=(str(res["run_id"]), str(tenant.id))
+        )
+
+        assert outcome.failed()
+        assert len(refusals) == 1
+        run = (
+            await db.execute(
+                select(AIAnalysisRun)
+                .where(AIAnalysisRun.id == uuid.UUID(str(res["run_id"])))
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        assert run.status == "failed"
+        assert run.current_stage != "competences"

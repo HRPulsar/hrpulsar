@@ -268,9 +268,21 @@ class WorkStep(BaseModel, TenantMixin):
     # HRP-861: percent of a reviewed step's hours that stays with the person
     # who checks the agent's work; null means the default share.
     review_human_share: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
-    # HRP-863: the company's word on the mode and on the agent pack (a pack
-    # code, built-in or the tenant's own); each outranks the computed value.
+    # HRP-863: the company's word on the mode and on the agent pack, built-in
+    # or the tenant's own; each outranks the computed value. The pack is held
+    # by id (HRP-911): a code cannot tell the tenant's own pack from a
+    # built-in one of the same code. A deleted pack drops the override.
     manual_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    manual_pack_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_agent_packs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # HRP-911: the override as it was stored before - nothing reads or
+    # writes it any more. Kept for one release: the previous release's
+    # containers still select it while a deploy migrates ahead of the swap
+    # (the HRP-832 / HRP-973 pattern); the next migration drops it.
     manual_pack_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # HRP-868: the step's own hourly rate in the tenant's currency; null
     # falls back to the tenant's rate.

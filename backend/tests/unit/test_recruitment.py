@@ -5,7 +5,7 @@ import uuid
 import pytest
 from app.models import Person
 from app.modules.recruitment import service
-from app.modules.recruitment.models import VacancyStage
+from app.modules.recruitment.models import Vacancy, VacancyStage
 from app.modules.recruitment.schemas import (
     CandidateCreate,
     CandidateUpdate,
@@ -71,23 +71,24 @@ class TestVacancyCRUD:
         # Create a draft vacancy
         await service.create_vacancy(db, tenant.id, user.id, _vacancy_data("draft1"))
 
-        # Create a vacancy and change status to published
+        # Create a vacancy and pause it (HRP-836: status is set directly -
+        # the edit payload no longer carries it).
         v2 = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data("pub1"))
-        await service.update_vacancy(
-            db, tenant.id, v2["id"], VacancyUpdate(status="published")
-        )
+        row = await db.get(Vacancy, v2["id"])
+        row.status = "paused"
+        await db.commit()
 
         draft_items, draft_total = await service.list_vacancies(
             db, tenant.id, status="draft"
         )
         pub_items, pub_total = await service.list_vacancies(
-            db, tenant.id, status="published"
+            db, tenant.id, status="paused"
         )
 
         assert draft_total >= 1
         assert all(v["status"] == "draft" for v in draft_items)
         assert pub_total >= 1
-        assert all(v["status"] == "published" for v in pub_items)
+        assert all(v["status"] == "paused" for v in pub_items)
 
     async def test_get_vacancy(self, db: AsyncSession, tenant, user):
         created = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data())
@@ -176,17 +177,21 @@ class TestVacancyCRUD:
 
     async def test_close_vacancy(self, db: AsyncSession, tenant, user):
         created = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data())
+        # HRP-836: only an open or paused vacancy closes.
+        row = await db.get(Vacancy, created["id"])
+        row.status = "open"
+        await db.commit()
         closed = await service.close_vacancy(
             db,
             tenant.id,
             created["id"],
             VacancyCloseData(
-                resolution="cancelled", close_reason="Position no longer needed"
+                resolution="closed_no_hire", close_reason="Position no longer needed"
             ),
         )
 
         assert closed["status"] == "closed"
-        assert closed["close_resolution"] == "cancelled"
+        assert closed["close_resolution"] == "closed_no_hire"
         assert closed["close_reason"] == "Position no longer needed"
         assert closed["closed_at"] is not None
 

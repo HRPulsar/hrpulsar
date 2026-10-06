@@ -30,8 +30,11 @@ export function InternalCandidatesBlock({
   vacancyId,
   reloadToken = 0,
   onAdded,
+  readOnly = false,
 }: {
   vacancyId: string;
+  /** HRP-836: a closed or cancelled vacancy takes no new candidates. */
+  readOnly?: boolean;
   /** HRP-687: bumped when the vacancy's library competences change, so
    *  `has_library_competences` (and the Post button) refresh without an F5. */
   reloadToken?: number;
@@ -40,11 +43,9 @@ export function InternalCandidatesBlock({
   onAdded?: () => void;
 }) {
   const t = useTranslations("recruitment");
-  // HRP-667: POST /talent-card is `manage` on recruitment (HRP-830) — every
-  // `view` holder sees this block. They keep the button, greyed out and
-  // with the reason next to it, rather than a 403 toast.
+  // HRP-667: POST /talent-card is `manage` on recruitment (HRP-830).
   const { canManageSection, canViewSection } = usePermissions();
-  const canAct = canManageSection("recruitment");
+  const canAct = canManageSection("recruitment") && !readOnly;
   // HRP-824: posting also needs the market open to the caller at all - the
   // API refuses a posting into a section the tenant closed for their role.
   // Adding someone off the shortlist (HRP-711) is recruitment's own write
@@ -124,7 +125,10 @@ export function InternalCandidatesBlock({
   // Not posted yet — the offer. This is the whole point of HRP-667: the
   // suggestion sits on the vacancy the recruiter already has open, and it
   // is a button, not a sentence telling them to go somewhere else.
+  // HRP-629: an offer the caller cannot take is noise on their vacancy, so
+  // whoever may not post sees no block at all until a card exists.
   if (!data.talent_card_id) {
+    if (!canPost) return null;
     return (
       <div
         className={cn(
@@ -138,18 +142,14 @@ export function InternalCandidatesBlock({
           <div>
             <p className="font-medium">{t("internalCandidatesOfferTitle")}</p>
             <p className="text-muted-foreground">
-              {/* HRP-678: the switch is a third reason the button can be
-                  dead, and it is the one the recruiter set themselves —
-                  so say which of the three it is. */}
-              {!canAct
-                ? t("internalCandidatesOfferNoPermission")
-                : !marketOpen
-                  ? t("internalCandidatesOfferMarketClosed")
-                  : !data.internal_search_allowed
-                  ? t("internalCandidatesOfferSearchDisabled")
-                  : data.has_library_competences
-                    ? t("internalCandidatesOfferHint")
-                    : t("internalCandidatesOfferNoCompetences")}
+              {/* HRP-678: the switch is a reason the button can be dead,
+                  and it is the one the recruiter set themselves — so say
+                  which of the two it is. */}
+              {!data.internal_search_allowed
+                ? t("internalCandidatesOfferSearchDisabled")
+                : data.has_library_competences
+                  ? t("internalCandidatesOfferHint")
+                  : t("internalCandidatesOfferNoCompetences")}
             </p>
           </div>
         </div>
@@ -158,7 +158,6 @@ export function InternalCandidatesBlock({
           onClick={post}
           disabled={
             busy ||
-            !canPost ||
             !data.internal_search_allowed ||
             !data.has_library_competences
           }

@@ -21,6 +21,14 @@ SET_PASSWORD_EMAIL_BATCH = 50
 # Mirrored in the import page hint (demo-email-limit-parity.test.ts).
 DEMO_IMPORT_EMAIL_LIMIT = 5
 
+# What the job records for a row ``row_problem`` refuses.
+ROW_ERRORS = {
+    ("employees", "required"): "Missing required fields",
+    ("employees", "date"): "hire_date must be YYYY-MM-DD or DD.MM.YYYY",
+    ("employees", "email"): "Invalid email",
+    ("dictionaries", "required"): "Missing type or title",
+}
+
 
 @celery.task(bind=True, max_retries=1, default_retry_delay=30)
 def run_import_task(
@@ -35,10 +43,9 @@ def run_import_task(
     import base64
     import secrets
     import uuid
-    from datetime import date as date_type
     from datetime import datetime, timezone
 
-    from pydantic import EmailStr, TypeAdapter, ValidationError
+    from pydantic import EmailStr, TypeAdapter
     from sqlalchemy import select, text
     from sqlalchemy.orm import Session
 
@@ -51,7 +58,7 @@ def run_import_task(
     from app.modules.auth.service import can_send_set_password_link
     from app.modules.company.models import Tenant
     from app.modules.data_import.models import ImportJob
-    from app.modules.data_import.service import read_rows
+    from app.modules.data_import.service import parse_date, read_rows, row_problem
     from app.modules.demo.utils import is_demo_cast_email
     from app.modules.dictionary.models import DictionaryItem
     from app.modules.employee.models import Course, Education, Employee, WorkExperience
@@ -62,21 +69,6 @@ def run_import_task(
     # Ids of the new accounts to email a set-password link.
     recipients: list[str] = []
     locale = "en"
-
-    def _parse_date(value) -> date_type | None:
-        if value is None:
-            return None
-        if isinstance(value, date_type):
-            return value if not isinstance(value, datetime) else value.date()
-        raw = str(value).strip()
-        # ISO from the template; DD.MM.YYYY is how a German Excel writes a
-        # date into CSV.
-        for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
-            try:
-                return datetime.strptime(raw, fmt).date()
-            except ValueError:
-                pass
-        return None
 
     try:
         with Session(engine) as db:
@@ -122,35 +114,26 @@ def run_import_task(
             error_count = 0
             errors: dict[str, list] = {"rows": []}
 
+            def refused(i: int, row: tuple) -> bool:
+                """The check the preview shows the admin before the import."""
+                nonlocal error_count
+                problem = row_problem(import_type, row)
+                if problem:
+                    errors["rows"].append(
+                        {"row": i, "error": ROW_ERRORS[import_type, problem[0]]}
+                    )
+                    error_count += 1
+                return problem is not None
+
             if import_type == "employees":
                 for i, row in rows:
+                    if refused(i, row):
+                        continue
                     try:
-                        if len(row) < 5 or not all(row[:5]):
-                            errors["rows"].append(
-                                {"row": i, "error": "Missing required fields"}
-                            )
-                            error_count += 1
-                            continue
-                        hire_date = _parse_date(row[4])
-                        if hire_date is None:
-                            errors["rows"].append(
-                                {
-                                    "row": i,
-                                    "error": "hire_date must be YYYY-MM-DD"
-                                    " or DD.MM.YYYY",
-                                }
-                            )
-                            error_count += 1
-                            continue
-
-                        try:
-                            # Normalized the way login and invitations store
-                            # it, or the person could never sign in.
-                            email = email_adapter.validate_python(str(row[0]))
-                        except ValidationError:
-                            errors["rows"].append({"row": i, "error": "Invalid email"})
-                            error_count += 1
-                            continue
+                        hire_date = parse_date(row[4])
+                        # Normalized the way login and invitations store it,
+                        # or the person could never sign in.
+                        email = email_adapter.validate_python(str(row[0]))
                         first_name, last_name = str(row[1]), str(row[2])
                         position_title = str(row[3])
 
@@ -222,10 +205,10 @@ def run_import_task(
                                 work_role = (
                                     str(row[6]) if len(row) > 6 and row[6] else None
                                 )
-                                work_start = _parse_date(
+                                work_start = parse_date(
                                     row[7] if len(row) > 7 else None
                                 )
-                                work_end = _parse_date(row[8] if len(row) > 8 else None)
+                                work_end = parse_date(row[8] if len(row) > 8 else None)
                                 if work_start:
                                     db.add(
                                         WorkExperience(
@@ -251,12 +234,10 @@ def run_import_task(
                                 edu_field = (
                                     str(row[11]) if len(row) > 11 and row[11] else ""
                                 )
-                                edu_start = _parse_date(
+                                edu_start = parse_date(
                                     row[12] if len(row) > 12 else None
                                 )
-                                edu_end = _parse_date(
-                                    row[13] if len(row) > 13 else None
-                                )
+                                edu_end = parse_date(row[13] if len(row) > 13 else None)
                                 if edu_start:
                                     db.add(
                                         Education(
@@ -278,7 +259,7 @@ def run_import_task(
                                 course_provider = (
                                     str(row[15]) if len(row) > 15 and row[15] else None
                                 )
-                                course_date = _parse_date(
+                                course_date = parse_date(
                                     row[16] if len(row) > 16 else None
                                 )
                                 db.add(
@@ -302,14 +283,9 @@ def run_import_task(
 
             elif import_type == "dictionaries":
                 for i, row in rows:
+                    if refused(i, row):
+                        continue
                     try:
-                        if len(row) < 2 or not row[0] or not row[1]:
-                            errors["rows"].append(
-                                {"row": i, "error": "Missing type or title"}
-                            )
-                            error_count += 1
-                            continue
-
                         item_type, title = str(row[0]), str(row[1])
                         description = str(row[2]) if len(row) > 2 and row[2] else None
 

@@ -35,6 +35,9 @@ def _settings(**overrides):
         # (HRP-264) — set a placeholder so demo-focused tests don't
         # trip it accidentally when sentry_environment='production'.
         "signup_turnstile_secret": "test-signup-secret",
+        # The public check's captcha validator (HRP-923) fires in production
+        # when a dev .env switches the check on - keep it off here.
+        "public_check_enabled": False,
         # jwt_secret has its own prod validator (review P0-6) rejecting the
         # placeholder default; set a strong value so demo-focused tests in
         # production don't trip it.

@@ -442,7 +442,21 @@ async def public_openapi_spec(
         f"All endpoints are rate-limited to {settings.public_api_rate_limit} per API key.\n\n"
         "## Batch Operations\n"
         f"Batch endpoints accept up to {settings.public_api_batch_max_items} items per request.\n"
-        "Responses include per-item results with partial success support."
+        "Responses include per-item results with partial success support.\n\n"
+        # HRP-583 (c): the one object-shaped detail is documented, not
+        # unified - integrations already read ``detail.valid_types``.
+        "## Errors\n"
+        "An error the API itself raises carries a stable top-level `code` to "
+        "branch on and a `detail` with a human-readable message, which may be "
+        "localised and must not be parsed. `detail` is a string, except for "
+        "`invalid_dictionary_type`: there it is an object with `code`, "
+        "`message` and `valid_types`, the accepted dictionary types.\n\n"
+        "Two responses come from the framework and have no `code`:\n"
+        "- `422` - a parameter or body that fails validation (pagination out "
+        "of range, a malformed batch, a missing `X-API-Key` header): `detail` "
+        "is a list of objects with `loc`, `msg` and `type`.\n"
+        "- `429` - the rate limit is exceeded: the body is "
+        '`{"error": "Rate limit exceeded: ..."}`.'
     )
 
     return full_schema

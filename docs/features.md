@@ -14,7 +14,7 @@ A central record for every person in the company: position, division, hire date,
 - Status lifecycle: active, on leave, inactive, terminated. Inactive and terminated accounts lose access immediately, and the employee is notified by email
 - The profile header shows five summary tiles: Status, Tenure, Assessments, Goals progress, and Last assessment. Tile counts respect role visibility, so employees never see drafts hidden from them
 - Goals progress averages completion across the employee's open development plans; a hint next to the tile explains the formula
-- Last assessment counts completed assessments only, dated by their completion — the same rule the "no recent assessment" badge uses, so the header and the badge cannot contradict each other. An employee with nothing completed but an assessment under way reads "Assessment running" rather than "no records", and a running one alongside a completed one shows as a compact "+N running" marker
+- Last assessment counts completed assessments only, dated by their completion — the same rule the "no recent assessment" badge uses, so the header and the badge cannot contradict each other. An employee with nothing completed but an assessment under way reads "Assessment running" rather than "no records", and next to a completed one the tile names it first and then "+N active" - every assessment not yet completed or cancelled
 - Who runs employee records - adding people, editing and moving them, their timeline, work history and pay - is the section access setting; admins and division managers unless you change it. The org structure still fences it: admins - and HR once given the section - reach everyone, anyone else the departments they head, and a new or moved person lands inside those departments. Below admin nobody edits their own record here beyond education and courses, nor an admin's or HR's record. Deleting someone and changing roles stay with admins, and the employee pickers across the product keep working whatever the setting says
 - Assigning someone as a division manager or deputy upgrades their role automatically; removing the assignment asks for confirmation before the downgrade
 - The card header repeats the same issue badges the directory shows for that person, so opening a profile says what is wrong before any tab is clicked
@@ -39,6 +39,7 @@ A timeline of milestones and changes through an employee's career.
 
 - Event types: hire, position change, division change, termination, compensation change, certification earned, assessment complete, development plan complete, exam complete, grade change
 - Events are recorded automatically on position, division, compensation, and status changes, with old and new values side by side
+- Recorded events read in the viewer's language: a change shows its old and new value - name, position, division, role, pay - and a status change or hire is named by its title alone; text typed into a custom event is shown as written
 - Filter by event type; custom events with free-text descriptions are supported
 
 ### Employment History
@@ -178,7 +179,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 ### Who Works in Hiring
 
 - Who runs hiring - vacancies, candidates, interviews, AI analyses, consents, reports and hiring rounds - is the section access setting; admins, HR and recruiters unless you change it, and they see every vacancy in the company
-- Everyone else the section is open to reads the vacancies they own, are the hiring manager of, or whose division they manage - never a vacancy they applied to themselves, which stays out of their reach for good together with its candidates, interviews and scores. Hiring managers keep evaluating candidates there - questions, scores, moving a candidate through the funnel - and division managers keep running hiring rounds, as long as the section is open to them
+- Everyone else the section is open to reads the vacancies they own, are the hiring manager of, or whose division they manage - never a vacancy they applied to themselves, which stays out of their reach for good together with its candidates, interviews and scores. Hiring managers keep evaluating candidates there - questions, scores, moving a candidate through the funnel - and division managers read the hiring rounds and fill in their own sheet on a round they are an evaluator on, as long as the section is open to them; creating, closing and staffing rounds and inviting outside evaluators takes Manage on the section
 - Recruitment settings stay with admins; GDPR requests and the audit log with admins and HR
 - The notifications that go to the hiring team when nobody else is named on them reach whoever the setting lets run hiring
 
@@ -194,6 +195,9 @@ Reference data shared across the platform: specializations, grades, skill levels
 - The salary range follows the library on every surface that edits it — create, the edit page, and the inline edit of the vacancy overview: changing position, specializations or grades refills it from the picked pairs, and a range typed by hand stands until the next such change. Pairs priced in different currencies fill nothing rather than adding up sums that do not compare
 - Every vacancy has a hiring manager, defaulting to the creator; any active member of the company can be named, whatever role they hold
 - Lifecycle: edit, archive with a 90-day retention window, restore, or permanently delete a draft without candidates; archived vacancies stay out of the list until "Show archived (N)" is ticked
+- Status model: a vacancy starts as a draft and opens with its first candidate, or with Publish, which needs a filled Competences & indicators block. An open vacancy can be paused, closed or cancelled and a paused one reopened, closed or cancelled - each from the vacancy menu in the list and on the page, after a confirmation. Removing every candidate never sends a vacancy back to draft
+- Closing records a resolution - closed with or without hiring - which has to match the funnel (with hiring needs a candidate on a hired stage, without hiring must not have one) and is shown next to the status
+- A paused vacancy freezes the interview questions, interviews and manager assessments of its candidates; a closed or cancelled one is read-only as a whole, AI Insights included. The interview pages of such a vacancy are read-only too, and the API refuses the same changes
 - Parallel edits are protected: a stale save is rejected instead of silently overwriting someone else's change
 - Per-vacancy attachments (documents, spreadsheets, presentations, images; 25 MB each, up to 10) feed context into AI generation
 
@@ -209,15 +213,16 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Add candidates by hand (name plus email or phone) or by bulk resume upload: up to 50 PDF and DOCX files at once, parsed by an LLM into structured data
 - Duplicate emails are caught before import with a link-or-create choice per file
 - The candidate page carries contact details, the parsed resume with per-section inline editing, files, and every vacancy application with its scores
-- Funnel stages ship with a 9-stage default (new through hired, rejected, withdrew) and can be customized per workspace or per vacancy; stage changes into a terminal state ask for confirmation
+- Funnel stages ship with an 11-stage default (new through offer, offer accepted, hired, probation completed, rejected, withdrew) and can be customized per workspace or per vacancy; stage changes into a terminal state ask for confirmation, and a hired candidate can still move on to probation completed
+- The vacancy's Analytics tab shows the funnel with a conversion column - the candidates who reached a stage out of those who reached the previous one, everyone counted up to the furthest stage they got to, even if rejected later - and the overall conversion: candidates on a hired stage out of all candidates of the vacancy
 - The vacancy table shows last position, experience, current stage, and the two assessments side by side: how much of the vacancy profile the manager scored and how much the AI scored, each as a percentage so the two are directly comparable. The AI verdict comes with the reason for it in the row itself, not only behind a popover. The Divergence column reads "N/M" — competences where the manager and the AI disagree out of all in the profile — and its hover card lists them and links into the full-screen canvas filtered to that candidate's divergent cells
 - A candidate nobody has assessed yet says so — "not assessed yet", with the reason in a tooltip — instead of an unexplained dash. Rows where the manager and the AI disagree carry a count of the competences they disagree on, and one definition of "disagree" is used everywhere: the workspace divergence threshold, applied per competence
 - Candidates who already work here are marked as such wherever candidates are read — the global list, the vacancy table (with the row tinted), and the candidate page — so an internal applicant is never mistaken for an outside one
 
 ### Internal Candidates
 
-- Before hiring outside, the vacancy offers to look inside: one action posts the requisition to the internal talent market as a vacancy card, carrying its required competences across - provided the talent market is open to the poster in the section access setting
-- The talent market's own competence matcher then fills the shortlist, and the vacancy shows those employees with their percentage match next to the external pipeline. There is no second matcher and no second copy of the requirements — the card is the vacancy's twin, and the link leads to it
+- Before hiring outside, the vacancy offers to look inside: one action posts the requisition to the internal talent market as a vacancy card, carrying its required competences across - provided the talent market is open to the poster in the section access setting. Whoever cannot post sees no offer, only the vacancy's candidates, until a card exists
+- The talent market's own competence matcher then fills the shortlist, and the vacancy shows those employees with their percentage match next to the external pipeline - the same percentage the card shows, judged against the vacancy's current competences, so a change to them shows at once. There is no second matcher and no second copy of the requirements — the card is the vacancy's twin, and the link leads to it
 - Posting needs required competences picked from the company library: the AI-generated profile describes a candidate in prose, while the internal match is scored against library competences and assessment results
 - The card is created as a draft, so nothing is announced to employees until someone publishes it from the talent market
 - Internal matching is part of the employment relationship — it reads competence and assessment data the employer already holds for its own staffing decisions (legitimate interest), so it needs no separate employee consent. A per-vacancy switch lets the recruiter who owns a requisition keep a sensitive one out of the internal search; it is on by default and off means the vacancy cannot be posted to the talent market at all. Once the vacancy has been posted the switch is locked on — the form shows it checked and disabled with the reason, and the API refuses to turn it off — so a requisition can never display a shortlist it claims not to search for; removing its talent market card unlocks it again
@@ -258,20 +263,24 @@ Reference data shared across the platform: specializations, grades, skill levels
 - The interviewers assigned to a future interview are emailed the candidate's name, the vacancy, and the local date and time with its time zone named. Later changes follow the same slot: someone added later gets the invitation, a move tells the people already on it the new time, a dropped interviewer is told they are off it, and archiving the interview cancels it for everyone — each in the recipient's own language
 - Each row links to the interview by its title and shows its round, the date it was added, its status, and a menu to edit or archive it
 - Archiving hides an interview behind a "Show archived" filter and keeps it restorable for 90 days; the round link is released and the AI scores it produced are marked as coming from an archived source. After the window closes the recording is deleted and the record stays for audit
-- The interview page opens on its title, the vacancy and round it belongs to, a Details block (candidate, type, status, added, date and time, duration, interviewers) and a Notes block — with inline editing where it still makes sense
+- The interview page opens on its title, the vacancy and round it belongs to, a Details block (candidate, type, status, added, date and time, duration, interviewers) and a Notes block — with inline editing where it still makes sense. Every assigned interviewer is named for everyone who opens the page, including one who has since applied to the vacancy and is no longer offered as an interviewer on it
 - Upload audio (mp3, wav, m4a) and video (mp4, webm, mov, avi) up to 500 MB, or text transcripts up to 10 MB, several files at once
 - Uploads are chunked and resumable: pause, resume, retry, and continue after a browser reload
 - The interview's recording type follows the file that is uploaded; when it contradicts the type chosen at scheduling, the recruiter is asked to confirm the switch first
 - Consent capture with magic-link signing runs before any upload; while a link is out and unsigned it can be sent again from the banner, after a confirmation naming when it last went out — the same link, so the copy already in the candidate's inbox keeps working
-- Transcription through pluggable providers — Deepgram, Whisper, AssemblyAI and Yandex SpeechKit, three of them with speaker separation; the recording is transcribed in the tenant's content language, or in the language the provider detects when none is set, and every configured key joins one fallback chain, so a provider that refuses the request passes the interview to the next one instead of failing it; an in-app player covers audio and video with speed control and keyboard shortcuts
+- The one AI step before consent is reading an uploaded resume when the candidate is created from it — the candidate sent that resume in. Everything after that needs the candidate's signed consent: AI Insights, interview questions, pasted or uploaded transcripts and their analysis, and interview recordings all stay off until the candidate signs, with the reason shown next to the action. Candidates already in the system who never signed are no longer sent to AI until they do
+- The candidate can withdraw consent from the same link at any time; from then on AI processing and uploads are refused, an analysis still waiting in the queue is stopped (the credits charged when it was started are not returned), the candidate page says consent was withdrawn, and a new consent request can be sent. The withdrawal is recorded in the audit log
+- In a demo workspace every new candidate is consented on creation, and so are the sample candidates of the recruitment onboarding walkthrough, so the AI features can be tried straight away
+- Transcription through pluggable providers — Deepgram, Whisper, AssemblyAI and Yandex SpeechKit, three of them with speaker separation; the recording is transcribed in the tenant's content language, or in the language the provider detects when none is set, and every configured key joins one fallback chain, so a provider that refuses the request passes the interview to the next one instead of failing it — the workspace's own keys first, then the platform's, led by the provider the operator picks with `TRANSCRIPTION_PROVIDER_DEFAULT`; an in-app player covers audio and video with speed control and keyboard shortcuts
 - The recording is prepared before it is sent out: the video track is dropped and the audio re-encoded, so an hour of interview travels as a few megabytes instead of half a gigabyte, and a recording still above a provider's request-size limit is split into overlapping parts and stitched back into one transcript
 - When the provider that transcribed the interview does not separate speakers, the turns are split into interviewer and candidate from the transcript itself, so the analysis still knows whose words it is scoring
 - The analysis pipeline reports data completeness, competence scores, blind spots, process findings, red flags, and a verdict
 - The analysis, its questions, the generated competency profile and the candidate reports are written in the workspace's content language whatever language the interview was conducted in; a workspace that never opened the setting falls back to the language the vacancy was created in, and opening the settings page does not count as answering
-- Two modes: resume-only (a fast pre-screen that never returns "recommended") and full (interview-anchored, with citations from the transcript). A prior resume-only run upgrades to full for the price difference
+- Two modes: resume-only (a fast pre-screen that never returns "recommended") and full (interview-anchored, with citations from the transcript). A prior resume-only run upgrades to full for the price difference. Resume-only reads an uploaded resume or a parsed resume entered by hand on the candidate card
+- Every citation the full analysis saves is checked against the transcript: its quote must be in the segment it names, and its timecodes are that segment's own; a quote the transcript does not hold is dropped, and the run records how many were. A scored competence with nothing left to back it reads "Unconfirmed", a quote the transcript lost after an edit is marked outdated, and a text transcript shows the quote itself instead of a timecode with no recording behind it
 - Progress renders stage by stage with a cancel option; resume citations click through to the matching resume section, and the quoted fragments are marked in the parsed resume and click back to their citation
 - The analysis card spells out, in words, where the manager and the AI disagreed — which competence, both scores, and which way the AI leaned — or says that the two agree, or that no manager has scored the candidate yet, so the AI verdict is never the only voice on the page
-- The platform flags an analysis that no longer matches its inputs — a re-parsed resume, edited vacancy competences, a run past 30 days, or an interview transcript the analysis never saw — and offers the re-run that fixes it. A stale baseline also closes the discounted upgrade, so a full analysis is never built on findings that have moved
+- The platform flags an analysis that no longer matches its inputs — a re-parsed resume or a hand-entered one edited since, edited vacancy competences, a run past 30 days, or an interview transcript the analysis never saw — and offers the re-run that fixes it. A stale baseline also closes the discounted upgrade, so a full analysis is never built on findings that have moved
 - The candidates table reports whether an analysis is running right now, derived from the data rather than from the last run
 - Where a manager's scores and the AI's disagree by the workspace threshold, the candidates table counts those competences and names them on hover — including the ones scored in an assessment round or judged by a resume-only analysis — and opens the canvas filtered to exactly those cells
 - Everyone the analysis concerns gets an email when it finishes or fails, naming the candidate and linking straight to the result
@@ -289,14 +298,18 @@ Reference data shared across the platform: specializations, grades, skill levels
 ### Recruitment Settings
 
 - A single settings hub for scales, AI and speech-to-text providers, branding, retention, roles, and templates
-- Bring your own keys for LLM and transcription providers (Anthropic, OpenAI, Gemini, Azure, Yandex, GigaChat, Whisper, Deepgram, AssemblyAI, Yandex SpeechKit, faster-whisper); keys are encrypted at rest and never returned in full
-- Retention windows per data type with a warning on legally short values
+- Bring your own keys for LLM and transcription providers (Anthropic, OpenAI, Gemini, Azure, Yandex, GigaChat, Whisper, Deepgram, AssemblyAI, Yandex SpeechKit); keys are encrypted at rest and never returned in full. Whisper can also point at your own OpenAI-compatible server
+- Connect your own model for recruitment from the interface: an OpenAI-compatible server such as Ollama or vLLM is added by its address, with no API key when the server needs none, and a connection check on each provider sends one short test request and says whether the model answered - or why not: unreachable server, rejected key, unknown model
+- Retention windows per data type with a warning on legally short values, applied every night: once an item is older than its window, counted from the day it was created, an interview loses its recording, transcript and AI analysis, a resume its file and parsed text, a consent record the signer's email, IP address and browser (the consent itself stays on record), and a hiring report is deleted; an interview still being transcribed or analysed waits for the next night. Each run is written to the erasure log; the audit log is kept as it is. A workspace that has never opened the retention settings keeps everything until it does
 
 ### Audit & Compliance
 
 - An append-only audit log of every mutating action with change diffs, IP, and user agent, browsable with filters
-- GDPR export gathers everything about a person into one JSON document with a 7-day download link
-- GDPR erasure replaces personal data with redaction markers across resumes, transcripts, and consents while preserving the audit trail
+- Every stage move names who made it, in the candidate's stage history and in the log with the stage before and after; AI runs name who started them, including the transcription and analysis that run on their own after an upload, which are logged under whoever uploaded the interview
+- GDPR export gathers everything about a person into one JSON document with a 7-day download link; the file itself is deleted when the link expires
+- GDPR erasure replaces personal data with redaction markers across resumes, transcripts, AI analyses and the verdicts shown on the candidate card, evaluator notes, generated questions and consents; it deletes the stored files, the hiring reports that list the person and their earlier export files, and strips the person's full name, email address and phone number (matched as whole words) from the audit log, notifications and email log while the events themselves stay
+- Erasure changes only the requesting company's data: a person who is also a candidate at another company, or has a user account, keeps that record, and only this company's candidate is detached from it
+- GDPR export and erasure open from the candidate page (Export / delete data) and from the recruitment settings, where the GDPR page finds the candidate by name or email
 
 ---
 
@@ -357,7 +370,7 @@ What to evaluate is chosen in a dedicated panel, on single and mass assessments 
 Once an assessment is completed, its results are read as two lists before the table.
 
 - **Growth zones**: every competence at or below the passing bar, worst first, with its percent
-- **Strengths**: everything above the bar
+- **Strengths**: everything above the bar, best first
 - Either block says so plainly when it is empty — all competences above the bar, or none of them
 - The full results table moves behind a "Show all results" toggle: the two blocks answer what it was usually read for, the table keeps the average, percent and scale level for when the detail is wanted
 - A "Create development plan" action on the growth zones builds a plan from exactly those competences — not the whole grade matrix — named after the assessment and with the materials each competence's level requires. Once such a plan exists the action becomes "Open development plan"
@@ -462,9 +475,10 @@ Knowledge testing with configurable questions and pass criteria.
 
 ### Question Import
 
-- Bulk import from Excel with a downloadable template
+- Bulk import from Excel on the exam page while the exam is a draft, for whoever edits its questions, with a downloadable template that comes filled with example questions
 - Up to 6 answer options per question, weights, and Markdown in question text
-- Duplicate detection against existing questions and row-level error reporting
+- Duplicate detection against existing questions and row-level error reporting: the page shows how many questions came in and every skipped row with its number and reason
+- A file that is not a readable Excel workbook is refused as a whole
 
 ---
 
@@ -499,7 +513,7 @@ An internal job board for open positions and project opportunities.
 - Appointment asks for confirmation, so a stray click cannot pin a candidate
 - Emails go out on every lifecycle event: publish, being added to a live card, appointment, completion, cancellation, and removal from a published card
 - The section is open to regular employees, narrowed to the cards their own name is on: a card they are a candidate on once it is published, plus a card of any status they have been appointed to before it goes out. They read their own row and their own match breakdown — not the shortlist they are ranked in — and every write control stays hidden
-- A vacancy card can also come from recruitment: posting a requisition to the talent market creates one with the vacancy's required competences already on it (see Recruitment → Internal Candidates)
+- A vacancy card can also come from recruitment: posting a requisition to the talent market creates one with the vacancy's required competences already on it (see Recruitment → Internal Candidates). Its Details name the vacancy it is based on, linked for whoever may open that vacancy in recruitment
 - Who authors the board - creating, publishing, staffing and deleting cards - is the section access setting; admins and division managers unless you change it. The setting opens the buttons, the org structure still says whose card it is: admins and HR reach every card, a division head their own department's and the ones they created. Everyone the section is open to keeps the cards their own name is on, and closing the section for a role closes those too
 
 ---
@@ -537,7 +551,7 @@ Break a process or a project down into steps, see who covers each step - an AI a
 - A verdict is marked preliminary while the breakdown is not accepted or rests on an unconfirmed capability
 - Assign the person who does a step, and the person who checks and signs it, from your active employees. An assigned person outranks the match - an agent's included, which stays on the row as what could take the step - and closes the gap even without the capabilities, with a "No matching skills" badge naming what is missing
 - A step where an agent drafts or someone answers for the result asks "Who checks?" until an accountable person is named; assignments change neither the shares nor the money
-- Overrule the computed result on any step in scope, right on its row: pick another automation mode, or name the agent type that does the step - also where no single agent type covered it. The manual value is what the buckets, the shares, the money, the To do tab and the SKILL.md follow; while it is set by hand, its menu offers "Return to computed" to bring the calculated value back. An assigned person still outranks the agent, and an agent type that is later removed is simply ignored. While a mode is set by hand and no agent type is named yet, the row keeps quiet about it - no "Nobody covers this" verdict, no quality light on an agent nobody picked
+- Overrule the computed result on any step in scope, right on its row: pick another automation mode, or name the agent type that does the step - also where no single agent type covered it. The manual value is what the buckets, the shares, the money, the To do tab and the SKILL.md follow; while it is set by hand, its menu offers "Return to computed" to bring the calculated value back. An assigned person still outranks the agent. The choice names one agent type, so the company's own type stays apart from a built-in one with the same code, under its own name in the menu; a type later switched off is ignored, and one deleted takes the choice with it - either way the step reads the computed match. While a mode is set by hand and no agent type is named yet, the row keeps quiet about it - no "Nobody covers this" verdict, no quality light on an agent nobody picked
 - Rows are navigable: the names of the executor, the accountable person and the backup open the employee card (a colleague outside your HR scope opens as the directory card), a step title in any of the three buckets scrolls to that step's row, and an agent type opens a short description of what an agent of that type does
 - The "assessed" and "expected" labels of a matched person open the match details: which of the person's competences cover the step's capabilities, the score of the latest completed assessment of each, and the passing score of their grade specialization it was held against. A match that is only expected by the grade matrix of the position says so and shows no score. The details follow the same rule as the name itself: only readers whose HR scope includes the person receive them
 
@@ -580,6 +594,8 @@ The registry behind the Coverage verdicts, as an API (`/api/ai-workforce/*`); a 
 - Nine built-in agent packs name what an agent type can do in catalog capabilities; a pack can be switched off for the company
 - Register the agents the company actually runs - vendor, category, cost, contract renewal, data classification, security review, EU AI Act risk level - each on a pack, with capabilities added or removed for that one agent
 - Assign an agent to an employee with its allowed use cases, a supervision level and an accountable owner; an employee requests an assignment, a Coverage manager approves, rejects or revokes it, and expiring assignments are listed
+- The accountable owner of an assignment and the owner of a workflow are named only from active employees. A workflow owner is handed over, never cleared, and an employee who owns a workflow or is accountable for an open assignment cannot be deleted until these are handed over
+- When an employee leaves, the assignments they are accountable for are suspended until a new accountable owner is named, and admins get one notification in the app and by email with how many need one
 - Describe multi-agent workflows step by step, and read every change in an audit feed filtered by actor, target and period
 
 ## AI Features
@@ -698,6 +714,7 @@ Programmatic access for integrations and automation.
 - All endpoints live under `/v1/` with a rate limit of 60 requests per minute per key and validated pagination
 - Read endpoints for employees, assessments, divisions, specializations, grades, and reference dictionaries
 - Reference dictionaries are read by type — an unknown type is rejected with a `400` that lists the accepted types, so a typo in an integration fails loudly instead of returning an empty page
+- Errors the API raises carry a stable top-level `code` and a human-readable `detail`; `detail` is a plain message everywhere except the unknown dictionary type, where it is an object whose `valid_types` lists the accepted types. Two framework responses have no `code`: a `422` validation error, whose `detail` is a list of `loc` / `msg` / `type` objects, and a `429` over the rate limit, whose body is `{"error": "Rate limit exceeded: ..."}`. The OpenAPI specification describes all of it
 - Batch operations create or update up to 100 resources per call — employees, divisions, specializations, grades, assessments, and exams — with per-item error reporting and partial success
 - An OpenAPI specification at `/v1/openapi.json` works with any API client or code generator
 
@@ -770,9 +787,10 @@ A first-login wizard for newly registered organizations.
 ## Analytics & Dashboards
 
 - A management dashboard built around the development loop — assess, find gaps, develop, close: four clickable stages show assessment coverage, employees scoring below their grade bar, open development plans, and plans finished in the chosen period — 30, 90 or 365 days — with how many of them met their deadline
-- An action queue that turns detected problems into next steps: employees below the bar with no development plan, overdue plans, plans stuck in review, and falling assessment coverage — each row deep-links into the module that fixes it
+- An action queue that turns detected problems into next steps: employees below the bar with no development plan, overdue plans, plans sitting in review for two weeks without a move (counted per plan, their owners named), and falling assessment coverage — each row deep-links into the module that fixes it
 - Every tile and queue row opens the list already filtered to the people it counted, so the number on the dashboard and the rows on the page always match; the names listed under a finding link straight to the person's card
-- Queue rows name the worst cases first: the people under a finding are ranked by how bad the problem is — how many competences sit below the bar and how far, how long a plan is overdue or stuck, how long since the last assessment — and the employee list the row opens keeps the same order, with an explicit fallback to the newest-first ordering
+- Queue rows name the worst cases first: the people under a finding are ranked by how bad the problem is — how many competences sit below the bar and how far, how long a plan is overdue or stuck, how long since the last assessment; for a gap with no plan, people who never had one come first, then those whose last plan was closed or cancelled longest ago — and the employee list the row opens keeps the same order, with an explicit fallback to the newest-first ordering
+- The employee list's Problems filter also takes three profile problems the badges show — profile incomplete, plan awaiting review, assessment overdue — matching exactly the people carrying that badge and ranked oldest first: added longest ago, in review longest, missed its end date earliest
 - The gaps stage only turns red when nobody is working on the gap — gaps that already have an open development plan read as amber, and a red chip on the tile counts the ones still without a plan
 - The assessed stage carries a red chip counting the people with no recent assessment, and the matching queue row's button names the same number, so "nobody assessed them" reads as a task rather than a statistic
 - Every stage of the loop, the action queue and the assessment-cycle card carry a question mark that explains exactly what the number counts, including the time windows and the passing bar behind it
@@ -780,9 +798,9 @@ A first-login wizard for newly registered organizations.
 - Dashboard figures follow the reader's scope: a division manager sees their own subtree, not the whole company
 - A personal dashboard for employees: my loop stages (latest assessment, my gaps, my active plan, confirmed closures), a personal to-do queue (pending surveys, returned or overdue plans, gaps without a plan), strengths with rare-skill highlights, growth direction to the next grade, and an assessment-score sparkline
 - An on-demand AI summary of the loop state — one click explains what is going on and what to do first; employees get a coach-style personal summary on their own dashboard (cached per data state)
-- HR metrics over a chosen period — 30, 90 or 365 days — shown as "was → now": plans closed, people at risk, grade changes, turnover, time between grade changes, average talent-market match and engagement. Each metric states how solid it is: the ones reconstructed from data that gets rewritten are marked as estimates and explain their formula, and metrics this workspace has no signal for are named rather than quietly left out
+- HR metrics over a chosen period — 30, 90 or 365 days — shown as "was → now": plans closed, people at risk, grade changes, turnover (people on leave count as employed, not as leavers), time between grade changes, talent-market match and engagement. Each metric states how solid it is: the ones reconstructed from data that gets rewritten are marked as estimates and explain their formula, and metrics this workspace has no signal for are named rather than quietly left out, each with a hint saying what it needs to appear
 - Who opens Analytics is the section access setting - admins, HR and division managers unless you change it. Read access shows the charts; management adds the assessment exports and the AI summary of the loop. The level opens the page, it does not widen the figures: admins and HR see the workspace, a division head sees their own department - the division headcount matrix included. Salary figures keep the audience they have on an employee's card, admins and the person's own division head
-- Active assessment cycle progress at a glance
+- Active assessments at a glance: how many are being prepared, sent, in progress and on review, with the share already launched; the button opens the assessment list filtered to those same statuses
 - Reports: assessment score distributions, competence heatmaps, and division comparisons
 - Assessment export to XLSX, generated in the background with a download link when ready
 - Long-running operations (imports, exports, AI generation) report their status through a single task-tracking mechanism
@@ -791,7 +809,8 @@ A first-login wizard for newly registered organizations.
 
 ## Data Import
 
-- Bulk employee import from Excel or CSV (comma- or semicolon-separated, dates as YYYY-MM-DD or DD.MM.YYYY): email, name, position, hire date, work experience, education, courses
+- Bulk employee import from Excel or CSV (comma- or semicolon-separated, UTF-8 or the Windows code page a Western or Russian Excel saves in, dates as YYYY-MM-DD or DD.MM.YYYY): email, name, position, hire date, work experience, education, courses
+- Before importing, the preview shows every row of the file - CSV or XLSX - as the import will read it, with the reason each refused row will be skipped; the CSV template opens in separate columns in Excel whatever its locale
 - Every imported employee gets an email with a link to set their own password — no shared default password. The link works once, expires after 7 days and confirms the address; until the person sets a password, an admin can resend it from the employee card, which voids the previous link. On a self-hosted installation without an email provider, the link is written to the server log instead
 - Dictionary import: specializations, grades, skill levels
 - Drag-and-drop upload, validation with row-level errors, and background processing with progress tracking

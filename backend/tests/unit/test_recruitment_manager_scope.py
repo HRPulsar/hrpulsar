@@ -452,6 +452,15 @@ class TestInternalShortlistIsScopedByTheVacancy:
         await db.commit()
         await db.refresh(card)
         vacancy.talent_card_id = card.id
+        # HRP-693: the block shows a stored score only for a card matching
+        # on specializations alone; one with no requirements scores nobody.
+        from app.modules.dictionary.models import DictionaryItem
+        from app.modules.talent_market.models import TalentCardSpecialization
+
+        spec = DictionaryItem(tenant_id=tenant.id, type="specialization", title="Twin")
+        db.add(spec)
+        await db.flush()
+        db.add(TalentCardSpecialization(card_id=card.id, specialization_id=spec.id))
         await db.commit()
 
         mine_emp = await self._employee(

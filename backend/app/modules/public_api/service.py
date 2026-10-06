@@ -289,6 +289,11 @@ async def batch_update_employees(
                 value = getattr(item, field, None)
                 if value is not None:
                     setattr(emp, field, value)
+            if item.status is not None:
+                # HRP-984: the same hand-over as the employee card's status.
+                from app.modules.ai_workforce import service as ai_workforce_service
+
+                await ai_workforce_service.release_dismissed_owner(db, emp)
 
             results.append(
                 {"index": idx, "success": True, "id": str(emp.id), "error": None}

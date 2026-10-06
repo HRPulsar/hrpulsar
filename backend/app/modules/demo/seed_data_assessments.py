@@ -495,21 +495,29 @@ PDPS: list[dict] = [
     # of an unattended gap — the demo's "the loop repeats" beat, shown
     # rather than explained. Half the items are done, so the plan looks
     # genuinely under way rather than freshly minted.
+    #
+    # HRP-737 REDO (QA 29.09): the plan is built from her Q4 review the way
+    # the assessment page's "Create development plan" button builds one
+    # (HRP-731) — one item per growth zone of that review, titled by the
+    # competence, with the competence's materials up to the level the
+    # review measured (Advanced), not the grade ladder's Intermediate. The
+    # concrete task stays as the item's description.
     {
         "title": "Growth path Q4 — Anna Rising",
         "employee_index": 2,  # Anna Rising, Backend L3
         "status": "in_progress",
+        "from_assessment": True,
         "specialization_key": "backend-dev",
         "grade_key": "g-senior",
         "items": [
             {
                 "competence_key": "c-distributed",
-                "title": "Design the multi-region failover runbook",
+                "description": "Design the multi-region failover runbook",
                 "is_passed": False,
             },
             {
                 "competence_key": "c-mentoring",
-                "title": "Run the Backend L2 mentoring circle",
+                "description": "Run the Backend L2 mentoring circle",
                 "is_passed": True,
             },
         ],

@@ -82,3 +82,86 @@ export function vacancyStatusOptionLabel(
   const key = vacancyStatusOptionKey(status);
   return key ? t(key) : status.charAt(0).toUpperCase() + status.slice(1);
 }
+
+// HRP-836: what a vacancy's status freezes, surface by surface. Mirror of
+// ``VACANCY_LOCKED_SURFACES`` in backend/app/modules/recruitment/common.py,
+// which answers 409 on the same surfaces. A paused vacancy stops the
+// interview work on its candidates; a closed or cancelled one is read-only
+// as a whole, AI Insights included.
+export type VacancySurface =
+  | "vacancy"
+  | "ai_insights"
+  | "questions"
+  | "interviews"
+  | "manager_assessments";
+
+const FROZEN_WHEN_ENDED: readonly VacancySurface[] = [
+  "vacancy",
+  "ai_insights",
+  "questions",
+  "interviews",
+  "manager_assessments",
+];
+
+export const VACANCY_READ_ONLY_SURFACES: Record<
+  string,
+  readonly VacancySurface[]
+> = {
+  paused: ["questions", "interviews", "manager_assessments"],
+  closed: FROZEN_WHEN_ENDED,
+  cancelled: FROZEN_WHEN_ENDED,
+};
+
+export function vacancyLocks(
+  status: string | null | undefined,
+  surface: VacancySurface,
+): boolean {
+  return (VACANCY_READ_ONLY_SURFACES[status ?? ""] ?? []).includes(surface);
+}
+
+// HRP-427 / HRP-836: the lifecycle commands of the kebab menu, between
+// Edit and Archive, in the order the tickets list them. Closed and
+// cancelled are final — they offer none (and no Edit either).
+export type VacancyStatusCommand =
+  | "publish"
+  | "pause"
+  | "reopen"
+  | "close"
+  | "cancel";
+
+export const VACANCY_STATUS_COMMANDS: Record<
+  string,
+  readonly VacancyStatusCommand[]
+> = {
+  draft: ["publish"],
+  open: ["pause", "close", "cancel"],
+  paused: ["reopen", "close", "cancel"],
+};
+
+/** Target status per command; ``close`` goes through ``/close`` instead. */
+export const VACANCY_COMMAND_TARGET: Record<
+  Exclude<VacancyStatusCommand, "close">,
+  "open" | "paused" | "cancelled"
+> = {
+  publish: "open",
+  pause: "paused",
+  reopen: "open",
+  cancel: "cancelled",
+};
+
+// HRP-836: the two close resolutions, as the backend stores them.
+export type VacancyCloseResolution = "hired" | "closed_no_hire";
+
+const VACANCY_RESOLUTION_KEYS: Record<VacancyCloseResolution, string> = {
+  hired: "vacancyResolutionHired",
+  closed_no_hire: "vacancyResolutionNoHire",
+};
+
+/** "Closed with hiring" / "Closed without hiring"; null for anything else. */
+export function vacancyResolutionLabel(
+  t: (key: string) => string,
+  resolution: string | null | undefined,
+): string | null {
+  const key = VACANCY_RESOLUTION_KEYS[resolution as VacancyCloseResolution];
+  return key ? t(key) : null;
+}

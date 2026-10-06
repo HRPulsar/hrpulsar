@@ -59,7 +59,7 @@ EXTRA_VACANCIES: list[dict] = [
         "salary_min": 105000,
         "salary_max": 135000,
         "salary_currency": "EUR",
-        "status": "published",
+        "status": "open",
         "anchor_division_key": "eng-frontend",
         "library_competences": [
             {"competence_key": "c-react", "skill_level_key": "sl-l3"},
@@ -92,7 +92,7 @@ EXTRA_VACANCIES: list[dict] = [
         "salary_min": 40000,
         "salary_max": 55000,
         "salary_currency": "EUR",
-        "status": "published",
+        "status": "open",
         "anchor_division_key": "eng-backend",
         "library_competences": [
             {"competence_key": "c-python", "skill_level_key": "sl-l1"},
@@ -120,7 +120,7 @@ EXTRA_VACANCIES: list[dict] = [
         "salary_min": 80000,
         "salary_max": 110000,
         "salary_currency": "EUR",
-        "status": "published",
+        "status": "open",
         "anchor_division_key": "design",
         "library_competences": [
             {"competence_key": "c-design-systems", "skill_level_key": "sl-l3"},
@@ -155,7 +155,7 @@ EXTRA_VACANCIES: list[dict] = [
         # accepts published / closed) — it would render as a paradoxical
         # stuck row in the demo. Publish it instead so the lifecycle is
         # reachable.
-        "status": "published",
+        "status": "open",
         "anchor_division_key": "people",
         "library_competences": [
             {"competence_key": "c-hiring", "skill_level_key": "sl-l3"},
@@ -484,24 +484,36 @@ EXTRA_CANDIDATES: list[dict] = [
                 "competence_id": "design-systems",
                 "score": 0.9,
                 "status": "assessed",
+                "quotes": [
+                    "She has done the last four migrations",
+                ],
                 "reasoning": "Owns the design system today and has already handed the last four migrations to someone else.",
             },
             {
                 "competence_id": "react",
                 "score": 0.85,
                 "status": "assessed",
+                "quotes": [
+                    "The on-call rotation, because I am in it.",
+                ],
                 "reasoning": "Six years on the frontend of this product; still in the on-call rotation.",
             },
             {
                 "competence_id": "mentoring",
                 "score": 0.8,
                 "status": "assessed",
+                "quotes": [
+                    "I have been reviewing less each time on purpose.",
+                ],
                 "reasoning": "Named a successor and described reducing his own review load on purpose.",
             },
             {
                 "competence_id": "hiring",
                 "score": 0.45,
                 "status": "insufficient",
+                "quotes": [
+                    "With the People Partner in the room for the first two quarters.",
+                ],
                 "reasoning": "Has interviewed, but never owned headcount or a performance cycle.",
             },
         ],
@@ -694,18 +706,28 @@ EXTRA_CANDIDATES: list[dict] = [
                 "competence_id": "ux-mobile",
                 "score": 0.9,
                 "status": "assessed",
+                "quotes": [
+                    "Cutting the fare comparison table on mobile.",
+                    "Completion rate on small screens went up eleven percent",
+                ],
                 "reasoning": "Cut the fare table on small screens and defended the call with a completion-rate number.",
             },
             {
                 "competence_id": "user-research",
                 "score": 0.8,
                 "status": "assessed",
+                "quotes": [
+                    "watch five of them do the job on their own phone before I open Figma.",
+                ],
                 "reasoning": "Would watch five hiring managers work on their own phone before opening Figma.",
             },
             {
                 "competence_id": "design-systems",
                 "score": 0.7,
                 "status": "assessed",
+                "quotes": [
+                    "A component library that is real, not a Figma file.",
+                ],
                 "reasoning": "Asks for a real component library rather than a Figma file, but has not built one.",
             },
         ],
@@ -856,12 +878,20 @@ EXTRA_CANDIDATES: list[dict] = [
                 "competence_id": "hiring",
                 "score": 0.85,
                 "status": "assessed",
+                "quotes": [
+                    "Scorecards per role, written before the first screen",
+                    "Rejections are where the bar actually lives.",
+                ],
                 "reasoning": "Reviews rejections rather than offers, because that is where the bar actually lives.",
             },
             {
                 "competence_id": "people-ops",
                 "score": 0.7,
                 "status": "assessed",
+                "quotes": [
+                    "Honestly, the coaching - and that is the failure mode I would want you to watch me for.",
+                    "I would put a standing hour per recruiter in the calendar and treat it as unmovable.",
+                ],
                 "reasoning": "Named his own failure mode and proposed the calendar fix for it unprompted.",
             },
         ],

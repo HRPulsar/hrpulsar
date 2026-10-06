@@ -19,6 +19,7 @@ import {
   gradeTitleLabel,
   skillLevelLabel,
   skillLevelTitleLabel,
+  specializationLabel,
   type ReferenceTranslator,
 } from "@/lib/reference-labels";
 
@@ -366,5 +367,32 @@ describe("skillLevelTitleLabel / gradeTitleLabel", () => {
     const empty = makeT({});
     expect(skillLevelTitleLabel(empty, "Basic")).toBe("Basic");
     expect(gradeTitleLabel(empty, "Middle")).toBe("Middle");
+  });
+});
+
+// HRP-912: the Specializations section and the position form's picker name a
+// specialization through one catalog entry.
+describe("specializationLabel", () => {
+  const local = makeT({
+    dictionary: { specialization: { qa_engineer: { label: "QA-Ingenieur (lokal)" } } },
+  });
+
+  it("matches the dictionary picker label for an origin row", () => {
+    const row = { title: "QA Engineer", i18n_key: "qa_engineer" };
+    expect(specializationLabel(local, row)).toBe("QA-Ingenieur (lokal)");
+    expect(specializationLabel(local, row)).toBe(
+      dictionaryItemLabel(local, { type: "specialization", ...row }),
+    );
+    expect(specializationLabel(t, row)).toBe("QA Engineer");
+    expect(specializationLabel(tDe, row)).toBe(
+      (de.reference as { dictionary: { specialization: { qa_engineer: { label: string } } } })
+        .dictionary.specialization.qa_engineer.label,
+    );
+  });
+
+  it("keeps a tenant's own title, with or without an unknown key", () => {
+    expect(specializationLabel(local, { title: "Own Spec" })).toBe("Own Spec");
+    expect(specializationLabel(local, { title: "Own Spec", i18n_key: null })).toBe("Own Spec");
+    expect(specializationLabel(local, { title: "Own Spec", i18n_key: "nope" })).toBe("Own Spec");
   });
 });

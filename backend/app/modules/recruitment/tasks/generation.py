@@ -56,6 +56,21 @@ def generate_questions_task(
                 logger.error("Candidate %s not found", candidate_id)
                 return {"status": "error", "error": "Candidate not found"}
 
+            # HRP-979: no consent in force, no resume to the AI provider —
+            # checked again before the result is written.
+            from app.modules.recruitment.consent_service import (
+                has_active_consent_sync,
+            )
+
+            def consent_refused() -> dict | None:
+                if has_active_consent_sync(db, uuid.UUID(tenant_id), candidate.id):
+                    return None
+                logger.info("No consent in force for candidate %s", candidate_id)
+                return {"status": "failed", "error": "consent_required"}
+
+            if (refused := consent_refused()) is not None:
+                return refused
+
             ai_usage_hooks.bind(
                 tenant_id=uuid.UUID(tenant_id),
                 action="recruitment.generate_candidate_questions",
@@ -105,6 +120,9 @@ def generate_questions_task(
                     credentials=creds,
                 )
             )
+
+            if (refused := consent_refused()) is not None:
+                return refused
 
             # Delete existing AI-generated questions for this candidate+vacancy
             db.execute(

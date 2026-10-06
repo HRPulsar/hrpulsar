@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useFormatter, useTranslations } from "next-intl";
 import {
@@ -20,7 +20,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { dictionaryItemLabel } from "@/lib/reference-labels";
-import type { AssessmentList, Tenant } from "@/lib/types";
+import type { GroupedAssessmentList, Tenant } from "@/lib/types";
 
 interface OnboardingStatus {
   needs_onboarding: boolean;
@@ -62,6 +62,8 @@ interface DevLoopFinding {
   code: string;
   severity: "alert" | "warn" | "info";
   count: number;
+  /** HRP-941: set when ``count`` counts something other than people (plans). */
+  employee_count?: number;
   employees: DevLoopFindingEmployee[];
   href: string;
 }
@@ -213,6 +215,31 @@ interface LoopStageSpec {
   testid?: string;
 }
 
+// HRP-844: the open statuses — everything but Done and Cancelled, the set the
+// backend counts as `open_pdps` — preset on the list the In development tile
+// opens, so the list holds exactly the plans the tile counted.
+const OPEN_PDP_STATUSES = ["draft", "sent", "in_progress", "review", "returned"];
+
+export const DEVELOPING_HREF = `/development?${OPEN_PDP_STATUSES.map(
+  (s) => `status=${s}`,
+).join("&")}`;
+
+// HRP-907: the assessments the Active assessments block counts — everything
+// not Done or Cancelled that a workflow can actually reach — and the filter
+// its button opens the list with.
+export const ACTIVE_ASSESSMENT_STATUSES = [
+  "draft",
+  "sent",
+  "in_progress",
+  "on_review",
+] as const;
+
+type ActiveAssessmentStatus = (typeof ACTIVE_ASSESSMENT_STATUSES)[number];
+
+export const ACTIVE_ASSESSMENTS_HREF = `/assessments?${ACTIVE_ASSESSMENT_STATUSES.map(
+  (s) => `status=${s}`,
+).join("&")}`;
+
 // HRP-638: every tile links to the list filtered down to the people it
 // counted. A tile that opens the unfiltered roster makes the reader hunt
 // for the ones the number was about.
@@ -269,7 +296,7 @@ export function buildStages(
     },
     {
       key: "developing",
-      href: "/development",
+      href: DEVELOPING_HREF,
       value: String(stages.developing.open_pdps),
       sub: t("stageDevelopingSub", {
         count: stages.developing.gap_employees_with_plan,
@@ -516,7 +543,7 @@ function FindingSubline({
   t: Translate;
 }) {
   if (finding.employees.length === 0) return null;
-  const rest = finding.count - finding.employees.length;
+  const rest = (finding.employee_count ?? finding.count) - finding.employees.length;
   return (
     <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
       {finding.employees.map((employee, index) => (
@@ -1031,38 +1058,65 @@ function MyDashboard({
   );
 }
 
-// --- Active cycle ---
+// --- Active assessments (HRP-907) ---
 
-interface CycleStats {
-  done: number;
-  inProgress: number;
-  notStarted: number;
-  total: number;
+type CycleCounts = Record<ActiveAssessmentStatus, number>;
+
+/** The grouped-list query for the active statuses from stage ``i`` on. */
+export function stageSuffixQuery(i: number): string {
+  const params = new URLSearchParams({ limit: "1" });
+  for (const s of ACTIVE_ASSESSMENT_STATUSES.slice(i)) params.append("status", s);
+  return params.toString();
 }
 
-function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }) {
+/**
+ * Rows of the grouped list (a mass assessment is one row) per stage. A
+ * status filter matches a mass assessment when any of its assessments is
+ * in that status, so per-status totals would count it more than once;
+ * instead each row sits under its furthest stage: ``totals[i]`` counts the
+ * rows matching stage ``i`` or later, and a stage's own count is the
+ * difference to the next one. They add up to the list the button opens.
+ */
+export function cycleCountsFromSuffixTotals(totals: number[]): CycleCounts {
+  return Object.fromEntries(
+    ACTIVE_ASSESSMENT_STATUSES.map((s, i) => [s, totals[i] - (totals[i + 1] ?? 0)]),
+  ) as CycleCounts;
+}
+
+/** Launched = out of preparation: sent, being taken or on review. */
+export function cycleStats(counts: CycleCounts) {
+  const launched = counts.sent + counts.in_progress + counts.on_review;
+  const total = launched + counts.draft;
+  return {
+    launched,
+    total,
+    percent: total > 0 ? Math.round((launched / total) * 100) : 0,
+  };
+}
+
+function CycleCard({ counts }: { counts: CycleCounts }) {
   const router = useRouter();
   const t = useTranslations("dashboard");
-  const completed = stats.done;
-  const pct = stats.total > 0 ? Math.round((completed / stats.total) * 100) : 0;
+  const { launched, total, percent } = cycleStats(counts);
 
   const segments = [
+    { key: "sent", label: t("segmentSent"), count: counts.sent, className: "bg-accent" },
     {
-      key: "submitted",
-      label: t("segmentSubmitted"),
-      count: stats.done,
-      className: "bg-accent",
+      key: "inProgress",
+      label: t("segmentInProgress"),
+      count: counts.in_progress,
+      className: "bg-accent/75",
     },
     {
       key: "inReview",
       label: t("segmentInReview"),
-      count: stats.inProgress,
-      className: "bg-accent/60",
+      count: counts.on_review,
+      className: "bg-accent/50",
     },
     {
-      key: "notStarted",
-      label: t("segmentNotStarted"),
-      count: stats.notStarted,
+      key: "preparing",
+      label: t("segmentPreparing"),
+      count: counts.draft,
       className: "bg-accent/20",
     },
   ];
@@ -1073,7 +1127,7 @@ function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }
     <Button
       size="sm"
       className="bg-accent text-accent-foreground hover:bg-accent/90"
-      onClick={() => router.push("/assessments")}
+      onClick={() => router.push(ACTIVE_ASSESSMENTS_HREF)}
       data-testid="dashboard-cycle-cta"
     >
       {t("openAssessments")}
@@ -1088,19 +1142,19 @@ function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }
           <Hint text={t("hintCycle")} data-testid="dashboard-hint-cycle" />
         </div>
         <span className="font-mono text-[11px] text-muted-foreground">
-          {hasCycle
-            ? t("cycleAssessmentsCount", { count: stats.total })
+          {total > 0
+            ? t("cycleAssessmentsCount", { count: total })
             : t("noActiveCycle")}
         </span>
       </div>
-      {hasCycle ? (
+      {total > 0 ? (
         <div className="flex flex-wrap items-center gap-x-8 gap-y-4 px-4 py-4">
           <div>
             <div className="text-[30px] font-bold leading-none tracking-[-0.03em]">
-              {pct}%
+              {percent}%
             </div>
             <div className="mt-1.5 text-xs text-muted-foreground">
-              {t("cycleSubmittedOf", { completed, total: stats.total })}
+              {t("cycleLaunchedOf", { launched, total })}
             </div>
           </div>
           <div className="min-w-[16rem] flex-1">
@@ -1110,7 +1164,7 @@ function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }
                   <div
                     key={s.key}
                     className={s.className}
-                    style={{ width: `${(s.count / stats.total) * 100}%` }}
+                    style={{ width: `${(s.count / total) * 100}%` }}
                     title={`${s.label}: ${s.count}`}
                   />
                 ) : null,
@@ -1126,14 +1180,7 @@ function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground">
-              {stats.inProgress > 0
-                ? t("cycleInReviewCount", { count: stats.inProgress })
-                : t("manageCycles")}
-            </span>
-            {cta}
-          </div>
+          {cta}
         </div>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-4">
@@ -1149,7 +1196,8 @@ function CycleCard({ stats, hasCycle }: { stats: CycleStats; hasCycle: boolean }
 
 interface DashboardData {
   tenant: Tenant | null;
-  assessments: AssessmentList | null;
+  /** HRP-907: active assessments per status, each the list's own `total`. */
+  cycleCounts: CycleCounts | null;
   /** null → endpoint unavailable for this role, hide the loop surfaces. */
   loop: DevLoop | null;
   /** Personal loop — loaded when the company loop is unavailable. */
@@ -1158,7 +1206,7 @@ interface DashboardData {
 
 const EMPTY_DATA: DashboardData = {
   tenant: null,
-  assessments: null,
+  cycleCounts: null,
   loop: null,
   myLoop: null,
 };
@@ -1217,9 +1265,20 @@ export default function DashboardPage() {
         // already said so, and a 403 toast is not how a closed tile looks.
         const [t, asmts, loop] = await Promise.allSettled([
           api.get<Tenant>("/company"),
+          // HRP-907: `total`s instead of counting a 100-row page, which
+          // capped every number at 100 - read from the grouped list the
+          // button opens, so the number is that list's row count.
           opensAssessments
-            ? api.get<AssessmentList>("/assessments?limit=100")
-            : Promise.resolve<AssessmentList | null>(null),
+            ? Promise.all(
+                ACTIVE_ASSESSMENT_STATUSES.map((_, i) =>
+                  api
+                    .get<GroupedAssessmentList>(
+                      `/assessments-grouped?${stageSuffixQuery(i)}`,
+                    )
+                    .then((r) => r.total),
+                ),
+              ).then(cycleCountsFromSuffixTotals)
+            : Promise.resolve<CycleCounts | null>(null),
           opensAnalytics
             ? api.get<DevLoop>("/analytics/dev-loop")
             : Promise.reject(new ApiError(403, "section closed")),
@@ -1241,7 +1300,7 @@ export default function DashboardPage() {
         }
         setData({
           tenant: t.status === "fulfilled" ? t.value : null,
-          assessments: asmts.status === "fulfilled" ? asmts.value : null,
+          cycleCounts: asmts.status === "fulfilled" ? asmts.value : null,
           loop: loop.status === "fulfilled" ? loop.value : null,
           myLoop,
         });
@@ -1266,21 +1325,6 @@ export default function DashboardPage() {
     load();
   }, [router, user?.is_platform_admin, opensAssessments, opensAnalytics, attempt]);
 
-  const cycleStats = useMemo<CycleStats>(() => {
-    const items = data.assessments?.items ?? [];
-    if (items.length === 0) {
-      return { done: 0, inProgress: 0, notStarted: 0, total: 0 };
-    }
-    let done = 0;
-    let inProgress = 0;
-    let notStarted = 0;
-    for (const a of items) {
-      if (a.status_code === "done") done++;
-      else if (a.status_code === "in_progress") inProgress++;
-      else notStarted++;
-    }
-    return { done, inProgress, notStarted, total: items.length };
-  }, [data.assessments]);
 
   if (loading) {
     return (
@@ -1334,9 +1378,7 @@ export default function DashboardPage() {
         />
       )}
 
-      {!data.myLoop && (
-        <CycleCard stats={cycleStats} hasCycle={cycleStats.total > 0} />
-      )}
+      {!data.myLoop && data.cycleCounts && <CycleCard counts={data.cycleCounts} />}
     </div>
   );
 }

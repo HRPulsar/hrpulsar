@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, KeyRound, Plus, Save, Trash2 } from "lucide-react";
+import { Loader2, KeyRound, PlugZap, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
 import { RequireRole } from "@/components/require-role";
@@ -59,6 +59,19 @@ function modelOwner(model: string): string | null {
   return null;
 }
 
+// Providers that speak the OpenAI API: a base_url points them at a
+// self-hosted server (Ollama, vLLM). It lives in the row's `settings`, and a
+// key is optional there (HRP-986).
+const BASE_URL_PROVIDERS = new Set(["openai", "azure", "gigachat"]);
+// Azure and GigaChat are reached only through their own endpoint: without
+// an address the row is never used, and the API refuses it.
+const BASE_URL_REQUIRED = new Set(["azure", "gigachat"]);
+
+function rowBaseUrl(p: Provider): string | null {
+  const raw = p.settings?.base_url;
+  return typeof raw === "string" && raw ? raw : null;
+}
+
 function canonicalProvider(provider: string): string {
   if (provider === "azure" || provider === "gigachat")
     return "openai_compatible";
@@ -72,10 +85,12 @@ export default function LLMProvidersPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({
     provider: "anthropic",
     model: "claude-sonnet-5",
     api_key: "",
+    base_url: "",
   });
 
   const load = useCallback(async () => {
@@ -101,6 +116,13 @@ export default function LLMProvidersPage() {
       toast.error(t("llmModelRequired"));
       return;
     }
+    const baseUrl = BASE_URL_PROVIDERS.has(draft.provider)
+      ? draft.base_url.trim()
+      : "";
+    if (BASE_URL_REQUIRED.has(draft.provider) && !baseUrl) {
+      toast.error(t("llmBaseUrlRequired"));
+      return;
+    }
     setCreating(true);
     try {
       await api.post("/recruitment/settings/llm-providers", {
@@ -108,12 +130,14 @@ export default function LLMProvidersPage() {
         model: draft.model,
         api_key: draft.api_key || null,
         is_active: true,
+        settings: baseUrl ? { base_url: baseUrl } : null,
       });
       toast.success(t("llmToastAdded"));
       setDraft({
         provider: "anthropic",
         model: "claude-sonnet-5",
         api_key: "",
+        base_url: "",
       });
       void load();
     } catch (err) {
@@ -134,6 +158,20 @@ export default function LLMProvidersPage() {
       toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setSavingId(null);
+    }
+  }
+
+  // One tiny call through this row's own key/server/model (HRP-986); the
+  // backend answers ok or a localized reason.
+  async function handleTest(p: Provider) {
+    setTestingId(p.id);
+    try {
+      await api.post(`/recruitment/settings/llm-providers/${p.id}/test`);
+      toast.success(t("llmTestOk"));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
+    } finally {
+      setTestingId(null);
     }
   }
 
@@ -235,6 +273,26 @@ export default function LLMProvidersPage() {
               />
             </div>
           </div>
+          {BASE_URL_PROVIDERS.has(draft.provider) && (
+            <div className="space-y-1">
+              <Label htmlFor="llm-base-url">{t("llmBaseUrlLabel")}</Label>
+              <Input
+                id="llm-base-url"
+                type="url"
+                value={draft.base_url}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, base_url: e.target.value }))
+                }
+                placeholder="http://localhost:11434/v1"
+                required={BASE_URL_REQUIRED.has(draft.provider)}
+                data-testid="llm-input-base-url"
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("llmBaseUrlHint")}
+                {draft.provider === "openai" && ` ${t("llmBaseUrlHintOpenai")}`}
+              </p>
+            </div>
+          )}
           <div className="flex justify-end">
             <Button
               onClick={handleCreate}
@@ -291,8 +349,30 @@ export default function LLMProvidersPage() {
                     <KeyRound className="size-3" />
                     {p.api_key_masked || t("providerKeyNotSet")}
                   </span>
+                  {rowBaseUrl(p) && (
+                    <span
+                      className="break-all text-xs text-muted-foreground"
+                      data-testid={`llm-row-base-url-${p.id}`}
+                    >
+                      {rowBaseUrl(p)}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleTest(p)}
+                    disabled={testingId === p.id}
+                    data-testid={`llm-btn-test-${p.id}`}
+                  >
+                    {testingId === p.id ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <PlugZap className="size-3.5" />
+                    )}
+                    {t("llmTestButton")}
+                  </Button>
                   <Button
                     size="sm"
                     variant="ghost"

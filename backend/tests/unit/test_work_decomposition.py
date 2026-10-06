@@ -447,8 +447,12 @@ class TestWorker:
         assert result["status"] == "cancelled"
         assert remembered == []
 
+    # HRP-987: a model gone with no replacement is the same kind of refusal.
+    @pytest.mark.parametrize(
+        "code", ["ai_no_allowed_processor", "ai_model_unavailable"]
+    )
     async def test_a_processor_refusal_keeps_its_own_code(
-        self, db, tenant, user, primitives, session_factory, monkeypatch
+        self, db, tenant, user, primitives, session_factory, monkeypatch, code
     ):
         # Review 01.10 (HRP-1005): a workspace whose processor list allows
         # no provider ended as service_error - "try later" - which no retry
@@ -457,7 +461,7 @@ class TestWorker:
         from app.modules.ai import providers as ai_providers
 
         async def refuse(*_a, **_k):
-            raise AppError("ai_no_allowed_processor", 409)
+            raise AppError(code, 409, model="m")
 
         monkeypatch.setattr(ai_providers, "resolve_generation_target", refuse)
         c = await _container(db, tenant, user)

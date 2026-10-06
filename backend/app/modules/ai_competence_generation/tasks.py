@@ -1377,14 +1377,24 @@ async def _build_prompt_competence_indicators(
 
     # HRP-541: the competence's real type, not a hardcoded "hard_skill" —
     # soft-skill competences were described to the model as hard skills.
+    # HRP-583: (a) only a competence type the tenant sees; (b) a platform
+    # type goes by its code - hard_skill / soft_skill / unique_skill, the
+    # prompt's own words - not by the title the interface translates. The
+    # tenant's own type has no code and goes as the company named it.
     competence_type = "hard_skill"
     if comp.competence_type_id is not None:
-        type_q = await db.execute(
-            select(DictionaryItem.title).where(
-                DictionaryItem.id == comp.competence_type_id
+        type_row = (
+            await db.execute(
+                select(DictionaryItem.i18n_key, DictionaryItem.title).where(
+                    DictionaryItem.id == comp.competence_type_id,
+                    DictionaryItem.type == "competence_type",
+                    (DictionaryItem.tenant_id == tenant_id)
+                    | DictionaryItem.tenant_id.is_(None),
+                )
             )
-        )
-        competence_type = type_q.scalar_one_or_none() or "hard_skill"
+        ).one_or_none()
+        if type_row is not None:
+            competence_type = type_row.i18n_key or type_row.title
 
     system, user_prompt = prompts.build_indicators_prompt(
         competence_title=comp.title,
@@ -1931,9 +1941,13 @@ async def _force_terminate_running(
         from app.core.errors import AppError
 
         sess.status = "error"
-        if isinstance(exc, AppError) and exc.code == "ai_no_allowed_processor":
-            # A refusal with a reason (HRP-1005): "crashed" would send the
-            # reader to try again, which changes nothing.
+        if isinstance(exc, AppError) and exc.code in (
+            "ai_no_allowed_processor",
+            "ai_model_unavailable",
+        ):
+            # A refusal with a reason (HRP-1005; HRP-987 - the model is gone
+            # with no replacement): "crashed" would send the reader to try
+            # again, which changes nothing. One code covers both refusals.
             sess.error_code = "no_allowed_processor"
             sess.error_message = str(exc.detail)
         else:

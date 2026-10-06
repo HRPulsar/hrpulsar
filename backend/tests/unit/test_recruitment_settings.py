@@ -493,6 +493,79 @@ class TestTranscriptionProviders:
         remaining = await settings_service.list_transcription_providers(db, tenant.id)
         assert all(r.id != cfg.id for r in remaining)
 
+    async def test_an_unimplemented_provider_is_refused_on_save(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        """HRP-985: the stub used to be saved and then failed every interview
+        in the worker; now the save itself says so."""
+        with pytest.raises(HTTPException) as exc:
+            await settings_service.create_transcription_provider(
+                db, tenant.id, TranscriptionProviderCreate(provider="faster_whisper")
+            )
+        assert exc.value.status_code == 422
+        assert exc.value.code == "transcription_provider_not_supported"
+
+    async def test_a_legacy_unimplemented_row_can_only_be_deleted(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        from app.modules.recruitment.models import TranscriptionProviderConfig
+
+        row = TranscriptionProviderConfig(
+            tenant_id=tenant.id, provider="faster_whisper", is_active=True
+        )
+        db.add(row)
+        await db.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            await settings_service.update_transcription_provider(
+                db, tenant.id, row.id, TranscriptionProviderUpdate(is_active=False)
+            )
+        assert exc.value.status_code == 422
+
+        await settings_service.delete_transcription_provider(db, tenant.id, row.id)
+        remaining = await settings_service.list_transcription_providers(db, tenant.id)
+        assert all(r.id != row.id for r in remaining)
+
+    async def test_whisper_keeps_its_own_server_address(
+        self, db: AsyncSession, tenant, monkeypatch
+    ) -> None:
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "deployment_mode", "onprem")
+        cfg = await settings_service.create_transcription_provider(
+            db,
+            tenant.id,
+            TranscriptionProviderCreate(
+                provider="whisper", settings={"base_url": "http://whisper.lan/v1"}
+            ),
+        )
+        assert cfg.settings == {"base_url": "http://whisper.lan/v1"}
+
+    async def test_a_private_whisper_address_is_refused_on_saas(
+        self, db: AsyncSession, tenant, monkeypatch
+    ) -> None:
+        """The same save-time SSRF guard as an LLM base_url (HRP-505)."""
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "deployment_mode", "saas")
+        private = {"base_url": "https://10.0.0.5/v1"}
+        with pytest.raises(HTTPException) as exc:
+            await settings_service.create_transcription_provider(
+                db,
+                tenant.id,
+                TranscriptionProviderCreate(provider="whisper", settings=private),
+            )
+        assert exc.value.code == "llm_base_url_not_public"
+
+        cfg = await settings_service.create_transcription_provider(
+            db, tenant.id, TranscriptionProviderCreate(provider="whisper")
+        )
+        with pytest.raises(HTTPException) as exc:
+            await settings_service.update_transcription_provider(
+                db, tenant.id, cfg.id, TranscriptionProviderUpdate(settings=private)
+            )
+        assert exc.value.code == "llm_base_url_not_public"
+
 
 # ─── Branding ───────────────────────────────────────────────────────
 

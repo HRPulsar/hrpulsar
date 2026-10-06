@@ -1,0 +1,8051 @@
+[
+ {
+  "slug": "contract-review",
+  "title": "Contract review",
+  "domain": "legal",
+  "industry": "cross",
+  "pcf_ref": "12.4.9",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 1,
+      "title": "Intake of the request through a structured form",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P1"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Check against the playbook, flag the non-standard clauses",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Triage and reviewer assignment by risk",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Draft the redlines",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Register the contract with its metadata",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 4,
+      "title": "Assess whether the deviations are acceptable for the deal",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Collect opinions from security, finance and procurement",
+      "description": null,
+      "codes": [
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Negotiate with the counterparty",
+      "description": null,
+      "codes": [
+       "P6",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P7"
+       ],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Formal approval with a rationale",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 9,
+     "title": "Signature by the authorised signatory",
+     "description": null,
+     "codes": [],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": null,
+      "codes": [],
+      "responsibility": "regulatory",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "month-end-close",
+  "title": "Month-end close",
+  "domain": "finance",
+  "industry": "cross",
+  "pcf_ref": "9.3.2",
+  "sources": [
+   {
+    "url": "https://www.financealliance.io/month-end-close-checklist/",
+    "kind": "association"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 1,
+      "title": "Check data readiness against the checklist",
+      "description": null,
+      "codes": [
+       "P2",
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2",
+        "P11"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Reconcile the subledgers and the bank",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Post the transactions (bank, AR, AP, cards)",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Journal entries: accruals, payroll, depreciation",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Investigate the discrepancies",
+      "description": null,
+      "codes": [
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Flux analysis of the variances",
+      "description": null,
+      "codes": [
+       "P2",
+       "P4",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4",
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Reviewer check",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Finalise and distribute the reports",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 8,
+      "title": "Controller sign-off",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "discovery-followup",
+  "title": "Follow-up after a discovery call",
+  "domain": "sales",
+  "industry": "cross",
+  "pcf_ref": "3.5.1",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 7
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 1,
+      "title": "Call transcript, notes",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P1"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Collect the promised materials",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Fill in the MEDDIC fields in the CRM",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Summary email with what was agreed",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Set the next step",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Circulate the insights to internal stakeholders",
+      "description": null,
+      "codes": [
+       "P5",
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 3,
+      "title": "Decide whether the deal is qualified",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 5,
+     "title": "Send it under one's own name",
+     "description": null,
+     "codes": [],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": null,
+      "codes": [],
+      "responsibility": "reputational",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "incident-response",
+  "title": "Incident response",
+  "domain": "ops",
+  "industry": "cross",
+  "pcf_ref": "8.7.6",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 1,
+      "title": "Detect the deviation",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 4,
+      "title": "Diagnose the cause",
+      "description": null,
+      "codes": [
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Status updates to customers and internally",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Post-mortem",
+      "description": null,
+      "codes": [
+       "P1",
+       "P4",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4",
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Create the follow-up tasks",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 2,
+      "title": "Declare the incident and its severity",
+      "description": null,
+      "codes": [
+       "P3",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Mobilise: IC, comms, SME",
+      "description": null,
+      "codes": [
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Mitigate: rollback, feature flag, restart",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Declare the resolution",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "hiring",
+  "title": "Hiring for an open position",
+  "domain": "hr",
+  "industry": "cross",
+  "pcf_ref": "7.2.2",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 8
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 4,
+      "title": "Sourcing",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "References and background checks",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 5,
+      "title": "Application screening and phone screen",
+      "description": null,
+      "codes": [
+       "P2",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Justify the need, open the requisition",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 2,
+      "title": "Intake meeting with the hiring manager",
+      "description": null,
+      "codes": [
+       "P1",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Job description and scorecard",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Interview loop",
+      "description": null,
+      "codes": [
+       "P6",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P7"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Scorecard debrief",
+      "description": null,
+      "codes": [
+       "P2",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 9,
+     "title": "Offer and approval",
+     "description": null,
+     "codes": [],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": null,
+      "codes": [],
+      "responsibility": "formal",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "goods-receipt",
+  "title": "Goods receipt at the warehouse",
+  "domain": "warehouse",
+  "industry": "manufacturing",
+  "pcf_ref": "4.4.2",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 5
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 1,
+      "title": "Confirm the receiving window and documents (PO, ASN, dock slot)",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 6,
+      "title": "Register the receipt in the system (batches, expiry dates, serial numbers)",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Label the goods and create the put-away task",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 3,
+      "title": "Count and scan the items against the PO",
+      "description": null,
+      "codes": [
+       "P2",
+       "B1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_physical",
+       "codes": [
+        "B1"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Resolve the discrepancy: accept partially, reject, or raise an exception",
+      "description": null,
+      "codes": [
+       "P3",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 2,
+     "title": "Unload into the receiving area, check the seal and the trailer",
+     "description": null,
+     "codes": [
+      "B2",
+      "B3"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B2",
+       "B3"
+      ],
+      "responsibility": "none",
+      "output_type": "external_change"
+     }
+    },
+    {
+     "position": 4,
+     "title": "Inspect the goods, record damage, isolate to the hold area",
+     "description": null,
+     "codes": [
+      "B3"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B3"
+      ],
+      "responsibility": "none",
+      "output_type": "external_change"
+     }
+    },
+    {
+     "position": 8,
+     "title": "Put away to the storage location and confirm the location",
+     "description": null,
+     "codes": [
+      "B2"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B2"
+      ],
+      "responsibility": "none",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "haccp-ccp-monitoring",
+  "title": "Critical control point monitoring (HACCP)",
+  "domain": "quality",
+  "industry": "food_manufacturing",
+  "pcf_ref": "4.3.3",
+  "sources": [
+   {
+    "url": "https://www.fda.gov/food/hazard-analysis-critical-control-point-haccp/haccp-principles-application-guidelines",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.fao.org/4/y1390e/y1390e09.htm",
+    "kind": "standard"
+   },
+   {
+    "url": "https://www.fsis.usda.gov/sites/default/files/media_file/2021-02/16_IM_HACCP_Principles.pdf",
+    "kind": "regulator"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 7
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Record the result in the CCP log",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Check against the critical limit, establish the deviation",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Establish the cause of the deviation",
+      "description": null,
+      "codes": [
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Document the corrective action",
+      "description": null,
+      "codes": [
+       "P1",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Keep the records and revise the HACCP plan when deviations recur",
+      "description": null,
+      "codes": [
+       "P2",
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 6,
+      "title": "Decide the fate of the affected product",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Verification: instrument calibration and record review",
+      "description": null,
+      "codes": [
+       "P2",
+       "B1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_physical",
+       "codes": [
+        "B1"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 1,
+     "title": "Measure or observe at the CCP at the set frequency",
+     "description": null,
+     "codes": [
+      "B1"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B1"
+      ],
+      "responsibility": "regulatory",
+      "output_type": "draft"
+     }
+    },
+    {
+     "position": 4,
+     "title": "Stop the process and isolate the affected product",
+     "description": null,
+     "codes": [
+      "B2"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B2"
+      ],
+      "responsibility": "regulatory",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "outbound-shipment-exception",
+  "title": "Outbound shipment and in-transit exception handling",
+  "domain": "logistics",
+  "industry": "cross",
+  "pcf_ref": "4.4.4",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 2,
+      "title": "Plan the load and the route",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P3"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "In-transit monitoring: milestones, ETA, temperature regime",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Release the order and consolidate it into a shipping unit",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Prepare the documents (BOL, packing list, ASN, export papers)",
+      "description": null,
+      "codes": [
+       "P1",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Hand over to the carrier and set the status in the TMS",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Communicate the exception to the customer and the carrier",
+      "description": null,
+      "codes": [
+       "P5",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Receive the POD, close the shipment, freight audit and claim",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 3,
+      "title": "Select the carrier and book by rate, transit time and reliability",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Exception handling: delay, damage, misroute, customs hold",
+      "description": null,
+      "codes": [
+       "P4",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 5,
+     "title": "Load, count the pieces, seal",
+     "description": null,
+     "codes": [
+      "B1",
+      "B2"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B1",
+       "B2"
+      ],
+      "responsibility": "none",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "preventive-maintenance-work-order",
+  "title": "Scheduled preventive maintenance by work order",
+  "domain": "maintenance",
+  "industry": "manufacturing",
+  "pcf_ref": "10.3.3",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 7
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "PM trigger fires (calendar, run hours, condition) and the work order is created",
+      "description": null,
+      "codes": [
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 2,
+      "title": "Plan the scope: job plan, spare parts, tools, permits",
+      "description": null,
+      "codes": [
+       "P1",
+       "P2",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Record the facts: hours, parts, failure codes, findings",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Analyse the failure history and revise the maintenance intervals",
+      "description": null,
+      "codes": [
+       "P2",
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 3,
+      "title": "Prioritise and schedule around the production window",
+      "description": null,
+      "codes": [
+       "P3",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Assign the technician and issue the work order",
+      "description": null,
+      "codes": [
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Supervisor check and work order close-out",
+      "description": null,
+      "codes": [
+       "P2",
+       "B3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_physical",
+       "codes": [
+        "B3"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 5,
+     "title": "Prepare safety on site: LOTO, permit to work",
+     "description": null,
+     "codes": [
+      "B2"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B2"
+      ],
+      "responsibility": "regulatory",
+      "output_type": "external_change"
+     }
+    },
+    {
+     "position": 6,
+     "title": "Perform the work on the equipment",
+     "description": null,
+     "codes": [
+      "B2",
+      "B3"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B2",
+       "B3"
+      ],
+      "responsibility": "formal",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "construction-inspection",
+  "title": "Construction site inspection",
+  "domain": "construction",
+  "industry": "construction",
+  "pcf_ref": "10.2.3",
+  "sources": [
+   {
+    "url": "https://www.phoenix.gov/pdd/inspections",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.nj.gov/dca/codes/offices/bhi_faq.shtml",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.dev-res.com/press-and-news/inspection-stages-in-the-construction-process",
+    "kind": "consulting"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 7
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Contractor requests the inspection at the stage before the structure is closed up",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 2,
+      "title": "Assign the inspector and the visit window",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Check the documents on site: permit, approved drawings, revisions",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Draw up and issue the correction notice",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 5,
+      "title": "Pass / fail decision with a list of deficiencies",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Re-inspect the corrected deficiencies",
+      "description": null,
+      "codes": [
+       "P2",
+       "B3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_physical",
+       "codes": [
+        "B3"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Final inspection and issue of the certificate of occupancy",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 4,
+     "title": "Inspect the completed work in place against the drawings and the codes",
+     "description": null,
+     "codes": [
+      "B3"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B3"
+      ],
+      "responsibility": "regulatory",
+      "output_type": "draft"
+     }
+    },
+    {
+     "position": 7,
+     "title": "Contractor fixes the deficiencies",
+     "description": null,
+     "codes": [
+      "B2"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B2"
+      ],
+      "responsibility": "formal",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "product-recall",
+  "title": "Initiating a product recall",
+  "domain": "quality",
+  "industry": "food_manufacturing",
+  "pcf_ref": "6.4.1",
+  "sources": [
+   {
+    "url": "https://www.fda.gov/media/123664/download",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.fda.gov/media/71814/download",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.fda.gov/medical-devices/postmarket-requirements-devices/recalls-corrections-and-removals-devices",
+    "kind": "regulator"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Qualify the signal (complaint, test result, audit finding)",
+      "description": null,
+      "codes": [
+       "P3",
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Trace the batches and the consignees through the distribution records",
+      "description": null,
+      "codes": [
+       "P1",
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Notify the regulator and the direct consignees with instructions",
+      "description": null,
+      "codes": [
+       "P5",
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Public warning, if the strategy requires it",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Effectiveness checks: poll the consignees and log the responses",
+      "description": null,
+      "codes": [
+       "P2",
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Status reports to the regulator on the progress of the recall",
+      "description": null,
+      "codes": [
+       "P1",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 12,
+      "title": "Request to terminate the recall",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 2,
+      "title": "Health hazard evaluation",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Recall strategy: depth, public warning, scope of the effectiveness checks",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 3,
+     "title": "Decision to initiate the recall by an authorised person",
+     "description": null,
+     "codes": [],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": null,
+      "codes": [],
+      "responsibility": "regulatory",
+      "output_type": "external_change"
+     }
+    },
+    {
+     "position": 4,
+     "title": "Stop shipments and sales of the affected batches",
+     "description": null,
+     "codes": [
+      "B2"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B2"
+      ],
+      "responsibility": "regulatory",
+      "output_type": "external_change"
+     }
+    },
+    {
+     "position": 11,
+     "title": "Return or destruction of the product with confirmation",
+     "description": null,
+     "codes": [
+      "B2"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B2"
+      ],
+      "responsibility": "regulatory",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "kyc-cdd-onboarding",
+  "title": "KYC/CDD at account opening",
+  "domain": "compliance",
+  "industry": "banking",
+  "pcf_ref": "11.2.2",
+  "sources": [
+   {
+    "url": "https://www.govinfo.gov/content/pkg/CFR-2019-title31-vol3/pdf/CFR-2019-title31-vol3-sec1010-230.pdf",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.fincen.gov/resources/statutes-and-regulations/cdd-final-rule",
+    "kind": "regulator"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Collect the customer's identification data (CIP: name, date of birth, address, TIN)",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 2,
+      "title": "Verify identity against documents and external databases",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "For a legal entity: obtain the beneficial ownership certification (25% share and control)",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Identify and verify the beneficial owners",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Screen against sanctions lists, PEP and adverse media",
+      "description": null,
+      "codes": [
+       "P2",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Ongoing monitoring of transactions and refresh of customer information",
+      "description": null,
+      "codes": [
+       "P2",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 6,
+      "title": "Build the customer risk profile (purpose and nature of the relationship)",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Decide: open the account, decline, or start enhanced due diligence",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Escalate suspicious activity and file the report with the regulator",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "emergency-triage",
+  "title": "Patient triage in the emergency department",
+  "domain": "clinical",
+  "industry": "healthcare",
+  "pcf_ref": "None",
+  "sources": [
+   {
+    "url": "https://sgnor.ch/fileadmin/user_upload/Dokumente/Downloads/Esi_Handbook.pdf",
+    "kind": "standard"
+   },
+   {
+    "url": "https://www.ahrq.gov/patient-safety/settings/emergency-dept/esi.html",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.ncbi.nlm.nih.gov/books/NBK557583/",
+    "kind": "research"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 8
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 4,
+      "title": "Brief focused history: medical history, medications, allergies",
+      "description": null,
+      "codes": [
+       "P1",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Assign the ESI level and document it",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Routing (bed, fast track, straight to resuscitation)",
+      "description": null,
+      "codes": [
+       "P3",
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 2,
+      "title": "Decision A: is an immediate life-saving intervention needed",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Decision B: a patient who cannot wait (high risk, confusion, severe pain)",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Decision C: predict the number of resources needed",
+      "description": null,
+      "codes": [
+       "P3",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Decision D: vitals in the danger zone — upgrade the level",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Reassess the waiting patients",
+      "description": null,
+      "codes": [
+       "P2",
+       "B3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_physical",
+       "codes": [
+        "B3"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 1,
+     "title": "Meet the patient, initial visual assessment and chief complaint",
+     "description": null,
+     "codes": [
+      "B3"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B3"
+      ],
+      "responsibility": "regulatory",
+      "output_type": "draft"
+     }
+    },
+    {
+     "position": 5,
+     "title": "Take the vital signs",
+     "description": null,
+     "codes": [
+      "B1"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B1"
+      ],
+      "responsibility": "regulatory",
+      "output_type": "draft"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "select-strategic-initiatives",
+  "title": "Selecting strategic initiatives for the portfolio",
+  "domain": "strategy",
+  "industry": "cross",
+  "pcf_ref": "1.3.3",
+  "sources": [
+   {
+    "url": "https://onstrategyhq.com/resources/strategic-planning-process-basics/",
+    "kind": "consulting"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 1,
+      "title": "Collect initiative proposals from the business units",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P1"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Refresh the picture: external environment, competitors, internal constraints",
+      "description": null,
+      "codes": [
+       "P1",
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Cascade the goals and communicate them inside the company",
+      "description": null,
+      "codes": [
+       "P5",
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 3,
+      "title": "Fix the evaluation criteria (strategic fit, impact, risk, feasibility)",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Score each initiative against the criteria",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Rank and cut off by budget and capacity",
+      "description": null,
+      "codes": [
+       "P3",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Defend the portfolio at the committee, bargaining between initiative owners",
+      "description": null,
+      "codes": [
+       "P7",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7",
+        "P8"
+       ],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Decide which initiatives to fund and which to stop",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Quarterly review: progress against goals, reallocation",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "discovery-usability-test",
+  "title": "Product usability study",
+  "domain": "product_research",
+  "industry": "cross",
+  "pcf_ref": "2.2.1",
+  "sources": [
+   {
+    "url": "https://www.nngroup.com/reports/how-to-conduct-usability-studies/",
+    "kind": "consulting"
+   },
+   {
+    "url": "https://www.nngroup.com/reports/how-to-recruit-participants-usability-studies/",
+    "kind": "consulting"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 8
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 7,
+      "title": "Consolidate the findings, classify the problems by severity",
+      "description": null,
+      "codes": [
+       "P1",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P1",
+        "P3"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Test plan: tasks, metrics, success criteria",
+      "description": null,
+      "codes": [
+       "P3",
+       "P5",
+       "P10"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5",
+        "P10"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Select and recruit participants matching the real user profile",
+      "description": null,
+      "codes": [
+       "P2",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Report with recommendations to the team",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Define the study goals and the format (qualitative or quantitative)",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Pilot session and plan revision",
+      "description": null,
+      "codes": [
+       "P2",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Run the sessions: tasks, probing questions without hints",
+      "description": null,
+      "codes": [
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Prioritise the fixes together with product",
+      "description": null,
+      "codes": [
+       "P6",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 6,
+     "title": "Observe what the participant does, not what they say",
+     "description": null,
+     "codes": [
+      "B3"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B3"
+      ],
+      "responsibility": "none",
+      "output_type": "draft"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "engineering-change-order",
+  "title": "Engineering change order (ECO)",
+  "domain": "engineering",
+  "industry": "manufacturing",
+  "pcf_ref": "2.3.1",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Identify the problem and assess the scale of its consequences",
+      "description": null,
+      "codes": [
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 2,
+      "title": "Raise the engineering change request (ECR) with a rationale",
+      "description": null,
+      "codes": [
+       "P1",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Work out the technical solution: design, drawings, specification",
+      "description": null,
+      "codes": [
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Compile the ECO with an implementation plan and a batch cut-in point",
+      "description": null,
+      "codes": [
+       "P1",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Notify the affected parties, suppliers included",
+      "description": null,
+      "codes": [
+       "P5",
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Verify the implementation and close the ECO",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 4,
+      "title": "Impact assessment: BOM, tooling, suppliers, stock, regulatory",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Stakeholder review (engineering, quality, purchasing, production)",
+      "description": null,
+      "codes": [
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Change control board approval",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 9,
+     "title": "Implementation: update the documentation and tooling, transition the batches",
+     "description": null,
+     "codes": [
+      "B2"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B2"
+      ],
+      "responsibility": "formal",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "patent-application",
+  "title": "Filing a patent application",
+  "domain": "legal",
+  "industry": "cross",
+  "pcf_ref": "2.1.3",
+  "sources": [
+   {
+    "url": "https://www.uspto.gov/patents/basics/patent-process-overview",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://gearhartlaw.com/the-key-stages-of-the-patent-examination-process/",
+    "kind": "consulting"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 10
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 2,
+      "title": "Prior art search",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 4,
+      "title": "Prepare the specification and the drawings",
+      "description": null,
+      "codes": [
+       "P5",
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Draft the claims",
+      "description": null,
+      "codes": [
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "File through the electronic system, formalities and fees",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Work through the office action and the examiner's citations",
+      "description": null,
+      "codes": [
+       "P1",
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Pay the issue fee and the maintenance fees",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Assess the patentability of the subject matter",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Decide on filing and on the strategy (provisional or full, jurisdictions)",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Response: amend the claims and argue the case",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Examiner interview when needed",
+      "description": null,
+      "codes": [
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "field-service-call",
+  "title": "Field service visit",
+  "domain": "services",
+  "industry": "cross",
+  "pcf_ref": "5.3.2",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 1,
+      "title": "Take the request: problem, address, equipment, urgency",
+      "description": null,
+      "codes": [
+       "P1",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P1",
+        "P12"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Prepare the visit: site history, spare parts into the van",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Qualify the request and create the work order",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Confirm the window to the customer and the access instructions",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Escalate when parts are missing or the job goes out of scope",
+      "description": null,
+      "codes": [
+       "P3",
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Close the work order, invoice, payment",
+      "description": null,
+      "codes": [
+       "P1",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 3,
+      "title": "Pick the technician by skill, location and time window",
+      "description": null,
+      "codes": [
+       "P3",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Diagnostics on site",
+      "description": null,
+      "codes": [
+       "P4",
+       "B1",
+       "B3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_physical",
+       "codes": [
+        "B1",
+        "B3"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Explain the work done to the customer and get the acceptance signature",
+      "description": null,
+      "codes": [
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 7,
+     "title": "Repair or replace the unit",
+     "description": null,
+     "codes": [
+      "B2"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B2"
+      ],
+      "responsibility": "formal",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "structured-ojt",
+  "title": "Structured on-the-job training",
+  "domain": "hr",
+  "industry": "cross",
+  "pcf_ref": "7.3.4",
+  "sources": [
+   {
+    "url": "https://njdottechtransfer.net/km-structured-on-the-job-training/",
+    "kind": "research"
+   },
+   {
+    "url": "https://www.researchgate.net/publication/277720719_Job_Instruction_Training_A_Step-by-Step_Guide",
+    "kind": "research"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 5
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 1,
+      "title": "Break the job into tasks and a learning sequence",
+      "description": null,
+      "codes": [
+       "P1",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P1",
+        "P3"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Prepare the trainee: why this skill and what the result will be",
+      "description": null,
+      "codes": [
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P12"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Prepare the trainer, the workplace and the materials",
+      "description": null,
+      "codes": [
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Check mastery against the task list",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 9,
+      "title": "Follow-up after an interval: observation and closing the gaps",
+      "description": null,
+      "codes": [
+       "P2",
+       "B3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_physical",
+       "codes": [
+        "B3"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 4,
+     "title": "Demonstrate while calling out the key points",
+     "description": null,
+     "codes": [
+      "B4"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B4"
+      ],
+      "responsibility": "none",
+      "output_type": "draft"
+     }
+    },
+    {
+     "position": 5,
+     "title": "Trial performance by the trainee under observation",
+     "description": null,
+     "codes": [
+      "B3",
+      "B4"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B3",
+       "B4"
+      ],
+      "responsibility": "formal",
+      "output_type": "draft"
+     }
+    },
+    {
+     "position": 6,
+     "title": "Corrective feedback during the performance",
+     "description": null,
+     "codes": [
+      "B4"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B4"
+      ],
+      "responsibility": "none",
+      "output_type": "draft"
+     }
+    },
+    {
+     "position": 8,
+     "title": "Clearance for independent work",
+     "description": null,
+     "codes": [],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": null,
+      "codes": [],
+      "responsibility": "regulatory",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "feature-development",
+  "title": "Feature development and release",
+  "domain": "engineering",
+  "industry": "software",
+  "pcf_ref": "8.5.4",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 8
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Design: architecture, interfaces, data schema",
+      "description": null,
+      "codes": [
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P9"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Implementation",
+      "description": null,
+      "codes": [
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P9"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Code review",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Testing: unit, integration, regression",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Post-release observation: metrics, errors, rollback on regression",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Defect triage and fixes",
+      "description": null,
+      "codes": [
+       "P4",
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Requirements and acceptance criteria",
+      "description": null,
+      "codes": [
+       "P1",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Acceptance against the criteria",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 7,
+     "title": "Release to production",
+     "description": null,
+     "codes": [],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": null,
+      "codes": [],
+      "responsibility": "formal",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "dmaic-improvement-project",
+  "title": "Process improvement project by DMAIC",
+  "domain": "quality",
+  "industry": "cross",
+  "pcf_ref": "13.1.5",
+  "sources": [
+   {
+    "url": "https://asq.org/quality-resources/dmaic",
+    "kind": "association"
+   },
+   {
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10229001/",
+    "kind": "research"
+   },
+   {
+    "url": "https://goleansixsigma.com/dmaic-five-basic-phases-of-lean-six-sigma/",
+    "kind": "consulting"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 10
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 2,
+      "title": "Define: as-is process map",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P1"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 3,
+      "title": "Measure: data collection plan and measurement system check",
+      "description": null,
+      "codes": [
+       "P10"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P10"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Analyze: find the root causes and test the hypotheses on data",
+      "description": null,
+      "codes": [
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Improve: pilot on the live process and assess the effect",
+      "description": null,
+      "codes": [
+       "P2",
+       "P10"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Control: control plan, charts, standardisation",
+      "description": null,
+      "codes": [
+       "P3",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Define: project charter, scope, customer requirements",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Measure: collect the baseline",
+      "description": null,
+      "codes": [
+       "P1",
+       "P2",
+       "B1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_physical",
+       "codes": [
+        "B1"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Improve: generate and select solutions",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Improve: implement the solution",
+      "description": null,
+      "codes": [
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Control: hand over to the process owner and close the project",
+      "description": null,
+      "codes": [
+       "P6",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P8"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "clinical-trial-visit",
+  "title": "Patient enrolment and a protocol visit",
+  "domain": "clinical",
+  "industry": "pharma",
+  "pcf_ref": "None",
+  "sources": [
+   {
+    "url": "https://www.ema.europa.eu/en/documents/scientific-guideline/ich-e6-r3-guideline-good-clinical-practice-gcp-step-5_en.pdf",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://irb.wisc.edu/manual/investigator-manual/appendix-a-additional-research-requirements/clinical-trials-and-ich-gcp/",
+    "kind": "research"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 8
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Check eligibility against the inclusion criteria from the medical data",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 2,
+      "title": "Informed consent: explanation, questions, signature before any procedures",
+      "description": null,
+      "codes": [
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Enrolment and randomisation by the protocol procedure",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Record the source data at the time of performance",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Transfer to the electronic form and raise the data queries",
+      "description": null,
+      "codes": [
+       "P1",
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Document the protocol deviation and notify the sponsor",
+      "description": null,
+      "codes": [
+       "P3",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Monitoring visit: check the form against the source records",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 7,
+      "title": "Record the adverse event and assess causality",
+      "description": null,
+      "codes": [
+       "P4",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 4,
+     "title": "Conduct the visit per protocol: procedures, sampling, scales",
+     "description": null,
+     "codes": [
+      "B1",
+      "B3"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B1",
+       "B3"
+      ],
+      "responsibility": "regulatory",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "course-design-delivery",
+  "title": "Designing and delivering a training course",
+  "domain": "hr",
+  "industry": "education",
+  "pcf_ref": "7.3.4",
+  "sources": [
+   {
+    "url": "https://www.td.org/content/newsletter/all-about-addie",
+    "kind": "association"
+   },
+   {
+    "url": "https://cops.usdoj.gov/pdf/training/ADDIE_Fact_Sheet.pdf",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.instructionaldesign.org/models/addie/",
+    "kind": "research"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 7
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Analysis: skills gap, audience, conditions of application",
+      "description": null,
+      "codes": [
+       "P1",
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Design: structure, sequence, methods, lesson plan",
+      "description": null,
+      "codes": [
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P9"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Develop the materials: exercises, cases, assessments",
+      "description": null,
+      "codes": [
+       "P5",
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5",
+        "P9"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Assess mastery against the criteria",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Evaluate the transfer of the skill to the job and the effect for the business",
+      "description": null,
+      "codes": [
+       "P2",
+       "P4",
+       "P10"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4",
+        "P10"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 2,
+      "title": "Learning objectives and mastery criteria",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Pilot with a focus group and revise the course",
+      "description": null,
+      "codes": [
+       "P2",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 6,
+     "title": "Prepare the instructors to deliver the course",
+     "description": null,
+     "codes": [
+      "B4"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B4"
+      ],
+      "responsibility": "none",
+      "output_type": "external_change"
+     }
+    },
+    {
+     "position": 7,
+     "title": "Deliver the session: explanation, demonstration, work with the audience",
+     "description": null,
+     "codes": [
+      "B4"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B4"
+      ],
+      "responsibility": "none",
+      "output_type": "external_change"
+     }
+    },
+    {
+     "position": 8,
+     "title": "Participants' practice with feedback",
+     "description": null,
+     "codes": [
+      "B3",
+      "B4"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B3",
+       "B4"
+      ],
+      "responsibility": "formal",
+      "output_type": "draft"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "ab-test",
+  "title": "Product hypothesis check with an A/B test",
+  "domain": "product_research",
+  "industry": "software",
+  "pcf_ref": "2.3.2",
+  "sources": [
+   {
+    "url": "http://ai.stanford.edu/~ronnyk/2007GuideControlledExperiments.pdf",
+    "kind": "research"
+   },
+   {
+    "url": "https://exp-platform.com/Documents/2023-03-11EncyclopeiaMLDSABTestingFinal.pdf",
+    "kind": "research"
+   },
+   {
+    "url": "https://www.tandfonline.com/doi/full/10.1080/00031305.2023.2257237",
+    "kind": "research"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Choose the OEC and the guardrail metrics",
+      "description": null,
+      "codes": [
+       "P10"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Instrument and validate the pipeline: logging, A/A test",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Randomise and launch on a share of traffic",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Analysis: significance, segments, SRM and peeking checks",
+      "description": null,
+      "codes": [
+       "P2",
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Record the result in the experiment database",
+      "description": null,
+      "codes": [
+       "P1",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Formulate the hypothesis: which change affects which metric",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Power calculation, minimum detectable effect and duration",
+      "description": null,
+      "codes": [
+       "P6",
+       "P10"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Monitor the guardrails and stop on harm",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Decide: ship, roll back, or re-run the experiment",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "kpi-development",
+  "title": "Setting a department's KPIs",
+  "domain": "management",
+  "industry": "cross",
+  "pcf_ref": "1.3.4",
+  "sources": [
+   {
+    "url": "https://www.kpi.org/kpi-basics/kpi-development/",
+    "kind": "consulting"
+   },
+   {
+    "url": "https://onstrategyhq.com/resources/how-to-identify-kpis/",
+    "kind": "consulting"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 9
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Choose two to four indicators per goal",
+      "description": null,
+      "codes": [
+       "P10"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Operational definition: formula, units, cut, exclusions",
+      "description": null,
+      "codes": [
+       "P10"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Data source and indicator owner",
+      "description": null,
+      "codes": [
+       "P3",
+       "P11"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Set up the reporting and the review cadence",
+      "description": null,
+      "codes": [
+       "P3",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Link to the department's strategic goal",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Check the data for fitness: completeness, lag, gameability",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Set the target value and the deadline",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Agree with the process owners",
+      "description": null,
+      "codes": [
+       "P7",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7",
+        "P8"
+       ],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Revise when the indicator diverges from real behaviour",
+      "description": null,
+      "codes": [
+       "P4",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "employee-onboarding",
+  "title": "Employee onboarding",
+  "domain": "hr",
+  "industry": "cross",
+  "pcf_ref": "7.3.1",
+  "sources": [],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 7
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Paperwork and access before the start date",
+      "description": null,
+      "codes": [
+       "P1",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 2,
+      "title": "First-days orientation: rules, safety, company context",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 3,
+      "title": "30-60-90 plan with expected results per stage",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Assign a mentor and introduce the team",
+      "description": null,
+      "codes": [
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Regular one-on-ones: progress, blockers, expectations",
+      "description": null,
+      "codes": [
+       "P7",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7",
+        "P8"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Assessment at the checkpoints against the plan",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Decision on passing the probation period",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 5,
+     "title": "Induction into the working procedures by the mentor",
+     "description": null,
+     "codes": [
+      "B4"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B4"
+      ],
+      "responsibility": "none",
+      "output_type": "draft"
+     }
+    },
+    {
+     "position": 6,
+     "title": "First tasks under supervision and feedback",
+     "description": null,
+     "codes": [
+      "B3",
+      "B4"
+     ],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": "blocked_physical",
+      "codes": [
+       "B3",
+       "B4"
+      ],
+      "responsibility": "none",
+      "output_type": "draft"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "campaign-creative-concept",
+  "title": "Developing the creative concept of an advertising campaign",
+  "domain": "marketing",
+  "industry": "cross",
+  "pcf_ref": "3.3.4",
+  "sources": [
+   {
+    "url": "https://pure.port.ac.uk/ws/files/2010643/TURNBULL_2015_cright_JMC_The_Advertising_Creative_Process.pdf",
+    "kind": "research"
+   },
+   {
+    "url": "https://www.acaweb.ca/en/wp-content/uploads/sites/2/2016/09/THE-CLIENT-BRIEF-FINAL-Eng-July-18-06.pdf",
+    "kind": "association"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 12
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Hand the brief to the agency: written document and verbal briefing at a meeting",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Agency's internal analysis of the brief and writing of the creative brief",
+      "description": null,
+      "codes": [
+       "P1",
+       "P4",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4",
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Creative teams develop the ideas",
+      "description": null,
+      "codes": [
+       "P13"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P13"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Rework or replace the creative routes on the client's feedback",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Present the proposed routes to the client",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 11,
+      "title": "Pre-test the creative on consumers and revise on the results",
+      "description": null,
+      "codes": [
+       "P2",
+       "P10"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P10"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Identify the need for advertising and prepare the client brief",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Brief review with the creative director and tasking of the creative teams",
+      "description": null,
+      "codes": [
+       "P5",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Internal acceptance of the ideas: presentation to the creative director and WIP meeting, selection of routes",
+      "description": null,
+      "codes": [
+       "P8",
+       "P13"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Tissue session with the client: showing rough routes and gathering the reaction",
+      "description": null,
+      "codes": [
+       "P7",
+       "P13"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Align on the route inside the client with its stakeholders",
+      "description": null,
+      "codes": [
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 12,
+      "title": "Client approves the creative route and hands it over to production",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "rebranding",
+  "title": "Identity development and rebranding",
+  "domain": "marketing",
+  "industry": "cross",
+  "pcf_ref": "None",
+  "sources": [
+   {
+    "url": "https://icoen.org/wp-content/uploads/conference_doc/icoen2/book3/ICOEN2-2015-p152-D.Agung%20Krisprimandoyo-Corporate%20Rebranding%20A%20Literature%20Review.pdf",
+    "kind": "research"
+   },
+   {
+    "url": "https://www.uspto.gov/trademarks/search/comprehensive-clearance-search-similar-trademarks",
+    "kind": "regulator"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 11
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 5,
+      "title": "Development of visual identity directions (mark, palette, typography, imagery)",
+      "description": null,
+      "codes": [
+       "P13"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P13"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Rounds of revisions of the chosen direction until acceptance",
+      "description": null,
+      "codes": [
+       "P5",
+       "P13"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5",
+        "P13"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Trademark clearance check against the registers and common law",
+      "description": null,
+      "codes": [
+       "P2",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Brand guidelines, templates and the asset set",
+      "description": null,
+      "codes": [
+       "P5",
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 12,
+      "title": "Post-launch evaluation against the rebranding goals",
+      "description": null,
+      "codes": [
+       "P2",
+       "P10"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Decision to rebrand and the project brief",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 2,
+      "title": "Brand audit: market, competitors, perception outside and inside the company",
+      "description": null,
+      "codes": [
+       "P1",
+       "P4",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Brand strategy: positioning, narrative, value proposition, architecture",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Choice of naming approach and development of name options",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Presentation of the directions to the stakeholders and choice of one",
+      "description": null,
+      "codes": [
+       "P7",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7",
+        "P8"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 11,
+      "title": "Launch: internal stakeholders and training first, then the external relaunch",
+      "description": null,
+      "codes": [
+       "P5",
+       "P8",
+       "B4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_physical",
+       "codes": [
+        "B4"
+       ],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 9,
+     "title": "Approval of the identity by the authorised body",
+     "description": null,
+     "codes": [],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": null,
+      "codes": [],
+      "responsibility": "formal",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "editorial-cycle",
+  "title": "Editorial cycle of a publication from topic to release",
+  "domain": "media",
+  "industry": "media",
+  "pcf_ref": "None",
+  "sources": [
+   {
+    "url": "https://www.kqed.org/about/editorial-process-in-action",
+    "kind": "association"
+   },
+   {
+    "url": "https://www.poynter.org/educators-students/2016/fundamentals-of-editing-the-editing-process/",
+    "kind": "association"
+   },
+   {
+    "url": "https://journalism.university/writing-and-editing-for-print-media/editing-process-print-media/",
+    "kind": "research"
+   },
+   {
+    "url": "https://www.rcfp.org/resources/pre-publication-review-guide/",
+    "kind": "association"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 12
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 9,
+      "title": "Proofreading and conformance to the style book",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "A topic appears: a reporter's pitch, a tip, a request from the audience",
+      "description": null,
+      "codes": [
+       "P1",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Write the piece",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Editing by the editor: structure, completeness, clarity, trimming",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P5"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Fact-check against primary sources — names, titles, dates, figures, quotes",
+      "description": null,
+      "codes": [
+       "P1",
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 12,
+      "title": "Monitor the responses and correct errors with a public notice",
+      "description": null,
+      "codes": [
+       "P2",
+       "P4",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 2,
+      "title": "Editorial decision to take the topic and assignment to the reporter",
+      "description": null,
+      "codes": [
+       "P6",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P8"
+       ],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Gather the facts: work with sources, interviews, documents, public records requests",
+      "description": null,
+      "codes": [
+       "P1",
+       "P4",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Mid-way review with the editor and the decision to continue",
+      "description": null,
+      "codes": [
+       "P6",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Legal review before publication",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Headline, lead, captions, pull-quotes and page layout",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 11,
+      "title": "Final read by the senior editor and release",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "ui-concept",
+  "title": "Interface design concept from brief to stakeholder acceptance",
+  "domain": "product",
+  "industry": "cross",
+  "pcf_ref": "None",
+  "sources": [
+   {
+    "url": "https://www.gov.uk/service-manual/design/making-prototypes",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://web.tamu.edu/aggie-ux-university/defining-and-organizing-your-sites-content/creating-websites-using-ux-principles/step-4-write-content-and-mock-up-pages/",
+    "kind": "research"
+   },
+   {
+    "url": "https://marcom.arizona.edu/applying-brand/web/web-project-workflow",
+    "kind": "research"
+   },
+   {
+    "url": "https://www.nngroup.com/articles/design-critiques/",
+    "kind": "consulting"
+   },
+   {
+    "url": "https://cliquestudios.com/university/resources/web-design-process",
+    "kind": "consulting"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 10
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Research: analytics, audit of the current solution, competitors, inputs from user research",
+      "description": null,
+      "codes": [
+       "P1",
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Information architecture: section map and user flows",
+      "description": null,
+      "codes": [
+       "P3",
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P9"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Mood board and visual direction options",
+      "description": null,
+      "codes": [
+       "P13"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P13"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Low-fi wireframes of the key screens",
+      "description": null,
+      "codes": [
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P9"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Hi-fi mock-ups: typography, colour, states, components",
+      "description": null,
+      "codes": [
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P9"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Kick-off session and creative brief: goals, audience, constraints, deadlines",
+      "description": null,
+      "codes": [
+       "P1",
+       "P5",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Design critique inside the team: presentation of the solution, gathering and recording of comments",
+      "description": null,
+      "codes": [
+       "P2",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Presentation of the mock-ups to the stakeholders with the reasoning behind the decisions",
+      "description": null,
+      "codes": [
+       "P5",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Revision rounds: consolidating comments from different stakeholders, prioritising, reworking",
+      "description": null,
+      "codes": [
+       "P1",
+       "P8",
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 12,
+      "title": "Handover to development: specifications, assets, components, walkthrough with the developers",
+      "description": null,
+      "codes": [
+       "P5",
+       "P8",
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 5,
+     "title": "Choice of the visual direction by the client",
+     "description": null,
+     "codes": [],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": null,
+      "codes": [],
+      "responsibility": "reputational",
+      "output_type": "external_change"
+     }
+    },
+    {
+     "position": 11,
+     "title": "Approval of the mock-ups by the client or the head of the unit",
+     "description": null,
+     "codes": [],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": null,
+      "codes": [],
+      "responsibility": "formal",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "collective-bargaining",
+  "title": "Negotiating a collective bargaining agreement",
+  "domain": "hr",
+  "industry": "cross",
+  "pcf_ref": "7.4.2",
+  "sources": [
+   {
+    "url": "https://www.oregon.gov/erb/pages/pecba.aspx",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://oer.ny.gov/negotiations-101",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.american.edu/labor-relations/upload/labor-negotiation-process.pdf",
+    "kind": "research"
+   },
+   {
+    "url": "https://www.nea.org/resource-library/5-stages-collective-bargaining",
+    "kind": "association"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 11
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 2,
+      "title": "Analyse the current agreement and gather data for the position",
+      "description": null,
+      "codes": [
+       "P1",
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P1",
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 4,
+      "title": "Prepare the package of proposals and exchange them at the first session",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Clarify the proposals and check whether the subject is a mandatory one for bargaining",
+      "description": null,
+      "codes": [
+       "P2",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Cost each proposal",
+      "description": null,
+      "codes": [
+       "P1",
+       "P9"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Draw up the agreed text of the agreement",
+      "description": null,
+      "codes": [
+       "P2",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 1,
+      "title": "Notice of the start of negotiations and appointment of the parties' bargaining teams",
+      "description": null,
+      "codes": [
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Gather proposals from members and stakeholders, priorities and the team's mandate",
+      "description": null,
+      "codes": [
+       "P6",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P8"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Bargaining rounds: argument, counter-proposals, trading concessions",
+      "description": null,
+      "codes": [
+       "P6",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P7"
+       ],
+       "responsibility": "reputational",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Mediation with a mediator when no agreement is reached",
+      "description": null,
+      "codes": [
+       "P7",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7",
+        "P8"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Declaration of impasse, exchange of final offers, cooling-off period",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 12,
+      "title": "Bring the agreement into force, communicate the terms and monitor compliance",
+      "description": null,
+      "codes": [
+       "P2",
+       "P5",
+       "P8"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P8"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": [
+    {
+     "position": 11,
+     "title": "Ratification by a vote of the members, approval by the employer's governing body, signing",
+     "description": null,
+     "codes": [],
+     "hours_per_run": null,
+     "runs_per_year": null,
+     "hours_per_year": null,
+     "reason": {
+      "mode": null,
+      "codes": [],
+      "responsibility": "regulatory",
+      "output_type": "external_change"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "slug": "user-support-ticket",
+  "title": "Support request from intake to closure",
+  "domain": "support",
+  "industry": "cross",
+  "pcf_ref": "8.7.8",
+  "sources": [
+   {
+    "url": "https://www.wright.edu/sites/www.wright.edu/files/page/attachments/Incident_Management1.pdf",
+    "kind": "research"
+   },
+   {
+    "url": "https://www.thinkhdi.com/~/media/HDICorp/Files/Standards/HDI-SC-Standard-v-5-0.pdf",
+    "kind": "association"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 12
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 1,
+      "title": "Receive the request through the contact channel and sort it: incident or service request",
+      "description": null,
+      "codes": [
+       "P3",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P3",
+        "P12"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Categorise by the predefined reference of categories and subcategories",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P3"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 5,
+      "title": "First line: diagnostics by the known error database and scripts, resolution at first contact",
+      "description": null,
+      "codes": [
+       "P2",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P2",
+        "P12"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 2,
+      "title": "Log the request — user, description, affected service and configuration item",
+      "description": null,
+      "codes": [
+       "P1"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Functional escalation to the second line with transfer of ownership and notification of the user",
+      "description": null,
+      "codes": [
+       "P3",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Second-line investigation: timeline, full scope, search through past incidents and logs",
+      "description": null,
+      "codes": [
+       "P2",
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "draft_then_review",
+       "codes": [
+        "P4"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Apply the resolution and restore the service, including through the user's actions under dictation",
+      "description": null,
+      "codes": [
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Record the resolution: closing notes, closure code, status 'resolved', notification of the user",
+      "description": null,
+      "codes": [
+       "P1",
+       "P3",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 11,
+      "title": "Confirmation by the user and closure of the request; on disagreement — reopening",
+      "description": null,
+      "codes": [
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 12,
+      "title": "Satisfaction survey on the closed request",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 4,
+      "title": "Prioritise by the impact and urgency matrix, override with a rationale",
+      "description": null,
+      "codes": [
+       "P3",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Hierarchical escalation: VIP, risk of an SLA breach, sensitive topic",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "customer-complaint-handling",
+  "title": "Customer complaint handling",
+  "domain": "customer_service",
+  "industry": "cross",
+  "pcf_ref": "6.2.3",
+  "sources": [
+   {
+    "url": "https://handbook.fca.org.uk/handbook/disp1/disp1s3",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://handbook.fca.org.uk/handbook/disp1/disp1s4",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://handbook.fca.org.uk/handbook/disp1/disp1s6",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.ombo.nsw.gov.au/guidance-for-organisations/resources/effective-complaint-management-guide",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://www.housing-ombudsman.org.uk/landlords-info/complaint-handling-code/the-code-2024/",
+    "kind": "regulator"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 12
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Receive the complaint in the channel and clarify the circumstances with the complainant",
+      "description": null,
+      "codes": [
+       "P1",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 2,
+      "title": "Log the complaint in the register: number, channel, substance, response deadline",
+      "description": null,
+      "codes": [
+       "P1",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Acknowledge receipt with a description of the procedure and the deadlines",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 5,
+      "title": "Investigate the circumstances: documents, employees' explanations, timeline",
+      "description": null,
+      "codes": [
+       "P1",
+       "P2",
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Progress updates and a holding response when the deadline is exceeded",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Final response with the reasons for the decision and the right to go to the ombudsman",
+      "description": null,
+      "codes": [
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Internal review by a different employee and referral of the case to the ombudsman",
+      "description": null,
+      "codes": [
+       "P2",
+       "P4",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 11,
+      "title": "Close the complaint and record the outcome and the delivery of redress",
+      "description": null,
+      "codes": [
+       "P1",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 4,
+      "title": "Initial assessment: subject of the complaint, severity, urgency, handling path",
+      "description": null,
+      "codes": [
+       "P3",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Decision on the merits of the complaint and the measure of redress",
+      "description": null,
+      "codes": [
+       "P2",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Work through the complainant's disagreement and settle the amount of redress",
+      "description": null,
+      "codes": [
+       "P6",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P7"
+       ],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 12,
+      "title": "Root cause analysis, identification of systemic problems and corrective measures",
+      "description": null,
+      "codes": [
+       "P1",
+       "P4",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "employee-inquiry",
+  "title": "Employee request to the HR service",
+  "domain": "hr",
+  "industry": "cross",
+  "pcf_ref": "7.7.2",
+  "sources": [
+   {
+    "url": "https://www.acas.org.uk/grievance-procedure-step-by-step",
+    "kind": "regulator"
+   },
+   {
+    "url": "https://hr.virginia.edu/about-us-home/hr-org/service-and-experience",
+    "kind": "research"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 12
+   },
+   "money": null,
+   "buckets": {
+    "moves": [],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Tier 0: self-service in the portal and searching the knowledge base for the answer",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 2,
+      "title": "Tier 0: dialogue with a chatbot on a routine question",
+      "description": null,
+      "codes": [
+       "P5",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Intake at the first line: open the case, categorise by the service catalogue, route and set the SLA",
+      "description": null,
+      "codes": [
+       "P1",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Tier 1: answer by script and knowledge base — a reference, the status of a request, an explanation of a policy",
+      "description": null,
+      "codes": [
+       "P5",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Tier 2: a specialist works the case through documents, HR data and correspondence",
+      "description": null,
+      "codes": [
+       "P2",
+       "P4"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Tier 2: clarifying dialogue with the employee and collection of the missing documents",
+      "description": null,
+      "codes": [
+       "P1",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 12,
+      "title": "Close the case and run the satisfaction survey",
+      "description": null,
+      "codes": [
+       "P3",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 5,
+      "title": "Escalate to the second line when knowledge or authority runs out",
+      "description": null,
+      "codes": [
+       "P3",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Hand over to the third line: HRBP, HR leadership or a lawyer — conflict, disciplinary matter, legal risk",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Investigate the circumstances: gather evidence and interview the participants",
+      "description": null,
+      "codes": [
+       "P4",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Meeting with the employee on the grievance or disciplinary matter, with the right to be accompanied",
+      "description": null,
+      "codes": [
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P7"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 11,
+      "title": "Decision on the case, written answer to the employee and explanation of the right to appeal",
+      "description": null,
+      "codes": [
+       "P5",
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "regulatory",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ },
+ {
+  "slug": "sales-order-processing",
+  "title": "Customer order processing (order-to-cash, the part before shipment)",
+  "domain": "sales",
+  "industry": "cross",
+  "pcf_ref": "3.5.4",
+  "sources": [
+   {
+    "url": "https://solutions.ifrc.org/sites/default/files/2024-10/K014750_APQC%20Process%20Classification%20Framework%20(PCF)%20-%20Cross%20Industry%20-%20PDF%20Version%207.4.pdf",
+    "kind": "association"
+   },
+   {
+    "url": "https://docs.peppol.eu/poacc/upgrade-3/profiles/65-advanced-ordering/",
+    "kind": "standard"
+   }
+  ],
+  "result": {
+   "schema_version": 1,
+   "preliminary": false,
+   "catalog_version": "v1.1",
+   "shares": null,
+   "hours": {
+    "total": 0.0,
+    "moves": 0.0,
+    "to_review": 0.0,
+    "stays": 0.0,
+    "to_review_after": 0.0,
+    "freed": 0.0,
+    "unestimated": 12
+   },
+   "money": null,
+   "buckets": {
+    "moves": [
+     {
+      "position": 2,
+      "title": "Validate the order: completeness of fields, lines, addresses and details",
+      "description": null,
+      "codes": [
+       "P1",
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "automatable",
+       "codes": [
+        "P1",
+        "P2"
+       ],
+       "responsibility": "none",
+       "output_type": "draft"
+      }
+     }
+    ],
+    "to_review": [
+     {
+      "position": 1,
+      "title": "Receive the order through the channel (portal, EDI, e-mail, phone) and enter it in the system",
+      "description": null,
+      "codes": [
+       "P1",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 3,
+      "title": "Clarify missing or contradictory data with the customer",
+      "description": null,
+      "codes": [
+       "P5",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 4,
+      "title": "Check the price, the commercial terms and the credit limit",
+      "description": null,
+      "codes": [
+       "P2"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "draft"
+      }
+     },
+     {
+      "position": 6,
+      "title": "Check availability, reserve and set the delivery date (ATP)",
+      "description": null,
+      "codes": [
+       "P2",
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "none",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 8,
+      "title": "Confirm the order to the customer: accepted, accepted with changes or rejected",
+      "description": null,
+      "codes": [
+       "P3",
+       "P5"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 9,
+      "title": "Handle the customer's request to change or cancel the order",
+      "description": null,
+      "codes": [
+       "P2",
+       "P3",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 10,
+      "title": "Release the order to fulfilment (to the warehouse or to production)",
+      "description": null,
+      "codes": [
+       "P3"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 11,
+      "title": "Order status notifications and answers to the customer's questions about the order",
+      "description": null,
+      "codes": [
+       "P3",
+       "P5",
+       "P12"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "review_required",
+       "codes": [],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     }
+    ],
+    "stays": [
+     {
+      "position": 5,
+      "title": "Decide on releasing the credit hold on the order",
+      "description": null,
+      "codes": [
+       "P6"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6"
+       ],
+       "responsibility": "formal",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 7,
+      "title": "Agree the shortage with the customer: new date, partial shipment, substitute item",
+      "description": null,
+      "codes": [
+       "P6",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P7"
+       ],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     },
+     {
+      "position": 12,
+      "title": "Handle the customer's complaint about the order: short delivery, wrong price, missed date",
+      "description": null,
+      "codes": [
+       "P4",
+       "P6",
+       "P7"
+      ],
+      "hours_per_run": null,
+      "runs_per_year": null,
+      "hours_per_year": null,
+      "reason": {
+       "mode": "blocked_judgment",
+       "codes": [
+        "P6",
+        "P7"
+       ],
+       "responsibility": "reputational",
+       "output_type": "external_change"
+      }
+     }
+    ]
+   },
+   "out_of_scope": []
+  }
+ }
+]

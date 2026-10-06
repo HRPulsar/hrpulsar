@@ -205,6 +205,7 @@ def _asks_for_itself(name: str, env: dict) -> bool:
 _E2E_WRITES = {
     "/api/recruitment/_test/seed-parsed-files",
     "/api/recruitment/_test/seed-verdict",
+    "/api/recruitment/_test/candidates/{candidate_id}/consent",
 }
 # Reads that are running hiring rather than reading it: they answered only
 # the roles that write before the matrix, and ``view`` must not open them.

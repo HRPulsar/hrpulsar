@@ -34,12 +34,15 @@ interface Props {
   vacancyId: string;
   initial: VacancyShape;
   onScaleChanged?: (vacancy: VacancyShape) => void;
+  /** HRP-836: a closed or cancelled vacancy is read-only. */
+  readOnly?: boolean;
 }
 
 export function VacancyAssessmentScaleBlock({
   vacancyId,
   initial,
   onScaleChanged,
+  readOnly = false,
 }: Props) {
   const t = useTranslations("recruitment");
   const [scales, setScales] = useState<Scale[]>([]);
@@ -50,7 +53,8 @@ export function VacancyAssessmentScaleBlock({
   const snapshot = vacancy.assessment_scale_snapshot ?? null;
   const lockedBySnapshot = Boolean(snapshot);
   // HRP-830: picking the vacancy's scale is `manage` on recruitment.
-  const canPick = usePermissions().canManageSection("recruitment");
+  const canPick =
+    usePermissions().canManageSection("recruitment") && !readOnly;
 
   const load = useCallback(async () => {
     setLoading(true);

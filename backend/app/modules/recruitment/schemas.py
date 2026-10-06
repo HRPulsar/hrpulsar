@@ -102,7 +102,8 @@ class VacancyUpdate(BaseModel):
     salary_max: float | None = None
     salary_currency: str | None = Field(default=None, max_length=10)
     language: str | None = Field(default=None, max_length=10)
-    status: str | None = Field(default=None, max_length=50)
+    # HRP-836: no ``status`` here - the lifecycle moves only through
+    # ``POST .../status`` and ``POST .../close``, which check the transition.
     requirements: str | None = None
     responsibilities: str | None = None
     conditions: str | None = None
@@ -222,9 +223,17 @@ class HiringManagerOption(BaseModel):
 
 
 class VacancyCloseData(BaseModel):
-    resolution: Literal["hired", "closed_no_hire", "cancelled"]
+    # HRP-836: "Closed with hiring" / "Closed without hiring". Cancelling is
+    # a status of its own now (``VacancyStatusChange``), not a resolution.
+    resolution: Literal["hired", "closed_no_hire"]
     hired_candidate_id: uuid.UUID | None = None
     close_reason: str | None = None
+
+
+class VacancyStatusChange(BaseModel):
+    """HRP-427 / HRP-836: Publish and Reopen (``open``), Pause, Cancel."""
+
+    status: Literal["open", "paused", "cancelled"]
 
 
 # --- Candidate ---
@@ -296,6 +305,7 @@ class CandidateVacancyRead(BaseModel):
     stage_name: str | None = None
     candidate_name: str | None = None
     vacancy_title: str | None = None
+    vacancy_status: str | None = None  # HRP-836
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -407,6 +417,8 @@ class CandidateVacancyApplicationRead(BaseModel):
     cv_id: uuid.UUID
     vacancy_id: uuid.UUID
     vacancy_title: str | None = None
+    # HRP-836: the card's blocks go read-only per vacancy status.
+    vacancy_status: str | None = None
     stage_id: uuid.UUID | None = None
     stage_name: str | None = None
     stage_type: str | None = None
@@ -959,6 +971,15 @@ class InterviewerOption(BaseModel):
     email: str
 
 
+class InterviewerBrief(BaseModel):
+    """HRP-1019: an interviewer as the company directory shows them to
+    everyone, so whoever opens the interview reads who sits in it."""
+
+    id: uuid.UUID
+    full_name: str
+    position_title: str | None = None
+
+
 class InterviewRead(BaseModel):
     id: uuid.UUID
     candidate_vacancy_id: uuid.UUID
@@ -969,6 +990,8 @@ class InterviewRead(BaseModel):
     duration_minutes: int | None = None
     interviewer_id: uuid.UUID | None = None
     interviewer_ids: list[uuid.UUID] = Field(default_factory=list)
+    # In ``interviewer_ids`` order; one gone from the tenant is left out.
+    interviewers: list[InterviewerBrief] = Field(default_factory=list)
     interview_date: datetime | None = None
     duration_seconds: int | None = None
     audio_file_id: uuid.UUID | None = None
@@ -1165,6 +1188,10 @@ class ConsentSignResult(BaseModel):
     status: str
 
 
+class ConsentRevokeResult(BaseModel):
+    status: str
+
+
 # --- Reports (R4a, reworked in HRP-521) ---
 
 # HRP-521 — report templates were removed; the sheet set is chosen in the
@@ -1324,6 +1351,11 @@ class FunnelStageStat(BaseModel):
     stage_name: str | None
     candidate_count: int
     median_seconds_in_stage: float | None
+    # HRP-785: see ``analytics_service.funnel_conversion``. ``None`` where
+    # the stage takes no conversion (first stage, rejected / withdrew-type
+    # stages, nobody reached the previous stage).
+    reached_count: int | None = None
+    conversion_percent: int | None = None
 
 
 class VacancyAnalytics(BaseModel):
@@ -1337,6 +1369,8 @@ class VacancyAnalytics(BaseModel):
     negative_stage_names: list[str] = []
     neutral_stage_names: list[str] = []
     total_candidates: int
+    # HRP-785: candidates on a terminal-positive stage / all candidates.
+    overall_conversion_percent: int | None = None
 
 
 class SummaryVacancyEntry(BaseModel):

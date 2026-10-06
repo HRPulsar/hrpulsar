@@ -101,3 +101,41 @@ describe("DatePicker (HRP-335 commit semantics)", () => {
     expect(onChange).toHaveBeenCalledWith("");
   });
 });
+
+// HRP-852: the calendar sits on the kit's Base UI popover. Pin the round
+// trip a recruiter makes: the icon opens it, a day commits and closes it,
+// Escape closes it without a pick.
+describe("DatePicker calendar popover (HRP-852)", () => {
+  const day = () =>
+    document.querySelector('[data-testid="dp-day-2026-08-14"]') as HTMLButtonElement | null;
+
+  async function openCalendar() {
+    await act(async () => {
+      (container.querySelector('[data-testid="dp-trigger"]') as HTMLButtonElement).click();
+    });
+  }
+
+  it("opens on the icon, commits a picked day and closes", async () => {
+    const { onChange } = renderPicker({ value: "2026-08-01" });
+    expect(day()).toBeNull();
+    await openCalendar();
+    expect(day()).not.toBeNull();
+    await act(async () => day()!.click());
+    expect(onChange).toHaveBeenCalledWith("2026-08-14");
+    await act(async () => {});
+    expect(day()).toBeNull();
+  });
+
+  it("closes on Escape without picking", async () => {
+    const { onChange } = renderPicker({ value: "2026-08-01" });
+    await openCalendar();
+    expect(day()).not.toBeNull();
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(day()).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});

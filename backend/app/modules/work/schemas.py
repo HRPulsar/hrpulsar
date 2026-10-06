@@ -225,7 +225,8 @@ class StepUpdate(BaseModel):
     # and pack (HRP-863), the tenant's rate (HRP-868).
     review_human_share: ReviewHumanShare | None = None
     manual_mode: AutomationMode | None = None
-    manual_pack_code: str | None = Field(default=None, max_length=50)
+    # HRP-911: the pack by id - two packs may share a code.
+    manual_pack_id: uuid.UUID | None = None
     hourly_rate: StepHourlyRate | None = None
 
 
@@ -259,7 +260,7 @@ class StepRead(BaseModel):
     accountable_employee_id: uuid.UUID | None
     review_human_share: int | None
     manual_mode: AutomationMode | None
-    manual_pack_code: str | None
+    manual_pack_id: uuid.UUID | None
     hourly_rate: float | None
     primitive_codes: list[str]
     capabilities: list[StepCapability]

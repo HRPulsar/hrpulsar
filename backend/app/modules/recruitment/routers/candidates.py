@@ -210,7 +210,7 @@ async def change_candidate_status(
     _scope: None = Depends(cv_scope),
 ):
     return await service.change_candidate_status(
-        db, current_user.tenant_id, cv_id, data
+        db, current_user.tenant_id, cv_id, data, user_id=current_user.id
     )
 
 
@@ -379,6 +379,7 @@ async def patch_candidate_vacancy(
         cv_id,
         data,
         if_match=if_match,
+        user_id=current_user.id,
     )
     etag = payload.pop("etag", None)
     if etag is not None:
@@ -396,7 +397,9 @@ async def delete_candidate_vacancy(
     current_user: User = Depends(runs_hiring),
 ):
     """HRP-181 REDO: drop the candidate from a vacancy funnel."""
-    await service.delete_candidate_vacancy(db, current_user.tenant_id, cv_id)
+    await service.delete_candidate_vacancy(
+        db, current_user.tenant_id, cv_id, user_id=current_user.id
+    )
     return Response(status_code=204)
 
 
@@ -458,5 +461,7 @@ async def archive_candidate(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
 ):
-    await service.archive_candidate(db, current_user.tenant_id, candidate_id)
+    await service.archive_candidate(
+        db, current_user.tenant_id, candidate_id, user_id=current_user.id
+    )
     return Response(status_code=204)

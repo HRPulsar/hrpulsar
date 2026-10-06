@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from datetime import date, datetime, timezone
 
 from fastapi import UploadFile, status
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -28,6 +28,8 @@ from app.modules.recruitment.common import (
     _get_vacancy,
     _publish_event,
     _stage_to_read_dict,
+    ensure_vacancy_unlocked,
+    vacancy_locks,
 )
 from app.modules.recruitment.models import (
     AssessmentInvite,
@@ -46,6 +48,7 @@ from app.modules.recruitment.schemas import (
     VacancyStageCreate,
     VacancyStagesReplace,
     VacancyStageUpdate,
+    VacancyStatusChange,
     VacancyUpdate,
 )
 
@@ -687,6 +690,7 @@ async def set_vacancy_competences(
     the 422 guard below protects), the pool recompute is queued.
     """
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     incoming: dict[uuid.UUID, dict] = {}
     for spec in data.competences:
@@ -879,6 +883,7 @@ async def upload_vacancy_attachment(
     file: UploadFile,
 ) -> dict:
     await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     if file.size is not None and file.size > MAX_ATTACHMENT_BYTES:
         raise AppError(
@@ -977,6 +982,7 @@ async def delete_vacancy_attachment(
     attachment_id: uuid.UUID,
 ) -> None:
     await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
     row = (
         await db.execute(
             select(VacancyAttachment).where(
@@ -1218,6 +1224,9 @@ async def update_vacancy(
             "vacancy_archived_readonly",
             status.HTTP_409_CONFLICT,
         )
+    # HRP-836: a closed or cancelled vacancy is read-only as a whole.
+    if vacancy_locks(vacancy.status, "vacancy"):
+        raise AppError("vacancy_status_read_only", status.HTTP_409_CONFLICT)
 
     current_etag = vacancy_etag(vacancy)
     if if_match is not None and if_match != current_etag:
@@ -1445,59 +1454,181 @@ async def delete_vacancy(
     await db.commit()
 
 
+# HRP-427 / HRP-836: the vacancy lifecycle. ``closed`` is reached through
+# ``close_vacancy`` (it carries a resolution), everything else through
+# ``change_vacancy_status``; any other move answers 409. Draft also turns
+# open by itself once a first candidate joins (``candidate_service``).
+VACANCY_TRANSITIONS: dict[str, frozenset[str]] = {
+    "draft": frozenset({"open"}),
+    "open": frozenset({"paused", "closed", "cancelled"}),
+    "paused": frozenset({"open", "closed", "cancelled"}),
+}
+
+
+async def _lock_for_transition(db: AsyncSession, vacancy: Vacancy) -> None:
+    """Row-lock the vacancy and re-read it, so two status commands cannot
+    both pass ``_check_transition`` on the same stale status."""
+    await db.execute(
+        select(Vacancy)
+        .where(Vacancy.id == vacancy.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+
+
+def _check_transition(vacancy: Vacancy, target: str) -> None:
+    if vacancy.archived_at is not None:
+        raise AppError("vacancy_archived_readonly", status.HTTP_409_CONFLICT)
+    if target not in VACANCY_TRANSITIONS.get(vacancy.status, frozenset()):
+        raise AppError("vacancy_status_transition_invalid", status.HTTP_409_CONFLICT)
+
+
+def _note_status_change(before: str, after: str) -> None:
+    """HRP-982: the status before and after, for the audit row."""
+    from app.modules.recruitment.audit_registry import annotate
+
+    annotate(payload_diff={"status": {"before": before, "after": after}})
+
+
+async def _has_competences(
+    db: AsyncSession, tenant_id: uuid.UUID, vacancy_id: uuid.UUID
+) -> bool:
+    """HRP-427: whether the "Competences & indicators" block holds anything -
+    a library competence or a competence of the vacancy profile."""
+    if await db.scalar(
+        select(
+            exists().where(
+                VacancyCompetence.vacancy_id == vacancy_id,
+                VacancyCompetence.tenant_id == tenant_id,
+            )
+        )
+    ):
+        return True
+    profile_data = await db.scalar(
+        select(VacancyProfile.profile_data).where(
+            VacancyProfile.vacancy_id == vacancy_id,
+            VacancyProfile.tenant_id == tenant_id,
+        )
+    )
+    return bool((profile_data or {}).get("competences"))
+
+
+async def change_vacancy_status(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    vacancy_id: uuid.UUID,
+    data: VacancyStatusChange,
+    *,
+    user_id: uuid.UUID | None = None,
+) -> dict:
+    """Publish (draft → open), Pause, Reopen (paused → open) or Cancel.
+
+    Publish needs a filled "Competences & indicators" block (HRP-427).
+    """
+    vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+    await _lock_for_transition(db, vacancy)
+    _check_transition(vacancy, data.status)
+    if vacancy.status == "draft" and not await _has_competences(
+        db, tenant_id, vacancy.id
+    ):
+        raise AppError("vacancy_publish_requires_competences", status.HTTP_409_CONFLICT)
+
+    _note_status_change(vacancy.status, data.status)
+    vacancy.status = data.status
+    vacancy.version = vacancy.version + 1
+    await db.commit()
+    await db.refresh(vacancy, attribute_names=["candidates", "updated_at"])
+    has_profile, invites = await _vacancy_extras(db, vacancy)
+    return await _vacancy_to_read_joined(
+        db, tenant_id, vacancy, has_profile=has_profile, active_invites_count=invites
+    )
+
+
 async def close_vacancy(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     vacancy_id: uuid.UUID,
     data: VacancyCloseData,
+    *,
+    user_id: uuid.UUID | None = None,
 ) -> dict:
-    """Close vacancy with resolution.
+    """Close an open or paused vacancy with a resolution (HRP-836).
 
     Set status='closed', closed_at=now(), close_resolution, close_reason.
-    If resolution='hired' and hired_candidate_id provided, set that
-    candidate_vacancy status to 'hired' and move it onto the funnel's
-    terminal-positive stage (HRP-425 — the analytics tiles count stages,
-    so closing a vacancy has to leave the funnel telling the same story).
+    The resolution has to match the funnel: "with hiring" (``hired``) needs
+    a candidate on a terminal-positive stage, "without hiring"
+    (``closed_no_hire``) must not have one.
+
+    ``hired_candidate_id`` (API callers) names the hire: that candidate
+    counts as the hire, gets status 'hired' and moves onto the funnel's
+    first terminal-positive stage (HRP-425 — the analytics tiles count
+    stages, so closing a vacancy has to leave the funnel telling the same
+    story).
     """
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+    await _lock_for_transition(db, vacancy)
+    _check_transition(vacancy, "closed")
 
+    stages = await _get_applicable_stages(db, tenant_id, vacancy_id)
+    positive_ids = [s.id for s in stages if s.stage_type == "terminal_positive"]
+    has_hire = bool(positive_ids) and bool(
+        await db.scalar(
+            select(
+                exists().where(
+                    CandidateVacancy.vacancy_id == vacancy_id,
+                    CandidateVacancy.tenant_id == tenant_id,
+                    CandidateVacancy.stage_id.in_(positive_ids),
+                )
+            )
+        )
+    )
+    cv = None
+    if data.resolution == "hired" and data.hired_candidate_id:
+        cv = (
+            await db.execute(
+                select(CandidateVacancy).where(
+                    CandidateVacancy.candidate_id == data.hired_candidate_id,
+                    CandidateVacancy.vacancy_id == vacancy_id,
+                    CandidateVacancy.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+    if data.resolution == "hired" and not has_hire and cv is None:
+        raise AppError("vacancy_close_requires_hire", status.HTTP_409_CONFLICT)
+    if data.resolution == "closed_no_hire" and has_hire:
+        raise AppError("vacancy_close_has_hire", status.HTTP_409_CONFLICT)
+
+    _note_status_change(vacancy.status, "closed")
     vacancy.status = "closed"
     vacancy.closed_at = datetime.now(timezone.utc)
     vacancy.close_resolution = data.resolution
     vacancy.close_reason = data.close_reason
+    vacancy.version = vacancy.version + 1
 
-    if data.resolution == "hired" and data.hired_candidate_id:
-        result = await db.execute(
-            select(CandidateVacancy).where(
-                CandidateVacancy.candidate_id == data.hired_candidate_id,
-                CandidateVacancy.vacancy_id == vacancy_id,
-                CandidateVacancy.tenant_id == tenant_id,
-            )
+    if cv is not None:
+        cv.status = "hired"
+        hired_stage = next(
+            (s for s in stages if s.stage_type == "terminal_positive"), None
         )
-        cv = result.scalar_one_or_none()
-        if cv:
-            cv.status = "hired"
-            stages = await _get_applicable_stages(db, tenant_id, vacancy_id)
-            hired_stage = next(
-                (s for s in stages if s.stage_type == "terminal_positive"), None
+        if hired_stage is not None and cv.stage_id != hired_stage.id:
+            history = list(cv.status_history or [])
+            history.append(
+                {
+                    "from_stage_id": str(cv.stage_id) if cv.stage_id else None,
+                    "to_stage_id": str(hired_stage.id),
+                    "changed_at": datetime.now(timezone.utc).isoformat(),
+                    "comment": "vacancy closed as hired",
+                    # HRP-982: who closed the vacancy moved the candidate.
+                    "changed_by": str(user_id) if user_id else None,
+                }
             )
-            if hired_stage is not None and cv.stage_id != hired_stage.id:
-                history = list(cv.status_history or [])
-                history.append(
-                    {
-                        "from_stage_id": str(cv.stage_id) if cv.stage_id else None,
-                        "to_stage_id": str(hired_stage.id),
-                        "changed_at": datetime.now(timezone.utc).isoformat(),
-                        "comment": "vacancy closed as hired",
-                    }
-                )
-                cv.stage_id = hired_stage.id
-                cv.status_history = history
-            # The row's ETag is W/"{version}". Closing the vacancy edits
-            # the link (status, and usually the stage), so the version has
-            # to move or a request holding the pre-close ETag would pass
-            # its If-Match check and quietly overwrite the Hired stage.
-            cv.version = (cv.version or 1) + 1
+            cv.stage_id = hired_stage.id
+            cv.status_history = history
+        # The row's ETag is W/"{version}". Closing the vacancy edits
+        # the link (status, and usually the stage), so the version has
+        # to move or a request holding the pre-close ETag would pass
+        # its If-Match check and quietly overwrite the Hired stage.
+        cv.version = (cv.version or 1) + 1
 
     await db.commit()
     # See update_vacancy comment — refresh both ``updated_at`` (server
@@ -1535,7 +1666,11 @@ DEFAULT_RECRUITMENT_STAGES: tuple[tuple[str, str, int, str, str], ...] = (
     ("manager_interview", "Interview with manager", 40, "active", "violet"),
     ("final_interview", "Final interview", 50, "active", "purple"),
     ("offer", "Offer", 60, "active", "amber"),
+    # HRP-790: the two post-offer steps. Existing tenants get them from
+    # ``hrp790stages01``. ``hired`` stays terminal-positive.
+    ("offer_accepted", "Offer accepted", 65, "active", "teal"),
     ("hired", "Hired", 70, "terminal_positive", "emerald"),
+    ("probation_completed", "Probation completed", 75, "terminal_positive", "green"),
     ("rejected", "Rejected", 80, "terminal_negative", "rose"),
     ("withdrew", "Withdrew", 90, "terminal_neutral", "gray"),
 )
@@ -1560,7 +1695,7 @@ async def _tenant_stage_locale(db: AsyncSession, tenant_id: uuid.UUID) -> str:
 async def seed_default_recruitment_stages(
     db: AsyncSession, tenant_id: uuid.UUID
 ) -> int:
-    """Seed the 9 spec-mandated recruitment stages for a tenant.
+    """Seed the default recruitment stages (``DEFAULT_RECRUITMENT_STAGES``).
 
     Idempotent: skips any ``(tenant_id, code)`` pair that already
     exists. Called from ``auth.service.register`` for new tenants; the
@@ -1714,6 +1849,7 @@ async def create_vacancy_stage_override(
 ) -> dict:
     """Create a vacancy-specific stage override."""
     await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     stage = VacancyStage(
         tenant_id=tenant_id,
@@ -1743,7 +1879,7 @@ async def create_vacancy_stage_override(
 async def get_tenant_default_stages(
     db: AsyncSession, tenant_id: uuid.UUID
 ) -> list[dict]:
-    """List the tenant's nine default funnel stages (FR-08).
+    """List the tenant's default funnel stages (FR-08).
 
     Rows are seeded at tenant create (``auth.service.register`` calls
     ``seed_default_recruitment_stages``). Returns them in ``sort_order``.
@@ -1814,6 +1950,7 @@ async def replace_vacancy_stages_override(
       to the funnel only via ``CandidateVacancy.stage_id`` history.
     """
     await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     # HRP-181 REDO: validate payload-level invariants before touching the
     # DB. Without these guards a client could ship an all-terminal funnel
@@ -2066,6 +2203,7 @@ async def post_vacancy_to_talent_market(
     )
 
     vacancy = await _get_vacancy(db, tenant_id, vacancy_id)
+    await ensure_vacancy_unlocked(db, tenant_id, "vacancy", vacancy_id=vacancy_id)
 
     if not vacancy.internal_search_allowed:
         raise AppError(
@@ -2228,8 +2366,17 @@ async def get_vacancy_internal_candidates(
 
     ``vacancy`` lets a caller that already holds the row skip the reload
     (HRP-706); the two scalars below are all this needs from it.
+
+    HRP-693 REDO: each row's percentage is the one the card's own
+    Candidates table shows, judged live against the card's current
+    requirements. The stored ``match_score`` waits for the pool recompute,
+    which a competence change queues on the worker after this block has
+    already re-read, and which never re-scores a manual pick below the bar
+    - the block kept showing a percentage of competences the vacancy no
+    longer asks for.
     """
-    from app.modules.talent_market.models import TalentCandidate, TalentCard
+    from app.modules.talent_market.card_service import _compute_candidates_breakdown
+    from app.modules.talent_market.models import TalentCard
 
     if vacancy is not None:
         talent_card_id = vacancy.talent_card_id
@@ -2274,23 +2421,39 @@ async def get_vacancy_internal_candidates(
     if talent_card_id is None:
         return payload
 
-    card = await db.get(TalentCard, talent_card_id)
-    if card is None or card.tenant_id != tenant_id:
+    # ``populate_existing``: the bridge reads this right after its matcher
+    # added the rows, and a card already in the session would otherwise
+    # keep the candidate list it was loaded with.
+    card = (
+        await db.execute(
+            select(TalentCard)
+            .options(
+                selectinload(TalentCard.candidates),
+                selectinload(TalentCard.competences),
+                selectinload(TalentCard.specializations),
+            )
+            .where(TalentCard.id == talent_card_id, TalentCard.tenant_id == tenant_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if card is None:
         return payload
     payload["talent_card_id"] = card.id
     payload["talent_card_status"] = card.status
 
-    rows = (
-        (
-            await db.execute(
-                select(TalentCandidate)
-                .options(selectinload(TalentCandidate.employee))
-                .where(TalentCandidate.card_id == card.id)
-            )
-        )
-        .scalars()
-        .all()
+    rows = card.candidates
+    live = await _compute_candidates_breakdown(
+        db, card, [row.employee_id for row in rows]
     )
+
+    def percent(row) -> int | None:
+        if card.competences:
+            return live.get(row.employee_id, {}).get("comp_match")
+        # No Required Competences: the card's table shows no percentage.
+        # A card matching on specializations alone keeps the score its pool
+        # stored; one with no requirements at all scores nobody.
+        return row.match_score if card.specializations else None
+
     # HRP-711: which of these people are already in the vacancy's own
     # pipeline. One statement for the whole roster — the block renders a
     # link instead of an Add button for them, and the button that stays
@@ -2333,7 +2496,7 @@ async def get_vacancy_internal_candidates(
                     f"{user.first_name} {user.last_name}".strip() if user else None
                 ),
                 "position_title": emp.position_title if emp is not None else None,
-                "match_score": row.match_score,
+                "match_score": percent(row),
                 "status": row.status,
                 "candidate_id": (
                     candidate_by_person.get(user.person_id) if user else None
@@ -2350,3 +2513,51 @@ async def get_vacancy_internal_candidates(
     )
     payload["items"] = items
     return payload
+
+
+async def vacancy_behind_card(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    card_id: uuid.UUID,
+    current_user: User | None,
+) -> dict | None:
+    """HRP-693: the requisition a talent card was posted from, for the
+    card's Details - its title, and whether this viewer may open it in
+    recruitment: the section open to them and the vacancy in their hiring
+    scope, the two gates its page stands behind. ``None`` for a card no
+    vacancy was posted to."""
+    from app.core.sections import matrix_levels
+    from app.modules.recruitment.scope import (
+        assert_in_scope,
+        resolve_recruitment_scope,
+    )
+
+    row = (
+        await db.execute(
+            select(Vacancy.id, Vacancy.title)
+            .where(Vacancy.tenant_id == tenant_id, Vacancy.talent_card_id == card_id)
+            .limit(1)
+        )
+    ).first()
+    if row is None:
+        return None
+    can_open = False
+    if (
+        current_user is not None
+        and (await matrix_levels(db, current_user))["recruitment"] != "none"
+    ):
+        scope = await resolve_recruitment_scope(db, current_user)
+        try:
+            await assert_in_scope(
+                db, current_user, scope, select(Vacancy.id).where(Vacancy.id == row.id)
+            )
+            can_open = True
+        except AppError:
+            pass
+    # The id only for whoever may follow it: nobody else is handed a key to
+    # a vacancy outside their reach.
+    return {
+        "id": row.id if can_open else None,
+        "title": row.title,
+        "can_open": can_open,
+    }

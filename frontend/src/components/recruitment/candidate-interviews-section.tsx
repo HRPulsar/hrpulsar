@@ -84,6 +84,8 @@ interface VacancyOption {
   title: string;
   candidate_vacancy_id: string;
   has_parsed_resume?: boolean;
+  /** HRP-836: the vacancy's status freezes its interviews. */
+  interviews_read_only?: boolean;
 }
 
 interface Props {
@@ -167,14 +169,17 @@ export function CandidateInterviewsSection({
   // `view` holders keep the list and the banner and lose the actions, the
   // same rule as the Add button on the internal-candidates shortlist.
   const { isAdmin, canManageSection } = usePermissions();
-  const canEdit = canManageSection("recruitment");
-
   const currentVacancy = useMemo(
     () => vacancyOptions.find((v) => v.id === vacancyId),
     [vacancyOptions, vacancyId],
   );
+  // HRP-836: a paused, closed or cancelled vacancy reads its interviews only.
+  const canEdit =
+    canManageSection("recruitment") && !currentVacancy?.interviews_read_only;
   const cvId = currentVacancy?.candidate_vacancy_id;
-  const consentSigned = consent?.status === "signed";
+  // HRP-979: `active` (from consent/latest) is the rule the server
+  // applies; a fresh send/resend response does not carry it.
+  const consentSigned = consent?.active ?? consent?.status === "signed";
 
   const loadInterviews = useCallback(async () => {
     if (!cvId) {
@@ -518,7 +523,9 @@ export function CandidateInterviewsSection({
               <ShieldAlert className="h-4 w-4 text-amber-600" />
               {consent?.status === "pending"
                 ? t("candidateInterviewsConsentPending")
-                : t("candidateInterviewsConsentMissing")}
+                : consent?.status === "revoked"
+                  ? t("candidateInterviewsConsentRevoked")
+                  : t("candidateInterviewsConsentMissing")}
             </span>
             {canEdit &&
               (consent?.status === "pending" ? (

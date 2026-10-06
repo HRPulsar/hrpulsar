@@ -19,7 +19,7 @@ import { resolveApplyToast } from "@/lib/matrix-apply-toast";
 import { specializationsApi, type SpecializationDetail } from "@/lib/api/specializations";
 import { api } from "@/lib/api";
 import type { Position } from "@/lib/types";
-import { gradeTitleLabel } from "@/lib/reference-labels";
+import { gradeTitleLabel, specializationLabel } from "@/lib/reference-labels";
 import { RequireRole } from "@/components/require-role";
 import { RequireSection } from "@/components/require-section";
 
@@ -230,7 +230,7 @@ export default function SpecializationAIGeneratePage() {
         )}
         <h1 className="text-2xl font-semibold tracking-tight">
           {spec
-            ? t("aiGenerateMatrixFor", { title: spec.title })
+            ? t("aiGenerateMatrixFor", { title: specializationLabel(tRef, spec) })
             : t("aiGenerateMatrix")}
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -247,7 +247,7 @@ export default function SpecializationAIGeneratePage() {
           <div className="min-w-0">
             <p className="font-medium">
               {t.rich("positionBannerHeadline", {
-                spec: spec?.title ?? t("specializationFallback"),
+                spec: spec ? specializationLabel(tRef, spec) : t("specializationFallback"),
                 specName: (chunks) => (
                   <span className="text-primary">{chunks}</span>
                 ),

@@ -383,18 +383,33 @@ def get_effective_model(row: TenantAISettings) -> str:
     return preset["models"].get(provider, preset["models"]["anthropic"])
 
 
-async def get_effective_model_async(db: AsyncSession, row: TenantAISettings) -> str:
+async def get_effective_model_async(
+    db: AsyncSession, row: TenantAISettings, *, dispatch: bool = True
+) -> str:
     """Effective model: the catalog kill-switch, then the tenant's processor
     list (HRP-1005). Billing reads its multiplier off this model, so it must
     be the one dispatch really sends; with no usable provider the model
-    stands and dispatch refuses the call."""
+    stands and dispatch refuses the call.
+
+    HRP-987: a model the catalog no longer offers, with no replacement, is
+    refused with ``ai_model_unavailable`` - pinned or preset alike - unless
+    the processor list swaps it for an allowed provider's model first. It
+    is never dispatched. ``dispatch=False`` is for read projections (the
+    settings page, the price list): they show the model as it stands.
+    """
     from app.modules.ai import processors
 
     model = await _catalog_checked_model(db, row)
-    return await processors.substitute_model(db, row.tenant_id, model) or model
+    if model is not None:
+        return await processors.substitute_model(db, row.tenant_id, model) or model
+    model = get_effective_model(row)
+    substitute = await processors.substitute_model(db, row.tenant_id, model)
+    if substitute not in (None, model) or not dispatch:
+        return substitute or model
+    raise AppError("ai_model_unavailable", status.HTTP_409_CONFLICT, model=model)
 
 
-async def _catalog_checked_model(db: AsyncSession, row: TenantAISettings) -> str:
+async def _catalog_checked_model(db: AsyncSession, row: TenantAISettings) -> str | None:
     """Effective model, checked against the catalog kill-switch.
 
     HRP-500 (review #12): disabling a catalog row blocked *picking* the
@@ -403,8 +418,9 @@ async def _catalog_checked_model(db: AsyncSession, row: TenantAISettings) -> str
     id and every unpinned tenant went on calling a model the platform
     admin had just turned off. When the resolved model is not pickable any
     more, fall back to another approved+enabled model of the same tier and
-    provider; with no substitute the preset id stands (killing generation
-    outright would be worse than one more call to a deprecated model).
+    provider; with no substitute there is nothing to dispatch: None
+    (HRP-987 - the preset id used to stand, so a disabled model with no
+    replacement kept being called).
     """
     from app.modules.ai import model_catalog_service
 
@@ -433,12 +449,12 @@ async def _catalog_checked_model(db: AsyncSession, row: TenantAISettings) -> str
     if substitute is None:
         logger.warning(
             "ai settings: model %s is disabled in the catalog and no %s/%s "
-            "replacement is approved — keeping it",
+            "replacement is approved — refusing it",
             model,
             provider,
             tier,
         )
-        return model
+        return None
     logger.warning(
         "ai settings: model %s is disabled in the catalog — falling back to %s",
         model,
@@ -500,7 +516,7 @@ async def get_effective_credit_multiplier_async(
     """
     from app.modules.ai import model_catalog_service
 
-    model = await get_effective_model_async(db, row)
+    model = await get_effective_model_async(db, row, dispatch=False)
     stored = await model_catalog_service.stored_multiplier(db, model)
     if stored is not None:
         return float(stored)
@@ -581,7 +597,7 @@ async def to_read_dict_async(db: AsyncSession, row: TenantAISettings) -> dict[st
     settings page could quote x1.0 for a model charged at x2.5 (and the
     spend preview inherited the same phantom delta).
     """
-    effective_model = await get_effective_model_async(db, row)
+    effective_model = await get_effective_model_async(db, row, dispatch=False)
     return to_read_dict(
         row,
         effective_model=effective_model,

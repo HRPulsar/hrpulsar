@@ -6,8 +6,12 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import * as Popover from "@radix-ui/react-popover";
 import { useTranslations } from "next-intl";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 // A character no name or label contains, to find where a sentence puts it.
 const MARK = "";
@@ -80,24 +84,22 @@ export function PackChip({ code, label, testId }: { code: string | null; label: 
   const key = `agentPack.${code}.description`;
   if (!code || !tRef.has(key)) return <>{label}</>;
   return (
-    <Popover.Root>
-      <Popover.Trigger
+    <Popover>
+      <PopoverTrigger
         className="rounded-sm underline decoration-dotted underline-offset-4 transition-colors hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         data-testid={testId}
       >
         {label}
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          align="start"
-          sideOffset={6}
-          className="z-50 w-[360px] max-w-[90vw] rounded-md border bg-popover p-4 text-sm text-popover-foreground shadow-md outline-none"
-          data-testid={`${testId}-popover`}
-        >
-          <p className="font-semibold">{label}</p>
-          <p className="mt-1 text-muted-foreground">{tRef(key)}</p>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        className="w-[360px] max-w-[90vw] rounded-md p-4 text-sm"
+        data-testid={`${testId}-popover`}
+      >
+        <p className="font-semibold">{label}</p>
+        <p className="mt-1 text-muted-foreground">{tRef(key)}</p>
+      </PopoverContent>
+    </Popover>
   );
 }

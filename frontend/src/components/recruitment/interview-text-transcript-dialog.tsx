@@ -17,11 +17,14 @@ import { api } from "@/lib/api";
 import type { Interview } from "@/lib/types";
 import { toast } from "sonner";
 import { Loader2, Sparkles } from "lucide-react";
+import { ConsentRequiredHint } from "@/components/recruitment/candidate-consent";
 
 interface InterviewTextTranscriptDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   interviewId: string;
+  /** HRP-979: the transcript goes to AI analysis, so it needs consent. */
+  consentSigned: boolean;
   onSaved?: (interview: Interview) => void;
 }
 
@@ -29,6 +32,7 @@ export function InterviewTextTranscriptDialog({
   open,
   onOpenChange,
   interviewId,
+  consentSigned,
   onSaved,
 }: InterviewTextTranscriptDialogProps) {
   const t = useTranslations("recruitment");
@@ -72,6 +76,12 @@ export function InterviewTextTranscriptDialog({
           <DialogTitle>{t("interviewPasteText")}</DialogTitle>
           <DialogDescription>{t("textTranscriptDescription")}</DialogDescription>
         </DialogHeader>
+        {!consentSigned && (
+          <ConsentRequiredHint
+            revoked={false}
+            testId="recruitment-interview-text-transcript-consent-hint"
+          />
+        )}
         <div className="space-y-2">
           <Label htmlFor="rec-int-paste">{t("textTranscriptTextLabel")}</Label>
           <Textarea
@@ -93,7 +103,7 @@ export function InterviewTextTranscriptDialog({
           </Button>
           <Button
             onClick={() => void handleSubmit()}
-            disabled={submitting}
+            disabled={submitting || !consentSigned}
             data-testid="recruitment-interview-btn-save-text-transcript"
           >
             {submitting ? (

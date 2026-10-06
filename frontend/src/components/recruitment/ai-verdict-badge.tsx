@@ -1,6 +1,5 @@
 "use client";
 
-import * as Popover from "@radix-ui/react-popover";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -11,6 +10,11 @@ import {
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 import {
   aiAnalysisBasis,
@@ -188,8 +192,8 @@ export function AiVerdictBadge({
         </span>
       )}
       {hasDetails && (
-        <Popover.Root>
-          <Popover.Trigger
+        <Popover>
+          <PopoverTrigger
             type="button"
             className="inline-flex items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full"
             aria-label={t("verdictDetailsAria")}
@@ -200,68 +204,66 @@ export function AiVerdictBadge({
             }
           >
             <Info className="size-3.5" aria-hidden />
-          </Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Content
-              align="end"
-              sideOffset={6}
-              className="z-50 w-[360px] max-w-[90vw] rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none"
-              data-testid={
-                testIdPrefix
-                  ? `${testIdPrefix}-ai-verdict-popover`
-                  : "ai-verdict-popover"
-              }
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <Icon className="size-4" aria-hidden />
-                  <span className="text-sm font-semibold">{label}</span>
-                </div>
-                {aiScore !== null && aiScore !== undefined && (
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {t("verdictScore", { score: aiScore.toFixed(2) })}
-                  </span>
-                )}
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            sideOffset={6}
+            className="w-[360px] max-w-[90vw] rounded-md p-4"
+            data-testid={
+              testIdPrefix
+                ? `${testIdPrefix}-ai-verdict-popover`
+                : "ai-verdict-popover"
+            }
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Icon className="size-4" aria-hidden />
+                <span className="text-sm font-semibold">{label}</span>
               </div>
-              {summary && (
-                <p className="mt-2 text-sm text-foreground/90">{summary}</p>
+              {aiScore !== null && aiScore !== undefined && (
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {t("verdictScore", { score: aiScore.toFixed(2) })}
+                </span>
               )}
-              <dl className="mt-3 space-y-2 text-xs">
-                {keyStrength && (
-                  <div>
-                    <dt className="font-medium text-foreground">
-                      {t("verdictKeyStrength")}
-                    </dt>
-                    <dd className="text-muted-foreground">{keyStrength}</dd>
-                  </div>
-                )}
-                {keyRisk && (
-                  <div>
-                    <dt className="font-medium text-foreground">
-                      {t("verdictKeyRisk")}
-                    </dt>
-                    <dd className="text-muted-foreground">{keyRisk}</dd>
-                  </div>
-                )}
-                {riskMitigation && (
-                  <div>
-                    <dt className="font-medium text-foreground">
-                      {t("verdictRiskMitigation")}
-                    </dt>
-                    <dd className="text-muted-foreground">{riskMitigation}</dd>
-                  </div>
-                )}
-              </dl>
-              {aiReadiness && (
-                <p className="mt-3 border-t pt-2 text-[11px] text-muted-foreground">
-                  {t("verdictBasedOn", {
-                    readiness: t(READINESS_TEXT_KEYS[aiReadiness]),
-                  })}
-                </p>
+            </div>
+            {summary && (
+              <p className="mt-2 text-sm text-foreground/90">{summary}</p>
+            )}
+            <dl className="mt-3 space-y-2 text-xs">
+              {keyStrength && (
+                <div>
+                  <dt className="font-medium text-foreground">
+                    {t("verdictKeyStrength")}
+                  </dt>
+                  <dd className="text-muted-foreground">{keyStrength}</dd>
+                </div>
               )}
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
+              {keyRisk && (
+                <div>
+                  <dt className="font-medium text-foreground">
+                    {t("verdictKeyRisk")}
+                  </dt>
+                  <dd className="text-muted-foreground">{keyRisk}</dd>
+                </div>
+              )}
+              {riskMitigation && (
+                <div>
+                  <dt className="font-medium text-foreground">
+                    {t("verdictRiskMitigation")}
+                  </dt>
+                  <dd className="text-muted-foreground">{riskMitigation}</dd>
+                </div>
+              )}
+            </dl>
+            {aiReadiness && (
+              <p className="mt-3 border-t pt-2 text-[11px] text-muted-foreground">
+                {t("verdictBasedOn", {
+                  readiness: t(READINESS_TEXT_KEYS[aiReadiness]),
+                })}
+              </p>
+            )}
+          </PopoverContent>
+        </Popover>
       )}
     </span>
   );

@@ -633,13 +633,26 @@ function MatchRow({
               <StepOverrideMenu
                 testId={`coverage-btn-change-pack-${row.step_id}`}
                 trigger={<Button size="sm" variant="outline" className="h-7" />}
-                options={packs && packs.map((pack) => ({ value: pack.code, label: packLabel(pack.code) }))}
-                value={row.agent?.pack_code ?? null}
+                // HRP-911: by id - the tenant's own pack may share a built-in
+                // one's code, and then reads by its own title.
+                options={
+                  packs &&
+                  packs.map((pack) =>
+                    pack.tenant_id
+                      ? {
+                          value: pack.id,
+                          label: t("ownPack", { name: pack.title_en }),
+                          testKey: `own-${pack.code}`,
+                        }
+                      : { value: pack.id, label: packLabel(pack.code), testKey: pack.code },
+                  )
+                }
+                value={row.agent?.pack_id ?? null}
                 manual={row.agent?.pack_manual ?? false}
                 resetLabel={t("manualReset")}
                 emptyLabel={tc("loading")}
                 onOpen={onLoadPacks}
-                onPick={(code) => onOverride({ manual_pack_code: code })}
+                onPick={(id) => onOverride({ manual_pack_id: id })}
               >
                 {row.agent ? t("changeAgent") : t("setAgent")}
               </StepOverrideMenu>

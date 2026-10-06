@@ -19,6 +19,9 @@ import {
 export interface OverrideOption {
   value: string;
   label: string;
+  /** The option's testid suffix when the value is no readable code (a pack
+   * id, HRP-911); the value otherwise. */
+  testKey?: string;
 }
 
 export function StepOverrideMenu({
@@ -67,7 +70,7 @@ export function StepOverrideMenu({
               // Picking the value already in effect pins it: a manual value
               // survives a reclassification, a computed one does not.
               onClick={() => onPick(option.value)}
-              data-testid={`${testId}-option-${option.value}`}
+              data-testid={`${testId}-option-${option.testKey ?? option.value}`}
             >
               <Check className={`size-4 ${option.value === value ? "" : "invisible"}`} />
               {option.label}

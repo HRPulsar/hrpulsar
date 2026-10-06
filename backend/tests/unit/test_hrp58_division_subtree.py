@@ -17,11 +17,14 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
+import pytest
 from app.modules.company import service as company_service
 from app.modules.company.models import Division
-from app.modules.company.schemas import DivisionCreate
+from app.modules.company.schemas import DivisionCreate, DivisionUpdate
 from app.modules.employee import service as employee_service
 from app.modules.employee.models import Employee
+from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -138,9 +141,121 @@ class TestDivisionSubtreeIds:
         div_a.parent_id = b
         await db.commit()
 
+        # HRP-572: a regression fails here instead of hanging the run.
+        await db.execute(text("SET LOCAL statement_timeout = '5s'"))
         ids = await company_service.get_division_subtree_ids(db, tenant.id, [a])
 
         assert set(ids) == {a, b}
+
+
+class TestDivisionSubtreeRecursiveQuery:
+    """HRP-572: the walk runs as one recursive query; the contract of HRP-58
+    holds - the same ids, the roots first, strangers dropped."""
+
+    async def test_a_deep_chain_is_collected_whole(self, db: AsyncSession, tenant):
+        chain = [await _make_division(db, tenant.id, "L0")]
+        for depth in range(1, 25):
+            chain.append(
+                await _make_division(db, tenant.id, f"L{depth}", parent_id=chain[-1])
+            )
+
+        ids = await company_service.get_division_subtree_ids(db, tenant.id, chain[:1])
+
+        assert sorted(ids) == sorted(chain)
+        assert len(ids) == len(chain)
+        assert ids[0] == chain[0]
+
+    async def test_several_roots_come_first_in_the_order_given(
+        self, db: AsyncSession, tenant
+    ):
+        a = await _make_division(db, tenant.id, "A")
+        a1 = await _make_division(db, tenant.id, "A1", parent_id=a)
+        b = await _make_division(db, tenant.id, "B")
+        b1 = await _make_division(db, tenant.id, "B1", parent_id=b)
+        b11 = await _make_division(db, tenant.id, "B11", parent_id=b1)
+        await _make_division(db, tenant.id, "C")  # not asked for
+
+        ids = await company_service.get_division_subtree_ids(db, tenant.id, [b, a])
+
+        assert ids[:2] == [b, a]
+        assert sorted(ids) == sorted([a, a1, b, b1, b11])
+
+    async def test_duplicates_and_a_root_inside_another_count_once(
+        self, db: AsyncSession, tenant
+    ):
+        top = await _make_division(db, tenant.id, "Top")
+        mid = await _make_division(db, tenant.id, "Mid", parent_id=top)
+        leaf = await _make_division(db, tenant.id, "Leaf", parent_id=mid)
+
+        ids = await company_service.get_division_subtree_ids(
+            db, tenant.id, [top, mid, top, leaf, mid]
+        )
+
+        assert ids[:3] == [top, mid, leaf]
+        assert len(ids) == 3
+
+    async def test_a_foreign_root_and_a_foreign_child_are_dropped(
+        self, db: AsyncSession, tenant
+    ):
+        from app.modules.company.models import Tenant
+
+        other = Tenant(name="Other Corp", slug=f"other-{uuid.uuid4().hex[:8]}")
+        db.add(other)
+        await db.commit()
+        mine = await _make_division(db, tenant.id, "Mine")
+        theirs = await _make_division(db, other.id, "Theirs")
+        # A child of another tenant under my division: corrupted data, never
+        # something the API writes - it still must not leak into my answer.
+        stray = await _make_division(db, other.id, "Stray")
+        div = await db.get(Division, stray)
+        assert div is not None
+        div.parent_id = mine
+        await db.commit()
+
+        assert await company_service.get_division_subtree_ids(
+            db, tenant.id, [theirs, mine]
+        ) == [mine]
+        assert (
+            await company_service.get_division_subtree_ids(db, tenant.id, [theirs])
+            == []
+        )
+
+    async def test_a_cycle_with_a_branch_ends(self, db: AsyncSession, tenant):
+        """``UNION`` is what ends the walk on a loop. The timeout turns a
+        regression to ``UNION ALL`` into a failure instead of a hung run."""
+        a = await _make_division(db, tenant.id, "A")
+        b = await _make_division(db, tenant.id, "B", parent_id=a)
+        c = await _make_division(db, tenant.id, "C", parent_id=b)
+        side = await _make_division(db, tenant.id, "Side", parent_id=c)
+        div_a = await db.get(Division, a)
+        assert div_a is not None
+        div_a.parent_id = c  # a -> b -> c -> a
+        await db.commit()
+
+        await db.execute(text("SET LOCAL statement_timeout = '5s'"))
+        ids = await company_service.get_division_subtree_ids(db, tenant.id, [b])
+
+        assert ids[0] == b
+        assert sorted(ids) == sorted([a, b, c, side])
+
+    async def test_moving_a_division_under_its_own_descendant_is_refused(
+        self, db: AsyncSession, tenant
+    ):
+        """The other caller: the parent check walks the same subtree."""
+        top = await _make_division(db, tenant.id, "Top")
+        mid = await _make_division(db, tenant.id, "Mid", parent_id=top)
+        leaf = await _make_division(db, tenant.id, "Leaf", parent_id=mid)
+        other = await _make_division(db, tenant.id, "Other")
+
+        with pytest.raises(HTTPException) as exc:
+            await company_service.update_division(
+                db, tenant.id, top, DivisionUpdate(parent_id=leaf)
+            )
+        assert exc.value.code == "division_parent_cycle"
+        moved = await company_service.update_division(
+            db, tenant.id, top, DivisionUpdate(parent_id=other)
+        )
+        assert moved["parent_id"] == other
 
 
 class TestListEmployeesIncludeSubDivisions:

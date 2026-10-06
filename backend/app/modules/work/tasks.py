@@ -34,7 +34,7 @@ import unicodedata
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypeGuard
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -208,6 +208,15 @@ async def _terminate(
     return {"status": "error", "session_id": str(sess.id), "error_code": error_code}
 
 
+def _is_refusal(exc: BaseException) -> TypeGuard[AppError]:
+    """No AI provider allowed (HRP-1005), or the model gone with no
+    replacement (HRP-987): the reason is the message, a retry fixes nothing."""
+    return isinstance(exc, AppError) and exc.code in (
+        "ai_no_allowed_processor",
+        "ai_model_unavailable",
+    )
+
+
 async def _force_terminate_running(
     session_factory: async_sessionmaker[AsyncSession],
     session_id: uuid.UUID,
@@ -219,7 +228,7 @@ async def _force_terminate_running(
         sess = await db.get(WorkDecompositionSession, session_id)
         if sess is None or sess.status not in ("pending", "running"):
             return
-        if isinstance(exc, AppError) and exc.code == "ai_no_allowed_processor":
+        if _is_refusal(exc):
             # A refusal with a reason (HRP-1005): "crashed" would send the
             # reader to try again, which changes nothing.
             await _terminate(
@@ -439,8 +448,9 @@ async def _deliver(
         await db.rollback()
         await db.refresh(sess)
         return {"status": sess.status, "session_id": str(sess.id)}
-    if charge:
-        params = sess.params or {}
+    params = sess.params or {}
+    # HRP-922: ``free`` - a run of the public check's sandbox, never charged.
+    if charge and not params.get("free"):
         await billing_hooks.consume_action(
             db,
             sess.tenant_id,
@@ -457,14 +467,16 @@ async def _deliver(
 
 def _bind_session_context(sess: Any) -> None:
     """HRP-964: attribute the run's model calls to the decomposition session.
-    Reset by celery_signals.on_task_postrun."""
+    Reset by celery_signals.on_task_postrun. HRP-922: a run made for another
+    record - the public check - names that record in ``usage_entity``."""
     params = sess.params or {}
+    entity = params.get("usage_entity") or {}
     ai_usage_hooks.bind(
         tenant_id=sess.tenant_id,
         user_id=sess.user_id,
         action=params.get("billing_action") or "work_decomposition.start",
-        entity_type="work_container",
-        entity_id=sess.container_id,
+        entity_type=entity.get("type") or "work_container",
+        entity_id=uuid.UUID(entity["id"]) if entity.get("id") else sess.container_id,
         work_unit_id=ai_usage_hooks.work_unit_id_or(sess.id),
     )
 
@@ -490,6 +502,13 @@ async def _execute_body(
         _bind_session_context(sess)
 
         tenant_settings = await ai_settings_service.get_or_default(db, sess.tenant_id)
+        language = (sess.params or {}).get("content_language")
+        if language:
+            # HRP-922: the public check answers in the visitor's language, not
+            # the sandbox's. Detached first: nothing may write it back.
+            if tenant_settings in db:
+                db.expunge(tenant_settings)
+            tenant_settings.content_language = language
         effective_model = await ai_settings_service.get_effective_model_async(
             db, tenant_settings
         )
@@ -884,7 +903,11 @@ async def execute_skill(
                 row = await db.get(WorkStepSkill, skill_id)
                 if row is not None:
                     await _fail_skill(
-                        db, row.tenant_id, skill_id, claimed_at, type(exc).__name__
+                        db,
+                        row.tenant_id,
+                        skill_id,
+                        claimed_at,
+                        str(exc.detail) if _is_refusal(exc) else type(exc).__name__,
                     )
         except Exception:  # noqa: BLE001
             logger.exception("work skill %s: could not mark failed", skill_id)

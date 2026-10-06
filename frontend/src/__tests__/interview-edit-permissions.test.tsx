@@ -16,11 +16,18 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import enMessages from "../../messages/en.json";
-import type { ConsentRequest, Interview } from "@/lib/types";
+import { api } from "@/lib/api";
+import type {
+  ConsentRequest,
+  Interview,
+  InterviewerOption,
+} from "@/lib/types";
 
 let roles: string[] = [];
 let consent: ConsentRequest | null = null;
 let putFails = false;
+// What the interviewer picker's list answers (an edit control's list).
+let pickerPeople: InterviewerOption[] = [];
 
 const INTERVIEW: Interview = {
   id: "iv-1",
@@ -28,7 +35,11 @@ const INTERVIEW: Interview = {
   status: "scheduled",
   transcription_status: "pending",
   analysis_status: "pending",
-  interviewer_ids: [],
+  interviewer_ids: ["u-1", "u-2"],
+  interviewers: [
+    { id: "u-1", full_name: "Olga Petrova", position_title: null },
+    { id: "u-2", full_name: "Ivan Sidorov", position_title: "Staff Engineer" },
+  ],
   segments: [],
   ai_assessments: [],
 };
@@ -58,11 +69,9 @@ vi.mock("@/lib/api", () => ({
       if (url.includes("/consent/latest")) return Promise.resolve(consent);
       // One row in the candidate section, so its row menu can be asserted.
       if (url.includes("/interviews?")) return Promise.resolve([INTERVIEW]);
-      if (
-        url.includes("/assessment-rounds") ||
-        url === "/recruitment/interviewers"
-      )
-        return Promise.resolve([]);
+      if (url.startsWith("/recruitment/interviewers?"))
+        return Promise.resolve(pickerPeople);
+      if (url.includes("/assessment-rounds")) return Promise.resolve([]);
       return Promise.reject(new Error(`not mocked: ${url}`));
     }),
     put: () => apiPut(),
@@ -285,6 +294,37 @@ describe("Inline segment edits — who may make them", () => {
       />,
     );
     expect(pencil()).toBeNull();
+  });
+});
+
+// HRP-1019: the names come with the interview. They used to be looked up
+// in the picker's list, which only an editor loads - a viewer saw a dash.
+describe("Interviewers field — names for every reader", () => {
+  it("shows the names to a viewer and an editor alike", async () => {
+    for (const role of ["hr", "hiring_manager", "manager", "recruiter"]) {
+      await render([role], <InterviewDetailPage />);
+      expect(
+        byId("recruitment-interview-detail-interviewers")?.textContent,
+        role,
+      ).toContain("Olga Petrova, Ivan Sidorov");
+    }
+  });
+
+  // HRP-1015: someone who has since applied to the vacancy is out of the
+  // picker's list (HRP-971) but stays on the interview, and keeps a name.
+  it("names an interviewer the picker no longer offers", async () => {
+    pickerPeople = [{ id: "u-1", full_name: "Olga Petrova", email: "o@x.io" }];
+    try {
+      await render(["recruiter"], <InterviewDetailPage />);
+      expect(api.get).toHaveBeenCalledWith(
+        "/recruitment/interviewers?candidate_vacancy_id=cv-1",
+      );
+      expect(
+        byId("recruitment-interview-detail-interviewers")?.textContent,
+      ).toContain("Olga Petrova, Ivan Sidorov");
+    } finally {
+      pickerPeople = [];
+    }
   });
 });
 

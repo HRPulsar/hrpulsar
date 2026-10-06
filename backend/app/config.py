@@ -150,8 +150,10 @@ class Settings(BaseSettings):
     deepgram_api_key: str = ""
     assemblyai_api_key: str = ""
     yandex_speechkit_api_key: str = ""
-    # whisper | deepgram | assemblyai | yandex_speechkit
-    transcription_provider_default: str = "whisper"
+    # Platform-keyed provider tried first: whisper | deepgram | assemblyai |
+    # yandex_speechkit. Empty = the measured order above (HRP-1007). A
+    # workspace's own keys still go before any platform key.
+    transcription_provider_default: str = ""
 
     # Email (optional) — Resend (SaaS) or SMTP (self-hosted)
     resend_api_key: str = ""
@@ -334,6 +336,30 @@ class Settings(BaseSettings):
     # on PUBLIC_CHECK_HOST (deploy/Caddyfile, docs/ops/PUBLIC_CHECK_SUBDOMAIN.md).
     public_check_enabled: bool = False
     public_check_host: str = ""
+    # Abuse and cost guards of the check (HRP-923), all on its intake
+    # (POST /api/public-check/checks); polling a result is never limited.
+    # Per-IP throttle in slowapi syntax: a few checks an hour, a couple of
+    # dozen a day from one address.
+    public_check_rate_limit: str = "5/hour;20/day"
+    # Cloudflare Turnstile secret of the check form; the page renders the
+    # shared NEXT_PUBLIC_TURNSTILE_SITE_KEY widget, so this is the secret
+    # of that widget. Empty skips the captcha (dev, on-prem, E2E); a
+    # deployed tier with the check on refuses to start without it.
+    public_check_turnstile_secret: str = ""
+    # The LLM budget: checks accepted per UTC day across all visitors, then
+    # "try again tomorrow". 0 = no cap - refused at startup in
+    # production/staging with the check on; recalibrate by the cost per
+    # check (HRP-931).
+    public_check_daily_limit: int = 500
+    # Kill switch: true refuses every new check with the same "try again
+    # tomorrow" answer; checks already queued still finish.
+    public_check_paused: bool = False
+    # Dictation of the description (HRP-947), POST /api/public-check/transcribe:
+    # recordings per IP in slowapi syntax (a bucket apart from new checks),
+    # and the minutes transcribed per UTC day across all visitors, behind
+    # the same pause. 0 = no cap - refused like the LLM budget's.
+    public_check_voice_rate_limit: str = "10/hour;30/day"
+    public_check_voice_daily_minutes: int = 120
 
     model_config = {"env_file": "../.env", "extra": "ignore"}
 
@@ -452,6 +478,20 @@ class Settings(BaseSettings):
                 f"AI_PROCESSORS_DEFAULT has unknown processors {unknown}; "
                 f"known: {', '.join(AI_PROCESSOR_NAMES)}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _known_transcription_provider_default(self) -> "Settings":
+        """HRP-1007: a typo must not silently leave the platform order as
+        measured while the operator believes it changed — refuse to start."""
+        known = ("whisper", "deepgram", "assemblyai", "yandex_speechkit")
+        name = self.transcription_provider_default.strip().lower()
+        if name and name not in known:
+            raise ValueError(
+                f"TRANSCRIPTION_PROVIDER_DEFAULT has unknown provider {name!r}; "
+                f"known: {', '.join(known)}"
+            )
+        self.transcription_provider_default = name
         return self
 
     @model_validator(mode="after")
@@ -739,6 +779,54 @@ class Settings(BaseSettings):
         origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
         if self.public_check_origin not in origins:
             self.cors_origins = ",".join([*origins, self.public_check_origin])
+        return self
+
+    @model_validator(mode="after")
+    def _public_check_guards(self) -> "Settings":
+        """The abuse guards of the public check hold or the app does not
+        start (HRP-923).
+
+        A typo in PUBLIC_CHECK_RATE_LIMIT would not fail a request: slowapi
+        logs it and throttles nothing. And a deployed tier with the check on
+        needs its captcha, as the signup form does
+        (:func:`_signup_turnstile_required_in_prod`), and both daily cost
+        caps - checks and dictated minutes - above 0.
+        """
+        from limits import parse_many
+
+        for name in ("public_check_rate_limit", "public_check_voice_rate_limit"):
+            try:
+                parse_many(getattr(self, name))
+            except ValueError as exc:
+                raise ValueError(
+                    f"{name.upper()} is not a rate limit "
+                    f"('{getattr(self, name)}'); expected e.g. "
+                    "'5/hour;20/day'."
+                ) from exc
+        env = (self.sentry_environment or "").lower()
+        if (
+            self.public_check_enabled
+            and env in {"production", "staging"}
+            and not self.public_check_turnstile_secret
+        ):
+            raise ValueError(
+                "PUBLIC_CHECK_TURNSTILE_SECRET must be set in "
+                f"'{env}' environment when PUBLIC_CHECK_ENABLED=true. Refusing "
+                "to start with the anonymous process check exposed without "
+                "a bot guard."
+            )
+        if self.public_check_enabled and env in {"production", "staging"}:
+            for name in (
+                "public_check_daily_limit",
+                "public_check_voice_daily_minutes",
+            ):
+                if getattr(self, name) <= 0:
+                    raise ValueError(
+                        f"{name.upper()} must be above 0 in '{env}' "
+                        "environment when PUBLIC_CHECK_ENABLED=true. Refusing "
+                        "to start the anonymous process check without a daily "
+                        "cost cap."
+                    )
         return self
 
 

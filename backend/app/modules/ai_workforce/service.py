@@ -22,7 +22,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from pydantic_core import to_jsonable_python
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,6 +50,7 @@ from app.modules.ai_workforce.schemas import (
     WorkflowStep,
     WorkflowUpdate,
 )
+from app.modules.auth.models import Role, User, user_roles
 from app.modules.competence.models import Competence
 from app.modules.employee.models import Employee
 from app.modules.primitives.models import Primitive
@@ -57,7 +58,10 @@ from app.modules.primitives.models import Primitive
 EXPIRY_WINDOW_DAYS = 30
 USER_AGENT_MAX = 300
 IP_ADDRESS_MAX = 45
-OPEN_ASSIGNMENT_STATUSES = ("pending", "active")
+# HRP-984: an active grant whose owner left - suspended, not closed.
+NEEDS_OWNER = "needs_owner"
+OPEN_ASSIGNMENT_STATUSES = ("pending", "active", NEEDS_OWNER)
+OWNER_NEEDED_TEMPLATE = "ai_workforce.owner_needed"
 
 
 # --- Audit ------------------------------------------------------------------
@@ -584,6 +588,20 @@ async def _employee_in_tenant(
     return row
 
 
+async def _active_owner(
+    db: AsyncSession, tenant_id: uuid.UUID, employee_id: uuid.UUID
+) -> Employee:
+    """HRP-984 / HRP-988: whoever answers for an agent - a grant's
+    accountable owner, a workflow's owner - is at work: not terminated, not
+    inactive (the statuses that also block sign-in)."""
+    from app.modules.auth.service import BLOCKED_EMPLOYEE_STATUSES
+
+    row = await _employee_in_tenant(db, tenant_id, employee_id)
+    if row.status in BLOCKED_EMPLOYEE_STATUSES:
+        raise AppError("ai_workforce_owner_inactive", 422)
+    return row
+
+
 async def _competences_in_tenant(
     db: AsyncSession, tenant_id: uuid.UUID, ids: Sequence[uuid.UUID]
 ) -> list[uuid.UUID]:
@@ -639,13 +657,14 @@ async def _ensure_no_active_grant(
     first does not, and the two disagree on the use cases and the
     supervision level the register is supposed to answer for.
 
-    On the raw status, not ``_active_grant``: a row that lost its owner is
-    repaired (or revoked), never stacked under a second one."""
+    On the raw status, not ``_active_grant``: a row that lost its owner -
+    deleted (owner NULL) or left the company (``needs_owner``, HRP-984) -
+    is repaired (or revoked), never stacked under a second one."""
     open_row = await db.execute(
         select(AIUsageAssignment.id).where(
             AIUsageAssignment.employee_id == employee_id,
             AIUsageAssignment.agent_id == agent_id,
-            AIUsageAssignment.status == "active",
+            AIUsageAssignment.status.in_(("active", NEEDS_OWNER)),
         )
     )
     if open_row.first() is not None:
@@ -803,7 +822,7 @@ async def create_assignment(
 ) -> dict:
     """An admin grants the assignment outright: active, approved by the caller."""
     await _employee_in_tenant(db, tenant_id, data.employee_id)
-    await _employee_in_tenant(db, tenant_id, data.accountability_owner_id)
+    await _active_owner(db, tenant_id, data.accountability_owner_id)
     await _active_agent(db, tenant_id, data.agent_id)
     # Under the agent row lock ``_active_agent`` just took, so two creates
     # for one pair serialise here instead of both writing a grant.
@@ -874,7 +893,7 @@ async def request_assignment(
     if pending.first() is not None:
         raise AppError("ai_assignment_already_requested", 409)
     if data.accountability_owner_id is not None:
-        await _employee_in_tenant(db, tenant_id, data.accountability_owner_id)
+        await _active_owner(db, tenant_id, data.accountability_owner_id)
     competence_ids = await _competences_in_tenant(db, tenant_id, data.competence_ids)
     valid_from = date.today()
     _check_period(valid_from, data.valid_until)
@@ -926,12 +945,17 @@ async def update_assignment(
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> dict:
-    row = await _assignment_row(db, tenant_id, assignment_id)
+    # FOR UPDATE: naming an owner can flip the status, like the other
+    # status writers.
+    row = await _assignment_row(db, tenant_id, assignment_id, for_update=True)
     if row.status not in OPEN_ASSIGNMENT_STATUSES:
         raise AppError("ai_assignment_closed", 409)
     changes = data.model_dump(exclude_unset=True)
     if changes.get("accountability_owner_id") is not None:
-        await _employee_in_tenant(db, tenant_id, changes["accountability_owner_id"])
+        await _active_owner(db, tenant_id, changes["accountability_owner_id"])
+        if row.status == NEEDS_OWNER:
+            # HRP-984: a new owner at work puts the suspended grant back.
+            changes["status"] = "active"
     _check_period(
         changes.get("valid_from") or row.valid_from,
         changes.get("valid_until", row.valid_until),
@@ -984,7 +1008,7 @@ async def approve_assignment(
     owner_id = data.accountability_owner_id or row.accountability_owner_id
     if owner_id is None:
         raise AppError("ai_assignment_owner_required", 400)
-    await _employee_in_tenant(db, tenant_id, owner_id)
+    await _active_owner(db, tenant_id, owner_id)
     valid_until = data.valid_until if data.valid_until is not None else row.valid_until
     _check_period(row.valid_from, valid_until)
 
@@ -1053,7 +1077,8 @@ async def revoke_assignment(
     user_agent: str | None = None,
 ) -> dict:
     row = await _assignment_row(db, tenant_id, assignment_id, for_update=True)
-    if row.status != "active":
+    # A grant waiting for a new owner (HRP-984) may be withdrawn instead.
+    if row.status not in ("active", NEEDS_OWNER):
         raise AppError("ai_assignment_not_active", 409)
     row.status = "revoked"
     _audit(
@@ -1123,6 +1148,142 @@ async def list_expiring_assignments(
         .order_by(AIUsageAssignment.valid_until, AIUsageAssignment.created_at)
     )
     return await _assignment_reads(db, rows.scalars().all())
+
+
+async def ensure_not_an_owner(db: AsyncSession, employee_id: uuid.UUID) -> None:
+    """HRP-984 / HRP-988: an employee who owns a workflow or answers for an
+    open grant is not hard-deleted - both FKs are ON DELETE SET NULL and
+    would leave a workflow or a grant with nobody behind it. Same posture as
+    the HRP-65 guard in ``employee.service.delete_employee``: 409, hand the
+    ownership over first."""
+    owns = select(
+        exists().where(
+            AIUsageAssignment.accountability_owner_id == employee_id,
+            AIUsageAssignment.status.in_(OPEN_ASSIGNMENT_STATUSES),
+        )
+        | exists().where(AgentWorkflow.owner_id == employee_id)
+    )
+    if await db.scalar(owns):
+        raise AppError("ai_workforce_owner_delete_blocked", 409)
+
+
+async def release_dismissed_owner(
+    db: AsyncSession, employee: Employee, *, user_id: uuid.UUID | None = None
+) -> int:
+    """HRP-984 (b): an employee who stops working stops answering for AI
+    agents. Every grant in force they own waits in ``needs_owner`` - not a
+    grant until a new owner at work is named - and the tenant's admins get
+    one notification for the lot. Pending requests stay: approving one
+    already refuses an owner who is not at work.
+
+    Every path that sets an employee's status calls this once the new
+    status is on the row. A no-op for a working status and for an owner
+    with nothing in force, so a repeated call is harmless. Sending the
+    notification commits; otherwise the caller does."""
+    from app.modules.auth.service import BLOCKED_EMPLOYEE_STATUSES
+
+    if employee.status not in BLOCKED_EMPLOYEE_STATUSES:
+        return 0
+    tenant_id, employee_id = employee.tenant_id, employee.id
+    rows = (
+        (
+            await db.execute(
+                select(AIUsageAssignment)
+                .where(
+                    AIUsageAssignment.tenant_id == tenant_id,
+                    AIUsageAssignment.accountability_owner_id == employee_id,
+                    AIUsageAssignment.status == "active",
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        row.status = NEEDS_OWNER
+        _audit(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="assignment.needs_owner",
+            target_type="ai_usage_assignment",
+            target_id=row.id,
+            payload={
+                "before": {"status": "active"},
+                "after": {"status": NEEDS_OWNER},
+                "accountability_owner_id": employee_id,
+            },
+        )
+    if rows:
+        await _notify_owner_needed(db, employee, len(rows))
+    return len(rows)
+
+
+async def _notify_owner_needed(
+    db: AsyncSession, employee: Employee, count: int
+) -> None:
+    """Bell entry and letter to each active admin of the tenant, in the
+    admin's own locale; ``title``/``message`` carry the letter for the bell,
+    which renders them as text and wraps the row in ``link``."""
+    from app.core.email_templates import frontend_url
+    from app.modules.notification.service import (
+        get_template_for_locale,
+        render_db_template_preview,
+        resolve_recipient_locale,
+        send_notification,
+    )
+
+    tenant_id, user_id = employee.tenant_id, employee.user_id
+    names = (
+        await db.execute(
+            select(User.first_name, User.last_name).where(User.id == user_id)
+        )
+    ).first()
+    admins = (
+        (
+            await db.execute(
+                select(User)
+                .join(user_roles, user_roles.c.user_id == User.id)
+                .join(Role, Role.id == user_roles.c.role_id)
+                .where(
+                    User.tenant_id == tenant_id,
+                    User.is_active.is_(True),
+                    Role.code == "admin",
+                    User.id != user_id,
+                )
+                .distinct()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # ponytail: no registry screen yet - the link opens Coverage, the
+    # section the registry belongs to; point it at the list once one ships.
+    link = "/coverage"
+    base = {
+        "employee_name": " ".join(names) if names else "",
+        "count": count,
+        "link": link,
+        "link_url": f"{frontend_url()}{link}",
+    }
+    for admin in admins:
+        locale = await resolve_recipient_locale(db, admin.id)
+        template = await get_template_for_locale(db, OWNER_NEEDED_TEMPLATE, locale)
+        if template is None:
+            continue
+        title, message = render_db_template_preview(
+            template, {**base, "link_url": None}
+        )
+        await send_notification(
+            db,
+            tenant_id,
+            OWNER_NEEDED_TEMPLATE,
+            admin.id,
+            admin.email or "",
+            {**base, "title": title, "message": message},
+            locale=locale,
+        )
 
 
 # --- Workflows --------------------------------------------------------------
@@ -1220,7 +1381,7 @@ async def create_workflow(
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> AgentWorkflow:
-    await _employee_in_tenant(db, tenant_id, data.owner_id)
+    await _active_owner(db, tenant_id, data.owner_id)
     steps = await _validated_steps(db, tenant_id, data.steps)
     row = AgentWorkflow(
         tenant_id=tenant_id, **data.model_dump(exclude={"steps"}), steps=steps
@@ -1255,8 +1416,9 @@ async def update_workflow(
 ) -> AgentWorkflow:
     row = await _workflow_row(db, tenant_id, workflow_id)
     changes = data.model_dump(exclude_unset=True)
-    if changes.get("owner_id") is not None:
-        await _employee_in_tenant(db, tenant_id, changes["owner_id"])
+    if "owner_id" in changes:
+        # HRP-988: the schema refuses a null; a new owner is at work.
+        await _active_owner(db, tenant_id, changes["owner_id"])
     if changes.get("steps") is None:
         # NOT NULL column: null in the body means "leave the steps alone".
         changes.pop("steps", None)

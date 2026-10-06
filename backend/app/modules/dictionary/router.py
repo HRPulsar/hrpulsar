@@ -19,7 +19,9 @@ router = APIRouter(tags=["dictionaries"])
 
 # HRP-827: editing the dictionaries asks the tenant's ``dictionaries`` row
 # for ``manage`` - the admin row is locked there, other roles get it only
-# from the matrix. The two reads stay open (``SHARED_READS``).
+# from the matrix. The section gate answers for the writes (HRP-1018); the
+# usage preview is a read, so it asks itself. The two reads stay open
+# (``SHARED_READS``).
 manage_dictionaries = require_section("dictionaries", "manage")
 
 
@@ -41,7 +43,7 @@ async def create_item(
     item_type: str,
     data: DictionaryItemCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(manage_dictionaries),
+    current_user: User = Depends(get_current_user),
 ):
     return await service.create_item(db, current_user.tenant_id, item_type, data)
 
@@ -60,7 +62,7 @@ async def update_item(
     item_id: uuid.UUID,
     data: DictionaryItemUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(manage_dictionaries),
+    current_user: User = Depends(get_current_user),
 ):
     return await service.update_item(db, current_user.tenant_id, item_id, data)
 
@@ -69,7 +71,7 @@ async def update_item(
 async def delete_item(
     item_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(manage_dictionaries),
+    current_user: User = Depends(get_current_user),
 ):
     await service.delete_item(db, current_user.tenant_id, item_id)
 

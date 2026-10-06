@@ -230,3 +230,29 @@ async def _test_get_assessment_invite_token(
     if invite is None:
         raise HTTPException(status_code=404, detail="invite not found")
     return {"id": str(invite.id), "token": invite.token}
+
+
+@router.post(
+    "/recruitment/_test/candidates/{candidate_id}/consent",
+    include_in_schema=False,
+)
+async def _test_sign_candidate_consent(
+    candidate_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record a signed consent for a candidate (HRP-979).
+
+    The real signature needs the token from the consent email; specs that
+    exercise AI paths or the withdraw link sign through this instead. The
+    token comes back so the public page can be opened. Tenant-scoped;
+    production gets a 404.
+    """
+    from app.modules.recruitment.common import _get_candidate
+    from app.modules.recruitment.consent_service import _record_signed_consent
+
+    require_dev_endpoint()
+    candidate = await _get_candidate(db, current_user.tenant_id, candidate_id)
+    row = await _record_signed_consent(db, current_user.tenant_id, candidate)
+    await db.commit()
+    return {"id": str(row.id), "token": row.token}

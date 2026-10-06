@@ -1,5 +1,10 @@
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens, createExam } from "./helpers";
+import {
+  createExam,
+  provisionTenantMember,
+  registerUser,
+  setAuthTokens,
+} from "./helpers";
 
 test.describe("Exams page", () => {
   let accessToken: string;
@@ -151,5 +156,62 @@ test.describe("Exams with data", () => {
     await expect(
       page.getByTestId("exam-assign-checkbox-select-all"),
     ).toBeVisible();
+  });
+});
+
+// HRP-1014: the author of an exam below the admin level (a manager runs the
+// exams section by default, HRP-640 keeps the exam theirs) imports
+// questions from the Excel template on the exam page.
+test.describe("Exam question import", () => {
+  let manager: { accessToken: string; refreshToken: string };
+  let examId: string;
+
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    const admin = await registerUser(page);
+    manager = await provisionTenantMember(
+      { page, accessToken: admin.accessToken },
+      { roleCode: "manager" },
+    );
+    const exam = await createExam(
+      { page, accessToken: manager.accessToken },
+      "Imported questions",
+    );
+    examId = exam.id;
+    await page.close();
+  });
+
+  test("author downloads the template, imports it and sees the questions; a repeat shows row errors", async ({
+    page,
+  }) => {
+    await setAuthTokens(page, manager.accessToken, manager.refreshToken);
+    await page.goto(`/exams/${examId}`);
+
+    const downloading = page.waitForEvent("download");
+    await page.getByTestId("exam-import-template").click({ timeout: 15000 });
+    const download = await downloading;
+    expect(download.suggestedFilename()).toBe("question_import_template.xlsx");
+    const template = test.info().outputPath(download.suggestedFilename());
+    await download.saveAs(template);
+
+    // The template ships filled with three example questions.
+    await page.getByTestId("exam-import-input").setInputFiles(template);
+    await expect(page.getByTestId("exam-import-result")).toContainText(
+      "3 questions imported",
+      { timeout: 15000 },
+    );
+    await expect(page.getByText("What is 2+2?")).toBeVisible();
+    await expect(page.getByText("Select prime numbers")).toBeVisible();
+
+    // The same rows again are duplicates: nothing imported, each row named.
+    await page.getByTestId("exam-import-input").setInputFiles(template);
+    await expect(page.getByTestId("exam-import-result")).toContainText(
+      "No questions imported",
+      { timeout: 15000 },
+    );
+    await expect(page.getByTestId("exam-import-error-row-2")).toContainText(
+      "Row 2: the same question is already in the exam",
+    );
+    await expect(page.getByTestId("exam-import-error-row-4")).toBeVisible();
   });
 });

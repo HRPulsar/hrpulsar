@@ -52,10 +52,15 @@ describe("recruitment follows the section level (HRP-830)", () => {
   });
 
   it("keeps evaluation and rounds with their roles at view", () => {
-    expect(table).toContain("canMoveStage={canEvaluateCandidates}");
+    // HRP-836: a closed or cancelled vacancy freezes its funnel on top.
+    expect(table).toContain("const canMoveStage = canEvaluateCandidates && !readOnly;");
     expect(questionSets).toContain("readOnly={!canEvaluate || currentSet.status === \"sample\"}");
     expect(canvas).toContain("const canScore = Boolean(inviteToken) || canEvaluateCandidates;");
-    expect(rounds).toContain("const { canRunHiringRounds: canRunRounds } = usePermissions();");
+    // HRP-836: the vacancy's status freezes its rounds on top of the role.
+    expect(rounds).toContain("const { canRunHiringRounds } = usePermissions();");
+    expect(rounds).toContain(
+      "const canRunRounds = canRunHiringRounds && !activeVacancy?.read_only;",
+    );
     expect(rounds).toContain("disabled={roundClosed || !canRunRounds}");
     // Mirrors resolve_user_role: the full payload wins before the slice.
     expect(candidatePage).toContain(

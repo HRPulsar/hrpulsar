@@ -59,6 +59,7 @@ import {
   type ResumeExcerptFocusDetail,
 } from "@/lib/resume-excerpt-focus";
 import { CANDIDATE_INTERVIEWS_ANCHOR_ID } from "@/lib/recruitment-helpers";
+import { vacancyLocks } from "@/lib/vacancy-status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -74,6 +75,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import {
+  ConsentRequiredHint,
+  useCandidateConsent,
+} from "@/components/recruitment/candidate-consent";
 
 type ModeOption = "resume_only" | "topup_to_full" | "full";
 
@@ -119,6 +124,8 @@ export function AiInsightsSection({
   // synchronous ref latch closes the window — the second click is
   // discarded before it can spend a second 20/40 credits.
   const busyLatchRef = useRef(false);
+  // HRP-979: no AI run on a candidate without consent in force.
+  const aiConsent = useCandidateConsent(candidateId);
   const [historyOpen, setHistoryOpen] = useState(false);
   // HRP-270: cancel-flow state + confirm modal.
   const [cancelling, setCancelling] = useState(false);
@@ -172,6 +179,12 @@ export function AiInsightsSection({
       null,
     [vacancyApplications, selectedCvId],
   );
+  // HRP-836: a closed or cancelled vacancy keeps its analyses on screen
+  // and offers no new run - no Analyze, no re-analyze or top-up banner.
+  const statusReadOnly = vacancyLocks(
+    vacancyApplications.find((a) => a.cv_id === selectedCvId)?.vacancy_status,
+    "ai_insights",
+  );
   const activeRun = useMemo(
     () => runs.find((r) => r.archived_at === null && r.status === "completed"),
     [runs],
@@ -202,6 +215,17 @@ export function AiInsightsSection({
   const trigger = useCallback(
     async (mode: ModeOption) => {
       if (!selectedCvId || busyLatchRef.current) return;
+      if (aiConsent.blocked) {
+        // The banners' re-run and upgrade buttons stay live; say why.
+        toast.error(
+          t(
+            aiConsent.revoked
+              ? "aiConsentRevokedHint"
+              : "aiConsentMissingHint",
+          ),
+        );
+        return;
+      }
       // HRP-269: ``full`` mode needs the transcribed interview id;
       // ``resume_only`` and ``topup_to_full`` are derived server-side
       // from the candidate-vacancy alone.
@@ -258,6 +282,8 @@ export function AiInsightsSection({
       }
     },
     [
+      aiConsent.blocked,
+      aiConsent.revoked,
       eligibility?.transcribed_interview_id,
       refresh,
       selectedCvId,
@@ -322,7 +348,12 @@ export function AiInsightsSection({
   const analyzeSplitButton = (
     <AnalyzeSplitButton
       disabled={
-        !selectedCvId || busy || !!inFlightRun || !resumeAvailable
+        !selectedCvId ||
+        busy ||
+        !!inFlightRun ||
+        !resumeAvailable ||
+        statusReadOnly ||
+        aiConsent.blocked
       }
       busy={busy}
       showCredits={showCredits}
@@ -373,6 +404,12 @@ export function AiInsightsSection({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {aiConsent.showHint && (
+          <ConsentRequiredHint
+            revoked={aiConsent.revoked}
+            testId="candidate-section-ai-insights-consent-hint"
+          />
+        )}
         {inFlightRun ? (
           <InFlightCard
             run={inFlightRun}
@@ -384,9 +421,9 @@ export function AiInsightsSection({
             run={activeRun}
             candidateId={candidateId}
             vacancyId={selectedVacancyId}
-            eligibility={eligibility}
+            eligibility={statusReadOnly ? null : eligibility}
             showCredits={showCredits}
-            staleness={staleness}
+            staleness={statusReadOnly ? null : staleness}
             analyzeSplitButton={analyzeSplitButton}
             onTopup={() => void trigger("topup_to_full")}
             onFullMode={() => void trigger("full")}

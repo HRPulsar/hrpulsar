@@ -412,6 +412,52 @@ def cleanup_detached_resume_files_task(self) -> dict:
         engine.dispose()
 
 
+@celery.task(
+    bind=True,
+    max_retries=0,
+    name="app.modules.recruitment.tasks.apply_recruitment_retention_task",
+)
+def apply_recruitment_retention_task(self) -> dict:
+    """HRP-983: apply each tenant's recruitment retention settings.
+
+    Daily from celery beat. The fixed sweeps above (archived interview
+    media after 90 days, detached resumes after 7) keep running on their
+    own; this one reads ``RecruitmentRetentionConfig``. The erasure itself
+    lives in ``gdpr_service.apply_retention``.
+    """
+
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.config import settings
+    from app.database import make_async_engine
+    from app.modules.recruitment.gdpr_service import apply_retention
+
+    async def _inner() -> dict:
+        engine = make_async_engine(
+            settings.database_url,
+            pool_size=2,
+            max_overflow=2,
+            pool_recycle=300,
+            pool_pre_ping=True,
+        )
+        session_factory = async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
+        try:
+            async with session_factory() as db:
+                return await apply_retention(db)
+        finally:
+            await engine.dispose()
+
+    try:
+        return {"status": "ok", **asyncio.run(_inner())}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("apply_recruitment_retention_task failed")
+        return {"status": "error", "error": str(exc)[:200]}
+
+
 @task_failure.connect
 def _on_recruitment_task_failure(
     sender=None,

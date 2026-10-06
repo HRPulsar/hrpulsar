@@ -39,6 +39,8 @@ from app.modules.recruitment.models import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit._consent import sign_consent
+
 
 async def _setup(db: AsyncSession) -> tuple[Interview, Tenant, VacancyProfile]:
     suffix = uuid.uuid4().hex[:6]
@@ -78,6 +80,7 @@ async def _setup(db: AsyncSession) -> tuple[Interview, Tenant, VacancyProfile]:
     db.add(candidate)
     await db.commit()
     await db.refresh(candidate)
+    await sign_consent(db, tenant.id, candidate.id)  # HRP-979
 
     cv = CandidateVacancy(
         tenant_id=tenant.id, vacancy_id=vacancy.id, candidate_id=candidate.id

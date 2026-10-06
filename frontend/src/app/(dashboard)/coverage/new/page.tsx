@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
-import { RequireRole } from "@/components/require-role";
+import { RequireSection } from "@/components/require-section";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -126,11 +126,12 @@ function NewContainerForm() {
 
 export default function NewContainerPage() {
   // HRP-810: a reader of one process opens the section, not this form.
+  // The section itself is the dashboard's SectionGate (HRP-1018).
   return (
-    <RequireRole coverageManage>
+    <RequireSection code="coverage" level="manage">
       <Suspense fallback={null}>
         <NewContainerForm />
       </Suspense>
-    </RequireRole>
+    </RequireSection>
   );
 }

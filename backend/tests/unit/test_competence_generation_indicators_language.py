@@ -29,6 +29,7 @@ and values come from two different vocabularies.
 
 from __future__ import annotations
 
+import uuid
 from unittest.mock import patch
 
 import pytest
@@ -41,6 +42,7 @@ from app.modules.ai_competence_generation.schemas import (
 )
 from app.modules.ai_settings import service as ai_settings_service
 from app.modules.ai_settings.schemas import AISettingsUpdate
+from app.modules.company.models import Tenant
 from app.modules.dictionary.models import DictionaryItem
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -450,28 +452,84 @@ class TestIndicatorPromptInputs:
     async def test_competence_type_comes_from_the_competence(
         self, db, tenant, user, competence, session_factory
     ) -> None:
-        """Soft-skill competences were announced to the model as hard skills.
-
-        "Soft skill" is the title the origin seed actually ships, so the
-        prompt carries the tenant-visible wording.
-        """
+        """Soft-skill competences were announced to the model as hard skills
+        (HRP-541). A platform type goes by its code, the word the prompt
+        defines, not by its title (HRP-583 (b))."""
         soft = DictionaryItem(
             type="competence_type",
-            title="Soft skill",
-            tenant_id=tenant.id,
+            title=f"Soft skill {uuid.uuid4().hex[:6]}",
+            i18n_key="soft_skill",
+            tenant_id=None,
             sort_index=0,
             is_active=True,
         )
         db.add(soft)
         await db.commit()
-        await db.refresh(soft)
-        competence.competence_type_id = soft.id
+        try:
+            competence.competence_type_id = soft.id
+            await db.commit()
+
+            captured: dict[str, str] = {}
+            await _run(session_factory, db, tenant, user, competence, captured)
+
+            assert '"competence_type": "soft_skill"' in captured["user"]
+            assert soft.title not in captured["user"]
+        finally:
+            # A platform row outlives the test's tenant: later tests list
+            # the platform's competence types.
+            competence.competence_type_id = None
+            await db.delete(soft)
+            await db.commit()
+
+    async def test_the_tenants_own_type_goes_as_named(
+        self, db, tenant, user, competence, session_factory
+    ) -> None:
+        """No code to send: the company's own word is the closest one."""
+        own = DictionaryItem(
+            type="competence_type",
+            title="Leadership",
+            tenant_id=tenant.id,
+            sort_index=0,
+            is_active=True,
+        )
+        db.add(own)
+        await db.commit()
+        competence.competence_type_id = own.id
         await db.commit()
 
         captured: dict[str, str] = {}
         await _run(session_factory, db, tenant, user, competence, captured)
 
-        assert '"competence_type": "Soft skill"' in captured["user"]
+        assert '"competence_type": "Leadership"' in captured["user"]
+
+    @pytest.mark.parametrize("stray", ["another_type", "another_tenant"])
+    async def test_a_row_that_is_no_type_of_the_tenant_gives_the_default(
+        self, db, tenant, user, competence, session_factory, stray
+    ) -> None:
+        """HRP-583 (a): an id of another dictionary, or another tenant's
+        type, never lends the prompt its title."""
+        owner = tenant
+        if stray == "another_tenant":
+            owner = Tenant(name="Other", slug=f"other-{uuid.uuid4().hex[:8]}")
+            db.add(owner)
+            await db.flush()
+        item = DictionaryItem(
+            type="specialization" if stray == "another_type" else "competence_type",
+            title="Stray title",
+            tenant_id=owner.id,
+            sort_index=0,
+            is_active=True,
+        )
+        db.add(item)
+        await db.commit()
+        competence.competence_type_id = item.id
+        await db.commit()
+
+        captured: dict[str, str] = {}
+        await _run(session_factory, db, tenant, user, competence, captured)
+
+        # Its title is not the type's: the lookup found no type at all.
+        assert '"competence_type": "hard_skill"' in captured["user"]
 
     async def test_untyped_competence_falls_back_to_hard_skill(
         self, db, tenant, user, competence, session_factory

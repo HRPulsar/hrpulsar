@@ -39,6 +39,18 @@ describe("sectionForPath", () => {
     expect(sectionForPath("/settings/ai")).toBe("ai-settings");
   });
 
+  it("checks Coverage once, by the matrix (HRP-1018)", async () => {
+    // The dashboard's SectionGate is the section check; the form asks for
+    // `manage` on top, and no page keeps a role check next to it.
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    expect(sectionForPath("/coverage/new")).toBe("coverage");
+    expect(sectionForPath("/coverage/8f1c")).toBe("coverage");
+    const form = readFileSync(resolve(__dirname, "../app/(dashboard)/coverage/new/page.tsx"), "utf8");
+    expect(form).toContain('<RequireSection code="coverage" level="manage">');
+    expect(form).not.toContain("RequireRole");
+  });
+
   it("leaves the surfaces outside the matrix alone", () => {
     // /employees/me mirrors the backend's PERSONAL_PATHS list: the route
     // itself is not gated. The /employees/{id} it redirects to still is.

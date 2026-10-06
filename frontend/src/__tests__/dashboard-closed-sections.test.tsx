@@ -35,7 +35,7 @@ const getMock = vi.fn((path: string) => {
       : Promise.resolve({ id: "t-1", name: "Acme" });
   }
   if (path.startsWith("/assessments")) {
-    return Promise.resolve({ items: [] });
+    return Promise.resolve({ items: [], total: 0 });
   }
   // /analytics/dev-loop, /analytics/my-loop: the page already tolerates a
   // failed fetch (null data / no crash), and these tests only care which

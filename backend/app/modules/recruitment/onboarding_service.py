@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError
 from app.models import Person
 from app.modules.company.models import Tenant
+from app.modules.recruitment import consent_service
 from app.modules.recruitment.models import (
     AIAssessment,
     Candidate,
@@ -252,7 +253,7 @@ async def seed_demo(
         tenant_id=tenant_id,
         title=DEMO_VACANCY_TITLE,
         description="Demo vacancy for onboarding (auto-cleanup after 14 days).",
-        status="published",
+        status="open",
         owner_id=user_id,
         language="en",
         tasks_main={"demo": True, "suffix": suffix},
@@ -290,6 +291,11 @@ async def seed_demo(
         )
         db.add(candidate)
         await db.flush()
+        # HRP-979: sample people are fictional — consented like demo ones,
+        # so the walkthrough's AI actions open on them.
+        await consent_service.auto_sign_demo_consent(
+            db, tenant_id, candidate, is_demo=True
+        )
         candidate_rows.append(candidate)
 
         cv = CandidateVacancy(
@@ -398,6 +404,11 @@ async def cleanup_demo(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str, Any]
         if vac.title == DEMO_VACANCY_TITLE or demo_flag:
             await db.delete(vac)
             removed["vacancies"] += 1
+
+    # HRP-979: the samples' consents went with them; so does the default
+    # template their auto-consent made, unless something else uses it.
+    await db.flush()
+    await consent_service._drop_unused_default_template(db, tenant_id)
 
     tenant = await _get_tenant(db, tenant_id)
     state = _coerce_state(tenant.recruitment_onboarding) or _initial_state()

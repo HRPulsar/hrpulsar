@@ -1,12 +1,12 @@
 """Unit tests for app.modules.recruitment.transcription_service."""
 
+import contextlib
 import json
 
 import pytest
 from app.modules.recruitment.transcription_service import (
     AssemblyAIProvider,
     DeepgramProvider,
-    FasterWhisperProvider,
     OpenAIWhisperProvider,
     TranscriptionResult,
     TranscriptSegment,
@@ -21,9 +21,12 @@ from app.modules.recruitment.transcription_service import (
 @pytest.fixture(autouse=True)
 def _every_processor_allowed(monkeypatch):
     """HRP-1005: the chain reads the tenant's processor list; the fake sync
-    session cannot answer that query."""
+    session cannot answer that query. The measured platform order unless a
+    test picks a default (HRP-1007) — a developer's .env may set one."""
+    from app.config import settings
     from app.modules.ai import processors
 
+    monkeypatch.setattr(settings, "transcription_provider_default", "")
     monkeypatch.setattr(
         processors,
         "allowed_processors_sync",
@@ -104,18 +107,10 @@ def test_deepgram_payload_falls_back_to_channel_transcript_when_no_utterances():
     assert result.segments == []
 
 
-@pytest.mark.asyncio
-async def test_faster_whisper_provider_is_stub():
-    provider = FasterWhisperProvider(endpoint="https://internal/llm")
-    with pytest.raises(NotImplementedError):
-        await provider.transcribe("interview.mp3")
-
-
 def test_provider_names_are_stable():
     assert OpenAIWhisperProvider.provider_name == "whisper"
     assert DeepgramProvider.provider_name == "deepgram"
     assert AssemblyAIProvider.provider_name == "assemblyai"
-    assert FasterWhisperProvider.provider_name == "faster_whisper"
 
 
 def test_whisper_provider_exposes_25mb_cap():
@@ -181,6 +176,10 @@ def _streaming_client_factory(total_bytes: int = 1024) -> type:
                 raise resp
             return resp
 
+        @contextlib.asynccontextmanager
+        async def stream(self, method, *args, **kwargs):
+            yield await self.post(*args, **kwargs)
+
     return _Client
 
 
@@ -205,6 +204,10 @@ class _RecordingClient:
         if isinstance(resp, BaseException):
             raise resp
         return resp
+
+    @contextlib.asynccontextmanager
+    async def stream(self, method, *args, **kwargs):
+        yield await self.post(*args, **kwargs)
 
 
 class _FakeTextResponse:
@@ -237,6 +240,9 @@ class _FakeResponse:
 
     def json(self) -> dict:
         return self._json
+
+    async def aiter_bytes(self):
+        yield json.dumps(self._json).encode()
 
 
 @pytest.mark.asyncio
@@ -1341,3 +1347,480 @@ def test_providers_with_native_diarization_declare_no_size_ceiling():
     assert DeepgramProvider.max_request_bytes is None
     assert AssemblyAIProvider.max_request_bytes is None
     assert YandexSpeechKitProvider.max_request_bytes is None
+
+
+# ---------------------------------------------------------------------------
+# HRP-985: the tenant's own Whisper server; no stub in the chain
+# ---------------------------------------------------------------------------
+
+
+def _platform_keys(monkeypatch, default=""):
+    """Every provider has a platform key; ``default`` is the operator's pick."""
+    from app.modules.recruitment import transcription_service
+
+    s = transcription_service.settings
+    monkeypatch.setattr(s, "assemblyai_api_key", "aai")
+    monkeypatch.setattr(s, "deepgram_api_key", "dg")
+    monkeypatch.setattr(s, "yandex_speechkit_api_key", "yc")
+    monkeypatch.setattr(s, "yandex_folder_id", "b1g")
+    monkeypatch.setattr(s, "openai_api_key", "oa")
+    monkeypatch.setattr(s, "transcription_provider_default", default)
+    return transcription_service
+
+
+def _chain(transcription_service, *rows):
+    import uuid as _uuid
+
+    return transcription_service.get_transcription_chain_sync(
+        _FakeSyncSession(list(rows)), _uuid.uuid4()
+    )
+
+
+def _row(provider, key=None, **provider_settings):
+    from app.core.crypto import encrypt_secret
+    from app.modules.recruitment.models import TranscriptionProviderConfig
+
+    return TranscriptionProviderConfig(
+        provider=provider,
+        api_key_encrypted=encrypt_secret(key) if key else None,
+        is_active=True,
+        settings=provider_settings or None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_whisper_posts_to_the_tenants_own_server(monkeypatch, audio_file):
+    import httpx
+    from app.modules.recruitment import transcription_service
+
+    monkeypatch.setattr(transcription_service.settings, "deployment_mode", "onprem")
+    _RecordingClient.post_response = _FakeResponse(200, {"text": "hi"})
+    monkeypatch.setattr(httpx, "AsyncClient", _RecordingClient)
+
+    await OpenAIWhisperProvider(
+        api_key="", base_url="http://whisper.lan:8000/v1/"
+    ).transcribe(audio_file)
+
+    sent = _RecordingClient.last_post
+    assert sent["args"][0] == "http://whisper.lan:8000/v1/audio/transcriptions"
+    # A local server without auth gets no empty bearer token.
+    assert "Authorization" not in sent["kwargs"]["headers"]
+
+
+@pytest.mark.asyncio
+async def test_whisper_without_an_address_is_openai(monkeypatch, audio_file):
+    import httpx
+
+    _RecordingClient.post_response = _FakeResponse(200, {"text": "hi"})
+    monkeypatch.setattr(httpx, "AsyncClient", _RecordingClient)
+
+    await OpenAIWhisperProvider(api_key="sk-x").transcribe(audio_file)
+
+    sent = _RecordingClient.last_post
+    assert sent["args"][0] == "https://api.openai.com/v1/audio/transcriptions"
+    assert sent["kwargs"]["headers"] == {"Authorization": "Bearer sk-x"}
+
+
+@pytest.mark.asyncio
+async def test_a_tenant_whisper_address_goes_through_the_ssrf_client(
+    monkeypatch, audio_file
+):
+    """The request-time half of the LLM base_url guard (HRP-505) covers the
+    Whisper address too; OpenAI itself does not need it."""
+    from app.core import url_guard
+
+    calls = []
+
+    def _guarded(base_url, *, error_code, timeout=None):
+        calls.append((base_url, error_code))
+        return _RecordingClient()
+
+    monkeypatch.setattr(url_guard, "tenant_endpoint_http_client", _guarded)
+    _RecordingClient.post_response = _FakeResponse(200, {"text": "hi"})
+
+    await OpenAIWhisperProvider(
+        api_key="k", base_url="https://stt.example.com/v1"
+    ).transcribe(audio_file)
+    assert calls == [("https://stt.example.com/v1", "llm_base_url_not_public")]
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _RecordingClient)
+    await OpenAIWhisperProvider(api_key="k").transcribe(audio_file)
+    assert len(calls) == 1
+
+
+class _RawResponse:
+    status_code = 200
+
+    def __init__(self, *chunks: bytes) -> None:
+        self._chunks = chunks
+
+    def raise_for_status(self) -> None:
+        pass
+
+    async def aiter_bytes(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (b"[1, 2]",),
+        (b"<html>bad gateway</html>",),
+        (b"{" + b" " * (8 * 1024 * 1024),) * 3,
+    ],
+    ids=["not-an-object", "not-json", "over-the-cap"],
+)
+async def test_a_bad_whisper_answer_is_a_provider_refusal(
+    monkeypatch, audio_file, chunks
+):
+    """Review B4: a tenant server's body is read up to a cap and has to be
+    a JSON object; anything else is a ValueError, which moves the chain on
+    instead of retrying the upload."""
+    import httpx
+
+    _RecordingClient.post_response = _RawResponse(*chunks)
+    monkeypatch.setattr(httpx, "AsyncClient", _RecordingClient)
+
+    with pytest.raises(ValueError):
+        await OpenAIWhisperProvider(api_key="k").transcribe(audio_file)
+
+
+def test_a_platform_key_never_goes_to_a_tenant_address(monkeypatch):
+    """A keyless Whisper row with an address is the tenant's own server: it
+    runs there without a key, and the platform OpenAI key is not added
+    behind it as a second Whisper."""
+    ts = _platform_keys(monkeypatch)
+
+    chain = _chain(ts, _row("whisper", base_url="http://whisper.lan/v1"))
+
+    whisper = [p for p in chain if p.provider_name == "whisper"]
+    assert len(whisper) == 1
+    assert whisper[0]._api_key == ""
+    assert whisper[0]._base_url == "http://whisper.lan/v1"
+    assert whisper[0].credential_source == "local"
+    # Built on the platform key, the same row settings drop the address.
+    built = ts._build("whisper", "oa", {"base_url": "http://x/v1"}, source="platform")
+    assert built._base_url is None
+
+
+def test_a_tenant_whisper_server_gets_no_platform_fallback(monkeypatch):
+    """Review B3: the tenant's own server failing must not ship the audio
+    to a platform-keyed vendor; the tenant's own keys still follow."""
+    ts = _platform_keys(monkeypatch)
+
+    chain = _chain(
+        ts,
+        _row("whisper", base_url="http://whisper.lan/v1"),
+        _row("deepgram", key="dg-own"),
+    )
+
+    assert [(p.provider_name, p.credential_source) for p in chain] == [
+        ("deepgram", "byok"),
+        ("whisper", "local"),
+    ]
+
+
+def test_a_tenant_whisper_server_may_opt_into_platform_fallback(monkeypatch):
+    ts = _platform_keys(monkeypatch)
+
+    chain = _chain(
+        ts,
+        _row(
+            "whisper", base_url="http://whisper.lan/v1", allow_platform_fallback=True
+        ),
+    )
+
+    assert chain[0].credential_source == "local"
+    platform = {p.provider_name for p in chain if p.credential_source == "platform"}
+    assert platform == {"deepgram", "assemblyai", "yandex_speechkit"}
+
+
+def test_a_keyed_whisper_row_uses_its_own_address(monkeypatch):
+    ts = _platform_keys(monkeypatch)
+
+    chain = _chain(ts, _row("whisper", key="sk-t", base_url="https://stt.example/v1"))
+
+    assert chain[0].provider_name == "whisper"
+    assert (chain[0]._api_key, chain[0]._base_url) == ("sk-t", "https://stt.example/v1")
+    assert chain[0].credential_source == "byok"
+
+
+def test_an_unimplemented_provider_row_never_joins_the_chain(monkeypatch):
+    ts = _platform_keys(monkeypatch)
+
+    chain = _chain(ts, _row("faster_whisper", key="whatever"))
+
+    assert "faster_whisper" not in [p.provider_name for p in chain]
+    with pytest.raises(ValueError):
+        ts._build("faster_whisper", "k")
+
+
+# ---------------------------------------------------------------------------
+# HRP-1007: TRANSCRIPTION_PROVIDER_DEFAULT orders the platform part
+# ---------------------------------------------------------------------------
+
+
+def _names(chain):
+    return [p.provider_name for p in chain]
+
+
+def test_empty_default_keeps_the_measured_order(monkeypatch):
+    ts = _platform_keys(monkeypatch, default="")
+
+    chain = _chain(ts)
+
+    assert _names(chain) == list(ts._CHAIN_ORDER)
+    assert {p.credential_source for p in chain} == {"platform"}
+
+
+def test_the_default_goes_first_among_platform_providers(monkeypatch):
+    ts = _platform_keys(monkeypatch, default="deepgram")
+
+    assert _names(_chain(ts)) == [
+        "deepgram",
+        "assemblyai",
+        "yandex_speechkit",
+        "whisper",
+    ]
+
+
+def test_the_tenants_own_key_still_goes_before_the_default(monkeypatch):
+    """BYOK first, whatever its place in the measured order — and a keyless
+    row is part of the platform part, ordered with the default."""
+    ts = _platform_keys(monkeypatch, default="deepgram")
+
+    chain = _chain(
+        ts,
+        _row("whisper", key="sk-tenant"),
+        _row("assemblyai", speakers_expected=3),
+    )
+
+    assert _names(chain) == ["whisper", "deepgram", "assemblyai", "yandex_speechkit"]
+    assert [p.credential_source for p in chain] == ["byok"] + ["platform"] * 3
+    # The keyless row still carries its own settings on the platform key.
+    assert chain[2]._speakers_expected == 3
+
+
+def test_a_default_without_a_platform_key_is_skipped(monkeypatch):
+    ts = _platform_keys(monkeypatch, default="deepgram")
+    monkeypatch.setattr(ts.settings, "deepgram_api_key", "")
+
+    assert _names(_chain(ts)) == ["assemblyai", "yandex_speechkit", "whisper"]
+
+
+def test_a_default_the_processor_list_denies_is_skipped(monkeypatch):
+    from app.modules.ai import processors
+
+    ts = _platform_keys(monkeypatch, default="deepgram")
+    monkeypatch.setattr(
+        processors,
+        "allowed_processors_sync",
+        lambda db, tenant_id: frozenset(processors.PROCESSORS) - {"deepgram"},
+    )
+
+    assert _names(_chain(ts)) == ["assemblyai", "yandex_speechkit", "whisper"]
+
+
+def test_an_unknown_default_refuses_to_start():
+    from app.config import Settings
+    from app.modules.recruitment.transcription_service import _CHAIN_ORDER
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="TRANSCRIPTION_PROVIDER_DEFAULT"):
+        Settings(transcription_provider_default="deepgarm")
+    with pytest.raises(ValidationError):
+        Settings(transcription_provider_default="faster_whisper")
+    for name in _CHAIN_ORDER:
+        assert Settings(transcription_provider_default=name)
+    normalized = Settings(transcription_provider_default=" Deepgram ")
+    assert normalized.transcription_provider_default == "deepgram"
+    empty = Settings(transcription_provider_default="")
+    assert empty.transcription_provider_default == ""
+
+
+# ---------------------------------------------------------------------------
+# HRP-970: every provider attempt is a row of the AI call log
+# ---------------------------------------------------------------------------
+
+
+class _JournaledProvider(_StubProvider):
+    def __init__(self, name, *, model, source="platform", seconds=600.0, **kw):
+        super().__init__(name, **kw)
+        self.model = model
+        self.credential_source = source
+        self._seconds = seconds
+
+    async def transcribe(self, audio_path, *, language=None, diarization=True):
+        result = await super().transcribe(
+            audio_path, language=language, diarization=diarization
+        )
+        result.duration_seconds = self._seconds
+        return result
+
+
+@pytest.fixture
+def journal(monkeypatch):
+    from app.core import ai_usage_hooks
+
+    records: list = []
+
+    async def _record(record):
+        records.append(record)
+
+    monkeypatch.setattr(ai_usage_hooks, "record_call", _record)
+    return records
+
+
+def _summary(records):
+    return [
+        (
+            r.kind,
+            r.provider,
+            r.model,
+            r.credential_source,
+            r.status,
+            r.error_code,
+            r.audio_seconds,
+        )
+        for r in records
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_fallback_leaves_one_row_per_attempt(journal):
+    from app.modules.recruitment.transcription_service import transcribe_with_chain
+
+    dead = _JournaledProvider("deepgram", model="nova-2", source="byok", refuses=401)
+    alive = _JournaledProvider("whisper", model="whisper-1")
+
+    result, _ = await transcribe_with_chain([dead, alive], "x.ogg")
+
+    assert result is not None and result.provider == "whisper"
+    assert _summary(journal) == [
+        ("transcription", "deepgram", "nova-2", "byok", "error", "http_401", None),
+        ("transcription", "whisper", "whisper-1", "platform", "ok", None, 600.0),
+    ]
+    assert all(r.latency_ms >= 0 and r.input_tokens is None for r in journal)
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_cannot_take_the_file_is_journaled(journal):
+    from app.modules.recruitment.transcription_service import transcribe_with_chain
+
+    await transcribe_with_chain(
+        [
+            _JournaledProvider("yandex_speechkit", model="general", rejects="-"),
+            _JournaledProvider("whisper", model="whisper-1"),
+        ],
+        "x.ogg",
+    )
+
+    assert [(r.provider, r.status, r.error_code) for r in journal] == [
+        ("yandex_speechkit", "error", "ValueError"),
+        ("whisper", "ok", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_transient_error_is_journaled_before_it_propagates(journal):
+    import httpx
+    from app.modules.recruitment.transcription_service import transcribe_with_chain
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await transcribe_with_chain(
+            [_JournaledProvider("assemblyai", model="universal-2", refuses=429)],
+            "x.ogg",
+        )
+
+    assert [(r.status, r.error_code) for r in journal] == [("error", "http_429")]
+
+
+@pytest.mark.asyncio
+async def test_the_journal_names_the_model_that_actually_ran(journal):
+    from app.modules.recruitment.transcription_service import transcribe_with_chain
+
+    provider = AssemblyAIProvider(api_key="k")
+
+    async def _routed(audio_path, *, language=None, diarization=True):
+        return _assemblyai_payload_to_result(
+            {"speech_model_used": "universal-2", "audio_duration": 61},
+            provider="assemblyai",
+        )
+
+    provider.transcribe = _routed
+
+    await transcribe_with_chain([provider], "x.ogg")
+
+    assert (journal[0].model, journal[0].audio_seconds) == ("universal-2", 61)
+    assert AssemblyAIProvider.model == "universal-3-5-pro"
+
+
+@pytest.mark.asyncio
+async def test_a_broken_journal_never_costs_the_transcript(monkeypatch):
+    from app.core import ai_usage_hooks
+    from app.modules.recruitment.transcription_service import transcribe_with_chain
+
+    async def _boom(record):
+        raise RuntimeError("journal down")
+
+    monkeypatch.setattr(ai_usage_hooks, "record_call", _boom)
+
+    result, err = await transcribe_with_chain(
+        [_JournaledProvider("whisper", model="whisper-1")], "x.ogg"
+    )
+    assert result is not None and err == ""
+
+
+@pytest.mark.asyncio
+async def test_a_guard_refusal_at_call_time_passes_the_turn_on(
+    monkeypatch, journal, audio_file
+):
+    """The tenant's Whisper host started resolving inside the perimeter
+    after it was saved: the request-time SSRF layer refuses it, and it will
+    refuse it on every retry — a permanent refusal of that row, like a 401,
+    not a crash of the chain that leaves the platform providers no turn."""
+    from app.core import url_guard
+    from app.core.errors import AppError
+    from app.modules.recruitment.transcription_service import transcribe_with_chain
+
+    class _Pinned(_RecordingClient):
+        async def post(self, *args, **kwargs):
+            raise AppError("llm_base_url_not_public", 400)
+
+    monkeypatch.setattr(
+        url_guard, "tenant_endpoint_http_client", lambda *a, **k: _Pinned()
+    )
+    tenant_server = OpenAIWhisperProvider(
+        api_key="sk-t", base_url="https://stt.tenant.example/v1"
+    )
+    tenant_server.credential_source = "byok"
+    platform = _JournaledProvider("assemblyai", model="universal-3-5-pro")
+
+    result, err = await transcribe_with_chain([tenant_server, platform], audio_file)
+
+    assert result is not None and result.provider == "assemblyai" and err == ""
+    assert [(r.provider, r.status, r.error_code) for r in journal] == [
+        ("whisper", "error", "llm_base_url_not_public"),
+        ("assemblyai", "ok", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_chain_refused_only_by_the_guard_reports_it(monkeypatch, journal):
+    from app.core.errors import AppError
+    from app.modules.recruitment.transcription_service import transcribe_with_chain
+
+    class _Guarded(_JournaledProvider):
+        async def transcribe(self, audio_path, *, language=None, diarization=True):
+            raise AppError("llm_base_url_https_required", 400)
+
+    result, err = await transcribe_with_chain(
+        [_Guarded("whisper", model="whisper-1")], "x.ogg"
+    )
+
+    assert result is None
+    assert "llm_base_url_https_required" in err

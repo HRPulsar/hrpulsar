@@ -12,6 +12,7 @@ import {
   Mail,
   MapPin,
   Phone,
+  ShieldCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ import { InterviewQuestionSets } from "@/components/recruitment/interview-questi
 import { ManagerAssessmentSection } from "@/components/recruitment/manager-assessment-section";
 import { ParsedResumeEditor } from "@/components/recruitment/parsed-resume-editor";
 import { useAuth } from "@/context/auth-context";
+import { vacancyLocks } from "@/lib/vacancy-status";
 import {
   fileTypeLabel,
   parseStatusLabel,
@@ -138,6 +140,8 @@ export default function CandidateDetailPage() {
         id: a.cv_id,
         vacancy_id: a.vacancy_id,
         vacancy_title: a.vacancy_title,
+        // HRP-836: the vacancy's status freezes its rounds.
+        read_only: vacancyLocks(a.vacancy_status, "manager_assessments"),
       })),
     [card?.vacancy_applications],
   );
@@ -169,6 +173,9 @@ export default function CandidateDetailPage() {
           t("candidateVacancyFallback", { id: a.vacancy_id.slice(0, 8) }),
         candidate_vacancy_id: a.cv_id,
         has_parsed_resume: hasResume,
+        // HRP-836: what the vacancy's status freezes, per block.
+        questions_read_only: vacancyLocks(a.vacancy_status, "questions"),
+        interviews_read_only: vacancyLocks(a.vacancy_status, "interviews"),
       })),
     [card?.vacancy_applications, hasResume, t],
   );
@@ -406,6 +413,9 @@ function Header({
 }) {
   const t = useTranslations("recruitment");
   const isArchived = !!card.archived_at;
+  // HRP-989: GDPR export / erasure is the admin and hr roles' (backend
+  // `require_role("admin", "hr")`).
+  const { isAdmin, isHr } = usePermissions();
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
@@ -459,9 +469,21 @@ function Header({
           )}
         </p>
       </div>
-      <Button variant="outline" render={<Link href={backHref} />}>
-        {t("actionBack")}
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        {(isAdmin || isHr) && (
+          <Button
+            variant="outline"
+            render={<Link href={`/recruitment/candidates/${card.id}/gdpr`} />}
+            data-testid="candidate-card-gdpr-link"
+          >
+            <ShieldCheck className="size-4" />
+            {t("candidateGdprAction")}
+          </Button>
+        )}
+        <Button variant="outline" render={<Link href={backHref} />}>
+          {t("actionBack")}
+        </Button>
+      </div>
     </div>
   );
 }

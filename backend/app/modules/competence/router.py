@@ -128,11 +128,8 @@ async def get_group_usage(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.modules.competence.models import CompetenceGroup
-
-    group = await db.get(CompetenceGroup, group_id)
-    if group is None or group.tenant_id not in (None, current_user.tenant_id):
-        raise AppError("competence_group_not_found", status.HTTP_404_NOT_FOUND)
+    # HRP-1016: the card's loader - another tenant's id answers its 404.
+    await service._load_group_in_tenant(db, current_user.tenant_id, group_id)
     usage = await check_group_usage(db, group_id)
     return {
         "matrix": usage.matrix,
@@ -298,6 +295,8 @@ async def get_competence_usage(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # HRP-1016: the card's loader - another tenant's id answers its 404.
+    await service._load_competence_in_tenant(db, current_user.tenant_id, competence_id)
     await hide_anothers_draft(db, current_user, competence_id)
     usage = await check_competence_usage(db, competence_id)
     return {
@@ -529,11 +528,10 @@ async def get_indicator_usage(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.modules.competence.models import Indicator
-
-    ind = await db.get(Indicator, indicator_id)
-    if ind is None or ind.tenant_id not in (None, current_user.tenant_id):
-        raise AppError("indicator_not_found", status.HTTP_404_NOT_FOUND)
+    # HRP-1016: the card's loader - another tenant's id answers its 404.
+    ind = await service._load_indicator_in_tenant(
+        db, current_user.tenant_id, indicator_id
+    )
     # HRP-632: a read hanging off another's draft answers the card's 404.
     await hide_anothers_draft(db, current_user, ind.competence_id)
     usage = await check_indicator_usage(db, ind)
@@ -795,11 +793,10 @@ async def get_material_usage(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.modules.competence.models import Material
-
-    material = await db.get(Material, material_id)
-    if material is None or material.tenant_id not in (None, current_user.tenant_id):
-        raise AppError("material_not_found", status.HTTP_404_NOT_FOUND)
+    # HRP-1016: the card's loader - another tenant's id answers its 404.
+    material = await service._load_material_in_tenant(
+        db, current_user.tenant_id, material_id
+    )
     # HRP-632: a read hanging off another's draft answers the card's 404.
     await hide_anothers_draft(db, current_user, material.competence_id)
     usage = await check_material_usage(db, material_id)

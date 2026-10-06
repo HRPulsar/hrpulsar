@@ -67,6 +67,7 @@ const SEGMENT_KEYS: Record<string, string> = {
   positions: "positions",
   retention: "retention",
   roles: "roles",
+  "saved-checks": "savedChecks",
   "section-access": "sectionAccess",
   scales: "scales",
   specializations: "specializations",

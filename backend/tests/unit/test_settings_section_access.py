@@ -77,8 +77,10 @@ def _level_of(route: APIRoute) -> str | None:
 
 
 def test_every_route_of_the_admin_block_asks_for_its_level():
-    # Reads ask for ``view``, writes for ``manage``; the one shared read
-    # (``GET /roles``) answers for itself.
+    # Reads ask for ``view``, writes for ``manage`` - the section gate's own
+    # rule for a section that is not self-guarded (HRP-1018), or else the
+    # route's ``require_section``; the one shared read (``GET /roles``)
+    # answers for itself.
     for route in app.routes:
         if not isinstance(route, APIRoute):
             continue
@@ -93,7 +95,8 @@ def test_every_route_of_the_admin_block_asks_for_its_level():
         if route.path in sections.SHARED_READS and reads:
             assert _level_of(route) is None, route.path
             continue
-        assert _level_of(route) == ("view" if reads else "manage"), (
+        gate = sections.gated_section(route) is section and not section.self_guarded
+        assert gate or _level_of(route) == ("view" if reads else "manage"), (
             f"{sorted(route.methods)} {route.path}"
         )
 

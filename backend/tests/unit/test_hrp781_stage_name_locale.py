@@ -45,7 +45,14 @@ def test_every_stage_has_a_de_name() -> None:
 
 
 def test_migration_table_matches_the_catalogs() -> None:
-    assert [row[0] for row in STAGE_NAMES] == [s[0] for s in DEFAULT_RECRUITMENT_STAGES]
+    # HRP-790 added two stages after this revision; it covers the nine
+    # that existed then.
+    from migrations.versions.hrp790stages01_post_offer_stages import NEW_STAGES
+
+    added = {code for code, *_ in NEW_STAGES}
+    assert [row[0] for row in STAGE_NAMES] == [
+        s[0] for s in DEFAULT_RECRUITMENT_STAGES if s[0] not in added
+    ]
     for code, en_name, by_locale in STAGE_NAMES:
         assert translate(f"recruitment.stage.{code}", "en") == en_name
         for locale, localized in by_locale.items():
@@ -66,7 +73,9 @@ async def test_seed_writes_names_in_the_tenant_locale(
     )
     await db.commit()
 
-    assert await seed_default_recruitment_stages(db, tenant.id) == 9
+    assert await seed_default_recruitment_stages(db, tenant.id) == len(
+        DEFAULT_RECRUITMENT_STAGES
+    )
     await db.commit()
 
     rows = (

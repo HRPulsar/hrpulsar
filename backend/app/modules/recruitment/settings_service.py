@@ -8,14 +8,17 @@ every query.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 
+import httpx
 from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import ai_usage_hooks
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from app.core.errors import AppError
 from app.core.s3 import get_presigned_url
@@ -27,6 +30,7 @@ from app.modules.recruitment.models import (
     ScaleConfig,
     TranscriptionProviderConfig,
 )
+from app.modules.recruitment.transcription_service import _CHAIN_ORDER
 from app.modules.storage.models import File
 
 log = logging.getLogger(__name__)
@@ -175,11 +179,25 @@ async def _guard_llm_settings(provider_settings: dict | None) -> None:
         await ensure_public_base_url(raw, error_code="llm_base_url_not_public")
 
 
+def _require_base_url(provider: str, provider_settings: dict | None) -> None:
+    """HRP-986: Azure and GigaChat are served only through their own
+    endpoint - a row without an http(s) base_url is never dispatched, so it
+    is refused instead of saved dead."""
+    from app.modules.ai.providers import base_url_from_settings, resolve_provider_name
+
+    if (
+        resolve_provider_name(provider) == "openai_compatible"
+        and base_url_from_settings(provider_settings) is None
+    ):
+        raise AppError("llm_base_url_required", status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+
 async def create_llm_provider(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     data: LLMProviderCreate,
 ) -> LLMProviderConfig:
+    _require_base_url(data.provider, data.settings)
     await _guard_llm_settings(data.settings)
     cfg = LLMProviderConfig(
         tenant_id=tenant_id,
@@ -206,6 +224,7 @@ async def update_llm_provider(
         raise AppError("llm_provider_not_found", status.HTTP_404_NOT_FOUND)
     payload = data.model_dump(exclude_unset=True)
     if "settings" in payload:
+        _require_base_url(cfg.provider, payload["settings"])
         await _guard_llm_settings(payload["settings"])
     if payload.get("model"):
         # The patch carries no provider — cross-check the new model against
@@ -260,6 +279,103 @@ async def delete_llm_provider(
     await db.commit()
 
 
+# HRP-986: a button press, not a pipeline call - a tiny answer, a short wait.
+_PROBE_TIMEOUT_S = 30.0
+_PROBE_MAX_TOKENS = 16
+
+
+async def probe_llm_provider(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    config_id: uuid.UUID,
+    user_id: uuid.UUID | None = None,
+) -> dict:
+    """Connection check for one config row (HRP-986).
+
+    One minimal call through the target generation resolves for this row -
+    its own key, base_url and model, the request-time SSRF client included.
+    The provider's own error text never reaches the response: a failure is
+    reduced to a code, the log keeps the details.
+    """
+    from app.modules.ai import llm_client, providers
+
+    cfg = await db.get(LLMProviderConfig, config_id)
+    if not cfg or cfg.tenant_id != tenant_id:
+        raise AppError("llm_provider_not_found", status.HTTP_404_NOT_FOUND)
+    target = providers.row_target(cfg)
+    if target is None:
+        raise AppError(
+            "llm_provider_test_not_dispatchable",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    try:
+        # The call spends the tenant's key: the AI call log attributes it
+        # to the tenant, the admin and the row (nothing binds the request).
+        with ai_usage_hooks.call_context(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="recruitment.llm_provider_probe",
+            entity_type="llm_provider",
+            entity_id=cfg.id,
+        ):
+            async with asyncio.timeout(_PROBE_TIMEOUT_S):
+                await llm_client.generate(
+                    "Reply with OK.",
+                    model=cfg.model,
+                    max_tokens=_PROBE_MAX_TOKENS,
+                    credentials=target,
+                )
+    except llm_client.LLMOutputTruncatedError:
+        pass  # The model answered; the tiny budget only cut the answer short.
+    except AppError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - every failure becomes a code
+        # The type only: the provider's message may echo the request.
+        log.warning(
+            "LLM provider probe failed: config=%s provider=%s error=%s",
+            cfg.id,
+            cfg.provider,
+            type(exc).__name__,
+        )
+        raise _probe_error(exc, cfg.model) from None
+    return {"status": "ok"}
+
+
+def _probe_error(exc: Exception, model: str) -> AppError:
+    import anthropic
+    import openai
+
+    if isinstance(
+        exc,
+        (
+            TimeoutError,
+            httpx.TransportError,
+            openai.APIConnectionError,
+            anthropic.APIConnectionError,
+        ),
+    ):
+        return AppError("llm_provider_test_unreachable", status.HTTP_502_BAD_GATEWAY)
+    # OpenAI/Anthropic carry the HTTP status as ``status_code``, Gemini as
+    # ``code`` (OpenAI's own ``code`` is a string and is skipped).
+    http_status = next(
+        (
+            value
+            for value in (getattr(exc, "status_code", None), getattr(exc, "code", None))
+            if isinstance(value, int)
+        ),
+        None,
+    )
+    if http_status in (401, 403):
+        return AppError("llm_provider_test_auth_failed", status.HTTP_502_BAD_GATEWAY)
+    if http_status == 404:
+        return AppError(
+            "llm_provider_test_model_not_found",
+            status.HTTP_502_BAD_GATEWAY,
+            model=model,
+        )
+    return AppError("llm_provider_test_failed", status.HTTP_502_BAD_GATEWAY)
+
+
 def _decode_api_key(encrypted: str | None, *, context: str) -> tuple[str | None, str]:
     """Decrypt-or-fail-soft helper. Returns ``(masked, key_status)``.
 
@@ -309,11 +425,26 @@ async def list_transcription_providers(
     return list(result.scalars().all())
 
 
+async def _guard_transcription_settings(
+    provider: str, provider_settings: dict | None
+) -> None:
+    """HRP-985: a provider the chain cannot run is refused when saved, not
+    discovered by a failed interview; a Whisper ``base_url`` passes the
+    same SSRF guard as an LLM one."""
+    if provider not in _CHAIN_ORDER:
+        raise AppError(
+            "transcription_provider_not_supported",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    await _guard_llm_settings(provider_settings)
+
+
 async def create_transcription_provider(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     data: TranscriptionProviderCreate,
 ) -> TranscriptionProviderConfig:
+    await _guard_transcription_settings(data.provider, data.settings)
     cfg = TranscriptionProviderConfig(
         tenant_id=tenant_id,
         provider=data.provider,
@@ -337,6 +468,7 @@ async def update_transcription_provider(
     if not cfg or cfg.tenant_id != tenant_id:
         raise AppError("transcription_provider_not_found", status.HTTP_404_NOT_FOUND)
     payload = data.model_dump(exclude_unset=True)
+    await _guard_transcription_settings(cfg.provider, payload.get("settings"))
     if "api_key" in payload:
         new_key = payload.pop("api_key")
         cfg.api_key_encrypted = encrypt_secret(new_key) if new_key else None

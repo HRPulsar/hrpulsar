@@ -13,6 +13,13 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # The suite runs in parallel shards, one runner (and one Postgres/Redis
+    # pair) each, so they never share a test DB. Test files are dealt out
+    # round-robin in path order; resize the list to change the shard count.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -53,13 +60,19 @@ jobs:
 
       # ee/ is monorepo-only too: lint it where it exists.
       - name: Lint (ruff)
+        if: strategy.job-index == 0
         run: cd backend && ruff check app/ $([ -d ee ] && echo ee/)
 
       - name: Type check (mypy)
+        if: strategy.job-index == 0
         run: cd backend && mypy app/ $([ -d ee ] && echo ee/) --ignore-missing-imports
 
       - name: Run tests
-        run: cd backend && pytest tests/ -v --tb=short
+        run: |
+          cd backend
+          pytest $(find tests -name 'test_*.py' | sort \
+            | awk -v n=${{ strategy.job-total }} -v k=${{ strategy.job-index }} 'NR % n == k') \
+            -v --tb=short
         env:
           DATABASE_URL: postgresql+asyncpg://hrpulsar:hrpulsar@localhost:5432/hrpulsar_test
           REDIS_URL: redis://localhost:6379
@@ -72,6 +85,7 @@ jobs:
       # `migrations` and excluded from the default run to keep the unit
       # suite fast.
       - name: Schema drift guard (models vs migrations)
+        if: strategy.job-index == 0
         run: cd backend && pytest tests/unit/test_schema_drift.py -m migrations -v --tb=short
         env:
           DATABASE_URL: postgresql+asyncpg://hrpulsar:hrpulsar@localhost:5432/hrpulsar_test
@@ -207,10 +221,20 @@ jobs:
         # community builds run e2e in the default onprem mode. The demo
         # sandbox rides along: saas-only (enabling it in onprem is a
         # startup config error), needed by demo-persona.spec.ts.
+        # The public process check (HRP-932) rides along the same way: on in
+        # saas, with one value for backend, worker, frontend and Playwright
+        # (e2e/public-check-helpers.ts); the community run leaves it off and
+        # its specs skip. A rate limit far above what the specs send - the
+        # 429 is reached through the E2E seed. The app domain is where the
+        # check host's links and 307s go.
         run: |
           if [ -d backend/ee ]; then
             echo "DEPLOYMENT_MODE=saas" >> "$GITHUB_ENV"
             echo "DEMO_ENABLED=true" >> "$GITHUB_ENV"
+            echo "PUBLIC_CHECK_ENABLED=true" >> "$GITHUB_ENV"
+            echo "PUBLIC_CHECK_HOST=http://check.localhost:3100" >> "$GITHUB_ENV"
+            echo "PUBLIC_CHECK_RATE_LIMIT=1000/hour;5000/day" >> "$GITHUB_ENV"
+            echo "NEXT_PUBLIC_APP_DOMAIN=localhost:3100" >> "$GITHUB_ENV"
           else
             echo "DEPLOYMENT_MODE=onprem" >> "$GITHUB_ENV"
           fi
@@ -264,7 +288,11 @@ jobs:
           DEFAULT_LOCALE: en
 
       - name: Start frontend
-        run: cd frontend && npm start -- --port 3100 &
+        # --hostname 0.0.0.0 as in the image (HOSTNAME=0.0.0.0): Next turns a
+        # proxy redirect into a relative one when its host is the server's
+        # own (localhost:3100), and the check host's 307 to the app host
+        # (HRP-924) would then loop on the check host.
+        run: cd frontend && npm start -- --port 3100 --hostname 0.0.0.0 &
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8100/api
           NEXT_PUBLIC_AVAILABLE_LOCALES: de,en

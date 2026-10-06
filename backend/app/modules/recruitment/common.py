@@ -18,6 +18,8 @@ from sqlalchemy.orm import selectinload
 from app.core.errors import AppError
 from app.modules.recruitment.models import (
     Candidate,
+    CandidateVacancy,
+    Interview,
     Vacancy,
     VacancyStage,
 )
@@ -101,6 +103,64 @@ async def _get_vacancy(
     if not vacancy:
         raise AppError("vacancy_not_found", status.HTTP_404_NOT_FOUND)
     return vacancy
+
+
+# HRP-836: what a vacancy's status freezes, surface by surface. A paused
+# vacancy stops the interview work on its candidates; a closed or cancelled
+# one is read-only as a whole, AI Insights included. The frontend mirror is
+# ``VACANCY_READ_ONLY_SURFACES`` in ``frontend/src/lib/vacancy-status.ts``.
+_FROZEN_WHEN_ENDED = frozenset(
+    {"vacancy", "ai_insights", "questions", "interviews", "manager_assessments"}
+)
+VACANCY_LOCKED_SURFACES: dict[str, frozenset[str]] = {
+    "paused": frozenset({"questions", "interviews", "manager_assessments"}),
+    "closed": _FROZEN_WHEN_ENDED,
+    "cancelled": _FROZEN_WHEN_ENDED,
+}
+
+
+def vacancy_locks(vacancy_status: str | None, surface: str) -> bool:
+    return surface in VACANCY_LOCKED_SURFACES.get(vacancy_status or "", frozenset())
+
+
+async def ensure_vacancy_unlocked(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    surface: str,
+    *,
+    vacancy_id: uuid.UUID | None = None,
+    cv_id: uuid.UUID | None = None,
+    interview_id: uuid.UUID | None = None,
+    round_id: uuid.UUID | None = None,
+) -> None:
+    """409 when the vacancy behind a mutation freezes ``surface`` (HRP-836).
+
+    Pass exactly one of the ids. Only the vacancy status is checked - the
+    role checks stay where they are. An id that resolves to nothing passes
+    through, so the service answers its own 404.
+    """
+    query = select(Vacancy.status).where(Vacancy.tenant_id == tenant_id)
+    if vacancy_id is not None:
+        query = query.where(Vacancy.id == vacancy_id)
+    else:
+        query = query.join(CandidateVacancy, CandidateVacancy.vacancy_id == Vacancy.id)
+        if cv_id is not None:
+            query = query.where(CandidateVacancy.id == cv_id)
+        elif interview_id is not None:
+            query = query.join(
+                Interview, Interview.candidate_vacancy_id == CandidateVacancy.id
+            ).where(Interview.id == interview_id)
+        else:
+            from app.modules.recruitment.manager_assessment_models import (
+                AssessmentRound,
+            )
+
+            query = query.join(
+                AssessmentRound,
+                AssessmentRound.candidate_vacancy_id == CandidateVacancy.id,
+            ).where(AssessmentRound.id == round_id)
+    if vacancy_locks(await db.scalar(query), surface):
+        raise AppError("vacancy_status_read_only", status.HTTP_409_CONFLICT)
 
 
 async def _get_candidate(

@@ -57,7 +57,8 @@ export function ErrorScreen({
       };
   // Retrying a truncated generation re-runs the same over-budget request;
   // the remedy is a narrower scope, so the retry button is hidden. Nor does
-  // a retry help a workspace whose processor list allows no provider.
+  // a retry help a workspace whose processor list allows no provider, or
+  // whose model is gone with no replacement (HRP-987, the same code).
   const retryable =
     errorCode !== "output_truncated" && errorCode !== "no_allowed_processor";
   return (

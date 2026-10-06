@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.sections import require_section
 from app.database import get_db
 from app.modules.ai import model_catalog_service, providers
 from app.modules.ai_settings import service
@@ -13,21 +12,20 @@ from app.modules.ai_settings.schemas import (
     ProcessorRead,
     ProviderStatusRead,
 )
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 
 router = APIRouter(prefix="/admin/ai-settings", tags=["ai-settings"])
 
 # HRP-831: the AI settings section on the tenant's matrix - ``view`` reads
 # the settings, presets, models and provider statuses, ``manage`` changes
-# or resets them.
-_view = require_section("ai-settings", "view")
-_manage = require_section("ai-settings", "manage")
+# or resets them. The section gate answers for both (HRP-1018).
 
 
 @router.get("", response_model=AISettingsRead)
 async def get_settings(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view),
+    current_user: User = Depends(get_current_user),
 ):
     row = await service.get_or_default(db, current_user.tenant_id)
     return await service.to_read_dict_async(db, row)
@@ -37,7 +35,7 @@ async def get_settings(
 async def update_settings(
     patch: AISettingsUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
 ):
     row = await service.update(db, current_user.tenant_id, patch)
     return await service.to_read_dict_async(db, row)
@@ -46,7 +44,7 @@ async def update_settings(
 @router.post("/reset", response_model=AISettingsRead)
 async def reset_settings(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
 ):
     row = await service.reset(db, current_user.tenant_id)
     return await service.to_read_dict_async(db, row)
@@ -54,7 +52,7 @@ async def reset_settings(
 
 @router.get("/presets", response_model=list[EffortPresetRead])
 async def get_presets(
-    _: User = Depends(_view),
+    _: User = Depends(get_current_user),
 ):
     return service.list_presets()
 
@@ -62,7 +60,7 @@ async def get_presets(
 @router.get("/models", response_model=list[AllowedModelRead])
 async def get_allowed_models(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(_view),
+    _: User = Depends(get_current_user),
 ):
     """Pickable models from the dynamic catalog (HRP-466).
 
@@ -79,7 +77,7 @@ async def get_allowed_models(
 @router.get("/providers", response_model=list[ProviderStatusRead])
 async def get_provider_statuses(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view),
+    current_user: User = Depends(get_current_user),
 ):
     """Which LLM providers this tenant can actually generate through
     (platform env key, tenant BYOK key, or a local OpenAI-compatible
@@ -90,7 +88,7 @@ async def get_provider_statuses(
 @router.get("/processors", response_model=list[ProcessorRead])
 async def get_processors(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_view),
+    current_user: User = Depends(get_current_user),
 ):
     """HRP-1005: outside companies this workspace's data reaches through the
     platform's keys. Read-only — the platform admin changes the list."""

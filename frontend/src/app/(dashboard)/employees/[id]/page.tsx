@@ -26,10 +26,12 @@ import {
   translatePdpStatus,
 } from "@/lib/pdp-status";
 import { sortPdpsForList } from "@/lib/pdp-filters";
+import { eventDescription as describeEvent } from "@/lib/employee-events";
 import {
   daysSinceCompleted,
   goalsProgressPercent,
   isRunningAssessment,
+  lastAssessmentActiveCount,
   latestDoneAssessment,
   openAssessmentCount,
   openPdpCount,
@@ -378,22 +380,17 @@ export default function EmployeeDetailPage() {
     };
   }, [employeeId]);
 
-  // HRP-999: the backend words a role change in English; the codes it keeps
-  // beside the words read in the viewer's language.
+  // HRP-999 / HRP-1013: the backend words system events in English; the
+  // values it keeps beside the words read in the viewer's language.
   function eventDescription(event: EmployeeEvent): string | null {
-    const from = event.old_value?.roles;
-    const to = event.new_value?.roles;
-    if (
-      event.event_type === "role_changed" &&
-      Array.isArray(from) &&
-      Array.isArray(to)
-    ) {
-      return t("eventRoleChanged", {
-        from: resolveRoleLabel(from, tRole),
-        to: resolveRoleLabel(to, tRole),
-      });
-    }
-    return event.description;
+    return describeEvent(event, {
+      t,
+      roleLabel: (codes) => resolveRoleLabel(codes, tRole),
+      divisionName: (divisionId) =>
+        flattenTree(divisions).find((d) => d.id === divisionId)?.name,
+      money: (cents, currency) =>
+        (cents / 100).toLocaleString(locale, { style: "currency", currency }),
+    });
   }
 
   async function changeRole(roleCode: string) {
@@ -982,16 +979,13 @@ export default function EmployeeDetailPage() {
     : latestRunningAssessment
       ? t("kpiAssessmentRunning")
       : "—";
-  // The running-count marker leads the sub-line: it is short and fixed
-  // width, so it survives the truncation that eats a long assessment title.
-  const lastAssessmentSub = (() => {
-    const shown = latestAssessment ?? latestRunningAssessment;
-    if (!shown) return t("kpiNoRecords");
-    const title = shown.title || assessmentTypeTitle(tRef, shown);
-    return latestAssessment && runningAssessments.length > 0
-      ? `${t("kpiAssessmentsRunning", { count: runningAssessments.length })} · ${title}`
-      : title;
-  })();
+  const lastAssessmentShown = latestAssessment ?? latestRunningAssessment;
+  const lastAssessmentSub = lastAssessmentShown
+    ? lastAssessmentShown.title || assessmentTypeTitle(tRef, lastAssessmentShown)
+    : t("kpiNoRecords");
+  // HRP-736 REDO (QA 28.09): the title first, cut by an ellipsis, then
+  // "+N active", which never shrinks and so stays readable.
+  const lastAssessmentActive = lastAssessmentActiveCount(assessments);
 
   // HRP-247 / HRP-246: shared helpers — "open" means not yet Done or
   // Cancelled. The legacy filter compared against ``"completed"`` (no
@@ -1017,6 +1011,8 @@ export default function EmployeeDetailPage() {
     label: string;
     value: string;
     sub: string;
+    // Shown after ``sub`` and never truncated.
+    subTail?: string;
     info?: string;
     // HRP-736 review: the tile capitalizes every word, which is right for
     // one-word statuses and wrong for a sentence (a title-cased "assessment running" reads wrong).
@@ -1088,6 +1084,10 @@ export default function EmployeeDetailPage() {
       label: t("kpiLastAssessment"),
       value: lastAssessmentLabel,
       sub: lastAssessmentSub,
+      subTail:
+        lastAssessmentActive > 0
+          ? t("kpiAssessmentsActive", { count: lastAssessmentActive })
+          : undefined,
       valuePlain: !latestAssessment && !!latestRunningAssessment,
     },
   ];
@@ -1351,8 +1351,16 @@ export default function EmployeeDetailPage() {
               >
                 {k.value}
               </div>
-              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                {k.sub}
+              <div className="mt-0.5 flex gap-1 text-[11px] text-muted-foreground">
+                <span className="truncate">{k.sub}</span>
+                {k.subTail && (
+                  <span
+                    className="shrink-0"
+                    data-testid={`employee-kpi-${k.key}-tail`}
+                  >
+                    {k.subTail}
+                  </span>
+                )}
               </div>
             </div>
           ))}

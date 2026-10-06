@@ -28,3 +28,27 @@ class ImportJobRead(BaseModel):
 class ImportJobList(BaseModel):
     items: list[ImportJobRead]
     total: int
+
+
+class ImportPreviewProblem(BaseModel):
+    """Why the import skips a row: ``required``, ``date`` or ``email``, and
+    the column (0-based) it is about."""
+
+    code: str
+    column: int
+
+
+class ImportPreviewRow(BaseModel):
+    line: int
+    cells: list[str]
+    problem: ImportPreviewProblem | None = None
+
+
+class ImportPreview(BaseModel):
+    """An upload as the import will read it (HRP-806): its first rows, and
+    how many data rows and rows with a problem the whole file has."""
+
+    columns: list[str]
+    rows: list[ImportPreviewRow]
+    total_rows: int
+    problem_rows: int

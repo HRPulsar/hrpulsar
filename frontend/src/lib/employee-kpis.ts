@@ -104,6 +104,18 @@ function completedAt(a: { finished_at: string }): number {
   return new Date(a.finished_at).getTime();
 }
 
+/**
+ * HRP-736 REDO (QA 28.09): the "+N active" marker after the completed
+ * assessment's title. Active is every assessment not Done or Cancelled -
+ * the Assessments tile's open count, On review included. Zero without a
+ * completed one: that tile reads "Assessment running" instead.
+ */
+export function lastAssessmentActiveCount(
+  asmts: (OpenAssessmentInput & LastAssessmentInput)[],
+): number {
+  return latestDoneAssessment(asmts) ? openAssessmentCount(asmts) : 0;
+}
+
 /** HRP-736: how long ago that assessment was completed, in whole days. */
 export function daysSinceCompleted(a: { finished_at: string }, now = Date.now()): number {
   return Math.max(0, Math.floor((now - completedAt(a)) / (24 * 3600 * 1000)));

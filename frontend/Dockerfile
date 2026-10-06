@@ -3,6 +3,9 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
+# No anonymous usage reports to Vercel from the build or the server (HRP-990).
+ENV NEXT_TELEMETRY_DISABLED=1
+
 # Optional override; when empty next.config.ts falls back to /version.py
 # (copied below) — the repo-root source of truth for the app version.
 ARG APP_VERSION=
@@ -53,6 +56,7 @@ LABEL org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.source="https://github.com/HRPulsar/hrpulsar"
 
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 

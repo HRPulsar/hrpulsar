@@ -208,12 +208,334 @@ async def test_clone_seed_marks_interviews_completed_with_analysis(
         assert iv.analysis_data["competence_assessments"]
 
     elena = next(iv for iv in analyzed if "Elena" in (iv.title or ""))
-    assert elena.analysis_data == ELENA_INTERVIEW_ANALYSIS
+
+    # HRP-980: the fixture lands as written, except that the seed anchors
+    # each citation on the segment holding its quote (pinned below).
+    def _unanchored(analysis: dict) -> dict:
+        return {
+            **analysis,
+            "competence_assessments": [
+                {**ca, "citations": [c["quote"] for c in ca["citations"]]}
+                for ca in analysis["competence_assessments"]
+            ],
+        }
+
+    assert _unanchored(elena.analysis_data) == _unanchored(ELENA_INTERVIEW_ANALYSIS)
     # Transcript packaged with the module gets attached verbatim — the
     # demo opens this exact interview on the first screen and we want
     # the panel populated.
     assert elena.transcript
     assert len(elena.transcript) > 100
+
+
+@pytest.mark.asyncio
+async def test_every_seeded_citation_points_at_a_segment_that_holds_it(
+    db: AsyncSession, tenant, user
+):
+    """HRP-980: a click on a demo citation opens the place it quotes.
+
+    Every citation the seed wrote — on the interview, on the run and on
+    the AI rows the matrix reads — names a real segment of its own
+    interview, carries that segment's timecodes, and quotes text the
+    segment holds.
+    """
+    from app.modules.recruitment.models import (
+        AIAnalysisRun,
+        AIAssessment,
+        InterviewSegment,
+    )
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    segments = {
+        str(seg.id): seg
+        for seg in (
+            await db.execute(
+                select(InterviewSegment).where(InterviewSegment.tenant_id == tenant.id)
+            )
+        ).scalars()
+    }
+
+    def _check(interview_id, citations) -> int:
+        for citation in citations:
+            segment = segments[citation["segment_id"]]
+            assert segment.interview_id == interview_id
+            assert (citation["start_sec"], citation["end_sec"]) == (
+                segment.start_sec,
+                segment.end_sec,
+            )
+            quote = " ".join(citation["quote"].split()).casefold()
+            assert quote in " ".join(segment.text.split()).casefold()
+        return len(citations)
+
+    checked = 0
+    interviews = (
+        await db.execute(select(Interview).where(Interview.tenant_id == tenant.id))
+    ).scalars()
+    for iv in interviews:
+        for ca in (iv.analysis_data or {}).get("competence_assessments") or []:
+            checked += _check(iv.id, ca.get("citations") or [])
+    for row in (
+        await db.execute(
+            select(AIAssessment).where(AIAssessment.tenant_id == tenant.id)
+        )
+    ).scalars():
+        checked += _check(row.interview_id, row.citations or [])
+    runs = (
+        await db.execute(
+            select(AIAnalysisRun).where(
+                AIAnalysisRun.tenant_id == tenant.id,
+                AIAnalysisRun.mode == "full",
+            )
+        )
+    ).scalars()
+    for run in runs:
+        for ca in run.analysis_data["competence_assessments"]:
+            checked += _check(run.interview_id, ca["citations"])
+    assert checked > 50
+
+
+@pytest.mark.asyncio
+async def test_the_headline_interview_has_a_recording_to_seek(
+    db: AsyncSession, tenant, user, monkeypatch
+):
+    """HRP-980: at least one demo interview plays back, so a citation click
+    seeks a recording rather than doing nothing. The asset goes to the
+    tenant's own prefix, which the demo purge sweeps."""
+    from app.modules.demo.seed import _ELENA_RECORDING
+    from app.modules.recruitment import interview_service
+    from app.modules.storage.models import File
+
+    stored: dict[str, tuple[bytes, str]] = {}
+
+    def _upload(data: bytes, path: str, content_type: str) -> str:
+        stored[path] = (data, content_type)
+        return f"s3://bucket/{path}"
+
+    monkeypatch.setattr("app.core.s3.upload_file", _upload)
+    monkeypatch.setattr(
+        "app.core.s3.get_presigned_url", lambda path, **_: f"https://s3/{path}"
+    )
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    with_audio = (
+        (
+            await db.execute(
+                select(Interview).where(
+                    Interview.tenant_id == tenant.id,
+                    Interview.audio_file_id.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(with_audio) == 1
+    elena = with_audio[0]
+    assert "Elena" in elena.title
+    file_row = await db.get(File, elena.audio_file_id)
+    assert file_row.path.startswith(f"tenants/{tenant.id}/")
+    assert stored[file_row.path] == (_ELENA_RECORDING.read_bytes(), "audio/mp4")
+    assert file_row.size == len(_ELENA_RECORDING.read_bytes()) < 150_000
+
+    media = await interview_service.get_interview_media_url(db, tenant.id, elena.id)
+    assert media["kind"] == "audio" and media["url"].endswith(file_row.path)
+
+
+@pytest.mark.asyncio
+async def test_without_object_storage_the_seed_stays_text_only(
+    db: AsyncSession, tenant, user, monkeypatch
+):
+    monkeypatch.setattr("app.core.s3.upload_file", lambda *a, **k: None)
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+    assert not (
+        await db.execute(
+            select(Interview.id).where(
+                Interview.tenant_id == tenant.id,
+                Interview.audio_file_id.is_not(None),
+            )
+        )
+    ).all()
+
+
+@pytest.mark.asyncio
+async def test_every_seeded_candidate_has_signed_the_consent(
+    db: AsyncSession, tenant, user
+):
+    """HRP-979: AI processing needs a signed, unrevoked consent request.
+
+    The demo seed hands every candidate one on the tenant's active
+    template, and their interviews carry the signature, so re-running an
+    analysis on stage never stops at the consent check.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.modules.recruitment.models import ConsentRequest, ConsentTemplate
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    [template] = (
+        (
+            await db.execute(
+                select(ConsentTemplate).where(ConsentTemplate.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert template.is_active and template.name and template.body
+
+    candidates = (
+        (await db.execute(select(Candidate).where(Candidate.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
+    requests = (
+        (
+            await db.execute(
+                select(ConsentRequest).where(ConsentRequest.tenant_id == tenant.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    signed = {
+        r.candidate_id: r
+        for r in requests
+        if r.status == "signed" and r.signed_at is not None and r.signed_at < now
+    }
+    assert candidates and {c.id for c in candidates} == set(signed)
+    for candidate in candidates:
+        request = signed[candidate.id]
+        assert request.email == candidate.email
+        assert request.template_id == template.id
+        assert request.expires_at > now + timedelta(days=300)
+    assert len({r.token for r in requests}) == len(requests)
+
+    interviews = (
+        (await db.execute(select(Interview).where(Interview.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
+    assert interviews
+    for interview in interviews:
+        assert interview.consent_template_id == template.id
+        assert interview.consent_signed_at is not None
+        assert interview.consent_signed_at < (interview.interview_date or now)
+
+
+@pytest.mark.asyncio
+async def test_annas_open_plan_is_built_from_her_q4_review(
+    db: AsyncSession,
+    tenant,
+    user,
+    assessment_statuses,
+    assessment_types,
+    default_answer_scale,
+):
+    """HRP-737 REDO (QA 29.09): the plan answers the review it is based on.
+
+    One item per growth zone of that review — named by the competence, as
+    the assessment page's plan button names it (HRP-731) — and each item
+    carries the competence's materials up to the level the review
+    measured. The seeded reviews pin no level, so they ran up to Advanced:
+    the Advanced material must be there, not just the ladder's
+    Intermediate ones.
+    """
+    from app.modules.auth.models import User as AuthUser
+    from app.modules.employee.issues import is_gap, passing_bar
+
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    anna = (
+        await db.execute(
+            select(Employee)
+            .join(AuthUser, Employee.user_id == AuthUser.id)
+            .where(
+                Employee.tenant_id == tenant.id,
+                AuthUser.email == "anna.rising@demo.example.com",
+            )
+        )
+    ).scalar_one()
+    plan = (
+        await db.execute(
+            select(PDP).where(PDP.employee_id == anna.id, PDP.status == "in_progress")
+        )
+    ).scalar_one()
+    review = await db.get(Assessment, plan.assessment_id)
+    assert review.title == "Q4 360° review — Anna Rising"
+
+    results = (
+        (
+            await db.execute(
+                select(AssessmentResult).where(
+                    AssessmentResult.assessment_id == review.id,
+                    AssessmentResult.competence_id.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    bar = passing_bar(review.passing_score)
+    growth = {
+        r.competence_id
+        for r in results
+        if r.percent is not None and is_gap(r.percent, bar)
+    }
+    competences = {
+        c.id: c
+        for c in (
+            await db.execute(
+                select(Competence).where(Competence.tenant_id == tenant.id)
+            )
+        ).scalars()
+    }
+    assert {competences[c].title for c in growth} == {
+        "Distributed Systems",
+        "Mentoring",
+    }
+
+    items = (
+        (await db.execute(select(PDPItem).where(PDPItem.pdp_id == plan.id)))
+        .scalars()
+        .all()
+    )
+    assert {i.competence_id for i in items} == growth
+    advanced = {
+        level.id
+        for level in (
+            await db.execute(
+                # The ladder rides on the origin levels (tenant NULL).
+                select(SkillLevel).where(SkillLevel.title == "Advanced")
+            )
+        ).scalars()
+    }
+    for item in items:
+        assert item.title == competences[item.competence_id].title
+        assert item.description, "the concrete task stays on the item"
+        levels = set(
+            (
+                await db.execute(
+                    select(Material.skill_level_id)
+                    .join(PDPItemMaterial, PDPItemMaterial.material_id == Material.id)
+                    .where(PDPItemMaterial.item_id == item.id)
+                )
+            ).scalars()
+        )
+        assert levels & advanced, item.title
+    assert plan.total_progress == 50
 
 
 @pytest.mark.asyncio
@@ -332,7 +654,7 @@ async def test_clone_seed_without_interviews_leaves_headline_rows_unanalysed(
                 .where(
                     CandidateVacancy.tenant_id == tenant.id,
                     Candidate.email.in_(
-                        ["elena.volkov@example.com", "tomas.becker@example.com"]
+                        ["elena.volkova@example.com", "tomas.becker@example.com"]
                     ),
                 )
             )
@@ -1750,9 +2072,13 @@ async def test_seeded_tenant_tells_the_dev_loop_story(
     # Q3 plan did not cover.
     assert "gaps_without_plan" in findings
     assert findings["gaps_without_plan"]["count"] >= 3
-    # Storyline B: an overdue plan and a plan stuck in review/returned.
+    # Storyline B: an overdue plan. HRP-941 narrowed the stuck row to plans
+    # in review: the storyline's stalled plan is "returned" (back with its
+    # author) and the seed's review plans are fresh, so a freshly seeded demo
+    # has no stuck row. Seeding a review plan aged past the threshold — the
+    # demo seed's call, not this pin's — brings it back.
     assert findings["pdp_overdue"]["count"] >= 1
-    assert findings["pdp_stuck_review"]["count"] >= 1
+    assert "pdp_stuck_review" not in findings
     # Coverage is deliberately partial — the "run assessments" CTA fires.
     assert "assessment_coverage" in findings
     assert 0 < payload["stages"]["assessed"]["percent"] < 100
@@ -1911,10 +2237,10 @@ async def test_demo_recruiting_funnel_tells_the_recommendation_story(
     )
     assert len(rows) == 3, "HRP-666 caps the headline funnel at three candidates"
     by_name = {r["candidate_name"]: r for r in rows}
-    assert set(by_name) == {"Elena Volkov", "Priya Shah", "Tomás Becker"}
+    assert set(by_name) == {"Elena Volkova", "Priya Shah", "Tomás Becker"}
     assert all(r["stage"] is not None for r in rows), "every demo row has a stage"
 
-    elena = by_name["Elena Volkov"]
+    elena = by_name["Elena Volkova"]
     assert elena["manager_score"] is not None
     assert elena["divergence_count"] == 0
     assert elena["score_divergence"] is False
@@ -2008,7 +2334,7 @@ async def test_flagship_funnel_reads_as_a_real_pipeline(
     by_name = {
         c["name"]: c["ai_percent"] for c in matrix["candidates"]
     }
-    elena = by_name["Elena Volkov"]
+    elena = by_name["Elena Volkova"]
     tomas = by_name["Tomás Becker"]
     priya = by_name["Priya Shah"]
     assert elena is not None and tomas is not None

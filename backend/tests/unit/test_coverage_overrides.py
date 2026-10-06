@@ -4,7 +4,9 @@ buckets, the shares, the To do list and the skill gate all follow it."""
 
 from __future__ import annotations
 
+import importlib.util
 import uuid
+from pathlib import Path
 
 import pytest
 from app.modules.ai_workforce.models import AIAgentPack
@@ -13,7 +15,7 @@ from app.modules.work import coverage, service
 from app.modules.work.models import WorkContainer, WorkStep, WorkStepSkill
 from app.modules.work.schemas import DecomposedStep, StepUpdate
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
 from tests.unit.test_coverage_matching import (
     _agent,
@@ -25,6 +27,11 @@ from tests.unit.test_coverage_matching import (
 )
 from tests.unit.test_coverage_matching import no_mapping_enqueue as _quiet
 from tests.unit.test_coverage_matching import seeded as _seeded
+
+MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "migrations/versions/hrp911packid_step_manual_pack_id.py"
+)
 
 # Re-exported under the names the tests below ask for: pytest resolves a
 # fixture by the name it is bound to in this module.
@@ -198,7 +205,7 @@ class TestManualPack:
         row, _ = await _row(db, tenant, c, step["id"])
         assert (row["verdict"], row["agent"]) == ("gap", None)
 
-        await _patch(db, tenant, step, manual_pack_code="drafting")
+        await _patch(db, tenant, step, manual_pack_id=await _pack_id(db, "drafting"))
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["verdict"] == "agent"
         assert row["gap_label"] is None
@@ -226,13 +233,13 @@ class TestManualPack:
         assert row["agent"]["agent_id"] == other["id"]
         assert row["agent"]["pack_manual"] is False
 
-        await _patch(db, tenant, step, manual_pack_code="drafting")
+        await _patch(db, tenant, step, manual_pack_id=await _pack_id(db, "drafting"))
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["agent"]["agent_id"] == mine["id"]
         assert row["agent"]["agent_name"] == "Writer"
         assert row["agent"]["pack_manual"] is True
 
-        await _patch(db, tenant, step, manual_pack_code=None)
+        await _patch(db, tenant, step, manual_pack_id=None)
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["agent"]["agent_id"] == other["id"]
         assert row["agent"]["pack_manual"] is False
@@ -245,7 +252,7 @@ class TestManualPack:
         with people - it would be covered by nobody."""
         c = await _container(db, tenant, user)
         step = await _step(db, tenant, c, ["P6"], hours_per_run=2, runs_per_year=100)
-        await _patch(db, tenant, step, manual_pack_code="drafting")
+        await _patch(db, tenant, step, manual_pack_id=await _pack_id(db, "drafting"))
         row, result = await _row(db, tenant, c, step["id"])
         assert (row["mode"], row["verdict"], row["agent"]) == (
             "blocked_judgment",
@@ -276,7 +283,7 @@ class TestManualPack:
             db,
             tenant,
             step,
-            manual_pack_code="drafting",
+            manual_pack_id=await _pack_id(db, "drafting"),
             executor_employee_id=emp.id,
         )
         row, _ = await _row(db, tenant, c, step["id"])
@@ -290,7 +297,7 @@ class TestManualPack:
         await db.commit()
         c = await _container(db, tenant, user)
         step = await _step(db, tenant, c, ["P1"])
-        await _patch(db, tenant, step, manual_pack_code=own.code)
+        await _patch(db, tenant, step, manual_pack_id=own.id)
         row, _ = await _row(db, tenant, c, step["id"])
         assert (row["agent"]["pack_code"], row["agent"]["pack_manual"]) == (
             own.code,
@@ -320,13 +327,13 @@ class TestManualPack:
         await db.commit()
         c = await _container(db, tenant, user)
         step = await _step(db, tenant, c, ["P1"])
-        for code in ("no_such_pack", theirs.code, ""):
+        for pack_id in (uuid.uuid4(), theirs.id):
             with pytest.raises(HTTPException) as exc:
-                await _patch(db, tenant, step, manual_pack_code=code)
+                await _patch(db, tenant, step, manual_pack_id=pack_id)
             assert exc.value.status_code == 422
             assert exc.value.code == "work_step_pack_invalid"
         stored = await db.scalar(
-            select(WorkStep.manual_pack_code).where(WorkStep.id == step["id"])
+            select(WorkStep.manual_pack_id).where(WorkStep.id == step["id"])
         )
         assert stored is None
 
@@ -352,13 +359,13 @@ class TestManualPack:
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["skill_status"] == "ready"
 
-        await _patch(db, tenant, step, manual_pack_code="drafting")
+        await _patch(db, tenant, step, manual_pack_id=await _pack_id(db, "drafting"))
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["skill_status"] == "none"
         gaps = await coverage.gaps(db, tenant.id, c.id)
         assert [g["kind"] for g in gaps] == ["not_automated_yet"]
 
-        await _patch(db, tenant, step, manual_pack_code="extraction")
+        await _patch(db, tenant, step, manual_pack_id=await _pack_id(db, "extraction"))
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["skill_status"] == "ready"
 
@@ -367,9 +374,121 @@ class TestManualPack:
     ):
         c = await _container(db, tenant, user)
         step = await _step(db, tenant, c, ["P1"])
-        await _patch(db, tenant, step, manual_pack_code="drafting")
+        await _patch(db, tenant, step, manual_pack_id=await _pack_id(db, "drafting"))
         row = await service.start_step_skill(db, tenant.id, step["id"], user_id=user.id)
         assert row.pack_id == await _pack_id(db, "drafting")
+
+
+class TestPackById:
+    """HRP-911: the override names a pack, not a code - the tenant's own pack
+    with a built-in one's code is the one the company picked."""
+
+    async def test_the_tenants_pack_with_a_built_in_code_is_the_one_named(
+        self, db, tenant, user, seeded
+    ):
+        own = AIAgentPack(
+            code="drafting",
+            title_en="Contract drafting",
+            i18n_key="agentPack.drafting",
+            tenant_id=tenant.id,
+        )
+        db.add(own)
+        await db.commit()
+        builtin = await _pack_id(db, "drafting")
+        c = await _container(db, tenant, user)
+        step = await _step(db, tenant, c, ["P1"])
+
+        await _patch(db, tenant, step, manual_pack_id=own.id)
+        row, result = await _row(db, tenant, c, step["id"])
+        assert (row["agent"]["pack_id"], row["agent"]["pack_code"]) == (
+            own.id,
+            "drafting",
+        )
+        assert row["agent"]["pack_manual"] is True
+        # The archive's README tells the two apart by pack, not by code.
+        assert result["packs"][own.id] == {"title": "Contract drafting", "own": True}
+        assert result["packs"][builtin]["own"] is False
+        skill = await service.start_step_skill(
+            db, tenant.id, step["id"], user_id=user.id
+        )
+        assert skill.pack_id == own.id
+
+        await _patch(db, tenant, step, manual_pack_id=builtin)
+        row, _ = await _row(db, tenant, c, step["id"])
+        assert row["agent"]["pack_id"] == builtin
+
+    async def test_a_deleted_pack_drops_the_override(self, db, tenant, user, seeded):
+        own = _own_pack(tenant.id)
+        db.add(own)
+        await db.commit()
+        c = await _container(db, tenant, user)
+        step = await _step(db, tenant, c, ["P1"])
+        await _patch(db, tenant, step, manual_pack_id=own.id)
+
+        await db.delete(own)
+        await db.commit()
+        stored = await db.scalar(
+            select(WorkStep.manual_pack_id).where(WorkStep.id == step["id"])
+        )
+        assert stored is None
+        row, _ = await _row(db, tenant, c, step["id"])
+        assert (row["agent"]["pack_code"], row["agent"]["pack_manual"]) == (
+            "extraction",
+            False,
+        )
+
+    async def test_the_migration_carries_a_code_over_preferring_the_tenants_pack(
+        self, db, tenant, user, seeded
+    ):
+        spec = importlib.util.spec_from_file_location("hrp911packid", MIGRATION)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        stranger = Tenant(name="Other", slug=f"other-{uuid.uuid4().hex[:8]}")
+        db.add(stranger)
+        await db.flush()
+        mine = AIAgentPack(
+            code="drafting", title_en="Mine", i18n_key="x", tenant_id=tenant.id
+        )
+        # Deactivated: the code resolves to the active built-in one today,
+        # and keeps doing so.
+        idle = AIAgentPack(
+            code="extraction",
+            title_en="Idle",
+            i18n_key="x",
+            tenant_id=tenant.id,
+            is_active=False,
+        )
+        theirs = _own_pack(stranger.id)
+        db.add_all([mine, idle, theirs])
+        await db.commit()
+        c = await _container(db, tenant, user)
+        expected = {
+            "drafting": mine.id,
+            "extraction": await _pack_id(db, "extraction"),
+            "coordinator": await _pack_id(db, "coordinator"),
+            theirs.code: None,  # another tenant's pack is not this one's
+            "no_such_pack": None,
+        }
+        steps = {}
+        for code in expected:
+            step = await _step(db, tenant, c, ["P1"])
+            await db.execute(
+                update(WorkStep)
+                .where(WorkStep.id == step["id"])
+                .values(manual_pack_code=code)
+            )
+            steps[step["id"]] = code
+        await db.commit()
+
+        await db.execute(text(mod.BACKFILL_SQL))
+        rows = await db.execute(
+            select(WorkStep.id, WorkStep.manual_pack_id).where(
+                WorkStep.id.in_(list(steps))
+            )
+        )
+        assert {steps[sid]: pid for sid, pid in rows.all()} == expected
+        await db.rollback()
 
 
 class TestApply:
@@ -378,9 +497,7 @@ class TestApply:
         unfiltered, so what keeps an override out of a new step is that the
         worker's schema has no field to put one in. Adding one there needs a
         filter at the apply."""
-        assert not {"manual_mode", "manual_pack_code"} & set(
-            DecomposedStep.model_fields
-        )
+        assert not {"manual_mode", "manual_pack_id"} & set(DecomposedStep.model_fields)
 
     async def test_apply_leaves_no_override_behind(self, db, tenant, user, seeded):
         """A new breakdown replaces every step: the overrides go with the
@@ -388,7 +505,11 @@ class TestApply:
         c = await _container(db, tenant, user, description="Close the month.")
         old = await _step(db, tenant, c, ["P6"])
         await _patch(
-            db, tenant, old, manual_mode="automatable", manual_pack_code="drafting"
+            db,
+            tenant,
+            old,
+            manual_mode="automatable",
+            manual_pack_id=await _pack_id(db, "drafting"),
         )
         sess = await service.create_session(db, tenant.id, user.id, c.id)
         sess.status = "ready"
@@ -411,9 +532,7 @@ class TestApply:
             .all()
         )
         assert old["id"] not in {s.id for s in steps}
-        assert [(s.manual_mode, s.manual_pack_code) for s in steps] == [
-            (None, None)
-        ] * 2
+        assert [(s.manual_mode, s.manual_pack_id) for s in steps] == [(None, None)] * 2
         result = await coverage.compute(db, tenant.id, c.id)
         by_title = {s["title"]: s for s in result["steps"]}
         assert by_title["Judge"]["mode"] == "blocked_judgment"

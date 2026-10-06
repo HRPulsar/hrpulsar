@@ -32,6 +32,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit._consent import sign_consent
+
 
 async def _setup_cv(db: AsyncSession, tenant, user) -> dict:
     vacancy = await service.create_vacancy(
@@ -88,6 +90,7 @@ async def _consent_interview(db, tenant, user, cv) -> Interview:
     ).scalar_one()
     row.consent_signed_at = datetime.now(timezone.utc)
     await db.commit()
+    await sign_consent(db, tenant.id, cv["candidate_id"])
     return row
 
 
@@ -360,6 +363,7 @@ class TestTextTranscript:
     async def test_paste_persists_segments_and_skips_av(self, db, tenant, user):
         ctx = await _setup_cv(db, tenant, user)
         first = await _scheduled_interview(db, tenant, user, ctx["cv"])
+        await sign_consent(db, tenant.id, ctx["candidate"]["id"])
         result = await service.paste_text_transcript(
             db,
             tenant.id,

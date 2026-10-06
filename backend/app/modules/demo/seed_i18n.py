@@ -63,9 +63,15 @@ TRANSLATABLE_KEYS = frozenset(
         "key_risk",
         "risk_mitigation",
         "reasoning",
-        # Citation quotes (Citation schema) — the demo fixture cites the
-        # same sentence its reasoning carries, so the catalog entry is shared.
+        # Citation quotes (Citation schema). HRP-980: a quote is a verbatim
+        # fragment of the seeded transcript, so its catalog value must be
+        # the same fragment of the localized transcript, word for word.
+        # ``quotes`` is the spec-side list ``build_candidate_analysis``
+        # turns into citations.
         "quote",
+        "quotes",
+        # HRP-979: the consent template the seeded candidates signed.
+        "body",
         # HRP-680 — resume-only analog of ``quote`` (ResumeExcerpt). The
         # chip renders this text, so it is display copy; the editor still
         # locates the item by company + period. Since HRP-666 ``company``
@@ -126,9 +132,8 @@ TRANSLATABLE_KEYS = frozenset(
 EXTRA_STRINGS: tuple[str, ...] = (
     # The demo admin's name (``service._create_demo_user``, HRP-713).
     "Ian Steward",
-    "Technical + system design — Elena Volkov",
+    "Technical + system design — Elena Volkova",
     "Recruiter screen — Tomás Becker",
-    "[Transcript redacted for demo brevity.]",
     "Investor demo interview.",
     "Investor demo interview (S7 extras).",
     "Investor demo candidate ({key}).",
@@ -284,7 +289,11 @@ def localized_structures() -> list[Any]:
         MATERIALS,
     )
     from app.modules.demo.seed_data_exams import MASS_EXAMS
-    from app.modules.demo.seed_data_misc import CUSTOM_DICTIONARIES, NOTIFICATIONS
+    from app.modules.demo.seed_data_misc import (
+        CONSENT_TEMPLATE,
+        CUSTOM_DICTIONARIES,
+        NOTIFICATIONS,
+    )
     from app.modules.demo.seed_data_recruitment_extras import (
         EXTRA_CANDIDATES,
         EXTRA_PARSED_RESUMES,
@@ -314,6 +323,7 @@ def localized_structures() -> list[Any]:
         MASS_EXAMS,
         CUSTOM_DICTIONARIES,
         NOTIFICATIONS,
+        CONSENT_TEMPLATE,
         EXTRA_VACANCIES,
         EXTRA_CANDIDATES,
         EXTRA_PARSED_RESUMES,
@@ -342,23 +352,28 @@ def employee_identity_strings() -> set[str]:
 
 
 def candidate_identity_strings() -> set[str]:
-    """Recruitment candidate full names, translated as whole strings.
+    """Recruitment candidate names and contacts, translated whole.
 
     ``first_name`` / ``last_name`` are structural halves the seed joins
     (and the extras use for interview titles), so they never pass through
     :func:`localize`; the seed calls :func:`translate` on the joined name
     instead, exactly like :func:`employee_identity_strings` does for the
-    employee pool. Emails deliberately stay out: they are ASCII lookup
-    keys (dedupe, ``DEMO_FIRST_SCREEN_CANDIDATE_EMAIL``, the analysis
-    killswitch), not display text.
+    employee pool. HRP-1000: the email, phone and LinkedIn on the card
+    name the same person, so they follow the name through the catalog
+    too — an ASCII entry per locale, like the employee emails. The
+    internal applicant (``employee_index``) is the seeded employee and
+    takes all of it from his user row.
     """
     from app.modules.demo.seed_data import candidates
     from app.modules.demo.seed_data_recruitment_extras import EXTRA_CANDIDATES
 
-    return {
-        f"{spec['first_name']} {spec['last_name']}"
-        for spec in (*candidates(), *EXTRA_CANDIDATES)
-    }
+    out: set[str] = set()
+    for spec in (*candidates(), *EXTRA_CANDIDATES):
+        out.add(f"{spec['first_name']} {spec['last_name']}")
+        if spec.get("employee_index") is None:
+            out.add(spec["email"])
+            out.update(spec[key] for key in ("phone", "linkedin") if spec.get(key))
+    return out
 
 
 def collect_translatable_strings() -> set[str]:

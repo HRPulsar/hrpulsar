@@ -30,6 +30,7 @@ from app.modules.recruitment.resume_presence import (
 from app.modules.recruitment.schemas import GenerateQuestionSetRequest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit._consent import sign_consent
 from tests.unit.test_hrp205_question_sets import _gen_questions
 
 pytestmark = pytest.mark.asyncio
@@ -59,6 +60,7 @@ async def _candidate(
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    await sign_consent(db, tenant.id, row.id)  # HRP-979
     return row
 
 

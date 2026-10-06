@@ -22,8 +22,8 @@ filtered by that role — except the baseline row, where `?role=employee` means
 "holds *only* the baseline" and so answers a different question than the count
 does. Access resolves through the role code and the section matrix; the
 permission codenames of the first release (`employees.read` and the like) were
-never read by a gate; HRP-832 dropped them from the code, and the tables follow
-one release later (HRP-973).
+never read by a gate; HRP-832 dropped them from the code, and HRP-973 dropped
+their tables one release later.
 
 Every account holds at least `employee`; the role is granted on every creation path and backfilled for accounts that predate the rule (HRP-619 covered accounts with no role at all; HRP-832 closed signup, invitation acceptance, signup approval, enterprise tenant creation, the demo visitor and the set-role call, which used to grant the tier role alone, and backfilled the accounts created in between). Because literally every account holds it, anything that names the `employee` role - a Coverage access rule, a raised `employee` row of the section matrix - reaches every member of the workspace, invited managers and recruiters included. A gate naming a code no migration seeds fails `backend/tests/unit/test_rbac_role_codes.py` (the former `hrd` code was exactly that: a gate that silently behaved as admin-only).
 
@@ -804,6 +804,12 @@ the verdicts stay. `GET /api/work/containers/{id}/people` - the people an
 editor can name as owner, rule or assignee - is the owner's and the managers',
 tenant-wide rather than directory-scoped, and carries only what the directory
 already shows plus `assignable`.
+
+Leave follows the section level, not the HR roles (HRP-1020): an assignee, an
+accountable or an owner on leave reads as on leave - and `assignable` as
+false - only to a caller with `manage` on `coverage`; anyone else sees them at
+work. Someone who left the company reads as gone to every reader (HRP-623,
+HRP-959).
 
 ## Recruitment (`/api/recruitment`, `/api/reports`, and its `/api/v1` routes)
 

@@ -996,6 +996,74 @@ class TestAppointCandidate:
 # --------------- HRP-129: auto-pool matcher ---------------
 
 
+async def add_done_assessment(
+    db: AsyncSession,
+    tenant,
+    employee,
+    comp,
+    skill_level,
+    percent: int,
+    finished_at=None,
+):
+    """Spin up a `done` Assessment with one AssessmentCompetence and
+    one AssessmentResult — the minimum the matcher needs to see."""
+    from datetime import datetime, timezone
+
+    from app.modules.assessment.models import (
+        Assessment,
+        AssessmentCompetence,
+        AssessmentResult,
+        AssessmentStatus,
+        AssessmentType,
+    )
+    from sqlalchemy import select
+
+    st = (
+        await db.execute(
+            select(AssessmentStatus).where(AssessmentStatus.code == "done")
+        )
+    ).scalar_one_or_none()
+    if not st:
+        st = AssessmentStatus(code="done", title="Done", sequence=6)
+        db.add(st)
+        await db.flush()
+    tp = (
+        await db.execute(select(AssessmentType).where(AssessmentType.code == "self"))
+    ).scalar_one_or_none()
+    if not tp:
+        tp = AssessmentType(code="self", title="Self")
+        db.add(tp)
+        await db.flush()
+
+    a = Assessment(
+        tenant_id=tenant.id,
+        employee_id=employee.id,
+        type_id=tp.id,
+        status_id=st.id,
+        initiator_id=employee.user_id,
+        finished_at=finished_at or datetime.now(timezone.utc),
+    )
+    db.add(a)
+    await db.flush()
+    db.add(
+        AssessmentCompetence(
+            assessment_id=a.id,
+            competence_id=comp.id,
+            skill_level_id=skill_level.id,
+        )
+    )
+    db.add(
+        AssessmentResult(
+            assessment_id=a.id,
+            competence_id=comp.id,
+            avg_score=percent / 25.0,
+            percent=percent,
+        )
+    )
+    await db.commit()
+    return a
+
+
 class TestComputeMatchHRP129:
     """Unit coverage for the rewritten _compute_match_score helper.
 
@@ -1032,75 +1100,8 @@ class TestComputeMatchHRP129:
         await db.commit()
         return card, comps, sl
 
-    async def _add_done_assessment(
-        self,
-        db: AsyncSession,
-        tenant,
-        employee,
-        comp,
-        skill_level,
-        percent: int,
-        finished_at=None,
-    ):
-        """Spin up a `done` Assessment with one AssessmentCompetence and
-        one AssessmentResult — the minimum the matcher needs to see."""
-        from datetime import datetime, timezone
-
-        from app.modules.assessment.models import (
-            Assessment,
-            AssessmentCompetence,
-            AssessmentResult,
-            AssessmentStatus,
-            AssessmentType,
-        )
-        from sqlalchemy import select
-
-        st = (
-            await db.execute(
-                select(AssessmentStatus).where(AssessmentStatus.code == "done")
-            )
-        ).scalar_one_or_none()
-        if not st:
-            st = AssessmentStatus(code="done", title="Done", sequence=6)
-            db.add(st)
-            await db.flush()
-        tp = (
-            await db.execute(
-                select(AssessmentType).where(AssessmentType.code == "self")
-            )
-        ).scalar_one_or_none()
-        if not tp:
-            tp = AssessmentType(code="self", title="Self")
-            db.add(tp)
-            await db.flush()
-
-        a = Assessment(
-            tenant_id=tenant.id,
-            employee_id=employee.id,
-            type_id=tp.id,
-            status_id=st.id,
-            initiator_id=employee.user_id,
-            finished_at=finished_at or datetime.now(timezone.utc),
-        )
-        db.add(a)
-        await db.flush()
-        db.add(
-            AssessmentCompetence(
-                assessment_id=a.id,
-                competence_id=comp.id,
-                skill_level_id=skill_level.id,
-            )
-        )
-        db.add(
-            AssessmentResult(
-                assessment_id=a.id,
-                competence_id=comp.id,
-                avg_score=percent / 25.0,
-                percent=percent,
-            )
-        )
-        await db.commit()
-        return a
+    async def _add_done_assessment(self, *args, **kwargs):
+        return await add_done_assessment(*args, **kwargs)
 
     async def test_example1_all_four_assessed_avg_70(
         self, db: AsyncSession, tenant, user, employee

@@ -40,6 +40,15 @@ export function dictionaryItemLabel(
   );
 }
 
+/** HRP-912: a specialization reads the same in the Specializations section as
+ * in the dictionary pickers of the position form. */
+export function specializationLabel(
+  t: ReferenceTranslator,
+  spec: { title: string; i18n_key?: string | null },
+): string {
+  return dictionaryItemLabel(t, { type: "specialization", ...spec });
+}
+
 export function dictionaryItemDescription(
   t: ReferenceTranslator,
   item: { type: string; description: string | null; i18n_key?: string | null },

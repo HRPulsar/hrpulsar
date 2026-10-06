@@ -24,6 +24,7 @@ from app.core.access_scope import (
 )
 from app.core.errors import AppError
 from app.core.sections import matrix_levels, require_section
+from app.core.upload_validation import assert_declared_size_within_limit
 from app.database import get_db
 from app.modules.assessment.schemas import StatusChange
 from app.modules.auth.dependencies import get_current_user
@@ -57,6 +58,7 @@ router = APIRouter(tags=["exams"])
 # other reader here, the employee taking their own exam (``/exams`` below,
 # outside the matrix). A mass exam has no owning division to narrow reads
 # by; the per-employee results it lists are narrowed by the read scope.
+# The section gate answers for the writes (HRP-1018); the reads ask here.
 _manage = require_section("exams", "manage")
 
 
@@ -82,7 +84,7 @@ async def mass_exam_scope(
 async def create_mass_exam(
     data: MassExamCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
 ):
     return await service.create_mass_exam(
         db, current_user.tenant_id, current_user.id, data
@@ -132,7 +134,7 @@ async def update_mass_exam(
     mass_exam_id: uuid.UUID,
     data: MassExamUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(mass_exam_scope),
 ):
     return await service.update_mass_exam(
@@ -145,7 +147,7 @@ async def change_status(
     mass_exam_id: uuid.UUID,
     data: StatusChange,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(mass_exam_scope),
 ):
     return await service.change_mass_exam_status(
@@ -163,7 +165,7 @@ async def add_question(
     mass_exam_id: uuid.UUID,
     data: QuestionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(mass_exam_scope),
 ):
     return await service.add_question(db, current_user.tenant_id, mass_exam_id, data)
@@ -178,7 +180,7 @@ async def update_question(
     question_id: uuid.UUID,
     data: QuestionUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(mass_exam_scope),
 ):
     return await service.update_question(
@@ -194,7 +196,7 @@ async def delete_question(
     mass_exam_id: uuid.UUID,
     question_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(mass_exam_scope),
 ):
     await service.delete_question(
@@ -206,12 +208,15 @@ async def delete_question(
 # --- GF9: Import Questions from Excel ---
 
 
-@router.post("/mass-exams/{mass_exam_id}/import-questions")
+@router.post(
+    "/mass-exams/{mass_exam_id}/import-questions",
+    dependencies=[Depends(assert_declared_size_within_limit)],
+)
 async def import_questions(
     mass_exam_id: uuid.UUID,
     file: UploadFile,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(mass_exam_scope),
 ):
     data = await file.read()
@@ -232,7 +237,7 @@ async def add_pass_mark(
     mass_exam_id: uuid.UUID,
     data: PassMarkCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(mass_exam_scope),
 ):
     return await service.add_pass_mark(db, current_user.tenant_id, mass_exam_id, data)
@@ -247,7 +252,7 @@ async def update_pass_mark(
     pass_mark_id: uuid.UUID,
     data: PassMarkUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(mass_exam_scope),
 ):
     return await service.update_pass_mark(
@@ -263,7 +268,7 @@ async def delete_pass_mark(
     mass_exam_id: uuid.UUID,
     pass_mark_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(mass_exam_scope),
 ):
     await service.delete_pass_mark(
@@ -298,7 +303,7 @@ async def assign_employees(
     mass_exam_id: uuid.UUID,
     employee_ids: list[uuid.UUID],
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(get_current_user),
     _scope: None = Depends(mass_exam_scope),
 ):
     return await service.assign_employees(
