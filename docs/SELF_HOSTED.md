@@ -74,7 +74,7 @@ starts 8 services:
 - **Frontend** — Next.js application (port 3000 internal)
 - **Celery worker** — Background jobs (emails, AI processing)
 - **Celery beat** — Periodic task scheduler
-- **PostgreSQL** — Database with pgvector extension
+- **PostgreSQL** — Database (no extensions required)
 - **Redis** — Cache and task queue
 - **MinIO** — S3-compatible file storage (plus a one-shot `minio-init`
   container that creates the storage bucket on first boot)
@@ -179,6 +179,7 @@ the hosted-product entry surface.
 | `ENCRYPTION_KEY` | No | Derived from `JWT_SECRET` | AES-GCM key encrypting per-workspace AI provider keys (BYOK) at rest; urlsafe-base64 decoding to at least 32 bytes (`openssl rand -base64 32`). Left unset it is derived from `JWT_SECRET`, so rotating `JWT_SECRET` without pinning this value first makes every stored BYOK key unreadable. Required explicitly when `DEPLOYMENT_MODE=saas` |
 | `POSTGRES_PASSWORD` | Yes | `hrpulsar` | PostgreSQL password |
 | `DEPLOYMENT_MODE` | No | `onprem` | `onprem` or `saas`. Keep `onprem` for a self-hosted install — it enables the self-serve registration form and the sign-in redirect at the root URL. Must be set on **both** the backend and the frontend process when you run them outside the bundled compose file |
+| `SIGNUP_ENABLED` | No | `true` | `false` closes self-serve workspace creation (`POST /api/auth/register`) once your workspace exists — on a company-internal install this stops any employee from opening `/register` and starting a workspace of their own. Invitations keep working |
 | `CORS_ORIGINS` | No | `http://localhost:3100,http://localhost:3300` | Comma-separated origins allowed to call the API. Set it to your public URL(s) on any deployed install — the default only covers local development |
 | `DATABASE_URL` | No | Auto-configured | PostgreSQL connection string |
 | `REDIS_URL` | No | Auto-configured | Redis connection string |

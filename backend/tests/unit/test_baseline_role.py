@@ -118,6 +118,7 @@ async def test_demo_division_heads_hold_the_manager_role(
     admin_role,
     employee_role,
     manager_role,
+    rbac_roles,
     enable_demo,
 ):
     start = await client.post("/api/demo/start", json={})
@@ -138,10 +139,12 @@ async def test_demo_division_heads_hold_the_manager_role(
     assert head_user_ids, "demo tenant has no division heads"
 
     codes = await _role_codes_by_user(db, tenant_id)
+    # HRP-1032: or a stronger tier role - the People head is HR, as a live
+    # workspace would have it.
     for user_id in head_user_ids:
-        assert (
-            "manager" in codes[str(user_id)]
-        ), f"division head {user_id} is not a manager"
+        assert codes[str(user_id)] & {"manager", "hr", "admin"}, (
+            f"division head {user_id} is not a manager"
+        )
 
 
 @pytest.mark.asyncio
@@ -194,6 +197,37 @@ async def test_demo_seed_covers_the_whole_role_model(
     seen = set().union(*codes.values())
     for expected in ("employee", "manager", "hr", "recruiter", "hiring_manager"):
         assert expected in seen, f"no demo user holds {expected}: {sorted(seen)}"
+
+
+@pytest.mark.asyncio
+async def test_demo_manager_filter_lists_managers_only(
+    client: AsyncClient,
+    db: AsyncSession,
+    admin_role,
+    employee_role,
+    manager_role,
+    rbac_roles,
+    enable_demo,
+):
+    """HRP-1032: the demo People head and deputy are HR; the Manager filter
+    used to list them too, because the seed stacked ``hr`` on ``manager`` -
+    a pair no live workspace ends up with."""
+    start = await client.post("/api/demo/start", json={})
+    assert start.status_code == 201, start.text
+    headers = {"Authorization": f"Bearer {start.json()['access_token']}"}
+
+    codes = await _role_codes_by_user(db, start.json()["tenant_id"])
+    assert not [c for c in codes.values() if {"manager", "hr"} <= c]
+
+    managers = await client.get("/api/employees?limit=100&role=manager", headers=headers)
+    assert managers.status_code == 200, managers.text
+    assert managers.json()["items"], "the demo seed has no managers left"
+    for row in managers.json()["items"]:
+        assert not {"hr", "admin"} & set(row["roles"]), row["user_name"]
+
+    hr = await client.get("/api/employees?limit=100&role=hr", headers=headers)
+    assert hr.status_code == 200, hr.text
+    assert len(hr.json()["items"]) == 2
 
 
 @pytest.mark.asyncio

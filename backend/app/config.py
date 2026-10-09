@@ -170,6 +170,13 @@ class Settings(BaseSettings):
     # verified leads into.
     resend_signup_audience_id: str = ""
 
+    # Self-serve workspace creation via POST /auth/register (HRP-1039).
+    # False closes it on managed/corporate installs where every account
+    # arrives by invitation — otherwise anyone on the intranet can start a
+    # shadow HR workspace. True by default: community self-hosted onboards
+    # its first workspace through /register.
+    signup_enabled: bool = True
+
     # Moderated onboarding (HRP-259..262 — M-wave).
     # Cloudflare Turnstile secret used by POST /api/signup-request; empty
     # disables the bot guard (handy in dev / E2E). Production validator

@@ -14,6 +14,7 @@ from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
 from app.modules.company import service
+from app.modules.company.dependencies import require_company_details
 from app.modules.company.schemas import (
     ActivityFieldAdd,
     ActivityFieldRead,
@@ -81,7 +82,7 @@ async def update_company(
 @router.get("/settings/company-profile", response_model=CompanyProfileRead)
 async def get_company_profile(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_company_details),
 ):
     return await service.get_company_profile(db, current_user.tenant_id)
 
@@ -186,7 +187,11 @@ async def get_onboarding_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await service.get_onboarding_status(db, current_user.tenant_id)
+    return await service.get_onboarding_status(
+        db,
+        current_user.tenant_id,
+        can_onboard=any(r.code == "admin" for r in current_user.roles),
+    )
 
 
 @router.post("/onboarding/complete", response_model=TenantRead)

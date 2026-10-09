@@ -1,11 +1,12 @@
 // HRP-623: `roles` is deliberately absent from `EmployeeDirectoryRead`, so
-// the Role and Status columns of the employee list must only render for
-// callers the backend answers in the full schema. Two ways that silently
+// the Role column of the employee list must only render for callers the
+// backend answers in the full schema (`status` and `specialization_title`
+// joined the directory row on purpose in the REDO). Two ways that silently
 // rots:
 //
 //   1. `canViewHrData` drifts away from the backend's `is_employee_only`
 //      (a wider set here renders columns the API never sends);
-//   2. someone adds `roles` / `hire_date` / `status` back to the directory
+//   2. someone adds `roles` / `hire_date` back to the directory
 //      schema and the "trimmed" contract quietly stops being trimmed.
 //
 // Both sides are parsed from source rather than mocked: the point is that
@@ -53,12 +54,11 @@ describe("employee directory schema", () => {
     expect(start, "EmployeeDirectoryRead not found").toBeGreaterThan(-1);
     const body = schemas.slice(
       start,
-      schemas.indexOf("class EmployeeDirectoryList", start),
+      schemas.indexOf("class EmployeeList", start),
     );
     for (const field of [
       "roles",
       "hire_date",
-      "status",
       "alert",
       "user_first_login_at",
       "specialization_id",

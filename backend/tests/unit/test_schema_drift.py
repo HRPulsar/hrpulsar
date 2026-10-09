@@ -406,9 +406,6 @@ def migrated_engine():
         admin.dispose()
 
     engine = sa.create_engine(target_sync_url)
-    with engine.begin() as conn:
-        # app/modules/ai/models.py uses pgvector's Vector type.
-        conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector"))
 
     # migrations/env.py reads app.config.settings.database_url at call time
     # and drives its own asyncio loop, so point the setting at the throwaway

@@ -1,16 +1,12 @@
 import logging
 import uuid
 
-import httpx
-import openai
 from fastapi import status
-from sqlalchemy import func, select, text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, exception_summary
 from app.modules.ai import llm_client, prompts
-from app.modules.ai.models import Embedding
 from app.modules.ai_settings import service as ai_settings_service
 
 logger = logging.getLogger(__name__)
@@ -417,103 +413,3 @@ async def generate_positions(
     from app.modules.position.service import _position_to_read
 
     return [_position_to_read(p, 0) for p in created]
-
-
-# --- Vector Search ---
-
-
-async def _embed(text_content: str) -> list[float]:
-    """Embedding vector, or a localized 502 when the provider fails (HRP-1010).
-
-    Not ``llm_generation_failed``: that one echoes the provider's message.
-    This code carries none - the log and the call journal keep the details.
-    Only the provider and the transport fail this way; a bug stays a 500.
-    """
-    try:
-        return await llm_client.get_embedding(text_content)
-    except (openai.OpenAIError, httpx.HTTPError):
-        logger.exception("Embedding provider call failed")
-        raise AppError("ai_embedding_failed", status.HTTP_502_BAD_GATEWAY) from None
-
-
-async def create_embedding(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    entity_type: str,
-    entity_id: uuid.UUID,
-    text_content: str,
-) -> dict:
-    """Generate and store embedding for an entity.
-
-    HRP-954: the upsert key is ``(tenant, entity_type, entity_id)`` — the
-    same entity key in another tenant is a different row.
-    """
-    vector = await _embed(text_content)
-
-    # Upsert on the tenant-scoped unique key: a racing pair of writers ends
-    # up updating one row instead of inserting two (or failing on the unique).
-    await db.execute(
-        pg_insert(Embedding)
-        .values(
-            tenant_id=tenant_id,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            text_content=text_content,
-            embedding=vector,
-        )
-        .on_conflict_do_update(
-            constraint="uq_embeddings_tenant_entity",
-            set_={
-                "text_content": text_content,
-                "embedding": vector,
-                "updated_at": func.now(),
-            },
-        )
-    )
-    await db.commit()
-    return {"entity_type": entity_type, "entity_id": str(entity_id), "status": "stored"}
-
-
-async def semantic_search(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    user_id: uuid.UUID | None,
-    query: str,
-    entity_type: str | None = None,
-    limit: int = 10,
-) -> list[dict]:
-    """Search entities by semantic similarity.
-
-    HRP-954: ``tenant_id`` is the caller's tenant, never a request field —
-    the search never leaves it.
-    """
-
-    query_vector = await _embed(query)
-
-    # pgvector cosine distance search
-    sql = """
-        SELECT entity_type, entity_id, text_content,
-               1 - (embedding <=> CAST(:query_vec AS vector)) AS similarity
-        FROM embeddings
-        WHERE tenant_id = :tenant_id
-    """
-    params: dict[str, object] = {"query_vec": str(query_vector), "tenant_id": tenant_id}
-
-    if entity_type:
-        sql += " AND entity_type = :entity_type"
-        params["entity_type"] = entity_type
-
-    sql += " ORDER BY embedding <=> CAST(:query_vec AS vector) LIMIT :limit"
-    params["limit"] = limit
-
-    result = await db.execute(text(sql), params)
-
-    return [
-        {
-            "entity_type": row.entity_type,
-            "entity_id": str(row.entity_id),
-            "text_content": row.text_content,
-            "similarity": round(float(row.similarity), 4),
-        }
-        for row in result.fetchall()
-    ]

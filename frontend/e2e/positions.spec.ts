@@ -3,6 +3,7 @@ import {
   registerUser,
   setAuthTokens,
   createPosition,
+  provisionTenantMember,
   setupFullTenant,
 } from "./helpers";
 
@@ -460,5 +461,31 @@ test.describe("Positions POS6 lifecycle + occupancy + alerts", () => {
     await expect(
       page.getByTestId(`positions-row-${positionId}-status`),
     ).toHaveAttribute("data-status", "active", { timeout: 10000 });
+  });
+});
+
+test.describe("Positions page under a division head (HRP-631)", () => {
+  let managerAccess: string;
+  let managerRefresh: string;
+
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    const admin = await registerUser(page);
+    const manager = await provisionTenantMember(
+      { page, accessToken: admin.accessToken },
+      { roleCode: "manager" },
+    );
+    managerAccess = manager.accessToken;
+    managerRefresh = manager.refreshToken;
+    await page.close();
+  });
+
+  test("authors by hand but gets no AI generation", async ({ page }) => {
+    await setAuthTokens(page, managerAccess, managerRefresh);
+    await page.goto("/company/positions");
+    await expect(page.getByTestId("positions-btn-create")).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(page.getByTestId("positions-btn-ai-generate")).toHaveCount(0);
   });
 });

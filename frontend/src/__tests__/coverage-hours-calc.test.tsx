@@ -28,13 +28,15 @@ const getCoverage = vi.fn();
 const listContainers = vi.fn();
 const updateStep = vi.fn();
 const toastError = vi.fn();
+// HRP-622: the rate links go to the company profile, the admin role's page.
+let canAdminister = true;
 
 vi.mock("@/lib/api/work", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/work")>()),
   workApi: { getCoverage, listContainers, updateStep },
 }));
 vi.mock("@/hooks/use-permissions", () => ({
-  usePermissions: () => ({ canCreateCoverage: false, canViewSection: () => true }),
+  usePermissions: () => ({ canCreateCoverage: false, canViewSection: () => true, canAdminister }),
 }));
 vi.mock("@/context/auth-context", () => ({ useAuth: () => ({ user: null }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: toastError } }));
@@ -136,6 +138,7 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  canAdminister = true;
   getCoverage.mockReset().mockResolvedValue(COVERAGE);
   updateStep.mockReset().mockImplementation(async (id: string, patch: Partial<WorkStep>) => ({
     ...STEPS.find((s) => s.id === id)!,
@@ -323,6 +326,14 @@ describe("the money", () => {
     expect(byTestId("coverage-roi-rate").querySelector("a")?.textContent).toBe("set one");
   });
 
+  it("keeps the sentence but drops the rate links below the admin role (HRP-622)", async () => {
+    canAdminister = false;
+    getCoverage.mockResolvedValue({ ...PRICED, hourly_rate: null, hourly_rate_currency: null });
+    await render();
+    expect(byTestId("coverage-roi-rate").textContent).toContain("No hourly rate, so no money here");
+    expect(byTestId("coverage-roi-rate").querySelector("a")).toBeNull();
+  });
+
   it("drops the no-rate line once a step's own rate puts money on the card", async () => {
     // HRP-858: the company rate is gone but its currency is not, so the
     // steps that carry their own rate still add up - "no hourly rate, so
@@ -473,6 +484,16 @@ describe("the step rate in the hours editor", () => {
 
     expect(updateStep).not.toHaveBeenCalled();
     expect(toastError).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the company rate without a link below the admin role (HRP-622)", async () => {
+    canAdminister = false;
+    getCoverage.mockResolvedValue(PRICED);
+    await render();
+    await click(byTestId("coverage-btn-weights"));
+    const hint = byTestId("coverage-weights-rate-hint");
+    expect(hint.textContent).toContain("50.00 EUR/h");
+    expect(hint.querySelector("a")).toBeNull();
   });
 
   it("takes a step rate without a company rate, and links to where that is set", async () => {

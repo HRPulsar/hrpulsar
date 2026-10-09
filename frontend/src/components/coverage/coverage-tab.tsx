@@ -896,6 +896,8 @@ function HoursEditor({
   onClose: () => void;
   onSaved: (updated: Map<string, WorkStep>, keepOpen?: boolean) => void;
 }) {
+  // HRP-622: only the admin role edits the company rate (see CoverageSummary).
+  const { canAdminister } = usePermissions();
   const [values, setValues] = useState<Record<string, HoursDraft>>(() =>
     Object.fromEntries(steps.map((s) => [s.id, draftOf(s)])),
   );
@@ -1021,10 +1023,15 @@ function HoursEditor({
                     maximumFractionDigits: 2,
                   }),
                   currency: coverage.hourly_rate_currency ?? "",
-                })}{" "}
-            <Link href={RATE_SETTINGS_HREF} className="text-primary underline-offset-4 hover:underline">
-              {companyRate === null ? t("roiRateSet") : t("roiRateEdit")}
-            </Link>
+                })}
+            {canAdminister && (
+              <>
+                {" "}
+                <Link href={RATE_SETTINGS_HREF} className="text-primary underline-offset-4 hover:underline">
+                  {companyRate === null ? t("roiRateSet") : t("roiRateEdit")}
+                </Link>
+              </>
+            )}
           </p>
         </DialogHeader>
         <ol className="max-h-[60vh] space-y-3 overflow-auto">

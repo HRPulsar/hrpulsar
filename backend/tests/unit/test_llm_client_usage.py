@@ -239,26 +239,6 @@ async def test_recorder_failure_does_not_break_generation(monkeypatch):
     assert await llm_client.generate("hi", model="gpt-4o") == '{"ok": true}'
 
 
-async def test_embedding_is_recorded(monkeypatch, records):
-    async def create(**_):
-        return SimpleNamespace(
-            data=[SimpleNamespace(embedding=[0.1, 0.2])],
-            usage=SimpleNamespace(prompt_tokens=4, completion_tokens=None, prompt_tokens_details=None),
-        )
-
-    monkeypatch.setattr(
-        llm_client,
-        "_get_openai",
-        lambda *a, **k: SimpleNamespace(embeddings=SimpleNamespace(create=create)),
-    )
-
-    await llm_client.get_embedding("hi", model="text-embedding-3-small")
-
-    (record,) = records
-    assert record.kind == "embedding"
-    assert record.input_tokens == 4 and record.output_tokens is None
-
-
 async def test_an_unusable_anthropic_answer_keeps_its_tokens(monkeypatch, records):
     # Review 01.10: an answer with no text block was billed by the provider
     # but journaled as an error with no tokens, so its cost was lost.

@@ -145,13 +145,13 @@ describe("read-only by vacancy status (HRP-836)", () => {
       'interviews_read_only: vacancyLocks(a.vacancy_status, "interviews")',
     );
     expect(QUESTIONS).toContain(
-      "const canEvaluate = canEvaluateCandidates && !currentVacancy?.questions_read_only;",
+      "const canExport = canEvaluateCandidates && !currentVacancy?.questions_read_only;",
     );
     expect(INTERVIEWS).toContain(
       'const canEdit = canManageSection("recruitment") && !currentVacancy?.interviews_read_only;',
     );
     expect(ROUNDS).toContain(
-      "const canRunRounds = canRunHiringRounds && !activeVacancy?.read_only;",
+      "const canFillSheet = !activeVacancy?.read_only;",
     );
     expect(AI_INSIGHTS).toContain('"ai_insights", );');
     expect(AI_INSIGHTS).toContain("!resumeAvailable || statusReadOnly");

@@ -84,24 +84,58 @@ test.describe("Company profile page", () => {
 test.describe("Company profile read-only for non-admin", () => {
   let memberAccessToken: string;
   let memberRefreshToken: string;
+  let employeeAccessToken: string;
+  let employeeRefreshToken: string;
 
   test.beforeAll(async ({ browser }) => {
     const page = await browser.newPage();
     const adminCreds = await registerUser(page);
+    // HRP-622: a plain employee no longer opens the profile at all, so the
+    // read-only view is checked on another role below the admin.
     const member = await provisionTenantMember(
       { page, accessToken: adminCreds.accessToken },
-      { roleCode: "employee" },
+      { roleCode: "hr" },
     );
     memberAccessToken = member.accessToken;
     memberRefreshToken = member.refreshToken;
+    const employee = await provisionTenantMember(
+      { page, accessToken: adminCreds.accessToken },
+      { roleCode: "employee" },
+    );
+    employeeAccessToken = employee.accessToken;
+    employeeRefreshToken = employee.refreshToken;
     await page.close();
   });
 
-  test.beforeEach(async ({ page }) => {
-    await setAuthTokens(page, memberAccessToken, memberRefreshToken);
+  test("employee keeps the overview tab only, direct links bounce (HRP-622)", async ({
+    page,
+  }) => {
+    await setAuthTokens(page, employeeAccessToken, employeeRefreshToken);
+    await page.goto("/company");
+    await expect(page.getByTestId("company-tab-overview")).toBeVisible({
+      timeout: 10000,
+    });
+    for (const tab of ["profile", "positions", "specializations"]) {
+      await expect(page.getByTestId(`company-tab-${tab}`)).toHaveCount(0);
+    }
+    for (const path of [
+      "/company/profile",
+      "/company/positions",
+      "/company/specializations",
+    ]) {
+      await page.goto(path);
+      await expect(page, path).toHaveURL(/\/dashboard$/, { timeout: 10000 });
+      await expect(
+        page
+          .locator("[data-sonner-toast]")
+          .filter({ hasText: /don't have permission/i })
+          .first(),
+      ).toBeVisible();
+    }
   });
 
-  test("employee sees fields disabled and no save button", async ({ page }) => {
+  test("non-admin sees fields disabled and no save button", async ({ page }) => {
+    await setAuthTokens(page, memberAccessToken, memberRefreshToken);
     await page.goto("/company/profile");
 
     await expect(page.getByTestId("company-profile-card-fields")).toBeVisible({

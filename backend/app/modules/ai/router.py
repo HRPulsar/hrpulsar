@@ -6,12 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import billing_hooks
 from app.core.errors import AppError
-from app.core.schemas import TaskAccepted
 from app.core.sections import require_section
 from app.database import get_db
-from app.modules.ai import processors, service
+from app.modules.ai import service
 from app.modules.assessment.scope import assert_assessment_in_scope
-from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
 from app.modules.position.scope import resolve_managed_divisions
 
@@ -31,22 +29,6 @@ class GenerateIndicatorsRequest(BaseModel):
 
 class SuggestPDPRequest(BaseModel):
     assessment_id: uuid.UUID
-
-
-class EmbedRequest(BaseModel):
-    entity_type: str = Field(max_length=50)
-    entity_id: uuid.UUID
-    text_content: str = Field(max_length=5000)
-
-
-class BatchEmbedRequest(BaseModel):
-    items: list[EmbedRequest] = Field(min_length=1, max_length=100)
-
-
-class SearchRequest(BaseModel):
-    query: str = Field(max_length=1000)
-    entity_type: str | None = None
-    limit: int = Field(default=10, ge=1, le=100)
 
 
 # ---------------------------------------------------------------------------
@@ -201,23 +183,16 @@ async def generate_positions(
     # the gate, so the ``company`` level is asked here.
     current_user: User = Depends(require_section("company", "manage")),
 ):
-    # HRP-631: a division head may run the generator, but the drafts it
-    # writes land in their own subtree — the generator files each position
-    # under a division, and an unfenced run would put drafts (and its
-    # sweep of unregenerated ones) across the whole workspace.
-    allowed = await resolve_managed_divisions(db, current_user)
-    if allowed == ():
-        # HRP-828: no subtree to file a draft under - refuse before the run
-        # is charged rather than bill a generation that saves nothing.
-        raise AppError(
-            "outside_division_scope",
-            status.HTTP_403_FORBIDDEN,
-            detail_extra={},
-            detail_code_key="error_code",
-        )
+    # HRP-631 (QA 06.10): the generator drafts the workspace's job
+    # catalogue, so it is for the roles whose write scope is the workspace
+    # (``ADMIN_ROLE_CODES``). Anyone scoped to a subtree - a division head,
+    # or a role the tenant raised to ``manage`` - is refused before the run
+    # is charged; they author positions by hand inside their subtree.
+    if await resolve_managed_divisions(db, current_user) is not None:
+        raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
     if sync:
         return await service.generate_positions(
-            db, current_user.tenant_id, current_user.id, allowed
+            db, current_user.tenant_id, current_user.id, None
         )
     cost = await billing_hooks.resolve_cost(
         db, current_user.tenant_id, "ai.generate_positions"
@@ -232,7 +207,7 @@ async def generate_positions(
         generate_positions_task,
         str(current_user.tenant_id),
         str(current_user.id),
-        None if allowed is None else [str(d) for d in allowed],
+        None,
         cost,
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
@@ -240,71 +215,4 @@ async def generate_positions(
         action="generate_positions",
     )
     response.status_code = status.HTTP_202_ACCEPTED
-    return {"task_id": result.id}
-
-
-@router.post("/ai/embed")
-async def create_embedding(
-    data: EmbedRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
-):
-    await processors.require_processor(db, current_user.tenant_id, "openai")
-    return await service.create_embedding(
-        db,
-        current_user.tenant_id,
-        data.entity_type,
-        data.entity_id,
-        data.text_content,
-    )
-
-
-@router.post("/ai/search")
-async def semantic_search(
-    data: SearchRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    await processors.require_processor(db, current_user.tenant_id, "openai")
-    return await service.semantic_search(
-        db,
-        current_user.tenant_id,
-        current_user.id,
-        data.query,
-        data.entity_type,
-        data.limit,
-    )
-
-
-# --- I3d: Batch embedding endpoint ---
-
-
-@router.post("/ai/embed/batch", response_model=TaskAccepted)
-async def batch_embed(
-    data: BatchEmbedRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin")),
-):
-    """Queue batch embedding generation as background task."""
-    await processors.require_processor(db, current_user.tenant_id, "openai")
-    from app.core.task_enqueue import enqueue_task
-    from app.modules.ai.tasks import batch_embed_task
-
-    items = [
-        {
-            "entity_type": item.entity_type,
-            "entity_id": str(item.entity_id),
-            "text_content": item.text_content,
-        }
-        for item in data.items
-    ]
-    result = enqueue_task(
-        batch_embed_task,
-        items,
-        str(current_user.tenant_id),
-        tenant_id=current_user.tenant_id,
-        user_id=current_user.id,
-        module="ai",
-        action="batch_embed",
-    )
     return {"task_id": result.id}

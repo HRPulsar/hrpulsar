@@ -40,9 +40,6 @@ JEV_MODEL = "jev-1.13.0"
 # Input tokens only; Jev output is free (docs.typesafe.ai/models, 23.09.2026).
 JEV_USD_PER_MTOK_INPUT = 0.042
 
-# --- Embeddings --------------------------------------------------------------
-EMBEDDING_MODEL = "text-embedding-3-small"
-
 # Per-effort provider -> model maps consumed by ``EFFORT_PRESETS``.
 FAST_MODELS: dict[str, str] = {
     "anthropic": ANTHROPIC_FAST,

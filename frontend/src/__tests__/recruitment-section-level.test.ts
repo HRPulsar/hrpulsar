@@ -55,13 +55,15 @@ describe("recruitment follows the section level (HRP-830)", () => {
     // HRP-836: a closed or cancelled vacancy freezes its funnel on top.
     expect(table).toContain("const canMoveStage = canEvaluateCandidates && !readOnly;");
     expect(questionSets).toContain("readOnly={!canEvaluate || currentSet.status === \"sample\"}");
+    // HRP-630: writing questions is `manage`; the hiring manager exports.
+    expect(questionSets).toContain('const canEvaluate = canExport && canManageSection("recruitment");');
     expect(canvas).toContain("const canScore = Boolean(inviteToken) || canEvaluateCandidates;");
     // HRP-836: the vacancy's status freezes its rounds on top of the role.
     expect(rounds).toContain("const { canRunHiringRounds } = usePermissions();");
-    expect(rounds).toContain(
-      "const canRunRounds = canRunHiringRounds && !activeVacancy?.read_only;",
-    );
-    expect(rounds).toContain("disabled={roundClosed || !canRunRounds}");
+    // HRP-630: one's own sheet is filled in at any level; the rest of the
+    // round is `manage`'s (HRP-629).
+    expect(rounds).toContain("const canFillSheet = !activeVacancy?.read_only;");
+    expect(rounds).toContain("disabled={roundClosed || !canFillSheet}");
     // Mirrors resolve_user_role: the full payload wins before the slice.
     expect(candidatePage).toContain(
       '(user?.roles ?? []).includes("hiring_manager") && !seesAllHiring;',

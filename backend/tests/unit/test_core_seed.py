@@ -304,6 +304,23 @@ async def test_populate_tenant_full_demo_counts(
     assert (
         await _count(db, EmployeeEvent, EmployeeEvent.employee_id.in_(emp_ids)) == 55
     )  # 50 hire + 5 position_change
+    # HRP-999: every seeded hire keeps its position as a value for the timeline.
+    hires = (
+        (
+            await db.execute(
+                select(EmployeeEvent).where(
+                    EmployeeEvent.employee_id.in_(emp_ids),
+                    EmployeeEvent.event_type == "hire",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(hires) == 50
+    assert all(
+        h.description == f"Hired as {h.new_value['position_title']}" for h in hires
+    )
     expected_managers = sum(
         1 for p in PEOPLE if any(t in p[2] for t in ("Lead", "VP", "Head", "Manager"))
     )

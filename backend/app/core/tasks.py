@@ -4,8 +4,8 @@ Only cross-cutting infrastructure lives here — outbound email delivery
 (with the demo-tenant gate + delivery logging) and the worker heartbeat.
 Domain-specific background jobs live in their own module's ``tasks.py``
 (project-review #30): ``employee`` (certificate expiry), ``assessment``
-(deadline reminders), ``analytics`` (XLSX export), ``data_import`` (bulk
-import) and ``ai`` (batch embeddings). Keeping this file free of domain
+(deadline reminders), ``analytics`` (XLSX export) and ``data_import``
+(bulk import). Keeping this file free of domain
 model imports stops core from structurally knowing every domain.
 """
 

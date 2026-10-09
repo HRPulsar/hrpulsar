@@ -563,36 +563,6 @@ async def generate_json(
     return parsed
 
 
-async def get_embedding(text: str, model: str | None = None) -> list[float]:
-    """Generate embedding vector for text."""
-    model = model or _get_embedding_model()
-    client = _get_openai()
-    started = time.perf_counter()
-    try:
-        response = await client.embeddings.create(model=model, input=[text])
-    except Exception as exc:
-        await _record("embedding", "openai", model, "platform", started, "error", error_code=_error_code(exc))
-        raise
-    await _record("embedding", "openai", model, "platform", started, "ok", usage=_openai_usage(response))
-    return response.data[0].embedding
-
-
-async def get_embeddings_batch(
-    texts: list[str], model: str | None = None
-) -> list[list[float]]:
-    """Generate embeddings for multiple texts."""
-    model = model or _get_embedding_model()
-    client = _get_openai()
-    started = time.perf_counter()
-    try:
-        response = await client.embeddings.create(model=model, input=texts)
-    except Exception as exc:
-        await _record("embedding", "openai", model, "platform", started, "error", error_code=_error_code(exc))
-        raise
-    await _record("embedding", "openai", model, "platform", started, "ok", usage=_openai_usage(response))
-    return [item.embedding for item in response.data]
-
-
 # -- Private helpers --
 
 
@@ -912,7 +882,3 @@ def _get_default_model() -> str:
     if provider == "yandex" and settings.yandex_api_key:
         return model_registry.BALANCED_MODELS["yandex"]
     return model_registry.BALANCED_MODELS["openai"]
-
-
-def _get_embedding_model() -> str:
-    return model_registry.EMBEDDING_MODEL

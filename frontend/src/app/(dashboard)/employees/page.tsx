@@ -81,6 +81,8 @@ const statusColors: Record<string, string> = {
 };
 
 const statusOptions = ["active", "inactive", "on_leave", "terminated"];
+// HRP-623 REDO: the directory lists active and on-leave colleagues only.
+const directoryStatusOptions = ["active", "on_leave"];
 
 const FILTER_KEYS = [
   "division_id",
@@ -199,6 +201,9 @@ function buildBackendQuery(
   // Costs an assessment + plan scan over the page, so only ask when there
   // is a column to render it in. The directory schema drops it anyway.
   if (withAlerts) params.set("with_alerts", "true");
+  // HRP-623 REDO: a manager's list spans the tenant here (and only here -
+  // the people pickers that read the same route keep the subtree).
+  params.set("tenant_wide", "true");
   for (const key of FILTER_KEYS) {
     for (const v of filters[key]) params.append(key, v);
   }
@@ -279,8 +284,13 @@ export default function EmployeesPage() {
   // through /auth/me and an admin-level colleague's not at all - the API
   // refuses each.
   const canManage = canManageSection("employees");
+  // HRP-623 REDO: a manager's list spans the tenant; a row outside the
+  // managed subtree arrives as the directory row (no `hire_date`) and is
+  // not theirs to edit.
+  const isDirectoryRow = (emp: Employee) => emp.hire_date === undefined;
   const canEditRow = (emp: Employee) =>
-    isAdminLevel || (emp.user_id !== user?.id && !holdsAdminLevel(emp.roles));
+    !isDirectoryRow(emp) &&
+    (isAdminLevel || (emp.user_id !== user?.id && !holdsAdminLevel(emp.roles)));
 
   // HRP-120: search is debounced and can fire overlapping requests. Track
   // the latest call with a monotonic token so an older response can't
@@ -420,8 +430,11 @@ export default function EmployeesPage() {
 
   const statusFilterOptions = useMemo(
     () =>
-      statusOptions.map((s) => ({ value: s, label: employeeStatusLabel(t, s) })),
-    [t],
+      (canViewHrData ? statusOptions : directoryStatusOptions).map((s) => ({
+        value: s,
+        label: employeeStatusLabel(t, s),
+      })),
+    [t, canViewHrData],
   );
 
   const issueFilterOptions = useMemo(
@@ -699,7 +712,6 @@ export default function EmployeesPage() {
           className="w-40"
         />
         )}
-        {canViewHrData && (
         <MultiSelectFilter
           data-testid="employees-multi-statuses"
           options={statusFilterOptions}
@@ -708,7 +720,6 @@ export default function EmployeesPage() {
           placeholder={t("filterStatuses")}
           className="w-36"
         />
-        )}
         {canViewHrData && (
         <MultiSelectFilter
           data-testid="employees-multi-issues"
@@ -776,10 +787,11 @@ export default function EmployeesPage() {
                   <TableHead>{t("position")}</TableHead>
                   <TableHead>{t("specializationGrade")}</TableHead>
                   {/* HRP-623: rank-and-file get the directory schema, which
-                      carries neither role nor status — the columns would
-                      render empty for them. */}
+                      carries no role — the column would render empty for
+                      them. Status it does carry (REDO), so for them it is
+                      the last column. */}
                   {canViewHrData && <TableHead>{t("role")}</TableHead>}
-                  {canViewHrData && <TableHead>{t("status")}</TableHead>}
+                  <TableHead>{t("status")}</TableHead>
                   {/* HRP-638: what is wrong with this person — the question
                       the dashboard sends the user here to answer. */}
                   {canViewHrData && <TableHead>{t("issues")}</TableHead>}
@@ -835,19 +847,19 @@ export default function EmployeesPage() {
                         data-testid={`employees-row-${emp.id}-role`}
                         className="text-muted-foreground"
                       >
-                        {resolveRoleLabel(emp.roles, tRole)}
+                        {isDirectoryRow(emp)
+                          ? "—"
+                          : resolveRoleLabel(emp.roles, tRole)}
                       </TableCell>
                     )}
-                    {canViewHrData && (
-                      <TableCell>
-                        <Badge
-                          variant="secondary"
-                          className={statusColors[emp.status ?? ""] || ""}
-                        >
-                          {employeeStatusLabel(t, emp.status)}
-                        </Badge>
-                      </TableCell>
-                    )}
+                    <TableCell data-testid={`employees-row-${emp.id}-status`}>
+                      <Badge
+                        variant="secondary"
+                        className={statusColors[emp.status ?? ""] || ""}
+                      >
+                        {employeeStatusLabel(t, emp.status)}
+                      </Badge>
+                    </TableCell>
                     {canViewHrData && (
                       <TableCell data-testid={`employees-row-${emp.id}-issues`}>
                         {emp.issues && emp.issues.length > 0 ? (

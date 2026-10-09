@@ -1174,7 +1174,9 @@ async def release_dismissed_owner(
     agents. Every grant in force they own waits in ``needs_owner`` - not a
     grant until a new owner at work is named - and the tenant's admins get
     one notification for the lot. Pending requests stay: approving one
-    already refuses an owner who is not at work.
+    already refuses an owner who is not at work. HRP-1028: every active
+    workflow they own is flagged ``needs_owner`` too, in the same
+    notification; a workflow keeps running, it waits for an owner.
 
     Every path that sets an employee's status calls this once the new
     status is on the row. A no-op for a working status and for an owner
@@ -1215,13 +1217,44 @@ async def release_dismissed_owner(
                 "accountability_owner_id": employee_id,
             },
         )
-    if rows:
-        await _notify_owner_needed(db, employee, len(rows))
-    return len(rows)
+    workflows = (
+        (
+            await db.execute(
+                select(AgentWorkflow)
+                .where(
+                    AgentWorkflow.tenant_id == tenant_id,
+                    AgentWorkflow.owner_id == employee_id,
+                    AgentWorkflow.is_active.is_(True),
+                    AgentWorkflow.needs_owner.is_(False),
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for wf in workflows:
+        wf.needs_owner = True
+        _audit(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="workflow.needs_owner",
+            target_type="agent_workflow",
+            target_id=wf.id,
+            payload={
+                "before": {"needs_owner": False},
+                "after": {"needs_owner": True},
+                "owner_id": employee_id,
+            },
+        )
+    if rows or workflows:
+        await _notify_owner_needed(db, employee, len(rows), len(workflows))
+    return len(rows) + len(workflows)
 
 
 async def _notify_owner_needed(
-    db: AsyncSession, employee: Employee, count: int
+    db: AsyncSession, employee: Employee, count: int, workflow_count: int = 0
 ) -> None:
     """Bell entry and letter to each active admin of the tenant, in the
     admin's own locale; ``title``/``message`` carry the letter for the bell,
@@ -1264,6 +1297,7 @@ async def _notify_owner_needed(
     base = {
         "employee_name": " ".join(names) if names else "",
         "count": count,
+        "workflow_count": workflow_count,
         "link": link,
         "link_url": f"{frontend_url()}{link}",
     }
@@ -1349,10 +1383,13 @@ async def list_workflows(
     is_active: bool | None = None,
     owner_id: uuid.UUID | None = None,
     human_role: str | None = None,
+    needs_owner: bool | None = None,
     skip: int = 0,
     limit: int = 50,
 ) -> tuple[list[AgentWorkflow], int]:
     stmt = select(AgentWorkflow).where(AgentWorkflow.tenant_id == tenant_id)
+    if needs_owner is not None:
+        stmt = stmt.where(AgentWorkflow.needs_owner.is_(needs_owner))
     if is_active is not None:
         stmt = stmt.where(AgentWorkflow.is_active.is_(is_active))
     if owner_id:
@@ -1419,6 +1456,9 @@ async def update_workflow(
     if "owner_id" in changes:
         # HRP-988: the schema refuses a null; a new owner is at work.
         await _active_owner(db, tenant_id, changes["owner_id"])
+        # HRP-1028: an owner at work answers for it again - the same person
+        # back at work included. Lands in the audit diff with the owner.
+        changes["needs_owner"] = False
     if changes.get("steps") is None:
         # NOT NULL column: null in the body means "leave the steps alone".
         changes.pop("steps", None)

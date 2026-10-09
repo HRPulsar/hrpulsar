@@ -16,6 +16,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import enMessages from "../../messages/en.json";
+import { formatDateTime } from "@/lib/date-format";
 import { api } from "@/lib/api";
 import type {
   ConsentRequest,
@@ -396,6 +397,23 @@ describe("Consent send / resend — who may do it (HRP-684 follow-up)", () => {
     consent = PENDING_CONSENT;
     await render(["admin"], section);
     expect(byId("recruitment-candidate-interviews-consent-resend-btn")).not.toBeNull();
+  });
+
+  it("asks to confirm with the last send's date and time only (HRP-684 REDO)", async () => {
+    consent = PENDING_CONSENT;
+    await render(["admin"], section);
+    await act(async () =>
+      byId("recruitment-candidate-interviews-consent-resend-btn")!.click(),
+    );
+    await flush();
+    const dialog = document.querySelector(
+      '[data-testid="recruitment-candidate-interviews-consent-resend-confirm"]',
+    );
+    expect(dialog).not.toBeNull();
+    const body = `Last sent: ${formatDateTime(PENDING_CONSENT.last_sent_at)}.`;
+    expect(dialog!.textContent).toContain(body);
+    expect(dialog!.textContent).not.toContain("email");
+    expect(dialog!.textContent).not.toContain("expired");
   });
 
   it("keeps the banner but no button for hr and a hiring manager", async () => {

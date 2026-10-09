@@ -39,7 +39,6 @@ from app.modules.employee.schemas import (
     EducationUpdate,
     EmployeeCompetenceOverview,
     EmployeeCreate,
-    EmployeeDirectoryList,
     EmployeeDirectoryRead,
     EmployeeEventCreate,
     EmployeeEventRead,
@@ -92,7 +91,7 @@ async def create_employee(
     return await service.create_employee(db, current_user.tenant_id, data)
 
 
-@router.get("/employees", response_model=EmployeeList | EmployeeDirectoryList)
+@router.get("/employees", response_model=EmployeeList)
 async def list_employees(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
@@ -115,6 +114,10 @@ async def list_employees(
     # HRP-729: severity ordering. Default when ``issue`` is set, so the list a
     # dashboard chip opens leads with the same person the chip named.
     sort: Literal["severity", "created"] | None = Query(default=None),
+    # HRP-623 REDO: the employees page asks a manager's list to span the
+    # tenant. Off by default - every people picker reads this route and must
+    # keep offering the subtree only.
+    tenant_wide: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -125,23 +128,26 @@ async def list_employees(
     # HRP-616 put on the card does not apply to the list. Admin-level roles
     # and whoever runs the records (``manage`` on ``employees`` - the
     # manager role until HRP-829) keep the full rows their own scope allows.
+    admin_level = any(r.code in ADMIN_ROLE_CODES for r in current_user.roles)
     directory = not (
-        any(r.code in ADMIN_ROLE_CODES for r in current_user.roles)
-        or (await matrix_levels(db, current_user))["employees"] == "manage"
+        admin_level or (await matrix_levels(db, current_user))["employees"] == "manage"
     )
     visible_ids = (
         None if directory else await get_visible_employee_ids(db, current_user)
     )
+    # HRP-623 REDO: rows the caller may not read in full are directory rows,
+    # listed only while active or on leave. ``set()`` - every row is one.
+    directory_outside: set[uuid.UUID] | None = None
     if directory:
+        directory_outside = set()
         # Trimming the columns is not enough: a predicate on a field the
         # directory hides answers the same question the field would.
-        # ``?status=terminated`` or ``?role=admin`` over the whole tenant
-        # hands back exactly the roster the schema is meant to withhold,
-        # and ``?grade_id=`` walks around ``directory_show_grades``. Only
-        # the filters over fields the directory actually shows survive.
-        status = None
+        # ``?role=admin`` over the whole tenant hands back exactly the
+        # roster the schema is meant to withhold, and ``?grade_id=`` walks
+        # around ``directory_show_grades``. Only the filters over fields the
+        # directory actually shows survive - ``status`` among them, which
+        # ``directory_outside`` keeps inside active / on leave.
         role = None
-        specialization_id = None
         grade_id = None
         unassigned_only = False
         with_alerts = False
@@ -149,6 +155,16 @@ async def list_employees(
         # filter answers the same question the badge would.
         issue = None
         sort = None
+    elif (
+        tenant_wide
+        and visible_ids is not None
+        and not (role or grade_id or unassigned_only or issue)
+    ):
+        # HRP-623 REDO (QA, 05.10): a manager sees the whole tenant - the
+        # managed subtree in full, everyone else as the directory does. A
+        # filter over a field the directory hides (role, grade, unassigned,
+        # problems) keeps the list inside the subtree, for the reason above.
+        directory_outside, visible_ids = visible_ids, None
     items, total = await service.list_employees(
         db,
         current_user.tenant_id,
@@ -167,9 +183,14 @@ async def list_employees(
         include_sub_divisions=include_sub_divisions,
         issue=issue,
         sort=sort,
+        directory_outside=directory_outside,
     )
     if directory:
         items = await service.directory_rows(db, current_user.tenant_id, items)
+    elif directory_outside is not None:
+        items = await service.apply_directory_scope(
+            db, current_user.tenant_id, items, directory_outside
+        )
     return {"items": items, "total": total}
 
 
@@ -232,6 +253,11 @@ async def get_employee(
     )
     if in_scope:
         return row
+    # HRP-623 REDO: the directory lists active and on-leave colleagues only;
+    # the trimmed card would otherwise say that someone left. Same answer as
+    # an id that does not exist.
+    if row["status"] not in service.DIRECTORY_STATUSES:
+        raise AppError("employee_not_found", 404)
     return (await service.directory_rows(db, current_user.tenant_id, [row]))[0]
 
 

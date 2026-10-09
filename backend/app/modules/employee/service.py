@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from fastapi import status
-from sqlalchemy import func, literal, or_, select
+from sqlalchemy import ColumnElement, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -175,6 +175,11 @@ def _employee_to_read(
     }
 
 
+# HRP-623 REDO: the only statuses a colleague's row is listed in. Someone
+# who left (``terminated`` / ``inactive``) is HR history, not a coworker.
+DIRECTORY_STATUSES = ("active", "on_leave")
+
+
 async def directory_rows(
     db: AsyncSession, tenant_id: uuid.UUID, rows: list[dict]
 ) -> list[dict]:
@@ -183,6 +188,9 @@ async def directory_rows(
     Built by narrowing ``_employee_to_read`` output rather than by a second
     query, so the directory can never drift away from the card it mirrors:
     a field added to the full row stays invisible here until it is listed.
+    ``status`` and ``specialization_title`` were added on purpose by the
+    HRP-623 REDO (QA, 05.10): the list is limited to ``DIRECTORY_STATUSES``,
+    so the status only tells active from on leave.
     """
     show_grades = await directory_show_grades(db, tenant_id)
     return [
@@ -194,6 +202,8 @@ async def directory_rows(
             "position_title": row["position_title"],
             "division_id": row["division_id"],
             "division_name": row["division_name"],
+            "status": row["status"],
+            "specialization_title": row["specialization_title"],
             "grade_title": row["grade_title"] if show_grades else None,
         }
         for row in rows
@@ -219,16 +229,24 @@ async def apply_directory_scope(
 ) -> list[dict]:
     """HRP-633: narrow the rows the caller may not read in full.
 
-    Used by the position drill-down and the specialization tab, which build
-    the same row shape. Order is preserved — a caller reading the list top
-    to bottom must not be able to tell which rows were trimmed from where
-    they sit.
+    Used by the position drill-down, the specialization tab and a manager's
+    tenant-wide employee list, which build the same row shape. Order is
+    preserved — a caller reading the list top to bottom must not be able to
+    tell which rows were trimmed from where they sit.
+
+    HRP-623 REDO: a trimmed row is listed only in ``DIRECTORY_STATUSES``,
+    like the directory itself - it now carries ``status``, so someone who
+    left would otherwise be shown as having left. Such rows are dropped, not
+    trimmed; the rows the caller reads in full stay whatever their status.
     """
     if visible_employee_ids is None:
         return rows
-    out_of_scope = [
-        row for row in rows if row["id"] not in visible_employee_ids
+    rows = [
+        row
+        for row in rows
+        if row["id"] in visible_employee_ids or row["status"] in DIRECTORY_STATUSES
     ]
+    out_of_scope = [row for row in rows if row["id"] not in visible_employee_ids]
     if not out_of_scope:
         return rows
     trimmed = {
@@ -392,7 +410,16 @@ async def create_employee(
 
     # Auto-create hire event
     title = emp.position_title or "Employee"
-    await _create_event(db, emp.id, "hire", f"Hired as {title}", data.hire_date)
+    # HRP-999: the position as a value, so the timeline words the hire in the
+    # viewer's language instead of this English sentence.
+    await _create_event(
+        db,
+        emp.id,
+        "hire",
+        f"Hired as {title}",
+        data.hire_date,
+        new_value={"position_title": emp.position_title},
+    )
 
     await db.commit()
     await db.refresh(emp)
@@ -421,7 +448,11 @@ async def list_employees(
     include_sub_divisions: bool = False,
     issue: Sequence[str] | str | None = None,
     sort: str | None = None,
+    directory_outside: set[uuid.UUID] | None = None,
 ) -> tuple[list[dict], int]:
+    """``directory_outside``: rows outside this set reach the caller as
+    directory rows (HRP-623), so they are listed only in
+    ``DIRECTORY_STATUSES``. ``None`` means no directory rows at all."""
     division_ids = _coerce_filter_list(division_id)
     # HRP-58: opt-in widening of the division filter to the whole subtree.
     # A division page that reports per-specialization headcount has to see
@@ -448,6 +479,12 @@ async def list_employees(
             return [], 0
         query = query.where(Employee.id.in_(visible_employee_ids))
         count_query = count_query.where(Employee.id.in_(visible_employee_ids))
+    if directory_outside is not None:
+        listed: ColumnElement[bool] = Employee.status.in_(DIRECTORY_STATUSES)
+        if directory_outside:
+            listed = or_(Employee.id.in_(directory_outside), listed)
+        query = query.where(listed)
+        count_query = count_query.where(listed)
 
     # HRP-638: "show me the people the dashboard is talking about". Resolved
     # tenant-wide (inside the caller's read scope) because the predicate has
@@ -622,8 +659,15 @@ async def list_employees(
     employees = list(result.scalars().all())
 
     issues_map: dict[uuid.UUID, list[str]] = {}
-    if with_alerts and employees:
-        alerts_map = await compute_employee_alerts_bulk_all(db, tenant_id, employees)
+    # HRP-623 REDO: a directory row drops the badges, so they are never
+    # computed for one.
+    badged = (
+        employees
+        if directory_outside is None
+        else [e for e in employees if e.id in directory_outside]
+    )
+    if with_alerts and badged:
+        alerts_map = await compute_employee_alerts_bulk_all(db, tenant_id, badged)
         # Scoped to this page, not the tenant: the badges only have to
         # explain the twenty rows on screen, and the tenant-wide pass is
         # the filter's job.
@@ -631,10 +675,10 @@ async def list_employees(
             db,
             tenant_id,
             visible_employee_ids=visible_employee_ids,
-            employee_ids={e.id for e in employees},
+            employee_ids={e.id for e in badged},
         )
         loop_issues = issues_by_employee(issue_cohorts(page_facts))
-        for emp in employees:
+        for emp in badged:
             issues_map[emp.id] = [
                 *alerts_map.get(emp.id, []),
                 *loop_issues.get(emp.id, []),

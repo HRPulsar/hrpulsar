@@ -13,7 +13,9 @@ dead-ending on email verification:
 import logging
 import uuid
 
+import pytest
 from app.config import settings
+from app.core.errors import AppError
 from app.modules.auth import service
 from app.modules.auth.models import User
 from app.modules.auth.schemas import RegisterRequest
@@ -42,6 +44,27 @@ def _no_provider(monkeypatch):
 async def _get_user(db: AsyncSession, email: str) -> User:
     result = await db.execute(select(User).where(User.email == email))
     return result.scalar_one()
+
+
+class TestSignupDisabled:
+    """HRP-1039: SIGNUP_ENABLED=false closes self-serve workspace creation
+    on managed installs (any employee on the intranet could otherwise open
+    /register and start a shadow HR workspace)."""
+
+    async def test_disabled_rejects_before_any_db_work(self, monkeypatch):
+        monkeypatch.setattr(settings, "signup_enabled", False)
+
+        # db is a plain object: the guard must fire before the first query.
+        with pytest.raises(AppError) as exc:
+            await service.register(object(), _register_data())
+
+        assert exc.value.code == "signup_disabled"
+        assert exc.value.status_code == 403
+
+    def test_enabled_by_default(self):
+        # Community self-hosted onboards through /register (SELF_HOSTED.md);
+        # the default must stay permissive and the flag opt-out.
+        assert settings.signup_enabled is True
 
 
 class TestAutoVerify:

@@ -14,7 +14,7 @@ Manage competencies, run 360° assessments, build development plans, and track e
 - **Talent Market** — Internal marketplace for vacancies, projects, and talent matching
 - **Coverage** — Break a process or a project into steps and see who covers each one: an AI agent type, a person on the team, or a gap you hand to hiring
 - **Recruitment** — Vacancies, candidate pipelines with AI resume parsing, interview rounds with transcription and analysis, and evaluation sheets for external evaluators
-- **AI-Powered** — LLM-based competency generation, indicator suggestions, and semantic search
+- **AI-Powered** — LLM-based competency generation and indicator suggestions
 - **Analytics & Reports** — Assessment statistics, competency matrices, and Excel exports
 - **Multi-tenant** — Isolated data per organization with system-wide reference data
 - **API-First** — 500+ REST API endpoints with Swagger documentation
@@ -52,9 +52,9 @@ make run                       # Start backend (8100) + frontend (3100)
 |-------|-----------|
 | Backend | Python 3.14+ / FastAPI |
 | Frontend | Next.js 16 / React 19 / TypeScript |
-| Database | PostgreSQL 17 + pgvector |
+| Database | PostgreSQL 17 |
 | Cache | Redis 7 |
-| AI/ML | Direct SDKs (Anthropic, OpenAI, Gemini) + pgvector |
+| AI/ML | Direct SDKs (Anthropic, OpenAI, Gemini) |
 | UI | shadcn/ui + Tailwind CSS |
 | Deploy | Docker Compose (self-hosted) |
 

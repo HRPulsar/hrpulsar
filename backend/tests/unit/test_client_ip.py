@@ -78,8 +78,58 @@ def test_blank_hops_are_skipped_not_returned():
     assert client_ip(_request("172.20.0.8", " , ")) == "172.20.0.8"
 
 
-def test_chain_of_only_trusted_hops_falls_back_to_peer():
-    assert client_ip(_request("172.20.0.8", "10.0.0.4, 192.168.1.1")) == "172.20.0.8"
+def test_chain_of_only_trusted_hops_takes_what_our_proxy_saw():
+    """HRP-652: an all-private chain used to fall back to the peer — Caddy's
+    own container address — so the GF cards showed 172.21.0.9 and every
+    visitor shared one bucket. The right-most hop is the one our proxy
+    recorded; with Caddy replacing an untrusted header, a caller cannot
+    choose it."""
+    assert client_ip(_request("172.20.0.8", "10.0.0.4, 192.168.1.1")) == "192.168.1.1"
+
+
+# --- flagship vs fleet site chains (HRP-652) --------------------------------
+
+# Flagship: public address on the droplet, Caddy sees the visitor directly.
+# Site behind an operator proxy that Caddy trusts (CADDY_TRUSTED_PROXIES):
+# the proxy writes the visitor, Caddy appends the proxy.
+# Site behind masquerading NAT: Caddy only ever sees the NAT gateway.
+_CADDY = "172.21.0.9"
+
+
+@pytest.mark.parametrize(
+    ("xff", "expected"),
+    [
+        ("203.0.113.7", "203.0.113.7"),  # flagship
+        ("203.0.113.7, 10.20.0.5", "203.0.113.7"),  # site, proxy trusted by Caddy
+        ("10.20.0.1", "10.20.0.1"),  # site, NAT masquerade: gateway, never Caddy
+    ],
+    ids=["flagship", "site-behind-proxy", "site-behind-nat"],
+)
+def test_visitor_ip_per_topology(xff, expected):
+    assert client_ip(_request(_CADDY, xff)) == expected
+
+
+def test_forged_prefix_behind_a_site_proxy_is_discarded():
+    forged = "198.51.100.1, 203.0.113.7, 10.20.0.5"
+    assert client_ip(_request(_CADDY, forged)) == "203.0.113.7"
+
+
+@pytest.mark.parametrize(
+    "chains",
+    [
+        ["203.0.113.7", "198.51.100.9"],  # flagship
+        ["203.0.113.7, 10.20.0.5", "198.51.100.9, 10.20.0.5"],  # site, proxy
+        ["192.168.1.10", "192.168.1.11"],  # intranet install
+    ],
+    ids=["flagship", "site-behind-proxy", "intranet"],
+)
+def test_two_visitors_get_two_rate_limit_buckets(chains):
+    """The per-IP limits (signup 5/hour, login 10/minute) key on this value:
+    two visitors must not share a bucket — nor collapse into Caddy's."""
+    from app.modules.auth.router import _auth_ip_key
+
+    keys = {_auth_ip_key(_request(_CADDY, xff)) for xff in chains}
+    assert len(keys) == 2 and _CADDY not in keys
 
 
 def test_missing_client_yields_none():

@@ -13,6 +13,7 @@ from app.core.sections import matrix_levels, require_section
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
+from app.modules.company.dependencies import require_company_details
 from app.modules.employee.schemas import EmployeeDirectoryRead
 from app.modules.position import service
 from app.modules.position.schemas import (
@@ -183,9 +184,10 @@ async def delete_position(
     await service.delete_position(db, current_user.tenant_id, position_id)
 
 
-# HRP-633: the gate stays `get_current_user` — the list itself is public to
-# the workspace, the same way the employee directory is. What changes is the
-# row: anyone whose full HR card the caller may not open comes back in the
+# HRP-633: below the HR roles the list is open the same way the employee
+# directory is (HRP-622: except to a plain employee, who no longer opens the
+# positions tab - ``require_company_details``). What changes is the row:
+# anyone whose full HR card the caller may not open comes back in the
 # directory shape, so `?with_alerts=true` over every position can no longer
 # reconstruct the HR roster. Same boundary as `GET /employees/{id}`, applied
 # per row, which is why the response mixes the two schemas.
@@ -197,7 +199,7 @@ async def list_position_employees(
     position_id: uuid.UUID,
     with_alerts: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_company_details),
 ):
     return await service.list_position_employees(
         db,
@@ -216,7 +218,7 @@ async def list_position_employees(
 async def get_position_occupancy(
     position_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_company_details),
 ):
     return await service.get_position_occupancy(db, current_user.tenant_id, position_id)
 
@@ -228,7 +230,7 @@ async def get_position_occupancy(
 async def get_position_matrix_status(
     position_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_company_details),
 ):
     # HRP-637: the pair ids are the position's grade in another spelling —
     # ``grade_specialization_id`` resolves to a grade title on the
@@ -247,7 +249,7 @@ async def get_position_matrix_status(
 async def get_position_competences(
     position_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_company_details),
 ):
     return trim_position_fields(
         await service.get_position_competence_matrix(

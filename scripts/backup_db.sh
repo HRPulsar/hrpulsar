@@ -81,8 +81,19 @@ echo "Starting backup..."
 # live database. Without them psql walks through a wall of "already exists"
 # and leaves a half-old, half-new schema behind; --no-owner drops the
 # GRANT/OWNER statements that fail when restoring under another role.
-docker compose exec -T postgres pg_dump -U hrpulsar --clean --if-exists --no-owner hrpulsar \
-    | gzip > "$FILE" || fail "pg_dump failed"
+if [ -n "$(docker compose ps -q postgres 2>/dev/null || true)" ]; then
+    docker compose exec -T postgres pg_dump -U hrpulsar --clean --if-exists --no-owner hrpulsar \
+        | gzip > "$FILE" || fail "pg_dump failed"
+else
+    # External database (host override points DATABASE_URL off-stack): dump
+    # through a one-off backend container — the image ships postgresql-client,
+    # and compose carries the override's DATABASE_URL into it. asyncpg's URL
+    # scheme is not libpq's, so the +asyncpg marker is stripped first.
+    echo "No postgres container in this stack — dumping the external database via the backend image."
+    docker compose run -T --rm --no-deps --entrypoint sh backend -c \
+        'pg_dump --clean --if-exists --no-owner --dbname "$(python -c "import os; print(os.environ[\"DATABASE_URL\"].replace(\"+asyncpg\", \"\"))")"' \
+        | gzip > "$FILE" || fail "pg_dump failed"
+fi
 
 SIZE=$(wc -c < "$FILE")
 [ "$SIZE" -ge "$MIN_BYTES" ] || fail "dump is only ${SIZE} bytes (expected >= ${MIN_BYTES})"

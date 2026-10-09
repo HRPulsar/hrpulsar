@@ -110,7 +110,6 @@ async def db():
                     f"Tests must run against hrpulsar_test, got '{db_name}'. "
                     f"Check DATABASE_URL / TEST_DB_URL."
                 )
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             # DROP SCHEMA needs an exclusive lock; a connection lingering in a
             # pool from a prior test intermittently deadlocked here in the ee
             # suite (asyncpg DeadlockDetectedError). Fail fast instead of
@@ -126,7 +125,6 @@ async def db():
             )
             await conn.execute(text("DROP SCHEMA public CASCADE"))
             await conn.execute(text("CREATE SCHEMA public"))
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             await conn.run_sync(Base.metadata.create_all)
             # HRP-305: mirror prod DELETE guards on tenants/users so tests
             # exercise the same row-level barrier as production.
@@ -224,6 +222,22 @@ def _pin_database_url_to_test_db(monkeypatch):
     """Engines built from settings inside tests (Celery-style sync engines,
     the HRP-964 call-log writer) must hit hrpulsar_test, never the dev DB."""
     monkeypatch.setattr(settings, "database_url", TEST_DB_URL)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_app_engine():
+    """Close the app engine's pooled connections in the loop that opened them.
+
+    Every authenticated request touches demo activity through the global
+    ``app.database.engine`` (not the overridden ``get_db``). Each test runs
+    in its own event loop, so a pooled connection reused by the next test
+    fails and is left ``idle in transaction``; a long run exhausted
+    max_connections in CI.
+    """
+    yield
+    from app.database import engine
+
+    await engine.dispose()
 
 
 @pytest.fixture(autouse=True)

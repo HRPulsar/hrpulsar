@@ -156,18 +156,16 @@ class EmployeeRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class EmployeeList(BaseModel):
-    items: list[EmployeeRead]
-    total: int
-
-
 class EmployeeDirectoryRead(BaseModel):
     """HRP-623: what a colleague sees — "find a coworker", nothing more.
 
-    Deliberately missing ``hire_date``, ``status``, ``roles``, ``alert``,
-    ``user_first_login_at`` and the specialization: those belong to the HR
+    Deliberately missing ``hire_date``, ``roles``, ``alert``,
+    ``user_first_login_at`` and ``specialization_id``: those belong to the HR
     process, not to a company directory. ``grade_title`` is filled only
-    when the tenant opted in via ``directory_show_grades``.
+    when the tenant opted in via ``directory_show_grades``. ``status`` and
+    ``specialization_title`` came in with the HRP-623 REDO: directory rows
+    are listed only while active or on leave, so the status says no more
+    than which of the two.
     """
 
     id: uuid.UUID
@@ -177,13 +175,17 @@ class EmployeeDirectoryRead(BaseModel):
     position_title: str | None = None
     division_id: uuid.UUID | None = None
     division_name: str | None = None
+    status: str | None = None
+    specialization_title: str | None = None
     grade_title: str | None = None
 
     model_config = {"from_attributes": True}
 
 
-class EmployeeDirectoryList(BaseModel):
-    items: list[EmployeeDirectoryRead]
+class EmployeeList(BaseModel):
+    # HRP-623 REDO: a manager's list spans the tenant - full rows for the
+    # managed subtree, directory rows for everyone else, on one page.
+    items: list[EmployeeRead | EmployeeDirectoryRead]
     total: int
 
 

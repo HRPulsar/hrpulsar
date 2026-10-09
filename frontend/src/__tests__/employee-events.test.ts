@@ -149,6 +149,24 @@ describe("eventDescription (HRP-1013)", () => {
     expect(describeIn("en", SYSTEM_EVENTS[1][1])).toBe("Anna Alt → Anna Neu");
   });
 
+  it("words a hire from the stored position in every language (HRP-999)", () => {
+    const hire = {
+      event_type: "hire",
+      description: "Hired as QA Engineer",
+      new_value: { position_title: "QA Engineer" },
+    };
+    for (const locale of LOCALES) {
+      const text = describeIn(locale, hire);
+      expect(text, locale).toContain("QA Engineer");
+      if (locale !== "en") expect(text, locale).not.toBe(hire.description);
+    }
+    expect(describeIn("de", hire)).toBe("Eingestellt als QA Engineer");
+    // Hired without a position: the title says it all.
+    expect(
+      describeIn("de", { ...hire, description: "Hired as Employee", new_value: { position_title: null } }),
+    ).toBeNull();
+  });
+
   it("keeps the text of an event added by hand", () => {
     const manual = { event_type: "hire", description: "Eingestellt nach Probetag" };
     expect(describeIn("de", manual)).toBe("Eingestellt nach Probetag");

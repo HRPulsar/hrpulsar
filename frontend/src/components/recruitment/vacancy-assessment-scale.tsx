@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
+import { recruitmentScaleName } from "@/lib/reference-labels";
 
 type ScaleLevel = {
   value: number;
@@ -45,6 +46,8 @@ export function VacancyAssessmentScaleBlock({
   readOnly = false,
 }: Props) {
   const t = useTranslations("recruitment");
+  // HRP-1023: the shipped scale is named in the interface language.
+  const tRef = useTranslations("reference");
   const [scales, setScales] = useState<Scale[]>([]);
   const [loading, setLoading] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -75,16 +78,20 @@ export function VacancyAssessmentScaleBlock({
   const activeScale = (() => {
     if (snapshot) {
       return {
-        name: snapshot.name ?? t("vacancyScaleSnapshotFallback"),
+        name: snapshot.name
+          ? recruitmentScaleName(tRef, snapshot.name)
+          : t("vacancyScaleSnapshotFallback"),
         levels: snapshot.levels ?? [],
       };
     }
     if (vacancy.assessment_scale_id) {
       const found = scales.find((s) => s.id === vacancy.assessment_scale_id);
-      if (found) return { name: found.name, levels: found.levels };
+      if (found)
+        return { name: recruitmentScaleName(tRef, found.name), levels: found.levels };
     }
     const def = scales.find((s) => s.is_default && !s.archived_at);
-    if (def) return { name: def.name, levels: def.levels };
+    if (def)
+      return { name: recruitmentScaleName(tRef, def.name), levels: def.levels };
     return null;
   })();
 
@@ -159,7 +166,7 @@ export function VacancyAssessmentScaleBlock({
               </option>
               {scales.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.name}
+                  {recruitmentScaleName(tRef, s.name)}
                   {s.is_default ? t("vacancyScaleDefaultSuffix") : ""}
                   {s.archived_at ? t("vacancyScaleArchivedSuffix") : ""}
                 </option>

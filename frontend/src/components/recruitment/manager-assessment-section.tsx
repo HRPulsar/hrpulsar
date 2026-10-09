@@ -209,6 +209,11 @@ interface Props {
 
 const AUTOSAVE_MS = 1500;
 
+// HRP-379: how long the email's jump keeps following the page as the blocks
+// above it load, and what hands the scroll back to the user earlier.
+const ANCHOR_FOLLOW_MS = 4000;
+const USER_TAKES_OVER = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+
 export function ManagerAssessmentSection({
   vacancies,
   initialVacancyId,
@@ -285,13 +290,36 @@ export function ManagerAssessmentSection({
   useEffect(() => {
     if (!activeRoundId || anchorScrolled.current) return;
     if (window.location.hash !== "#manager-assessments") return;
-    anchorScrolled.current = true;
-    sectionRef.current?.scrollIntoView({
-      block: "start",
-      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-        ? "auto"
-        : "smooth",
-    });
+    const el = sectionRef.current;
+    if (!el) return;
+    // HRP-379 REDO 02.10: the blocks above this one are often still loading
+    // at this point and push it down by hundreds of pixels after the jump.
+    // So the jump follows the page column until it settles - or until the
+    // user takes over - and lands on the block's title (scroll-mt-16 keeps
+    // a strip of the previous block in view). Instant, not smooth: an
+    // animation aims at an offset the growing page has already moved.
+    const jump = () => el.scrollIntoView({ block: "start" });
+    jump();
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(jump);
+    if (el.parentElement) observer?.observe(el.parentElement);
+    const timer = window.setTimeout(settle, ANCHOR_FOLLOW_MS);
+    function release() {
+      observer?.disconnect();
+      window.clearTimeout(timer);
+      for (const e of USER_TAKES_OVER)
+        window.removeEventListener(e, settle, { capture: true });
+    }
+    // Once per visit, so a later tab click is not yanked back. Set when the
+    // follow ends rather than up front: a remount (React's dev double
+    // effect) must still get to follow.
+    function settle() {
+      anchorScrolled.current = true;
+      release();
+    }
+    for (const e of USER_TAKES_OVER)
+      window.addEventListener(e, settle, { capture: true, passive: true });
+    return release;
   }, [activeRoundId]);
 
   // HRP-348 REDO: one debounce timer per score row — a shared timer would
@@ -327,7 +355,10 @@ export function ManagerAssessmentSection({
     [vacancies, activeCvId],
   );
   // HRP-836: a paused, closed or cancelled vacancy reads its rounds only.
-  const canRunRounds = canRunHiringRounds && !activeVacancy?.read_only;
+  // HRP-630: the sheet on screen is always the caller's own (`ensureSheet`),
+  // and its evaluator fills it in at any level the section is open - a
+  // hiring manager at `view` named on the round included.
+  const canFillSheet = !activeVacancy?.read_only;
   const canManageRounds = canManageRecruitment && !activeVacancy?.read_only;
   const activeRound = useMemo(
     () => rounds.find((r) => r.id === activeRoundId) ?? null,
@@ -827,23 +858,29 @@ export function ManagerAssessmentSection({
     });
   }
 
-  const completedCount = sheet
-    ? profileCompetences.filter((comp) =>
-        sheet.competence_scores.some(
-          (c) => c.competence_id === comp.id && c.score_value !== null,
-        ),
-      ).length
-    : 0;
+  // HRP-1022: with no sheet of the caller's own on the round - only
+  // external evaluators scored it - progress is what their submitted sheets
+  // put into the round aggregate. The aggregate is read with the round's
+  // writes, so whoever cannot run rounds gets no such row (it would read 0/N).
+  const submittedExternal =
+    canRunHiringRounds &&
+    invites.some((i) => i.status === "submitted" || Boolean(i.submitted_at));
+  const isScored = (compId: string) =>
+    sheet
+      ? sheet.competence_scores.some(
+          (c) => c.competence_id === compId && c.score_value !== null,
+        )
+      : Boolean(aggregatesByCompetence[compId]);
+  const completedCount =
+    sheet || submittedExternal
+      ? profileCompetences.filter((comp) => isScored(comp.id)).length
+      : 0;
   const totalCount = profileCompetences.length;
 
   // HRP-348 REDO: `Mark as complete` unlocks only once every competence
   // with the Critical chip has an overall score (manual or computed).
   const unscoredCritical = profileCompetences.filter(
-    (comp) =>
-      comp.criticality === "critical" &&
-      !sheet?.competence_scores.some(
-        (c) => c.competence_id === comp.id && c.score_value !== null,
-      ),
+    (comp) => comp.criticality === "critical" && !isScored(comp.id),
   );
   const canComplete =
     completedCount > 0 && unscoredCritical.length === 0;
@@ -860,6 +897,9 @@ export function ManagerAssessmentSection({
     <Card
       id="manager-assessments"
       ref={sectionRef}
+      // HRP-379: the email's jump lands on the block's title with a strip
+      // of the block above still in view, not flush against the edge.
+      className="scroll-mt-16"
       data-testid="candidate-section-assessments"
     >
       <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -1024,8 +1064,9 @@ export function ManagerAssessmentSection({
               </div>
             </div>
 
-            {/* Form */}
-            {sheet ? (
+            {/* Form. HRP-1022: the progress row and Mark as complete also
+                stand for a round only external evaluators scored. */}
+            {sheet || submittedExternal ? (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span data-testid="assessment-progress-counter">
@@ -1120,24 +1161,26 @@ export function ManagerAssessmentSection({
                     </span>
                   )}
                 </div>
-                <CompetenceScoreList
-                  competences={profileCompetences}
-                  scaleLevels={scaleLevels}
-                  competenceScores={sheet.competence_scores}
-                  indicatorScores={sheet.indicator_scores}
-                  disabled={roundClosed || !canRunRounds}
-                  emptyHint={t("managerAssessmentEmptyHint")}
-                  aggregates={aggregatesByCompetence}
-                  onCompetenceScore={(compId, value) =>
-                    void setCompetenceScore(compId, value)
-                  }
-                  onCompetenceComment={(compId, comment) =>
-                    void setCompetenceComment(compId, comment)
-                  }
-                  onIndicatorScore={(compId, indId, value) =>
-                    void setIndicatorScore(compId, indId, value)
-                  }
-                />
+                {sheet && (
+                  <CompetenceScoreList
+                    competences={profileCompetences}
+                    scaleLevels={scaleLevels}
+                    competenceScores={sheet.competence_scores}
+                    indicatorScores={sheet.indicator_scores}
+                    disabled={roundClosed || !canFillSheet}
+                    emptyHint={t("managerAssessmentEmptyHint")}
+                    aggregates={aggregatesByCompetence}
+                    onCompetenceScore={(compId, value) =>
+                      void setCompetenceScore(compId, value)
+                    }
+                    onCompetenceComment={(compId, comment) =>
+                      void setCompetenceComment(compId, comment)
+                    }
+                    onIndicatorScore={(compId, indId, value) =>
+                      void setIndicatorScore(compId, indId, value)
+                    }
+                  />
+                )}
               </div>
             ) : null}
 

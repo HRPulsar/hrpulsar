@@ -21,8 +21,46 @@ import type {
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { toast } from "sonner";
 
+const AUTO_PROCESS_PREFIX = "hrp1031-auto-process:";
+
+function readAutoProcess(cvId: string): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage.getItem(AUTO_PROCESS_PREFIX + cvId) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+/** HRP-1031: the "transcribe and run AI analysis after upload" switch is
+ *  remembered per candidate x vacancy, so a reload keeps what the recruiter
+ *  chose. Kept in this browser: a UI preference has no store of its own on
+ *  the server, and it only steers the next upload. On until switched off. */
+export function useAutoProcess(
+  cvId: string | null | undefined,
+): [boolean, (on: boolean) => void] {
+  const key = cvId ?? "";
+  const [chosen, setChosen] = useState<Record<string, boolean>>({});
+  const value = chosen[key] ?? (cvId ? readAutoProcess(cvId) : true);
+  const set = useCallback(
+    (on: boolean) => {
+      setChosen((prev) => ({ ...prev, [key]: on }));
+      if (!cvId) return;
+      try {
+        window.localStorage.setItem(AUTO_PROCESS_PREFIX + cvId, on ? "1" : "0");
+      } catch {
+        /* storage blocked - the switch still holds for this visit */
+      }
+    },
+    [key, cvId],
+  );
+  return [value, set];
+}
+
 interface InterviewUploadZoneProps {
   interviewId: string;
+  /** HRP-1031: keys the remembered auto-process switch. */
+  candidateVacancyId?: string;
   consentSigned: boolean;
   // HRP-405: the interview's declared recording type. When the dropped
   // file is of a different kind we ask before switching the type
@@ -68,6 +106,7 @@ function storageKey(interviewId: string): string {
 
 export function InterviewUploadZone({
   interviewId,
+  candidateVacancyId,
   consentSigned,
   interviewType,
   onUploaded,
@@ -106,7 +145,7 @@ export function InterviewUploadZone({
   };
   // HRP-202 REDO: chain transcribe -> analyze automatically once the
   // upload completes. Text transcripts skip the chain (no ASR needed).
-  const [autoProcess, setAutoProcess] = useState(true);
+  const [autoProcess, setAutoProcess] = useAutoProcess(candidateVacancyId);
 
   const stateRef = useRef<{
     cancelled: boolean;

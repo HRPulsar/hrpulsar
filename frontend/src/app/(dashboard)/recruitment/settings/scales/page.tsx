@@ -12,6 +12,11 @@ import { Loader2, Plus, Star, Trash2, Archive, ArrowDown, ArrowUp } from "lucide
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import {
+  localizeRecruitmentScaleLevels,
+  recruitmentScaleDescription,
+  recruitmentScaleName,
+} from "@/lib/reference-labels";
 
 type ScaleLevel = {
   id?: string;
@@ -82,6 +87,8 @@ type Scale = {
 export default function ScaleSettingsPage() {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  // HRP-1023: the shipped scale reads in the interface language.
+  const tRef = useTranslations("reference");
   const [scales, setScales] = useState<Scale[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -258,7 +265,7 @@ export default function ScaleSettingsPage() {
   }
 
   async function handleDelete(scale: Scale) {
-    if (!confirm(t("scaleDeleteConfirm", { name: scale.name }))) return;
+    if (!confirm(t("scaleDeleteConfirm", { name: recruitmentScaleName(tRef, scale.name) }))) return;
     setSavingId(scale.id);
     try {
       await api.delete(`/v1/assessment-scales/${scale.id}`);
@@ -476,7 +483,9 @@ export default function ScaleSettingsPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-col gap-0.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">{s.name}</span>
+                      <span className="text-sm font-medium">
+                        {recruitmentScaleName(tRef, s.name)}
+                      </span>
                       {s.is_default && (
                         <Badge className={BADGE_COLOR.emerald}>
                           {t("scaleBadgeDefault")}
@@ -488,7 +497,7 @@ export default function ScaleSettingsPage() {
                     </div>
                     {s.description && (
                       <span className="text-xs text-muted-foreground">
-                        {s.description}
+                        {recruitmentScaleDescription(tRef, s.description)}
                       </span>
                     )}
                   </div>
@@ -554,7 +563,7 @@ export default function ScaleSettingsPage() {
                   )}
                 </div>
                 <div className="grid gap-1 text-xs">
-                  {s.levels.map((lvl) => (
+                  {localizeRecruitmentScaleLevels(tRef, s.levels).map((lvl) => (
                     <div
                       key={lvl.id ?? `${lvl.value}-${lvl.label}`}
                       className="flex items-center gap-2"

@@ -46,6 +46,7 @@ from app.modules.recruitment.schemas import (
     QuestionRead2,
     QuestionSetExportRequest,
     QuestionSetRead,
+    QuestionSetSample,
     QuestionsPDFExportRequest,
     QuestionUpdate,
     QuestionUpdate2,
@@ -101,7 +102,7 @@ async def add_question(
     vacancy_id: uuid.UUID,
     data: QuestionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(evaluates),
+    current_user: User = Depends(runs_hiring),
     _candidate_scope: None = Depends(candidate_scope),
     _vacancy_scope: None = Depends(vacancy_scope),
 ):
@@ -118,7 +119,7 @@ async def update_question(
     question_id: uuid.UUID,
     data: QuestionUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(evaluates),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(candidate_question_scope),
 ):
     return await service.update_question(db, current_user.tenant_id, question_id, data)
@@ -128,7 +129,7 @@ async def update_question(
 async def delete_question(
     question_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(evaluates),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(candidate_question_scope),
 ):
     await service.delete_question(db, current_user.tenant_id, question_id)
@@ -673,7 +674,7 @@ async def list_vacancy_question_sets(
 
 @router.get(
     "/v1/question-sets/sample",
-    response_model=QuestionSetRead,
+    response_model=QuestionSetSample,
 )
 async def get_question_set_sample(
     current_user: User = Depends(get_current_user),
@@ -696,7 +697,7 @@ async def generate_question_set(
     cv_id: uuid.UUID,
     data: GenerateQuestionSetRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(evaluates),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(cv_scope),
 ):
     """Generate, regenerate or evolve a question set (8 credits).
@@ -720,7 +721,7 @@ async def generate_question_set(
 async def cancel_question_set_generation(
     set_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(evaluates),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(question_set_scope),
 ):
     """HRP-471: stop waiting for a generation that is still running. Asks
@@ -740,7 +741,7 @@ async def add_question_to_set(
     set_id: uuid.UUID,
     data: QuestionCreate2,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(evaluates),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(question_set_scope),
 ):
     return await question_service.add_question_to_set(
@@ -760,7 +761,7 @@ async def patch_question(
     question_id: uuid.UUID,
     data: QuestionUpdate2,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(evaluates),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(question_scope),
 ):
     return await question_service.update_question_v2(
@@ -776,7 +777,7 @@ async def patch_question(
 async def delete_question_v2(
     question_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(evaluates),
+    current_user: User = Depends(runs_hiring),
     _scope: None = Depends(question_scope),
 ):
     await question_service.soft_delete_question(db, current_user.tenant_id, question_id)

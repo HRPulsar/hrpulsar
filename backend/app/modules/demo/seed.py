@@ -805,6 +805,17 @@ async def _seed_employees(
             )
         )
 
+    # ── Grant the remaining system roles ────────────────────────────────
+    # Before the leadership pass on purpose (HRP-1032): a live workspace
+    # holds one tier role per person - `sync_role_on_assign` skips anyone
+    # already manager-or-higher, and a role change replaces the role. Granted
+    # after it, `hr` landed on top of `manager`, and the People head and
+    # deputy turned up under the Manager filter while the Role column said HR.
+    for assignment, employee in zip(EMPLOYEE_ASSIGNMENTS, ctx.employees, strict=True):
+        code = assignment.get("rbac_role")
+        if code:
+            await grant_role(db, employee.user_id, code)
+
     # ── Wire division leadership ────────────────────────────────────────
     for assignment, employee in zip(EMPLOYEE_ASSIGNMENTS, ctx.employees, strict=True):
         role = assignment["manager_role"]
@@ -821,15 +832,6 @@ async def _seed_employees(
         # assigned through the UI (HRP-196) — a demo division head without
         # the manager role sees none of the team surfaces.
         await sync_role_on_assign(db, tenant_id, employee.id)
-
-    # ── Grant the remaining system roles ────────────────────────────────
-    # After the leadership pass on purpose: `sync_role_on_assign` skips a
-    # user who already holds a manager-or-higher role, so granting `hr`
-    # first would quietly cost the People head their `manager` row.
-    for assignment, employee in zip(EMPLOYEE_ASSIGNMENTS, ctx.employees, strict=True):
-        code = assignment.get("rbac_role")
-        if code:
-            await grant_role(db, employee.user_id, code)
 
     # HRP-303: the Engineering parent division has no direct headcount
     # (sub-divisions hold all eng employees), so the sub-division heads

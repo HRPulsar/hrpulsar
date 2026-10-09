@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-09
+
+### Added
+- A SIGNUP_ENABLED setting closes self-serve workspace creation on company-internal installs; invitations keep working (HRP-1039)
+- AI workforce: when the owner of an agent workflow leaves, the workflow is marked as needing a new owner and admins are told in the same notification as for assignments (HRP-1028)
+
+### Removed
+- Unused semantic-search API endpoints and the pgvector dependency; PostgreSQL needs no extensions now (HRP-1042)
+
+### Changed
+- Public check: the header carries the HRPulsar logo linking to the website, matching the marketing site (HRP-934)
+
+### Fixed
+- Company: a rank-and-file employee no longer sees the Profile, Positions and Specializations tabs, and direct links to them show an access error (HRP-622)
+- Positions: a division manager no longer gets AI generation of positions or the banner of AI drafts awaiting review; admins and HR keep both (HRP-631)
+- Specializations: the pointer to Settings → Dictionaries shows only to users who can manage the dictionaries (HRP-828)
+- Visitors on private networks, and visitors behind a proxy listed in CADDY_TRUSTED_PROXIES, keep their own IP and per-IP rate limits instead of sharing the bundled proxy's address (HRP-652)
+- Recruitment: the shipped Standard 1-4 assessment scale, its description and level labels follow the interface language in the scale settings and on evaluation sheets (HRP-1023)
+- Recruitment: the sample interview question set opens instead of failing (HRP-773)
+- Recruitment: a Manager assessments round scored only by external evaluators shows its progress and can be marked complete once every Critical competence is scored (HRP-1022)
+- Recruitment: the "Transcribe and run AI analysis automatically after upload" switch keeps its position for the candidate and vacancy after a reload (HRP-1031)
+- Recruitment: the link in the submitted-assessment email stops at the Manager assessments title with a little of the page above it in view (HRP-379)
+- Recruitment: the consent link resend confirmation shows only when the link was last sent (HRP-684)
+- Recruitment: below Manage, a hiring manager reads and exports the interview questions without editing them and fills in only their own sheet on a round they evaluate; a vacancy's hiring manager can be named an evaluator on its rounds; recruiters and hiring managers read every talent market card (HRP-630)
+- Employees: the directory shows each colleague's specialization and status, lists active and on-leave people only and filters by status; a division manager's list covers the whole company, with people outside their departments shown as the directory shows them (HRP-623)
+- Employee profile: a hire on the timeline names the position in the viewer's language (HRP-999)
+- Demo: the Manager role filter on the employee list no longer lists the HR people who lead a division (HRP-1032)
+
 ## [2.3.0] - 2026-10-06
 
 ### Added

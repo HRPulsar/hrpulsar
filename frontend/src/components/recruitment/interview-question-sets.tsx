@@ -212,8 +212,9 @@ export function InterviewQuestionSets({
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
   // HRP-830: question sets are evaluation - `manage` on recruitment or the
-  // hiring manager; everyone else reads them.
-  const { canEvaluateCandidates } = usePermissions();
+  // hiring manager; everyone else reads them. HRP-630: writing them is
+  // `manage`; the hiring manager at `view` reads and exports them.
+  const { canEvaluateCandidates, canManageSection } = usePermissions();
   const [vacancyId, setVacancyId] = useState<string | undefined>(
     initialVacancyId || vacancyOptions[0]?.id,
   );
@@ -260,8 +261,9 @@ export function InterviewQuestionSets({
     [vacancyOptions, vacancyId],
   );
   // HRP-836: a paused, closed or cancelled vacancy reads its sets only.
-  const canEvaluate =
+  const canExport =
     canEvaluateCandidates && !currentVacancy?.questions_read_only;
+  const canEvaluate = canExport && canManageSection("recruitment");
 
   useEffect(() => {
     const cvId = currentVacancy?.candidate_vacancy_id;
@@ -862,66 +864,70 @@ export function InterviewQuestionSets({
               )}
             </div>
             <div className="flex items-center gap-2">
-              {canEvaluate && currentSet.status !== "sample" && !isInFlight(currentSet) && (
+              {canExport && currentSet.status !== "sample" && !isInFlight(currentSet) && (
                 <>
-                  {/* HRP-485 task 1: split button — the primary half
-                      opens the custom-question dialog, the caret offers
-                      both entry points explicitly. */}
-                  <span className="inline-flex">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="rounded-r-none"
-                      onClick={() => setAddOpen(true)}
-                      data-testid="recruitment-interview-questions-add-btn"
-                    >
-                      <Plus className="mr-1 h-4 w-4" />
-                      {t("questionSetsAdd")}
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        data-testid="recruitment-interview-questions-add-menu-btn"
-                        aria-label={t("questionSetsAddMenuAria")}
-                        render={
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="rounded-l-none border-l-0 px-2"
-                          />
-                        }
-                      >
-                        <ChevronDown className="h-4 w-4" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent
-                        align="end"
-                        data-testid="recruitment-interview-questions-add-menu"
-                      >
-                        <DropdownMenuItem
+                  {canEvaluate && (
+                    <>
+                      {/* HRP-485 task 1: split button — the primary half
+                          opens the custom-question dialog, the caret offers
+                          both entry points explicitly. */}
+                      <span className="inline-flex">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="rounded-r-none"
                           onClick={() => setAddOpen(true)}
-                          data-testid="recruitment-interview-questions-add-custom-item"
+                          data-testid="recruitment-interview-questions-add-btn"
                         >
-                          {t("questionSetsAddMenuCustom")}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => setCompetencyOpen(true)}
-                          data-testid="recruitment-interview-questions-add-competency-item"
-                        >
-                          {t("questionSetsAddMenuFromCompetency")}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setRegenerateConfirm(true)}
-                    disabled={busy || insufficient || aiConsent.blocked}
-                    data-testid="recruitment-interview-questions-regenerate-btn"
-                  >
-                    <RefreshCw className="mr-1 h-4 w-4" />
-                    {t("questionSetsRegenerate")}
-                    {creditSuffix}
-                  </Button>
+                          <Plus className="mr-1 h-4 w-4" />
+                          {t("questionSetsAdd")}
+                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            data-testid="recruitment-interview-questions-add-menu-btn"
+                            aria-label={t("questionSetsAddMenuAria")}
+                            render={
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="rounded-l-none border-l-0 px-2"
+                              />
+                            }
+                          >
+                            <ChevronDown className="h-4 w-4" />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="end"
+                            data-testid="recruitment-interview-questions-add-menu"
+                          >
+                            <DropdownMenuItem
+                              onClick={() => setAddOpen(true)}
+                              data-testid="recruitment-interview-questions-add-custom-item"
+                            >
+                              {t("questionSetsAddMenuCustom")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => setCompetencyOpen(true)}
+                              data-testid="recruitment-interview-questions-add-competency-item"
+                            >
+                              {t("questionSetsAddMenuFromCompetency")}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setRegenerateConfirm(true)}
+                        disabled={busy || insufficient || aiConsent.blocked}
+                        data-testid="recruitment-interview-questions-regenerate-btn"
+                      >
+                        <RefreshCw className="mr-1 h-4 w-4" />
+                        {t("questionSetsRegenerate")}
+                        {creditSuffix}
+                      </Button>
+                    </>
+                  )}
                   {/* HRP-484 task 2: export covers the current set only,
                       so the action belongs to the set card, not the
                       section header. */}

@@ -17,6 +17,15 @@ class TestOnboardingStatus:
         assert status.division_count == 0
         assert status.has_invitations is False
 
+    async def test_no_onboarding_for_non_admin(self, db: AsyncSession, tenant):
+        """A requester who cannot run the wizard is never sent into it."""
+        status = await service.get_onboarding_status(
+            db, tenant.id, can_onboard=False
+        )
+        assert status.needs_onboarding is False
+        assert status.onboarding_completed is False
+        assert status.employee_count == 0
+
     async def test_no_onboarding_with_employees(
         self, db: AsyncSession, tenant, employee
     ):

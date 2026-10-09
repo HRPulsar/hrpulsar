@@ -234,6 +234,32 @@ describe("Manager assessments for a manager below manage (HRP-629)", () => {
     expect(byId("score-stub")).toBeNull();
   });
 
+  // HRP-630 (QA 06.10): the hiring manager at view, named an internal
+  // evaluator on a round, gets the same exception as the manager - their
+  // own sheet on that round and nothing else.
+  it("lets a hiring manager at view fill in their own sheet and nothing else", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await render(["hiring_manager"], "view");
+    for (const tab of [MINE.id, OTHER.id]) {
+      await openTab(tab);
+      for (const id of WRITES) expect(anyById(id), `${tab}: ${id}`).toBeNull();
+    }
+    await openTab(OTHER.id);
+    expect(byId("score-stub")).toBeNull();
+    await openTab(MINE.id);
+    const score = byId("score-stub");
+    expect(score!.disabled).toBe(false);
+    await act(async () => score!.click());
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    await flush();
+    expect(api.patch).toHaveBeenCalledWith(
+      `/v1/assessments/sheet-${MINE.id}-${ME}/competence-scores/c-1`,
+      { score_value: 4, score_source: "manual" },
+    );
+  });
+
   it("keeps every write for whoever manages recruitment, a manager included", async () => {
     for (const who of [["recruiter"], ["manager"]]) {
       await render(who, "manage");

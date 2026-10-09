@@ -17,6 +17,7 @@ from app.core.errors import AppError
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.auth.models import User
+from app.modules.company.dependencies import require_company_details
 from app.modules.competence.dependencies import hide_anothers_draft
 from app.modules.employee.schemas import EmployeeDirectoryRead
 from app.modules.position.schemas import PositionEmployeeRead
@@ -62,7 +63,7 @@ async def list_specializations(
 async def get_specialization(
     spec_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_company_details),
 ):
     detail = await service.get_specialization_detail(
         db, current_user.tenant_id, spec_id
@@ -171,7 +172,7 @@ async def delete_grade(
 async def list_specialization_positions(
     spec_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_company_details),
 ):
     blocks = await service.get_positions_summary(db, current_user.tenant_id, spec_id)
     # HRP-637: this is the catalogue's "position -> grade" join under
@@ -195,7 +196,7 @@ async def list_specialization_employees(
     spec_id: uuid.UUID,
     with_alerts: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_company_details),
 ):
     # HRP-633: same trimming as the position drill-down — the two routes
     # share the row shape, so they have to share the boundary too.
@@ -216,7 +217,7 @@ async def get_matrix(
     spec_id: uuid.UUID,
     grade_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_company_details),
 ):
     # HRP-637: ``MatrixCellRead`` carries no grade key, so there is nothing
     # here to trim — but ``grade_id`` is a query parameter, which makes the
@@ -254,7 +255,7 @@ async def upsert_matrix(
 async def get_matrix_bulk(
     spec_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_company_details),
 ):
     # HRP-637: ``MatrixBulkGradeRead.grade_id`` is a required uuid, so this
     # payload cannot be blanked field-by-field the way the others are — and

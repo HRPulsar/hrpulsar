@@ -185,7 +185,7 @@ def _guards(dependant) -> list[tuple[str, dict]]:
     out: list[tuple[str, dict]] = []
     for dep in dependant.dependencies:
         name = getattr(dep.call, "__name__", "")
-        if name in ("section_checker", "section_or_role_checker", "role_checker", "admin_checker"):
+        if name in ("section_checker", "section_or_role_checker", "role_checker", "admin_checker", "sheet_owner_checker"):
             out.append((name, inspect.getclosurevars(dep.call).nonlocals))
         out.extend(_guards(dep))
     return out
@@ -198,7 +198,8 @@ def _asks_for_itself(name: str, env: dict) -> bool:
         return env["role"] in {"hiring_manager", "manager", "admin"}
     if name == "role_checker":
         return set(env["role_codes"]) in ({"admin"}, {"admin", "hr"})
-    return False
+    # HRP-630: ``runs_rounds``, or the sheet's own evaluator at any level.
+    return name == "sheet_owner_checker"
 
 
 # E2E seams, 404 outside ``E2E_MODE``.
@@ -298,8 +299,10 @@ def test_what_a_scoped_caller_reaches_is_scoped():
     for r in app.routes:
         if not isinstance(r, APIRoute) or (s := section_for_path(r.path)) is None or s.code != "recruitment":
             continue
-        roles = {env["role"] for name, env in _guards(r.dependant) if name == "section_or_role_checker"}
-        if not roles & {"hiring_manager", "manager"} or r.path in _TENANT_SETTINGS_READS:
+        guards_of = _guards(r.dependant)
+        roles = {env["role"] for name, env in guards_of if name == "section_or_role_checker"}
+        opens_view = roles & {"hiring_manager", "manager"} or any(n == "sheet_owner_checker" for n, _ in guards_of)
+        if not opens_view or r.path in _TENANT_SETTINGS_READS:
             continue
         named = {k for k in keyed if f"{{{k}}}" in r.path}
         covered = {guards[n] for n in _dependency_names(r.dependant) if n in guards}

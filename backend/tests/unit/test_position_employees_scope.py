@@ -31,9 +31,13 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit.test_section_gate import _save
+
 # Fields the directory shape must never carry — the HR process, not the
 # company phone book.
-HR_FIELDS = ("hire_date", "status", "alert", "specialization_title", "user_id")
+# HRP-623 REDO put ``status`` and ``specialization_title`` into the directory
+# row on purpose (QA, 05.10).
+HR_FIELDS = ("hire_date", "alert", "user_id")
 
 
 def _is_full_row(row: dict) -> bool:
@@ -107,6 +111,10 @@ async def persona(
     tenant_id = start.json()["tenant_id"]
     me = await client.get("/api/auth/me", headers=headers)
     assert me.status_code == 200, me.text
+    # HRP-622: a plain employee opens the position / specialization
+    # drill-downs only once the tenant raises them to ``manage`` on company;
+    # the trims checked here must hold for them then.
+    await _save(client, levels={"company": {"employee": "manage"}}, headers=admin_headers)
     own_id = await db.scalar(
         select(Employee.id).where(Employee.user_id == me.json()["id"])
     )
@@ -377,3 +385,36 @@ async def test_a_manager_reads_hr_rows_only_inside_their_subtree(
 
     assert full_outside == 0, f"{full_outside} HR rows outside the managed subtree"
     assert trimmed, "no row was trimmed — the walk proved nothing"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["terminated", "inactive"])
+async def test_a_colleague_who_left_is_not_listed_or_opened_as_a_trimmed_row(
+    client: AsyncClient, db: AsyncSession, persona: DemoPersona, status: str
+):
+    """HRP-623 REDO: the directory row carries ``status``, and the directory
+    lists active / on-leave people only - the drill-downs and the trimmed
+    card must not tell a colleague that someone left."""
+    gone = await db.scalar(
+        select(Employee).where(
+            Employee.position_id == persona.position_id,
+            Employee.id != persona.own_id,
+        )
+    )
+    gone.status = status
+    await db.commit()
+
+    for route, url in _routes(persona).items():
+        rows = (await client.get(url, headers=persona.headers)).json()
+        assert str(gone.id) not in {r["id"] for r in rows}, route
+        assert {r["status"] for r in rows} <= {"active", "on_leave"}, route
+        # Whoever reads the row in full still sees it, status and all.
+        full = (await client.get(url, headers=persona.admin_headers)).json()
+        assert {r["id"]: r["status"] for r in full}[str(gone.id)] == status, route
+
+    card = await client.get(f"/api/employees/{gone.id}", headers=persona.headers)
+    assert card.status_code == 404, card.text
+    assert card.json()["code"] == "employee_not_found"
+    assert (
+        await client.get(f"/api/employees/{gone.id}", headers=persona.admin_headers)
+    ).status_code == 200

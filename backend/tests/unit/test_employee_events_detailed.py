@@ -145,3 +145,24 @@ class TestDetailedEmployeeEvents:
             db, tenant.id, employee.id, event_type="termination", current_user=user
         )
         assert len(events) == 1
+
+
+async def test_hire_event_keeps_the_position_as_a_value(
+    db: AsyncSession, user, tenant
+):
+    """HRP-999: the timeline words the hire in the viewer's language from
+    ``new_value``; the English description stays for the API."""
+    from app.modules.employee.schemas import EmployeeCreate
+
+    emp = await service.create_employee(
+        db,
+        tenant.id,
+        EmployeeCreate(
+            user_id=user.id, position_title="Engineer", hire_date=date(2024, 1, 15)
+        ),
+    )
+    [hire] = await service.list_events(
+        db, tenant.id, emp["id"], event_type="hire", current_user=user
+    )
+    assert hire["description"] == "Hired as Engineer"
+    assert hire["new_value"] == {"position_title": "Engineer"}

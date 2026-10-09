@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, case, delete, exists, or_, select
+from sqlalchemy import ColumnElement, and_, case, delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -957,7 +957,18 @@ async def _assert_pre_interview_slot_free(
 #: A user adding *themselves* bypasses this list: "Start scoring this
 #: round" is gated by the router's own require_role and must keep working
 #: for recruiters.
+#: HRP-630: on top of the roles, the vacancy's own hiring manager - whatever
+#: role they hold - may be named an evaluator on its rounds: they already
+#: read the vacancy, and fill in their own sheet there at ``view``.
 ELIGIBLE_EVALUATOR_ROLES = ("platform_admin", "admin", "manager")
+
+
+async def _vacancy_hiring_manager_id(
+    db: AsyncSession, vacancy_id: uuid.UUID
+) -> uuid.UUID | None:
+    return await db.scalar(
+        select(Vacancy.hiring_manager_id).where(Vacancy.id == vacancy_id)
+    )
 
 
 async def list_eligible_evaluators(
@@ -978,10 +989,13 @@ async def list_eligible_evaluators(
         )
     )
     existing = set(existing_rows.scalars().all())
+    vacancy_id = await _round_vacancy_id(db, rd)
     # HRP-971: nobody the fence keeps off the vacancy scores on it.
-    fenced = {
-        u.id for u in await fenced_users(db, tenant_id, await _round_vacancy_id(db, rd))
-    }
+    fenced = {u.id for u in await fenced_users(db, tenant_id, vacancy_id)}
+    eligible: ColumnElement[bool] = Role.code.in_(ELIGIBLE_EVALUATOR_ROLES)
+    hiring_manager_id = await _vacancy_hiring_manager_id(db, vacancy_id)
+    if hiring_manager_id is not None:
+        eligible = or_(eligible, User.id == hiring_manager_id)
 
     rows = await db.execute(
         select(User)
@@ -990,7 +1004,7 @@ async def list_eligible_evaluators(
         .where(
             User.tenant_id == tenant_id,
             User.is_active.is_(True),
-            Role.code.in_(ELIGIBLE_EVALUATOR_ROLES),
+            eligible,
         )
         .distinct()
         .order_by(User.first_name, User.last_name, User.email)
@@ -1010,7 +1024,10 @@ async def list_eligible_evaluators(
 
 
 async def _assert_evaluator_eligible(
-    db: AsyncSession, tenant_id: uuid.UUID, evaluator_user_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    evaluator_user_id: uuid.UUID,
+    vacancy_id: uuid.UUID,
 ) -> Any:
     """Load the target user and refuse anyone outside the allowed roles."""
     from app.modules.auth.models import Role, User, user_roles
@@ -1018,6 +1035,8 @@ async def _assert_evaluator_eligible(
     target = await db.get(User, evaluator_user_id)
     if target is None or target.tenant_id != tenant_id or not target.is_active:
         raise AppError("evaluator_user_not_found", status.HTTP_404_NOT_FOUND)
+    if evaluator_user_id == await _vacancy_hiring_manager_id(db, vacancy_id):
+        return target
     allowed = await db.execute(
         select(Role.code)
         .join(user_roles, user_roles.c.role_id == Role.id)
@@ -1051,14 +1070,17 @@ async def add_evaluator(
     # HRP-373: adding a *colleague* is role-gated and notifies them;
     # claiming your own sheet ("Start scoring this round") is neither.
     is_self = user_id is not None and user_id == evaluator_user_id
+    vacancy_id = await _round_vacancy_id(db, rd)
     target = None
     if not is_self:
-        target = await _assert_evaluator_eligible(db, tenant_id, evaluator_user_id)
+        target = await _assert_evaluator_eligible(
+            db, tenant_id, evaluator_user_id, vacancy_id
+        )
     # HRP-369: the FIRST user to start scoring becomes the round's only
     # evaluator (re-adding themselves stays idempotent); any other claim
     # on the slot is rejected.
     await refuse_fenced_assignees(
-        db, tenant_id, await _round_vacancy_id(db, rd), user_ids={evaluator_user_id}
+        db, tenant_id, vacancy_id, user_ids={evaluator_user_id}
     )
     await _assert_pre_interview_slot_free(db, rd, evaluator_user_id=evaluator_user_id)
     existing = await db.execute(

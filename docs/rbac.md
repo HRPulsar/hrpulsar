@@ -345,12 +345,15 @@ grade page of a specialization under `/dictionaries` writes the grade
 system and stays `admin`-only.
 
 The AI generators follow the surface they write to: the two that fill the
-catalogue moved with it, and `POST /ai/generate-positions` follows the
-position rule instead — a division head may run it, but the drafts land in
-their own subtree. The generator's context only offers them their own
-divisions, an item naming any other is dropped, and the sweep of drafts the
-model did not regenerate is narrowed the same way so it cannot delete a
-neighbouring department's.
+catalogue moved with it. `POST /ai/generate-positions` drafts the
+workspace's job catalogue, so since the HRP-631 rework (QA 06.10) it asks
+`manage` on `company` **and** an admin-level role (`admin`, `hr`,
+`platform_admin`): a caller scoped to a subtree - a division head, or a role
+the tenant raised to `manage` - gets `403 auth_insufficient_permissions`
+before the run is charged and authors positions by hand inside the subtree.
+The positions page mirrors it: the AI Generate button needs
+`canGeneratePositions`, and the banner of AI drafts awaiting review renders
+for admin-level roles only.
 
 `Position` is the exception because it has `division_id`. Its gate was left as
 `admin` / `manager` — `hr` reaches every other catalogue but not this one.
@@ -429,12 +432,26 @@ division, so it renders only for an admin-level role at `manage`; AI drafts
 are approved or rejected per row the caller may edit, deleting a position is
 offered to the `admin` role alone, and a grade's attributes on the
 specialization page (they live on the grade chain) are read-only below it.
-`POST /ai/generate-positions` refuses a caller with no subtree
-(`403 outside_division_scope`) before the run is charged - it would file
-nothing. Naming a division's head or deputy still rewrites roles (see "Role
+`POST /ai/generate-positions` refuses any subtree-scoped caller
+(`403 auth_insufficient_permissions`) before the run is charged (HRP-631).
+Naming a division's head or deputy still rewrites roles (see "Role
 lifecycle": the `manager` role is granted to the new head and taken from a
 head left with no division), so a role the tenant raises to `manage` does that
 too - inside its subtree, or across the workspace for `hr`.
+
+**HRP-622: a plain employee keeps the overview.** A caller holding no role but
+`employee` gets neither the Profile, Positions nor Specializations tab of the
+company section, a direct link to them bounces to the dashboard with the
+permission toast, and the reads behind them answer 403: the company profile,
+the position drill-downs (employees, occupancy, matrix status, competences)
+and the specialization card, positions, employees and matrices
+(`require_company_details`). The pickers in `SHARED_READS` stay open. A tenant
+that raises `employee` to `manage` on `company` hands the tabs back; any other
+role keeps them at `view`. Frontend twin: `canViewCompanyDetails`.
+
+**HRP-828: the dictionaries hint.** The Specializations tab points to
+Settings → Dictionaries → Specializations (the hint and the empty state) only
+for a caller with `manage` on `dictionaries` - the page it names.
 
 ## Assessments and development plans
 

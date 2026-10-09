@@ -77,6 +77,7 @@ import {
   interviewStatusLabel,
   processingStatusLabel,
 } from "@/lib/recruitment-types";
+import { useAutoProcess } from "./interview-upload-zone";
 import { ScheduleInterviewDialog } from "./schedule-interview-dialog";
 
 interface VacancyOption {
@@ -153,7 +154,6 @@ export function CandidateInterviewsSection({
   const [editing, setEditing] = useState<Interview | null>(null);
   const [pendingArchive, setPendingArchive] = useState<Interview | null>(null);
   const [showArchived, setShowArchived] = useState(false);
-  const [autoProcess, setAutoProcess] = useState(true);
   const [uploads, setUploads] = useState<FileProgress[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -177,6 +177,7 @@ export function CandidateInterviewsSection({
   const canEdit =
     canManageSection("recruitment") && !currentVacancy?.interviews_read_only;
   const cvId = currentVacancy?.candidate_vacancy_id;
+  const [autoProcess, setAutoProcess] = useAutoProcess(cvId);
   // HRP-979: `active` (from consent/latest) is the rule the server
   // applies; a fresh send/resend response does not carry it.
   const consentSigned = consent?.active ?? consent?.status === "signed";
@@ -800,7 +801,9 @@ export function CandidateInterviewsSection({
         open={resendOpen}
         onOpenChange={setResendOpen}
         title={t("candidateInterviewsResendConfirmTitle")}
-        description={t("candidateInterviewsResendConfirmBody", {
+        // HRP-684: the date of the last send and nothing else - how the
+        // link is delivered is not the user's concern.
+        description={t("candidateInterviewsResendLastSent", {
           sentAt: formatDateTime(consent?.last_sent_at ?? consent?.created_at),
         })}
         confirmLabel={t("candidateInterviewsResendConsent")}

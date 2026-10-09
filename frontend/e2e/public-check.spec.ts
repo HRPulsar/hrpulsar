@@ -41,6 +41,8 @@ test.describe("Public check — input page", () => {
     // A rewrite, not a redirect: the short address stays in the bar.
     expect(page.url()).toBe(`${CHECK_ORIGIN}/?utm_source=e2e&utm_campaign=hrp932`);
     await expect(page.getByTestId("check-form")).toBeVisible();
+    // The header carries the brand's wordmark, not a plain text name.
+    await expect(page.getByTestId("check-link-landing").locator("img").first()).toBeVisible();
 
     const submit = page.getByTestId("check-btn-submit");
     await expect(submit).toBeDisabled();

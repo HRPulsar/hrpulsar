@@ -34,6 +34,22 @@ export function usePermissions() {
      */
     isAdminLevel: holdsAdminLevel(roles),
     /**
+     * HRP-622: the Profile, Positions and Specializations tabs of the
+     * company section - everyone but a plain employee (no role besides
+     * `employee`), unless the tenant raised that role to `manage` on
+     * company. Mirrors `require_company_details` in
+     * backend/app/modules/company/dependencies.py.
+     */
+    canViewCompanyDetails:
+      roles.some((code) => code !== "employee") || sections.company === "manage",
+    /**
+     * HRP-631: AI-drafting positions drafts the workspace's job catalogue,
+     * so it is an admin-level role's at `manage` on company - a division
+     * head authors positions by hand in their subtree. Mirrors the refusal
+     * of a subtree-scoped caller in POST /ai/generate-positions.
+     */
+    canGeneratePositions: holdsAdminLevel(roles) && sections.company === "manage",
+    /**
      * HRP-810: Coverage opens by /auth/me, not by a role list - the roles
      * that run it get "manage", anyone who reads at least one process gets
      * "view". Editing one process is that process's `my_access`.

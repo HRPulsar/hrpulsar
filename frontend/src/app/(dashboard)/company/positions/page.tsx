@@ -126,7 +126,13 @@ export default function PositionsPage() {
     setDrilldownOpen(true);
   }
 
-  const { canManageSection, canViewJobProfile, isAdmin } = usePermissions();
+  const {
+    canManageSection,
+    canViewJobProfile,
+    isAdmin,
+    isAdminLevel,
+    canGeneratePositions,
+  } = usePermissions();
   // HRP-631: creating is a section question (HRP-828: `manage` on company,
   // it used to be the admin/manager role) — a division head files the new
   // position under one of their own divisions. Editing an existing one is a
@@ -388,16 +394,19 @@ export default function PositionsPage() {
         />
         {canManage && (
           <div className="flex gap-2">
-            <Button
-              data-testid="positions-btn-ai-generate"
-              variant="outline"
-              size="sm"
-              onClick={handleAIGenerate}
-              disabled={generating}
-            >
-              <Sparkles className="mr-1 h-4 w-4" />
-              {generating ? t("generating") : t("aiGenerate")}
-            </Button>
+            {/* HRP-631: a division head authors by hand, never with AI. */}
+            {canGeneratePositions && (
+              <Button
+                data-testid="positions-btn-ai-generate"
+                variant="outline"
+                size="sm"
+                onClick={handleAIGenerate}
+                disabled={generating}
+              >
+                <Sparkles className="mr-1 h-4 w-4" />
+                {generating ? t("generating") : t("aiGenerate")}
+              </Button>
+            )}
             <Button
               data-testid="positions-btn-create"
               size="sm"
@@ -411,8 +420,10 @@ export default function PositionsPage() {
       </div>
 
       {/* HRP-60: AI-generated drafts requiring validation are surfaced at the
-          top of the page so the operator sees them before the approved list. */}
-      {drafts.length > 0 && (
+          top of the page so the operator sees them before the approved list.
+          HRP-631: the drafts are workspace-wide, so a caller bound to a
+          subtree (a division head) gets no banner. */}
+      {isAdminLevel && drafts.length > 0 && (
         <Card
           data-testid="positions-draft-card"
           className="border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/40"

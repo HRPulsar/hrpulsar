@@ -1501,6 +1501,25 @@ class QuestionSetRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class QuestionSample(QuestionRead2):
+    """HRP-773: a question of the static sample set - no row behind it."""
+
+    id: uuid.UUID | None = None  # type: ignore[assignment]
+    question_set_id: uuid.UUID | None = None  # type: ignore[assignment]
+
+
+class QuestionSetSample(QuestionSetRead):
+    """HRP-773: ``GET /v1/question-sets/sample`` - shaped like a set so the
+    same components render it, but it is a static preview and has no id,
+    candidate-vacancy or timestamps of its own."""
+
+    id: uuid.UUID | None = None  # type: ignore[assignment]
+    candidate_vacancy_id: uuid.UUID | None = None  # type: ignore[assignment]
+    created_at: datetime | None = None  # type: ignore[assignment]
+    updated_at: datetime | None = None  # type: ignore[assignment]
+    questions: list[QuestionSample] = Field(default_factory=list)  # type: ignore[assignment]
+
+
 class VacancyCompetenceOption(BaseModel):
     """One entry of the vacancy's Competences & indicators block, keyed by
     the same normalized id questions carry (HRP-504)."""

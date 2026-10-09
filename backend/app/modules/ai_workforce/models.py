@@ -371,6 +371,12 @@ class AgentWorkflow(BaseModel, TenantMixin):
     deactivated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # HRP-1028: the owner stopped working; set by ``release_dismissed_owner``,
+    # cleared by naming an owner at work. A flag rather than a status: the
+    # workflow keeps running, it only has nobody answering for it.
+    needs_owner: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
 
 class AIWorkforceAuditLog(BaseModel, TenantMixin):

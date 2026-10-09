@@ -67,6 +67,9 @@ describe("Manager score refresh on the candidate page (HRP-812)", () => {
 describe("Manager assessments deep link from the submitted-assessment email (HRP-379)", () => {
   it("carries the anchor the email points at", () => {
     expect(SECTION).toContain('id="manager-assessments"');
+    // HRP-379 REDO 02.10: the jump stops short of the title, with a strip
+    // of the previous block still visible.
+    expect(SECTION).toMatch(/id="manager-assessments"[\s\S]{0,300}className="scroll-mt-16"/);
   });
 
   it("scrolls itself into view once the linked round tab is selected", () => {
@@ -76,7 +79,7 @@ describe("Manager assessments deep link from the submitted-assessment email (HRP
     const hashCheck = SECTION.indexOf(
       'if (window.location.hash !== "#manager-assessments") return;',
     );
-    const scroll = SECTION.indexOf("sectionRef.current?.scrollIntoView({", hashCheck);
+    const scroll = SECTION.indexOf('el.scrollIntoView({ block: "start" })', hashCheck);
     const deps = SECTION.indexOf("}, [activeRoundId]);", scroll);
     expect(scroll).toBeGreaterThan(hashCheck);
     expect(deps).toBeGreaterThan(scroll);

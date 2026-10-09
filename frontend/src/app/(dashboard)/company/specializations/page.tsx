@@ -218,9 +218,13 @@ export default function SpecializationsPage() {
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-xs"
         />
-        <p className="text-xs text-muted-foreground">
-          {t("specializationsDictionaryHint")}
-        </p>
+        {/* HRP-828: the hint points at a page only `manage` on the
+            dictionaries opens. */}
+        {canDelete && (
+          <p className="text-xs text-muted-foreground">
+            {t("specializationsDictionaryHint")}
+          </p>
+        )}
       </div>
 
       {loading ? (
@@ -362,7 +366,9 @@ export default function SpecializationsPage() {
                 >
                   {search
                     ? t("specializationsNoMatches")
-                    : t("specializationsEmpty")}
+                    : canDelete
+                      ? t("specializationsEmpty")
+                      : t("specializationsEmptyReadOnly")}
                 </TableCell>
               </TableRow>
             )}

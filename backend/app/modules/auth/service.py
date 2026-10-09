@@ -219,6 +219,13 @@ async def register(
     signed-out visitor who switched the language of the form must get the
     email in that language, not in whatever their browser advertises.
     """
+    from app.config import settings
+
+    # Managed installs close self-serve workspace creation (HRP-1039);
+    # accounts then only arrive through invitations.
+    if not settings.signup_enabled:
+        raise AppError("signup_disabled", status.HTTP_403_FORBIDDEN)
+
     # Check email uniqueness (global, since tenant doesn't exist yet)
     existing = await db.execute(select(User).where(User.email == data.email))
     if existing.scalars().first():

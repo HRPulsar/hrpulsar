@@ -56,7 +56,10 @@ vi.mock("sonner", () => ({
 // HRP-830: the generate, new-set and cancel buttons follow the recruitment
 // matrix; the cases below are a caller who may evaluate candidates.
 vi.mock("@/hooks/use-permissions", () => ({
-  usePermissions: () => ({ canEvaluateCandidates: true }),
+  usePermissions: () => ({
+    canEvaluateCandidates: true,
+    canManageSection: () => true,
+  }),
 }));
 
 const { InterviewQuestionSets } = await import(

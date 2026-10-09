@@ -367,6 +367,8 @@ async def list_workflows(
     is_active: bool | None = None,
     owner_id: uuid.UUID | None = None,
     human_role: HumanRole | None = None,
+    # HRP-1028: the workflows whose owner left.
+    needs_owner: bool | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -378,6 +380,7 @@ async def list_workflows(
         is_active=is_active,
         owner_id=owner_id,
         human_role=human_role,
+        needs_owner=needs_owner,
         skip=skip,
         limit=limit,
     )

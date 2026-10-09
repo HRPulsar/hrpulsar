@@ -136,7 +136,7 @@ async def test_a_raised_role_runs_only_its_subtree(auth_client, client, db, tena
     colleague, report = org["colleague"].id, org["report"].id
 
     assert _refused(await client.put(f"/api/employees/{colleague}", json={"status": "on_leave"}, headers=h))
-    assert (await client.get("/api/employees?limit=200", headers=h)).json()["items"][0].get("status") is None
+    assert (await client.get("/api/employees?limit=200", headers=h)).json()["items"][0].get("hire_date") is None
     await _save(auth_client, levels={"employees": {"recruiter": "manage"}})
 
     assert (await client.put(f"/api/employees/{colleague}", json={"status": "on_leave"}, headers=h)).status_code == 200
@@ -144,8 +144,10 @@ async def test_a_raised_role_runs_only_its_subtree(auth_client, client, db, tena
     assert _refused(await client.put(f"/api/employees/{report}", json={"status": "on_leave"}, headers=h), FENCE)
     assert (await _hire(client, db, tenant, h, org["theirs"])).status_code == 201
     assert _refused(await _hire(client, db, tenant, h, org["mine"]), FENCE)
-    rows = (await client.get("/api/employees?limit=200", headers=h)).json()["items"]
-    assert {r["id"] for r in rows} >= {str(colleague)} and all("status" in r for r in rows)
+    rows = (await client.get("/api/employees?limit=200&tenant_wide=true", headers=h)).json()["items"]
+    # HRP-623 REDO: the subtree in full, the rest of the tenant as directory rows.
+    full = {r["id"] for r in rows if "hire_date" in r}
+    assert str(colleague) in full and str(report) in {r["id"] for r in rows} - full
     # The raise hands the record, not what only the admin role did.
     assert _refused(await client.delete(f"/api/employees/{colleague}", headers=h))
     assert _refused(await client.put(f"/api/employees/{colleague}/role", json={"role_code": "hr"}, headers=h))
@@ -206,7 +208,7 @@ async def test_lowering_the_manager_closes_the_writes_and_the_hr_rows(auth_clien
     assert _refused(await client.get("/api/employees/available-users", headers=mgr))
     assert _refused(await client.post(f"/api/employees/{report}/education", json=EDUCATION, headers=mgr), NO_WRITE)
     rows = (await client.get("/api/employees?limit=200", headers=mgr)).json()["items"]
-    assert rows and all("status" not in r for r in rows)
+    assert rows and all("hire_date" not in r for r in rows)
 
 
 async def test_closing_the_section_keeps_the_shared_reads(auth_client, client, db, tenant, org):

@@ -13,6 +13,7 @@ says.
 import inspect
 import uuid
 from datetime import date
+from unittest.mock import MagicMock, patch
 
 import pytest
 from app.core.sections import section_for_path
@@ -121,7 +122,22 @@ async def test_ai_positions_are_refused_before_billing_without_a_subtree(auth_cl
     # would be charged and save nothing.
     recruiter = _headers(await _user(db, tenant, "recruiter"))
     await _save(auth_client, levels={"company": {"recruiter": "manage"}})
-    assert _refused(await client.post("/api/ai/generate-positions", headers=recruiter), FENCE)
+    assert _refused(await client.post("/api/ai/generate-positions", headers=recruiter))
+
+
+@patch("app.modules.ai.tasks.generate_positions_task")
+async def test_ai_positions_are_the_workspace_roles_only(mock_task, auth_client, client, chart):
+    # HRP-631 (QA 06.10): a division head at ``manage`` authors positions in
+    # their subtree by hand but never runs the workspace-wide generator...
+    mock_task.apply_async.return_value = MagicMock(id="task-pos")
+    mgr, hr = _headers(chart["mgr_user"]), _headers(chart["hr_user"])
+    assert (await client.get("/api/auth/me", headers=mgr)).json()["sections"]["company"] == "manage"
+    assert _refused(await client.post("/api/ai/generate-positions", headers=mgr))
+    mock_task.apply_async.assert_not_called()
+    # ...while hr raised to ``manage`` keeps it, and the admin as before.
+    await _save(auth_client, levels={"company": {"hr": "manage"}})
+    assert (await client.post("/api/ai/generate-positions", headers=hr)).status_code == 202
+    assert (await auth_client.post("/api/ai/generate-positions")).status_code == 202
 
 
 async def test_lowering_the_manager_closes_the_writes_and_the_buttons(auth_client, client, chart):
@@ -167,6 +183,40 @@ async def test_closing_the_section_keeps_the_shared_reads(auth_client, client, d
         f"/api/grade-system/specializations/{spec}",
         f"/api/grade-system/specializations/{spec}/grades",
     ):
+        r = await client.get(path, headers=employee)
+        assert r.status_code == 200, (path, r.text)
+
+
+async def test_a_plain_employee_reads_the_pickers_but_not_the_details(auth_client, client, db, tenant, chart):
+    # HRP-622: the profile, positions and specializations tabs are not a
+    # plain employee's - their reads 403 at the default ``view``, the
+    # pickers stay open, and a raise to ``manage`` hands the tabs back.
+    spec, _ = await _spec_and_grade(auth_client)
+    employee = _headers(await _user(db, tenant, "employee"))
+    hiring = _headers(await _user(db, tenant, "hiring_manager"))
+    pos = chart["mine_position"].id
+    details = (
+        "/api/settings/company-profile",
+        f"/api/positions/{pos}/employees",
+        f"/api/positions/{pos}/occupancy",
+        f"/api/positions/{pos}/matrix-status",
+        f"/api/positions/{pos}/competences",
+        f"/api/specializations/{spec}",
+        f"/api/specializations/{spec}/positions",
+        f"/api/specializations/{spec}/employees",
+        f"/api/specializations/{spec}/matrix-bulk",
+    )
+    for path in details:
+        assert _refused(await client.get(path, headers=employee)), path
+        # Any role on top of ``employee`` keeps the tabs at ``view``.
+        r = await client.get(path, headers=hiring)
+        assert r.status_code == 200, (path, r.text)
+    for path in ("/api/positions", f"/api/positions/{pos}", "/api/specializations"):
+        r = await client.get(path, headers=employee)
+        assert r.status_code == 200, (path, r.text)
+
+    await _save(auth_client, levels={"company": {"employee": "manage"}})
+    for path in details:
         r = await client.get(path, headers=employee)
         assert r.status_code == 200, (path, r.text)
 

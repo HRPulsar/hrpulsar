@@ -22,7 +22,7 @@ jobs:
         shard: [1, 2, 3, 4]
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: postgres:17
         env:
           POSTGRES_DB: hrpulsar_test
           POSTGRES_USER: hrpulsar
@@ -172,7 +172,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: postgres:17
         env:
           POSTGRES_DB: hrpulsar_test
           POSTGRES_USER: hrpulsar
@@ -244,9 +244,6 @@ jobs:
 
       - name: Install Playwright browsers
         run: cd frontend && npx playwright install --with-deps chromium
-
-      - name: Enable pgvector extension
-        run: PGPASSWORD=hrpulsar psql -h localhost -U hrpulsar -d hrpulsar_test -c 'CREATE EXTENSION IF NOT EXISTS vector;'
 
       - name: Run database migrations
         run: cd backend && alembic upgrade heads

@@ -24,7 +24,6 @@ xlrd<2.0
 openai
 anthropic
 google-genai
-pgvector
 slowapi
 prometheus-client
 sentry-sdk[fastapi]

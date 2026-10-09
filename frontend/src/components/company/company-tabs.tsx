@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { usePermissions } from "@/hooks/use-permissions";
 
 const tabs = [
   { href: "/company", labelKey: "tabOverview", testId: "company-tab-overview" },
@@ -26,9 +27,12 @@ const tabs = [
 export function CompanyTabs() {
   const pathname = usePathname() ?? "";
   const t = useTranslations("company");
+  // HRP-622: a plain employee keeps the overview only.
+  const { canViewCompanyDetails } = usePermissions();
+  const visible = canViewCompanyDetails ? tabs : tabs.slice(0, 1);
   return (
     <nav className="flex gap-1 border-b">
-      {tabs.map((tab) => {
+      {visible.map((tab) => {
         const active =
           tab.href === "/company"
             ? pathname === "/company"

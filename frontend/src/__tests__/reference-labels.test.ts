@@ -217,6 +217,23 @@ describe("reference catalog invariants", () => {
       ),
     );
     expect(pinned).toEqual({
+      // HRP-1023: manager_assessment_service.DEFAULT_SCALE_* (pinned there
+      // too, test_hrp1023_system_scale_catalog.py).
+      recruitmentScale: {
+        standard: {
+          name: "Standard 1-4",
+          description: "Default scale shipped with HRPulsar.",
+        },
+        level: {
+          notSuitable: {
+            label: "Not suitable",
+            description: "Cannot perform required tasks",
+          },
+          below: { label: "Below expectations", description: "Significant gaps" },
+          meets: { label: "Meets expectations", description: "Acceptable level" },
+          exceeds: { label: "Exceeds expectations", description: "Top performer" },
+        },
+      },
       dictionary: {
         grade: {
           junior: { label: "Junior", description: "Entry-level position" },

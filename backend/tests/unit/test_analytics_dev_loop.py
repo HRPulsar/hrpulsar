@@ -874,8 +874,12 @@ async def test_my_loop_stale_and_survey_pending(
     )
     in_progress = result.scalar_one_or_none()
     if not in_progress:
+        # sequence must match conftest's assessment_statuses fixture (and the
+        # production seed): a higher number poisons the shared lookup table
+        # and breaks in_progress -> on_review transitions in assessment tests
+        # that land in the same pytest session.
         in_progress = AssessmentStatus(
-            code="in_progress", title="In progress", sequence=3
+            code="in_progress", title="In progress", sequence=2
         )
         db.add(in_progress)
         await db.flush()
@@ -1145,7 +1149,8 @@ async def test_my_loop_survey_pending_sees_sent_assessment(
     )
     sent = result.scalar_one_or_none()
     if not sent:
-        sent = AssessmentStatus(code="sent", title="Sent", sequence=2)
+        # sequence matches conftest's assessment_statuses fixture (see above).
+        sent = AssessmentStatus(code="sent", title="Sent", sequence=1)
         db.add(sent)
         await db.flush()
     a = Assessment(

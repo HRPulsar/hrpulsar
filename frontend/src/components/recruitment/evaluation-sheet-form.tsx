@@ -14,6 +14,7 @@ import {
   indicatorScoreId,
 } from "@/lib/competence-ids";
 import { criticalityConfig } from "@/components/recruitment/competence-tree-view";
+import { localizeRecruitmentScaleLevels } from "@/lib/reference-labels";
 
 export interface ScaleLevel {
   value: number;
@@ -255,7 +256,7 @@ interface CompetenceScoreListProps {
 
 export function CompetenceScoreList({
   competences,
-  scaleLevels,
+  scaleLevels: storedLevels,
   competenceScores,
   indicatorScores,
   disabled = false,
@@ -266,6 +267,10 @@ export function CompetenceScoreList({
   onIndicatorScore,
 }: CompetenceScoreListProps) {
   const t = useTranslations("recruitment");
+  // HRP-1023: the shipped scale's labels in the interface language - the
+  // internal sheet and the external evaluator's sheet both render here.
+  const tRef = useTranslations("reference");
+  const scaleLevels = localizeRecruitmentScaleLevels(tRef, storedLevels);
   return (
     <div className="space-y-2">
       {competences.length === 0 && (

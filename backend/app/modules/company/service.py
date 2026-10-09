@@ -992,8 +992,13 @@ async def remove_activity_field(
 
 
 async def get_onboarding_status(
-    db: AsyncSession, tenant_id: uuid.UUID
+    db: AsyncSession, tenant_id: uuid.UUID, *, can_onboard: bool = True
 ) -> OnboardingStatusRead:
+    # ``can_onboard``: only an admin can run the wizard (/onboarding/complete
+    # is admin-only), so for anyone else ``needs_onboarding`` stays False —
+    # otherwise the dashboard steers an employee of an empty tenant into a
+    # wizard they cannot complete (regression after HRP-828 made this a
+    # shared read; before that their 403 was swallowed).
     tenant = await get_tenant(db, tenant_id)
 
     emp_count = (
@@ -1017,7 +1022,7 @@ async def get_onboarding_status(
         )
     ).scalar() or 0
 
-    needs = not tenant.onboarding_completed and emp_count == 0
+    needs = can_onboard and not tenant.onboarding_completed and emp_count == 0
 
     return OnboardingStatusRead(
         needs_onboarding=needs,

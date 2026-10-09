@@ -201,6 +201,8 @@ services:
     restart: unless-stopped
 
   postgres:
+    # ponytail: image stays pgvector until the release after HRP-1042 ships the
+    # drop-extension migration everywhere; then switch to postgres:17.
     image: pgvector/pgvector:0.8.7-pg17
     environment:
       POSTGRES_DB: hrpulsar

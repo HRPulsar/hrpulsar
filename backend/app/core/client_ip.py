@@ -91,8 +91,15 @@ def client_ip(request: Request) -> str | None:
         return peer
 
     fwd = request.headers.get("x-forwarded-for") or ""
-    for hop in reversed([token.strip() for token in fwd.split(",")]):
-        if hop and not _peer_is_trusted(hop, trusted):
+    hops = [token.strip() for token in fwd.split(",") if token.strip()]
+    for hop in reversed(hops):
+        if not _peer_is_trusted(hop, trusted):
             return hop
-    # Chain empty or trusted end to end — the peer is the best we have.
-    return peer
+    # Chain trusted end to end — a visitor on a private address (intranet
+    # install), or a proxy / NAT in front of Caddy on one (HRP-652). Take the
+    # right-most hop: it is what our own proxy recorded, and only as
+    # trustworthy as the proxies it trusts (an upstream that appends to a
+    # client-sent header lets the client choose entries). The peer would be
+    # Caddy's container address — one bucket for every visitor. Empty chain:
+    # the peer is all we have.
+    return hops[-1] if hops else peer

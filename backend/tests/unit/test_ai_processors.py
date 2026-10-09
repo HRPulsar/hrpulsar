@@ -426,7 +426,7 @@ async def test_processors_endpoint_lists_allowed_keyed_processors(
     assert [p["name"] for p in resp.json()] == ["anthropic", "jev"]
 
 
-# --- Task 4: transcription, Jev and embeddings reach only the list ---------
+# --- Task 4: transcription and Jev reach only the list ---------------------
 
 
 async def test_wrapper_lets_ai_no_allowed_processor_through(
@@ -447,21 +447,3 @@ async def test_wrapper_lets_ai_no_allowed_processor_through(
     with pytest.raises(AppError) as exc:
         await ai_service.generate_competences(db, tenant.id, None, "Engineer")
     assert exc.value.code == "ai_no_allowed_processor"
-
-
-async def test_embeddings_need_openai_on_the_list(auth_client, monkeypatch) -> None:
-    """F7: hermetic even if the guard regresses — no real OpenAI key and a
-    stub that fails the test the moment embeddings are actually generated."""
-    from app.modules.ai import llm_client
-
-    monkeypatch.setattr(settings, "ai_processors_default", "anthropic")
-    monkeypatch.setattr(settings, "openai_api_key", "")
-
-    async def _must_not_be_called(*args, **kwargs):
-        pytest.fail("get_embedding must not be called: the processor guard should refuse first")
-
-    monkeypatch.setattr(llm_client, "get_embedding", _must_not_be_called)
-
-    resp = await auth_client.post("/api/ai/search", json={"query": "python"})
-    assert resp.status_code == 409
-    assert resp.json()["code"] == "ai_processor_not_allowed"

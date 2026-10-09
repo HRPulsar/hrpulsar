@@ -24,8 +24,8 @@ export interface EventDescriptionDeps {
 }
 
 // The backend and the dev seed both open a hire with this; a hire added by
-// hand carries whatever its author typed. The position is not kept as a
-// value, so the sentence has nothing to be rebuilt from.
+// hand carries whatever its author typed. Since HRP-999 the backend keeps
+// the position as a value; older hires have nothing to rebuild from.
 const SYSTEM_HIRE_PREFIX = "Hired as ";
 // The one compensation event the backend writes without values.
 const COMPENSATION_REMOVED = "Compensation record removed";
@@ -50,6 +50,11 @@ export function eventDescription(
 
   switch (event.event_type) {
     case "hire":
+      if (to && "position_title" in to) {
+        return typeof to.position_title === "string" && to.position_title
+          ? t("eventHiredAs", { position: to.position_title })
+          : null;
+      }
       return event.description?.startsWith(SYSTEM_HIRE_PREFIX)
         ? null
         : event.description;

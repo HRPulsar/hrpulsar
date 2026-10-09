@@ -18,6 +18,7 @@ import { useLocale, useTranslations } from "next-intl";
 import Link from "next/link";
 
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { usePermissions } from "@/hooks/use-permissions";
 import type { Coverage, Quality } from "@/lib/api/work";
 
 /** The bar's segments and the legend's dots, in bar order: one list, so the
@@ -64,6 +65,10 @@ export const RATE_SETTINGS_HREF = "/company/profile";
 export function CoverageSummary({ coverage }: { coverage: Coverage }) {
   const t = useTranslations("coverage");
   const locale = useLocale();
+  // HRP-622: the rate lives on the company profile, which only the admin
+  // role edits (and a plain employee cannot even open) - below it the
+  // sentence stays, the link to a page that bounces does not.
+  const { canAdminister } = usePermissions();
   const { shares, hours, hourly_rate: rate, hourly_rate_currency: currency } = coverage;
   // The currency is the company's (HRP-868), and an amount without one is
   // not money: a step may carry a rate while the company has none, and the
@@ -161,20 +166,30 @@ export function CoverageSummary({ coverage }: { coverage: Coverage }) {
               <p className="mt-3 text-xs text-muted-foreground" data-testid="coverage-roi-rate">
                 {rate === null ? (
                   <>
-                    {t("roiRateMissing")}{" "}
-                    <Link href={RATE_SETTINGS_HREF} className="text-primary underline-offset-4 hover:underline">
-                      {t("roiRateSet")}
-                    </Link>
+                    {t("roiRateMissing")}
+                    {canAdminister && (
+                      <>
+                        {" "}
+                        <Link href={RATE_SETTINGS_HREF} className="text-primary underline-offset-4 hover:underline">
+                          {t("roiRateSet")}
+                        </Link>
+                      </>
+                    )}
                   </>
                 ) : (
                   <>
                     {t("roiRate", {
                       rate: rate.toLocaleString(locale),
                       currency: currency ?? "",
-                    })}{" "}
-                    <Link href={RATE_SETTINGS_HREF} className="text-primary underline-offset-4 hover:underline">
-                      {t("roiRateEdit")}
-                    </Link>
+                    })}
+                    {canAdminister && (
+                      <>
+                        {" "}
+                        <Link href={RATE_SETTINGS_HREF} className="text-primary underline-offset-4 hover:underline">
+                          {t("roiRateEdit")}
+                        </Link>
+                      </>
+                    )}
                   </>
                 )}
               </p>

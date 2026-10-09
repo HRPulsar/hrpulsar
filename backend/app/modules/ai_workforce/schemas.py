@@ -279,6 +279,8 @@ class WorkflowRead(BaseModel):
     human_role: str
     is_active: bool
     deactivated_at: datetime | None
+    # HRP-1028: the owner left; an admin names a new one.
+    needs_owner: bool = False
     created_at: datetime
     updated_at: datetime
 

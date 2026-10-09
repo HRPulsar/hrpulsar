@@ -49,6 +49,7 @@ from app.modules.recruitment.routers.common import (
     recruitment_public_limiter,
     runs_hiring,
     runs_rounds,
+    sheet_owner_checker,
 )
 from app.modules.recruitment.scope import (
     assessment_scope,
@@ -292,7 +293,7 @@ async def set_competence_score_endpoint(
     competence_id: uuid.UUID,
     payload: CompetenceScoreIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(runs_rounds),
+    current_user: User = Depends(sheet_owner_checker),
     _scope: None = Depends(assessment_scope),
 ) -> dict[str, Any]:
     return await service.set_competence_score(
@@ -311,7 +312,7 @@ async def set_indicator_score_endpoint(
     indicator_id: uuid.UUID,
     payload: IndicatorScoreIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(runs_rounds),
+    current_user: User = Depends(sheet_owner_checker),
     _scope: None = Depends(assessment_scope),
 ) -> dict[str, Any]:
     return await service.set_indicator_score(
@@ -329,7 +330,7 @@ async def submit_assessment_endpoint(
     assessment_id: uuid.UUID,
     payload: FinalNotesIn = Body(default_factory=FinalNotesIn),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(runs_rounds),
+    current_user: User = Depends(sheet_owner_checker),
     _scope: None = Depends(assessment_scope),
 ) -> dict[str, Any]:
     return await service.submit_assessment(

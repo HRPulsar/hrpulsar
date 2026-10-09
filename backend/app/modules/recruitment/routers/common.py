@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 
 from fastapi import Depends, status
 from slowapi.util import get_remote_address
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
@@ -14,6 +16,7 @@ from app.core.sections import matrix_levels, require_section
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
+from app.modules.recruitment.manager_assessment_models import RecruitmentAssessment
 
 
 def resolve_page_params(
@@ -55,13 +58,16 @@ recruitment_public_limiter = make_limiter(get_remote_address)
 #
 # * ``runs_hiring`` - ``manage``, which also sees the whole workspace.
 #   Used to be the admin/recruiter role list.
-# * ``evaluates`` - ``manage`` or the ``hiring_manager`` role: questions,
-#   human scores, the candidate's stage on a vacancy in scope. The role
-#   keeps it at ``view`` (Maxim, 25.09), in its own column of the scores:
-#   another evaluator's cell is ``manage``'s.
+# * ``evaluates`` - ``manage`` or the ``hiring_manager`` role: human
+#   scores, the candidate's stage and the question PDF exports on a vacancy
+#   in scope. The role keeps it at ``view`` (Maxim, 25.09), in its own
+#   column of the scores: another evaluator's cell is ``manage``'s. Writing
+#   the interview questions is ``manage``'s (HRP-630): at ``view`` the
+#   hiring manager reads and exports them.
 # * ``runs_rounds`` - ``manage`` or the ``manager`` role: hiring rounds,
 #   their evaluators, scores and invites. ``manager`` sits on hiring
 #   rounds (``ELIGIBLE_EVALUATOR_ROLES``) and keeps them at ``view``.
+#   One's own sheet on a round is ``sheet_owner_checker``'s.
 runs_hiring = require_section("recruitment", "manage")
 
 
@@ -85,6 +91,32 @@ def _manage_or_role(role: str) -> Callable:
 
 evaluates = _manage_or_role("hiring_manager")
 runs_rounds = _manage_or_role("manager")
+
+
+async def sheet_owner_checker(
+    assessment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """HRP-630: a round's internal evaluator fills in their own sheet at any
+    level the section is open to them - a hiring manager at ``view`` named
+    on the round included. Any other sheet stays ``runs_rounds``'s; the
+    service still refuses a colleague's user sheet to everyone."""
+    if "manager" in {r.code for r in current_user.roles} or await runs_hiring_level(
+        db, current_user
+    ):
+        return current_user
+    owner = await db.scalar(
+        select(RecruitmentAssessment.evaluator_user_id).where(
+            RecruitmentAssessment.id == assessment_id,
+            RecruitmentAssessment.tenant_id == current_user.tenant_id,
+        )
+    )
+    if owner is None or owner != current_user.id:
+        raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
+    return current_user
+
+
 # The two reads behind the admin's own settings pages that the section
 # also runs on (the consent templates, the branding): the admin role keeps
 # its page at any level, ``manage`` keeps what it read before.

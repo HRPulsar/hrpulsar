@@ -353,7 +353,11 @@ async def get_candidate_breakdown(
 
     # HRP-971: a card the caller competes on opens only their own row, even
     # to a division head at ``manage``.
-    if not scope.unrestricted and (not scope.manages or scope.competes_on(card_id)):
+    # HRP-630: a board reader (``reads_all``) opens a readable card's
+    # candidate rows like a runner does, below.
+    if not scope.unrestricted and (
+        not (scope.manages or scope.reads_all) or scope.competes_on(card_id)
+    ):
         if scope.employee_id is None or scope.employee_id != employee_id:
             raise AppError("tm_insufficient_permissions", _status.HTTP_403_FORBIDDEN)
         await assert_employee_card_visible(

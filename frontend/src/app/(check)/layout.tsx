@@ -4,7 +4,8 @@ import { connection } from "next/server";
 import { getTranslations } from "next-intl/server";
 
 import { LanguageSwitcher } from "@/components/language-switcher";
-import { getBrandName } from "@/lib/brand";
+import { getBrandName, getLogoUrl } from "@/lib/brand";
+import { getLandingHref } from "@/lib/landing-url";
 import { publicCheckHost } from "@/lib/public-check-host";
 
 /**
@@ -24,11 +25,22 @@ export default async function PublicCheckLayout({
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b">
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-3">
-          <div className="flex min-w-0 items-baseline gap-2">
-            <span className="text-sm font-semibold tracking-tight">
-              {getBrandName()}
-            </span>
+        <div className="mx-auto flex h-[60px] max-w-3xl items-center justify-between gap-3 px-4">
+          <div className="flex min-w-0 items-center gap-3">
+            {/* The marketing site's wordmark, linking home: a visitor from the
+                landing sees the same header, not a second brand. */}
+            <a
+              href={getLandingHref()}
+              aria-label={getBrandName()}
+              data-testid="check-link-landing"
+              className="shrink-0"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={getLogoUrl("light")} alt={getBrandName()} className="block h-7 dark:hidden" />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={getLogoUrl("dark")} alt="" className="hidden h-7 dark:block" />
+            </a>
+            <span aria-hidden="true" className="h-5 w-px bg-border" />
             <span className="truncate text-sm text-muted-foreground">
               {t("serviceName")}
             </span>

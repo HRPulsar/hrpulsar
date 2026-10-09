@@ -100,13 +100,15 @@ test.describe("Demo employee persona surfaces", () => {
     await expect(page.getByTestId("sidebar-link-recruitment")).toHaveCount(0);
     await expect(page.getByTestId("sidebar-link-talent-market")).toBeVisible();
 
-    // The directory lists the whole company, without the HR columns.
+    // The directory lists the whole company, without the HR columns; the
+    // status filter it keeps (HRP-623 REDO) offers active / on leave only.
     await page.goto("/employees");
     await expect(page.getByTestId("employees-table")).toBeVisible({
       timeout: 20000,
     });
     await expect(page.getByTestId("employees-filter-role")).toHaveCount(0);
-    await expect(page.getByTestId("employees-multi-statuses")).toHaveCount(0);
+    await expect(page.getByTestId("employees-multi-issues")).toHaveCount(0);
+    await expect(page.getByTestId("employees-multi-statuses")).toBeVisible();
     await expect(page.getByTestId("employees-btn-create")).toHaveCount(0);
 
     // Own card, reached the way a user reaches it — full record, read-only.

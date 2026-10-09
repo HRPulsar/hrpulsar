@@ -98,6 +98,17 @@ def _refused(resp) -> bool:
     return resp.status_code == 403 and "outside_recruitment_scope" in resp.text
 
 
+def _manage_only(path: str) -> bool:
+    """HRP-630 (QA 06.10): writing interview questions moved to ``manage``,
+    which sees the whole workspace - at the default ``view`` the role gate
+    refuses them ahead of the scope guard. Their PDF exports stay."""
+    return "question" in path and "pdf" not in path
+
+
+def _gated(resp) -> bool:
+    return resp.status_code == 403 and "auth_insufficient_permissions" in resp.text
+
+
 @pytest_asyncio.fixture
 async def hiring(db: AsyncSession, tenant):
     """Two divisions, and one of every mutable hiring resource in each.
@@ -296,6 +307,7 @@ class TestMutationScope:
         """The count the ticket is written around; a route dropped from
         the table would otherwise go untested in silence."""
         assert len(_routes(hiring["mine"])) == 24
+        assert sum(_manage_only(p) for _, p, _ in _routes(hiring["mine"])) == 7
 
     async def test_writing_into_a_neighbouring_division_is_refused(
         self, client: AsyncClient, hiring
@@ -303,7 +315,8 @@ class TestMutationScope:
         h = _headers(hiring["mgr_user"])
         for method, path, body in _routes(hiring["theirs"]):
             resp = await _call(client, method, path, body, h)
-            assert _refused(resp), f"{method} {path} -> {resp.status_code} {resp.text}"
+            refused = _gated(resp) if _manage_only(path) else _refused(resp)
+            assert refused, f"{method} {path} -> {resp.status_code} {resp.text}"
 
     async def test_the_managers_own_division_still_goes_through(
         self, client: AsyncClient, hiring

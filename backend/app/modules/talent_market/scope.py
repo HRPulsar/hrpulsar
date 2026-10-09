@@ -56,6 +56,10 @@ from app.modules.recruitment.models import Vacancy
 from app.modules.recruitment.scope import own_candidacy
 from app.modules.talent_market.models import TalentCandidate, TalentCard
 
+#: HRP-630: below the admin level these roles read every card at any level
+#: the section is open to them, like ``hr`` (an admin-level role) does.
+BOARD_READER_ROLES = frozenset({"recruiter", "hiring_manager"})
+
 
 @dataclass(frozen=True)
 class TalentScope:
@@ -72,6 +76,10 @@ class TalentScope:
     # (``employee_read_filter``) and is never theirs to run. Resolved only
     # for callers who could run a card at all.
     competing_card_ids: frozenset[uuid.UUID] = frozenset()
+    # HRP-630: the hiring roles read the whole board, the way ``hr`` does -
+    # an internal shortlist on a vacancy opens its talent card. Writing
+    # stays ``manage`` and the org fence above.
+    reads_all: bool = False
 
     def competes_on(self, card_id: uuid.UUID) -> bool:
         return card_id in self.competing_card_ids
@@ -83,7 +91,12 @@ class TalentScope:
         role, no managed division, and the section at ``view`` - reads the
         cards their own name is on and nothing else. Used to be "holds
         neither admin nor manager"; the level replaced the role."""
-        return not self.unrestricted and not self.manages and not self.division_ids
+        return (
+            not self.unrestricted
+            and not self.manages
+            and not self.division_ids
+            and not self.reads_all
+        )
 
     def card_filter(self) -> ColumnElement[bool]:
         """Write condition on ``TalentCard``; only valid when restricted.
@@ -127,7 +140,7 @@ class TalentScope:
                 and (card.status != "draft" or ca.status == "appointed")
                 for ca in card.candidates
             )
-        if self.unrestricted or card.is_published:
+        if self.unrestricted or self.reads_all or card.is_published:
             return True
         if card.author_id == self.user_id:
             return True
@@ -140,6 +153,8 @@ class TalentScope:
     def read_filter(self) -> ColumnElement[bool]:
         """Write condition widened by the board itself."""
         clauses = [self.card_filter(), TalentCard.is_published.is_(True)]
+        if self.reads_all:
+            clauses = [sa.true()]
         if self.employee_id is not None:
             clauses.append(
                 TalentCard.id.in_(
@@ -243,20 +258,23 @@ async def resolve_talent_scope(db: AsyncSession, current_user: User) -> TalentSc
         division_ids = tuple(
             await get_managed_division_ids(db, current_user.tenant_id, emp.id)
         )
+    reads_all = any(r.code in BOARD_READER_ROLES for r in current_user.roles)
     return TalentScope(
         unrestricted=False,
         division_ids=division_ids,
         user_id=current_user.id,
         employee_id=employee_id,
         manages=manages,
-        # A caller who runs no card reads the applicant's way already.
+        # A caller who reads only their own cards reads the applicant's way
+        # already.
         competing_card_ids=(
             await _competing_card_ids(
                 db, current_user, employee_id, twins=levels["recruitment"] != "manage"
             )
-            if manages or division_ids
+            if manages or division_ids or reads_all
             else frozenset()
         ),
+        reads_all=reads_all,
     )
 
 

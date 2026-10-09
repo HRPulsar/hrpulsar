@@ -48,9 +48,9 @@ test.describe("Access scope (role-aware list filters)", () => {
     await setDivisionManager(adminOpts, division.id, manager.employeeId!);
 
     // --- /api/employees ---
-    const list = async (token: string) =>
+    const list = async (token: string, query = "") =>
       page.request
-        .get(`${API}/employees?limit=100`, {
+        .get(`${API}/employees?limit=100${query}`, {
           headers: { Authorization: `Bearer ${token}` },
         })
         .then(async (r) => {
@@ -76,12 +76,14 @@ test.describe("Access scope (role-aware list filters)", () => {
       expect.arrayContaining([employee.employeeId, manager.employeeId]),
     );
     const ownRow = empList.items.find((e) => e.id === employee.employeeId)!;
-    for (const hidden of ["user_id", "hire_date", "status", "roles"]) {
+    // `status` is part of the directory row since the HRP-623 REDO.
+    for (const hidden of ["user_id", "hire_date", "roles"]) {
       expect(ownRow, `directory row leaks ${hidden}`).not.toHaveProperty(hidden);
     }
 
-    // Manager sees self + every employee in the managed subtree (= self + employee)
-    const mgrList = await list(manager.accessToken);
+    // Manager sees the whole tenant (HRP-623 REDO), here self + employee,
+    // both inside the managed subtree
+    const mgrList = await list(manager.accessToken, "&tenant_wide=true");
     expect(mgrList.total).toBe(2);
     expect(mgrList.items.map((e) => e.id)).toEqual(
       expect.arrayContaining([employee.employeeId, manager.employeeId]),

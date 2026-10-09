@@ -745,6 +745,7 @@
     "eventTypeCompensationChange": "Compensation change",
     "eventValueChange": "{from} → {to}",
     "eventCompensationRemoved": "Record removed",
+    "eventHiredAs": "Hired as {position}",
     "actions": "Actions",
     "openDevelopmentPlan": "Open development plan",
     "developmentPlanLimitReason": "Already has {limit} active plans — finish or cancel one first.",
@@ -1056,6 +1057,7 @@
     "manageGrades": "Manage grades",
     "specializationsNoMatches": "No specializations match your search.",
     "specializationsEmpty": "No specializations yet. Add them in Settings → Dictionaries → Specializations.",
+    "specializationsEmptyReadOnly": "No specializations yet.",
     "deleteSpecialization": "Delete specialization",
     "deleteSpecReferenced": "\"{title}\" is still referenced. Detach the items below before deleting.",
     "deleteSpecConfirm": "Delete \"{title}\"? This cannot be undone.",
@@ -3618,6 +3620,30 @@
   },
   "errors": {},
   "reference": {
+    "recruitmentScale": {
+      "standard": {
+        "name": "Standard 1-4",
+        "description": "Default scale shipped with HRPulsar."
+      },
+      "level": {
+        "notSuitable": {
+          "label": "Not suitable",
+          "description": "Cannot perform required tasks"
+        },
+        "below": {
+          "label": "Below expectations",
+          "description": "Significant gaps"
+        },
+        "meets": {
+          "label": "Meets expectations",
+          "description": "Acceptable level"
+        },
+        "exceeds": {
+          "label": "Exceeds expectations",
+          "description": "Top performer"
+        }
+      }
+    },
     "dictionary": {
       "grade": {
         "junior": {
@@ -6038,7 +6064,7 @@
     "interviewEditInterviewersAria": "Edit interviewers",
     "candidateInterviewsResendConsent": "Resend",
     "candidateInterviewsResendConfirmTitle": "Resend the consent link?",
-    "candidateInterviewsResendConfirmBody": "The link was last sent on {sentAt}. It will go to the candidate's current email; an expired link is replaced by a new one.",
+    "candidateInterviewsResendLastSent": "Last sent: {sentAt}.",
     "canvasRoundPreInterview": "Pre-interview",
     "canvasRoundInterviewNumber": "Interview {number}",
     "canvasRoundFinal": "Final",

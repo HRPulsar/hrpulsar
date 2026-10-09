@@ -21,12 +21,12 @@ async def _headers(db, tenant, code):
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _save(auth_client, *, hidden=(), levels=None):
-    matrix = (await auth_client.get(URL)).json()
+async def _save(auth_client, *, hidden=(), levels=None, headers=None):
+    matrix = (await auth_client.get(URL, headers=headers)).json()
     for s in matrix["sections"]:
         s["hidden"] = s["code"] in hidden
         s["levels"].update((levels or {}).get(s["code"], {}))
-    r = await auth_client.put(URL, json={"sections": [{"code": s["code"], "hidden": s["hidden"], "levels": s["levels"]} for s in matrix["sections"]]})
+    r = await auth_client.put(URL, json={"sections": [{"code": s["code"], "hidden": s["hidden"], "levels": s["levels"]} for s in matrix["sections"]]}, headers=headers)
     assert r.status_code == 200, r.text
 
 

@@ -194,3 +194,56 @@ export function gradeTitleLabel(
   if (!SYSTEM_GRADE_KEYS.has(key)) return title;
   return resolve(t, `dictionary.grade.${key}.label`, title) ?? title;
 }
+
+// ---------------------------------------------------------------------------
+// HRP-1023: the recruitment assessment scale every tenant is seeded with
+// (backend manager_assessment_service.DEFAULT_SCALE_*). The seed carries no
+// key and the model no "system" flag, so - as for the title-only ladders
+// above - the seeded English text is the join key, and only on display: the
+// stored rows are never rewritten. A renamed scale, or a level set that is
+// not exactly the seeded four, is the tenant's own and renders verbatim.
+const SYSTEM_RECRUITMENT_SCALE_NAME = "Standard 1-4";
+const SYSTEM_RECRUITMENT_SCALE_DESCRIPTION = "Default scale shipped with HRPulsar.";
+const SYSTEM_RECRUITMENT_LEVELS: Record<
+  number,
+  { key: string; label: string; description: string }
+> = {
+  1: { key: "notSuitable", label: "Not suitable", description: "Cannot perform required tasks" },
+  2: { key: "below", label: "Below expectations", description: "Significant gaps" },
+  3: { key: "meets", label: "Meets expectations", description: "Acceptable level" },
+  4: { key: "exceeds", label: "Exceeds expectations", description: "Top performer" },
+};
+
+export function recruitmentScaleName(t: ReferenceTranslator, name: string): string {
+  if (name !== SYSTEM_RECRUITMENT_SCALE_NAME) return name;
+  return resolve(t, "recruitmentScale.standard.name", name) ?? name;
+}
+
+export function recruitmentScaleDescription(
+  t: ReferenceTranslator,
+  description: string | null | undefined,
+): string | null {
+  if (description !== SYSTEM_RECRUITMENT_SCALE_DESCRIPTION) return description ?? null;
+  return resolve(t, "recruitmentScale.standard.description", description);
+}
+
+export function localizeRecruitmentScaleLevels<
+  L extends { value: number; label: string; description?: string | null },
+>(t: ReferenceTranslator, levels: L[]): L[] {
+  const seeded =
+    levels.length === Object.keys(SYSTEM_RECRUITMENT_LEVELS).length &&
+    levels.every((l) => SYSTEM_RECRUITMENT_LEVELS[l.value]?.label === l.label);
+  if (!seeded) return levels;
+  return levels.map((l) => {
+    const sys = SYSTEM_RECRUITMENT_LEVELS[l.value];
+    const base = `recruitmentScale.level.${sys.key}`;
+    return {
+      ...l,
+      label: resolve(t, `${base}.label`, l.label) ?? l.label,
+      description:
+        l.description === sys.description
+          ? resolve(t, `${base}.description`, l.description)
+          : l.description,
+    };
+  });
+}

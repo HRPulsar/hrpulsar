@@ -812,6 +812,7 @@ export default function InterviewDetailPage() {
                   <>
                     <InterviewUploadZone
                       interviewId={interview.id}
+                      candidateVacancyId={interview.candidate_vacancy_id}
                       consentSigned={!!interview.consent_signed_at}
                       interviewType={interview.type}
                       onUploaded={(updated) => {

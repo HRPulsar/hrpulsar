@@ -685,11 +685,12 @@ test.describe("Section access matrix (HRP-820)", () => {
       await expect(saved).toBeVisible();
     };
 
-    // The default: `view` - the catalogue reads, nothing writes.
+    // The default: `view` - HRP-622: a plain employee keeps the overview
+    // only, the positions tab bounces.
     await setAuthTokens(page, employeeAccess, employeeRefresh);
     await page.goto("/company/positions");
-    await expect(page.getByTestId("positions-search")).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId("positions-btn-create")).toHaveCount(0);
+    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
+    await expectPermissionToast(page);
 
     // Hand the section to the employee role: authoring opens.
     await setEmployeeLevel("manage");
@@ -749,7 +750,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     await setAuthTokens(page, employeeAccess, employeeRefresh);
     await page.goto("/employees");
     await expect(page.getByTestId("employees-table")).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId("employees-multi-statuses")).toHaveCount(0);
+    await expect(page.getByTestId("employees-multi-issues")).toHaveCount(0);
     await expect(page.getByTestId("employees-btn-create")).toHaveCount(0);
 
     // Hand the section to the employee role: the HR record opens. Heading
@@ -757,7 +758,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     await setEmployeeLevel("manage");
     await setAuthTokens(page, employeeAccess, employeeRefresh);
     await page.goto("/employees");
-    await expect(page.getByTestId("employees-multi-statuses")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("employees-multi-issues")).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId("employees-btn-create")).toHaveCount(0);
 
     // Take it away: the pages bounce, the section's own reads close, the

@@ -103,6 +103,8 @@ async def seed_people(ctx: SeedContext) -> None:
                 event_type="hire",
                 description=f"Hired as {position}",
                 event_date=emp.hire_date,
+                # HRP-999: the timeline words the hire from this value.
+                new_value={"position_title": position},
             )
         )
 

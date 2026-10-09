@@ -1,4 +1,4 @@
-"""Tests for async AI generation, export, and embedding endpoints.
+"""Tests for async AI generation and export endpoints.
 
 After the POOL_HOLD_REDUCTION refactor (2026-04-30):
 - POST /api/ai/generate-* default to async (202 + task_id) and pass
@@ -96,48 +96,6 @@ class TestAsyncExportEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["task_id"] == "export-task-id-789"
-
-
-class TestBatchEmbedEndpoint:
-    @patch("app.modules.ai.tasks.batch_embed_task")
-    async def test_batch_embed(self, mock_task, auth_client: AsyncClient, tenant):
-        mock_result = MagicMock()
-        mock_result.id = "embed-task-id-101"
-        mock_task.apply_async.return_value = mock_result
-
-        resp = await auth_client.post(
-            "/api/ai/embed/batch",
-            json={
-                "items": [
-                    {
-                        "entity_type": "competence",
-                        "entity_id": "00000000-0000-0000-0000-000000000001",
-                        "text_content": "Leadership skills",
-                    },
-                    {
-                        "entity_type": "competence",
-                        "entity_id": "00000000-0000-0000-0000-000000000002",
-                        "text_content": "Problem solving",
-                    },
-                ],
-            },
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["task_id"] == "embed-task-id-101"
-        mock_task.apply_async.assert_called_once()
-        # Verify items were serialized correctly (single positional list arg)
-        kwargs = mock_task.apply_async.call_args.kwargs
-        items_arg = kwargs["args"][0]
-        assert len(items_arg) == 2
-        assert items_arg[0]["entity_type"] == "competence"
-        # HRP-954: the rows are written for the caller's tenant.
-        assert kwargs["args"][1] == str(tenant.id)
-
-    @patch("app.modules.ai.tasks.batch_embed_task")
-    async def test_batch_embed_empty_items(self, mock_task, auth_client: AsyncClient):
-        resp = await auth_client.post("/api/ai/embed/batch", json={"items": []})
-        assert resp.status_code == 422  # Validation error: min_length=1
 
 
 class TestTaskStatusEndpoint:

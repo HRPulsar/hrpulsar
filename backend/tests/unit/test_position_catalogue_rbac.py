@@ -39,6 +39,8 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit.test_section_gate import _save
+
 # The "position -> grade" join, in every spelling the payloads use.
 GRADE_FIELDS = ("grade_id", "grade_title", "specialization_id", "specialization_title")
 SALARY_FIELDS = ("salary_min", "salary_max")
@@ -135,6 +137,10 @@ async def persona(
     )
     assert switched.status_code == 200, switched.text
     headers = {"Authorization": f"Bearer {switched.json()['access_token']}"}
+    # HRP-622: a plain employee opens the position / specialization
+    # drill-downs only once the tenant raises them to ``manage`` on company;
+    # the trims checked here must hold for them then.
+    await _save(client, levels={"company": {"employee": "manage"}}, headers=admin_headers)
 
     tenant_id = start.json()["tenant_id"]
     # Any position carrying both halves of the pair — without one the grade
