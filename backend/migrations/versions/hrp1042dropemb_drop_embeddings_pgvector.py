@@ -20,7 +20,22 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.execute("DROP TABLE IF EXISTS embeddings")
-    op.execute("DROP EXTENSION IF EXISTS vector")
+    # On managed installs the extension may be owned by a superuser, not the
+    # app role (hrpulsar-ru deploy, 09.10). Nothing references it once the
+    # table is gone, so leave it in place rather than fail the migration;
+    # ops can drop it as a superuser at their leisure.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            DROP EXTENSION IF EXISTS vector;
+        EXCEPTION WHEN insufficient_privilege THEN
+            RAISE NOTICE
+                'pgvector extension left in place: not the owner, drop it as a superuser';
+        END
+        $$;
+        """
+    )
 
 
 def downgrade() -> None:
