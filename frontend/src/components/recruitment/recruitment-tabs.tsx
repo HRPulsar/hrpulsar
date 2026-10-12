@@ -35,19 +35,22 @@ const tabs = [
     href: "/recruitment/settings",
     labelKey: "tabSettings",
     testId: "recruitment-tab-settings",
-    adminOnly: true,
+    // HRP-1045: the settings hub opens to whoever can open at least one
+    // tab — `manage` on recruitment (scales, branding, consents), the hr
+    // role (retention, roles) or the admin role.
+    settingsAccess: true,
   },
 ];
 
 export function RecruitmentTabs() {
   const t = useTranslations("recruitment");
   const pathname = usePathname() ?? "";
-  // HRP-830: both tabs follow the role gates behind them - the settings
-  // writes are `require_role("admin")`, the audit log `("admin", "hr")`;
-  // neither names platform_admin.
-  const { isAdmin, isHr } = usePermissions();
+  // HRP-830: both tabs follow the role gates behind them - the audit log
+  // is `require_role("admin", "hr")`; neither names platform_admin.
+  const { isAdmin, isHr, canManageSection } = usePermissions();
   const visibleTabs = tabs.filter((tab) => {
-    if (tab.adminOnly) return isAdmin;
+    if (tab.settingsAccess)
+      return isAdmin || isHr || canManageSection("recruitment");
     if (tab.auditRoles) return isAdmin || isHr;
     return true;
   });

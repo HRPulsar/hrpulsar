@@ -108,8 +108,9 @@ export default function SectionAccessPage() {
           >
             {t("sectionAccessEmployeeFloor")}
           </p>
+          {/* HRP-820 QA (06.10): the screen lives under /settings/roles now. */}
           <Link
-            href="/company/profile"
+            href="/settings/roles"
             className="text-sm text-accent hover:underline"
             data-testid="section-access-link-back"
           >

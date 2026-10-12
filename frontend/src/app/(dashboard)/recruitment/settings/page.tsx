@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import { useTranslations } from "next-intl";
+import { useRecruitmentSettingsAccess } from "./gates";
 import {
   Card,
   CardContent,
@@ -22,7 +25,9 @@ import {
 } from "lucide-react";
 
 // HRP-476: the tile copy lives in the `recruitment` i18n namespace — the
-// static list only owns the route → icon → key relation.
+// static list only owns the route → icon → key relation. `access` names
+// the flag from useRecruitmentSettingsAccess the tile's tab is gated by
+// (HRP-1045): only reachable tiles are shown.
 const TILES = [
   {
     href: "/recruitment/settings/scales",
@@ -30,6 +35,7 @@ const TILES = [
     descriptionKey: "settingsTileScalesDesc",
     icon: Ruler,
     testId: "rec-settings-card-scales",
+    access: "managesRecruitment",
   },
   {
     href: "/recruitment/settings/llm-providers",
@@ -37,6 +43,7 @@ const TILES = [
     descriptionKey: "settingsTileLlmDesc",
     icon: Globe2,
     testId: "rec-settings-card-llm",
+    access: "isAdmin",
   },
   {
     href: "/recruitment/settings/transcription-providers",
@@ -44,6 +51,7 @@ const TILES = [
     descriptionKey: "settingsTileSttDesc",
     icon: Mic,
     testId: "rec-settings-card-stt",
+    access: "isAdmin",
   },
   {
     href: "/recruitment/settings/branding",
@@ -51,6 +59,7 @@ const TILES = [
     descriptionKey: "settingsTileBrandingDesc",
     icon: ImageIcon,
     testId: "rec-settings-card-branding",
+    access: "readsHiringSettings",
   },
   {
     href: "/recruitment/settings/retention",
@@ -58,6 +67,7 @@ const TILES = [
     descriptionKey: "settingsTileRetentionDesc",
     icon: ShieldCheck,
     testId: "rec-settings-card-retention",
+    access: "readsTenantSettings",
   },
   {
     href: "/recruitment/settings/roles",
@@ -65,6 +75,7 @@ const TILES = [
     descriptionKey: "settingsTileRolesDesc",
     icon: UsersRound,
     testId: "rec-settings-card-roles",
+    access: "readsTenantSettings",
   },
   {
     href: "/recruitment/settings/consent-templates",
@@ -72,6 +83,7 @@ const TILES = [
     descriptionKey: "settingsTileConsentTemplatesDesc",
     icon: ScrollText,
     testId: "rec-settings-card-consent-templates",
+    access: "readsHiringSettings",
   },
   {
     // HRP-989: export and erasure run per candidate; the page finds them.
@@ -80,6 +92,7 @@ const TILES = [
     descriptionKey: "settingsTileGdprDesc",
     icon: ShieldOff,
     testId: "rec-settings-card-gdpr",
+    access: "readsTenantSettings",
   },
   {
     href: "/recruitment/audit-log",
@@ -87,12 +100,15 @@ const TILES = [
     descriptionKey: "settingsTileAuditDesc",
     icon: Activity,
     testId: "rec-settings-card-audit",
+    access: "readsTenantSettings",
   },
-];
+] as const;
 
 export default function RecruitmentSettingsHubPage() {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  const access = useRecruitmentSettingsAccess();
+  const tiles = TILES.filter((tile) => access[tile.access]);
   return (
     <div className="space-y-5" data-testid="recruitment-settings-hub">
       <RecruitmentBreadcrumbs segments={[{ label: tc("settings") }]} />
@@ -107,7 +123,7 @@ export default function RecruitmentSettingsHubPage() {
       </header>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {TILES.map((tile) => {
+        {tiles.map((tile) => {
           const Icon = tile.icon;
           return (
             <Card

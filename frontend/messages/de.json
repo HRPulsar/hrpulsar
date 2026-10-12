@@ -480,7 +480,7 @@
       "hint": "Verschickte Einladungen und was daraus geworden ist — offen, angenommen, storniert oder abgelaufen. Beim Annehmen entstehen Benutzerkonto und Mitarbeiterkarte in einem Schritt, Rolle und Abteilung sind bereits gesetzt."
     },
     "roles": {
-      "hint": "Eine schreibgeschützte Übersicht der Rollen dieses Arbeitsbereichs: was jede tatsächlich öffnen und ändern darf und wie viele Personen sie innehaben. Die Zahl öffnet die Mitarbeiterliste, gefiltert nach dieser Rolle."
+      "hint": "Ein Verzeichnis der Rollen dieses Arbeitsbereichs: was jede Rolle darf und wie viele Personen sie haben. Ein Klick auf eine Zahl öffnet die Mitarbeitendenliste, gefiltert nach dieser Rolle. Gezählt werden hier alle Konten Ihres Arbeitsbereichs; ein Konto hat in der Liste aber unter Umständen keine Zeile."
     },
     "aiSettings": {
       "hint": "Welches Modell dieser Arbeitsbereich nutzt, wie viel Aufwand pro Aufruf eingesetzt wird und in welcher Sprache die KI schreibt. Die Einstellungen gelten für jede KI-Aktion im Produkt — Kompetenzerzeugung, Positionsentwürfe, Planvorschläge, Rekrutierungsanalysen."
@@ -896,7 +896,7 @@
     "sectionAccessLevelManage": "Verwaltung",
     "sectionAccessLockedAdmin": "Die Administratorrolle behält vollen Zugriff auf diesen Bereich.",
     "sectionAccessCannotHide": "Dieser Bereich kann nicht ausgeblendet werden.",
-    "sectionAccessBack": "Zurück zum Profil",
+    "sectionAccessBack": "Zurück zu den Rollen",
     "seatFromElsewhere": "Ein Admin hat hier jemanden außerhalb Ihrer Bereiche eingesetzt; nur ein Admin ändert diese Position.",
     "sectionAccessEmployeeFloor": "Alle haben zusätzlich die Rolle Mitarbeiter, daher öffnet keine Rolle einen Bereich weniger als die Spalte Mitarbeiter.",
     "sectionAccessBelowEmployee": "Alle haben zusätzlich die Rolle Mitarbeiter, daher öffnet diese Rolle den Bereich ohnehin mit {level}.",
@@ -2730,13 +2730,13 @@
     "aiPresetBalancedDescription": "Ausgewogene Qualität und Kosten (Standard)",
     "aiPresetThoroughDescription": "Höchste Qualität, langsamer und teurer",
     "rolesTitle": "Rollen",
-    "rolesSubtitle": "Welche Rollen es in diesem Workspace gibt, was jede davon tatsächlich darf und wie viele Personen sie haben.",
+    "rolesSubtitle": "Welche Rollen es gibt, was jede davon darf und wie viele Personen sie haben.",
     "rolesLoading": "Rollen werden geladen …",
     "rolesLoadFailed": "Rollen konnten nicht geladen werden.",
     "rolesColRole": "Rolle",
     "rolesColCan": "Was diese Rolle darf",
     "rolesColHolders": "Personen",
-    "rolesHoldersHint": "Rollen überlagern sich: Jedes Konto trägt zusätzlich die Basisrolle „Mitarbeitende“, deshalb überschneiden sich diese Zahlen und ergeben in Summe nicht die Personalstärke. Ein Klick auf eine Zahl öffnet die Mitarbeitendenliste — ein Konto ohne eigene Personalkarte wird hier gezählt, hat dort aber keine Zeile.",
+    "rolesHoldersHint": "Rollen überlagern sich: Jedes Konto trägt zusätzlich die Basisrolle „Mitarbeitende“, deshalb überschneiden sich diese Zahlen und ergeben in Summe nicht die Personalstärke. Ein Klick auf eine Zahl öffnet die Mitarbeitendenliste — gezählt werden hier alle Konten Ihres Arbeitsbereichs, ein Konto hat dort aber unter Umständen keine Zeile.",
     "rolesHoldersLink": "Mitarbeitende mit dieser Rolle anzeigen",
     "rolesKindSystem": "System",
     "rolesKindCustom": "Eigene",
@@ -5450,6 +5450,7 @@
     "candidatesTableDivergenceMore": "…und {count} weitere",
     "candidatesTableDivergenceAria": "{count} von {total} Kompetenzen weichen zwischen Führungskraft und KI ab",
     "candidatesTableDivergenceCanvasHint": "Zum Anzeigen im Canvas klicken",
+    "candidatesTableDivergenceOpenCanvas": "Canvas öffnen",
     "candidatesTableBulkQueuedPartial": "{queued} eingeplant, {failed} übersprungen (siehe Kandidatenkarten).",
     "candidatesTableBulkQueued": "Analyse nur mit Lebenslauf für {count} Kandidat(en) eingeplant.",
     "candidatesTableBulkFailed": "Sammelanalyse konnte nicht gestartet werden",

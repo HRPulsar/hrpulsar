@@ -11,6 +11,7 @@ import { OPEN_DEMO_FEEDBACK_EVENT } from "@/components/dashboard/demo-feedback-p
 import { useAuth } from "@/context/auth-context";
 import { useIsSaas } from "@/hooks/use-is-saas";
 import { saveDemoAccess, switchDemoPersona, type DemoPersona } from "@/lib/demo";
+import { loadGoogleAds, trackDemoConversion } from "@/lib/google-ads";
 import { cn } from "@/lib/utils";
 import { TURNSTILE_FAILED_MESSAGE_KEY, useTurnstileGate } from "@/lib/turnstile";
 import type { CreditBalance } from "@/lib/types";
@@ -70,6 +71,10 @@ function SaveAccessModal({
         turnstile_token: turnstile.token,
         keep_demo_data: form.keep_demo_data,
       });
+      // HRP-1052: Google Ads counts the demo conversion next to our own
+      // tracker — the signup request the line above just created. Only on
+      // success, so a failed captcha or API error never reports a lead.
+      trackDemoConversion();
       setDone(true);
       onSaved();
     } catch (err) {
@@ -276,6 +281,13 @@ export function DemoBanner() {
     if (!isDemo) return;
     const id = setInterval(() => setTick((t) => t + 1), REFRESH_EVERY_MS);
     return () => clearInterval(id);
+  }, [isDemo]);
+
+  // HRP-1052: gtag.js is a marketing script — it loads only inside a demo
+  // sandbox (and only when the deployment configures a conversion target),
+  // ahead of the save-access conversion it will carry.
+  useEffect(() => {
+    if (isDemo) loadGoogleAds();
   }, [isDemo]);
 
   if (!isDemo || !user) return null;

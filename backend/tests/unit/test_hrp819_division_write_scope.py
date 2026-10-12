@@ -198,3 +198,83 @@ class TestHeadsFromOwnSubtree:
                 headers=h,
             )
             assert resp.status_code == 403, (deputy, resp.text)
+
+
+class TestHeadDoesNotReplaceSelf:
+    """HRP-819 (QA 09.10): below the admin level a head does not hand off
+    a Manager / Deputy Manager seat they hold themselves — the change
+    unseats the caller, so it is the admin's or HR's move."""
+
+    async def test_manager_and_deputy_cannot_unseat_themselves(
+        self, client: AsyncClient, db: AsyncSession, tenant, manager_role
+    ) -> None:
+        employee_role = await _get_or_create_role(db, "employee", "Employee")
+        mgr_user = await _make_user_with_role(db, tenant.id, manager_role, prefix="mgr")
+        deputy_user = await _make_user_with_role(
+            db, tenant.id, manager_role, prefix="dep"
+        )
+        insider_user = await _make_user_with_role(
+            db, tenant.id, employee_role, prefix="in"
+        )
+        mine = await _division(db, tenant.id, "Mine")
+        mgr_emp = await _make_employee(db, tenant.id, mgr_user.id, mine.id)
+        deputy_emp = await _make_employee(db, tenant.id, deputy_user.id, mine.id)
+        insider = await _make_employee(db, tenant.id, insider_user.id, mine.id)
+        mine.manager_id = mgr_emp.id
+        mine.deputy_manager_id = deputy_emp.id
+        await db.commit()
+
+        # Replacing — or clearing — one's own seat is refused for both
+        # fields, for the manager and for the deputy alike.
+        refused = [
+            (_auth_headers(mgr_user, tenant.id), {"manager_id": str(insider.id)}),
+            (_auth_headers(mgr_user, tenant.id), {"manager_id": None}),
+            (
+                _auth_headers(deputy_user, tenant.id),
+                {"deputy_manager_id": str(insider.id)},
+            ),
+            (_auth_headers(deputy_user, tenant.id), {"deputy_manager_id": None}),
+        ]
+        for headers, body in refused:
+            resp = await client.put(
+                f"/api/divisions/{mine.id}", json=body, headers=headers
+            )
+            assert resp.status_code == 403, (body, resp.text)
+            assert (
+                resp.json()["detail"]["error_code"] == "cannot_replace_self_as_head"
+            )
+
+        h = _auth_headers(mgr_user, tenant.id)
+        # The edit form sending one's own seat back unchanged is not a
+        # hand-off, and the seat someone else holds stays changeable.
+        resp = await client.put(
+            f"/api/divisions/{mine.id}",
+            json={"name": "Mine v2", "manager_id": str(mgr_emp.id)},
+            headers=h,
+        )
+        assert resp.status_code == 200, resp.text
+        resp = await client.put(
+            f"/api/divisions/{mine.id}",
+            json={"deputy_manager_id": str(insider.id)},
+            headers=h,
+        )
+        assert resp.status_code == 200, resp.text
+
+    async def test_admin_replaces_their_own_seat(
+        self, auth_client: AsyncClient, db: AsyncSession, tenant, employee
+    ) -> None:
+        mine = await _division(
+            db, tenant.id, "Mine", manager_id=employee.id, deputy_manager_id=employee.id
+        )
+        other_user = await _make_user_with_role(
+            db,
+            tenant.id,
+            await _get_or_create_role(db, "employee", "Employee"),
+            prefix="next",
+        )
+        other = await _make_employee(db, tenant.id, other_user.id, mine.id)
+        resp = await auth_client.put(
+            f"/api/divisions/{mine.id}",
+            json={"manager_id": str(other.id), "deputy_manager_id": None},
+        )
+        assert resp.status_code == 200, resp.text

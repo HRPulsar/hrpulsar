@@ -1,8 +1,9 @@
 // HRP-830: recruitment follows the tenant's matrix. `manage` runs hiring -
 // vacancies, candidates, interviews, AI analyses, reports - for the whole
 // workspace; below it the hiring manager evaluates and the manager runs
-// hiring rounds on the vacancies in their scope. The settings stay the
-// admin role's, GDPR and the audit log admin's and hr's.
+// hiring rounds on the vacancies in their scope. The settings tabs follow
+// their APIs' audiences (HRP-1045); GDPR and the audit log stay admin's
+// and hr's.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -70,12 +71,36 @@ describe("recruitment follows the section level (HRP-830)", () => {
     );
   });
 
-  it("leaves the settings to admin and the audit log to admin and hr", () => {
-    expect(tabs).toContain("if (tab.adminOnly) return isAdmin;");
+  // HRP-1045: the settings follow the audiences their APIs already admit.
+  it("opens each settings tab to its API's audience", () => {
+    expect(tabs).toContain(
+      'return isAdmin || isHr || canManageSection("recruitment");',
+    );
     expect(tabs).toContain("if (tab.auditRoles) return isAdmin || isHr;");
     expect(read("../app/(dashboard)/recruitment/settings/layout.tsx")).toContain(
-      "<RequireRole admin>",
+      "<RequireRecruitmentSettings>",
     );
+    // Retention and roles read as admin | hr; providers stay admin-only;
+    // branding and consent templates read as `manage` or admin; the
+    // hiring-round scales keep their own `manage` gate.
+    for (const route of ["retention", "roles"]) {
+      expect(
+        read(`../app/(dashboard)/recruitment/settings/${route}/layout.tsx`),
+      ).toContain("<RequireAdminOrHr>");
+    }
+    for (const route of ["llm-providers", "transcription-providers"]) {
+      expect(
+        read(`../app/(dashboard)/recruitment/settings/${route}/layout.tsx`),
+      ).toContain("<RequireRole admin>");
+    }
+    for (const route of ["branding", "consent-templates"]) {
+      expect(
+        read(`../app/(dashboard)/recruitment/settings/${route}/layout.tsx`),
+      ).toContain("<RequireReadsHiringSettings>");
+    }
+    expect(
+      read("../app/(dashboard)/recruitment/settings/scales/layout.tsx"),
+    ).toContain('<RequireSection code="recruitment" level="manage">');
     expect(read("../app/(fullscreen)/recruitment/layout.tsx")).toContain(
       '<RequireSection code="recruitment">',
     );

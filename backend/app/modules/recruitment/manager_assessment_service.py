@@ -1252,6 +1252,12 @@ async def list_assessments_for_round(
     collected material, and HRP-377's "View submission" reads them.
     ``viewer_user_id=None`` keeps the unfiltered view for internal callers
     (aggregates, exports) that have already done their own gating.
+
+    HRP-629 REDO: the gate is membership-aware (:func:`_anchoring_gate_active`)
+    — a viewer who holds no sheet and is not on the evaluator list (a manager
+    at ``view``, an admin watching) has nothing to anchor, so they read every
+    sheet even while the round is live. The role gate and the vacancy scope
+    guard on the route decide who gets here at all.
     """
     rd = await _load_round(db, tenant_id, round_id)
     result = await db.execute(
@@ -1261,16 +1267,14 @@ async def list_assessments_for_round(
         )
     )
     assessments = list(result.scalars().all())
-    if viewer_user_id is not None and not _round_is_closed(rd):
-        own = next(
-            (a for a in assessments if a.evaluator_user_id == viewer_user_id), None
-        )
-        if own is None or own.status != "submitted":
-            assessments = [
-                a
-                for a in assessments
-                if a.evaluator_user_id is None or a.evaluator_user_id == viewer_user_id
-            ]
+    if viewer_user_id is not None and await _anchoring_gate_active(
+        db, rd, viewer_user_id
+    ):
+        assessments = [
+            a
+            for a in assessments
+            if a.evaluator_user_id is None or a.evaluator_user_id == viewer_user_id
+        ]
     return [await _assessment_to_dict(db, a) for a in assessments]
 
 

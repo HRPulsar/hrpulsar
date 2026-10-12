@@ -201,9 +201,9 @@ services:
     restart: unless-stopped
 
   postgres:
-    # ponytail: image stays pgvector until the release after HRP-1042 ships the
-    # drop-extension migration everywhere; then switch to postgres:17.
-    image: pgvector/pgvector:0.8.7-pg17
+    # Stock image on the same glibc base the previous pgvector image used;
+    # an alpine (musl) switch would invalidate glibc collation indexes.
+    image: postgres:17.6
     environment:
       POSTGRES_DB: hrpulsar
       POSTGRES_USER: hrpulsar

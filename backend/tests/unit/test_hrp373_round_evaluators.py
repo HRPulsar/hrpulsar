@@ -257,6 +257,21 @@ class TestColleagueSheetVisibility:
         )
         assert external.id in {a["id"] for a in visible}
 
+    async def test_non_evaluator_viewer_reads_every_sheet_on_a_live_round(
+        self, db: AsyncSession, tenant, user, admin_role
+    ):
+        # HRP-629 REDO: a viewer who holds no sheet and is not on the
+        # evaluator list (a manager at `view`, an admin watching) has
+        # nothing to anchor — the listing returns every sheet even while
+        # the round is in progress.
+        rd_id, colleague, _cv = await self._two_evaluators(db, tenant, user)
+        watcher = await _make_extra_user(db, tenant)
+
+        visible = await service.list_assessments_for_round(
+            db, tenant.id, rd_id, viewer_user_id=watcher.id
+        )
+        assert {a["evaluator_user_id"] for a in visible} == {user.id, colleague.id}
+
     async def test_gate_lifts_once_the_round_is_complete(
         self, db: AsyncSession, tenant, user, admin_role
     ):

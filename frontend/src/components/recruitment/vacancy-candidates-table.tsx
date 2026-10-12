@@ -1133,6 +1133,7 @@ function DivergenceBadge({ row, vacancyId }: DivergenceBadgeProps) {
   // candidate — both filters travel in the URL.
   const canvasHref = `/recruitment/requisitions/${vacancyId}/assessments/canvas?filter=divergences&candidates=${row.id}`;
   return (
+    <span className="inline-flex flex-col items-center gap-0.5">
     <Tooltip>
       <TooltipTrigger
         // Focusable, so keyboard and screen-reader users reach the chip and
@@ -1182,6 +1183,17 @@ function DivergenceBadge({ row, vacancyId }: DivergenceBadgeProps) {
         </Link>
       </TooltipContent>
     </Tooltip>
+    {/* HRP-1044: the hover tooltip's link is out of reach on touch screens
+        and from the keyboard, so the canvas is also a plain link right
+        under the chip — in the table row and in the mobile card alike. */}
+    <Link
+      href={canvasHref}
+      className="text-[11px] underline underline-offset-2 hover:opacity-80"
+      data-testid={`vacancy-candidates-row-${row.id}-divergence-open-canvas`}
+    >
+      {t("candidatesTableDivergenceOpenCanvas")}
+    </Link>
+    </span>
   );
 }
 

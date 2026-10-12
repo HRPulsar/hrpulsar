@@ -33,7 +33,11 @@ describe("sectionForPath", () => {
     expect(sectionForPath("/employees")).toBe("employees");
     expect(sectionForPath("/employees/123")).toBe("employees");
     expect(sectionForPath("/admin/employees/unassigned")).toBe("employees");
-    expect(sectionForPath("/company/profile/section-access")).toBe("company");
+    // HRP-820 QA (06.10): the matrix screen lives under /settings/roles.
+    // `roles` is admin_locked in the backend registry, so whatever the
+    // matrix says, the admin keeps the section - no lockout from the
+    // screen that edits it.
+    expect(sectionForPath("/settings/roles/section-access")).toBe("roles");
     expect(sectionForPath("/assessment-groups/1")).toBe("assessments");
     expect(sectionForPath("/settings/import")).toBe("import");
     expect(sectionForPath("/settings/ai")).toBe("ai-settings");

@@ -14,10 +14,15 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Plus, Save, Star } from "lucide-react";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
+import { usePermissions } from "@/hooks/use-permissions";
 
 export default function ConsentTemplatesPage() {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  // HRP-1045: POST / PUT /recruitment/consent-templates stay the admin
+  // role's — `manage` on recruitment reads the templates, so the create
+  // card and the per-row writes are not offered to them.
+  const { isAdmin: canEdit } = usePermissions();
   // HRP-476: the seeded consent body is candidate-facing copy, so it comes
   // from the `recruitment` i18n namespace.
   const defaultBody = t("consentDefaultBody");
@@ -111,6 +116,7 @@ export default function ConsentTemplatesPage() {
         </p>
       </header>
 
+      {canEdit && (
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
@@ -173,6 +179,7 @@ export default function ConsentTemplatesPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium">{t("templatesExistingTitle")}</h2>
@@ -196,6 +203,7 @@ export default function ConsentTemplatesPage() {
                 key={`${t.id}::${t.version}::${t.is_active ? 1 : 0}`}
                 template={t}
                 saving={savingId === t.id}
+                canEdit={canEdit}
                 onUpdate={handleUpdate}
               />
             ))}
@@ -209,10 +217,13 @@ export default function ConsentTemplatesPage() {
 function TemplateRow({
   template,
   saving,
+  canEdit,
   onUpdate,
 }: {
   template: ConsentTemplate;
   saving: boolean;
+  /** HRP-1045: writes are the admin role's; readers get the text only. */
+  canEdit: boolean;
   onUpdate: (
     template: ConsentTemplate,
     patch: Partial<ConsentTemplate>,
@@ -239,6 +250,7 @@ function TemplateRow({
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="h-7 max-w-xs"
+            disabled={!canEdit}
           />
           {template.is_active ? (
             <Badge className={BADGE_COLOR.emerald}>{t("statusActive")}</Badge>
@@ -249,6 +261,7 @@ function TemplateRow({
             v{template.version}
           </span>
         </div>
+        {canEdit && (
         <div className="flex items-center gap-1">
           {!template.is_active && (
             <Button
@@ -277,12 +290,14 @@ function TemplateRow({
             {t("save")}
           </Button>
         </div>
+        )}
       </div>
       <Textarea
         rows={6}
         value={body}
         onChange={(e) => setBody(e.target.value)}
         className="text-xs"
+        disabled={!canEdit}
       />
     </li>
   );

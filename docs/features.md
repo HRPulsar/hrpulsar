@@ -99,7 +99,7 @@ A snapshot of the employee's competence profile in two blocks.
 
 ### Section Access
 
-- Admins choose which menu sections each role opens - none, view or manage per section and role - or hide a section from everyone
+- Admins choose which menu sections each role opens - none, view or manage per section and role - or hide a section from everyone; the matrix opens from the Roles page in the Admin area
 - The defaults are exactly today's access, so switching the screen on changes nothing until you do
 - The admin surfaces and the company profile always stay open to admins, so nobody locks themselves out; every save is logged with what changed
 - Who opens data import, invitations, roles and AI settings is the section access setting too - admins by default, plus HR and division managers for invitations. Invitations follow the org structure: HR sees and sends across the workspace, a division manager only into the departments they head; who may hand out which role stays the inviter hierarchy, and changing the role of a sent invitation stays with admins
@@ -181,7 +181,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 
 - Who runs hiring - vacancies, candidates, interviews, AI analyses, consents, reports and hiring rounds - is the section access setting; admins, HR and recruiters unless you change it, and they see every vacancy in the company
 - Everyone else the section is open to reads the vacancies they own, are the hiring manager of, or whose division they manage - never a vacancy they applied to themselves, which stays out of their reach for good together with its candidates, interviews and scores. Hiring managers keep evaluating candidates there - scores, moving a candidate through the funnel - and read and export the interview questions, while writing them takes Manage on the section; division managers and hiring managers read the hiring rounds and fill in their own sheet on a round they are an evaluator on, as long as the section is open to them, and a vacancy's hiring manager can be named an evaluator on its rounds whatever role they hold; creating, closing and staffing rounds and inviting outside evaluators takes Manage on the section
-- Recruitment settings stay with admins; GDPR requests and the audit log with admins and HR
+- Recruitment settings open per tab to whoever its API admits: whoever runs hiring edits the assessment scales and reads branding and the consent templates, HR also reads data retention and the role reference, and changing any of those plus the LLM and transcription providers stays with admins; GDPR requests and the audit log with admins and HR
 - The notifications that go to the hiring team when nobody else is named on them reach whoever the setting lets run hiring
 
 ### First Hiring Cycle

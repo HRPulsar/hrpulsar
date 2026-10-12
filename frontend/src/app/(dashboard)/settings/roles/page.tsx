@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { sectionAccessApi } from "@/lib/api/section-access";
 import type { Role } from "@/lib/types";
 import { RequireSection } from "@/components/require-section";
 import { usePermissions } from "@/hooks/use-permissions";
 import { FALLBACK_ROLE_CODE, SYSTEM_ROLE_KEYS } from "@/lib/user-role-label";
 import { Badge } from "@/components/ui/badge";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
@@ -76,11 +78,19 @@ function RolesPageContent() {
   const t = useTranslations("settings");
   // HRP-831: the count drills into the employee list filtered by role -
   // a filter the directory drops, so below the HR record it is a number.
-  const { canViewEmployeeRecords } = usePermissions();
+  const { canViewEmployeeRecords, canAdminister } = usePermissions();
   const tSections = useTranslations("sections");
   const tSidebar = useTranslations("sidebar");
+  // The section-access screen's strings live in the `company` namespace
+  // (where the screen was born, HRP-820); its entry point reuses them.
+  const tCompany = useTranslations("company");
   const [roles, setRoles] = useState<Role[] | null>(null);
   const [failed, setFailed] = useState(false);
+  // HRP-820 QA (06.10): the matrix entry moved here from the company
+  // profile. N sections hidden, or the generic hint while it hasn't
+  // loaded — canAdminister gates the fetch since the matrix API is
+  // admin-only.
+  const [hiddenCount, setHiddenCount] = useState<number | null>(null);
 
   useEffect(() => {
     api
@@ -95,6 +105,14 @@ function RolesPageContent() {
       .catch(() => setFailed(true));
   }, []);
 
+  useEffect(() => {
+    if (!canAdminister) return;
+    sectionAccessApi
+      .get()
+      .then((m) => setHiddenCount(m.sections.filter((s) => s.hidden).length))
+      .catch(() => setHiddenCount(null));
+  }, [canAdminister]);
+
   return (
     <div className="space-y-6" data-testid="roles-page">
       <div>
@@ -106,6 +124,36 @@ function RolesPageContent() {
         </div>
         <p className="text-sm text-muted-foreground">{t("rolesSubtitle")}</p>
       </div>
+
+      {canAdminister && (
+        <Card>
+          <CardContent className="pt-6">
+            <div
+              className="flex items-center justify-between gap-3"
+              data-testid="roles-section-access"
+            >
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">
+                  {tCompany("sectionAccess")}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {hiddenCount === null
+                    ? tCompany("sectionAccessHint")
+                    : tCompany("sectionAccessSummary", { count: hiddenCount })}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                render={<Link href="/settings/roles/section-access" />}
+                data-testid="roles-link-section-access"
+              >
+                {tCompany("sectionAccessOpen")}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardContent className="pt-6">
@@ -153,7 +201,9 @@ function RolesPageContent() {
                           </Badge>
                         </div>
                       </TableCell>
-                      <TableCell className="align-top text-sm text-muted-foreground">
+                      {/* HRP-634 QA: wrap, so the People column fits small
+                          screens without a horizontal scrollbar. */}
+                      <TableCell className="align-top text-sm text-muted-foreground whitespace-normal">
                         {capKey
                           ? t(capKey)
                           : role.description || t("rolesCapCustom")}

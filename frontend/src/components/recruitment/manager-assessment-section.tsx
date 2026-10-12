@@ -243,6 +243,11 @@ export function ManagerAssessmentSection({
     onScoresChangedRef.current = onScoresChanged;
   }, [onScoresChanged]);
   const [sheet, setSheet] = useState<AssessmentSheet | null>(null);
+  // HRP-629 REDO (QA 09.10): internal colleagues' sheets on the round. A
+  // viewer with no sheet of their own (a manager at `view` who is not an
+  // evaluator, an admin watching) reads them below, read-only. The server
+  // only returns them while the viewer has nothing left to anchor (HRP-373).
+  const [otherSheets, setOtherSheets] = useState<AssessmentSheet[]>([]);
   const [scaleLevels, setScaleLevels] = useState<ScaleLevel[]>([]);
   const [profileCompetences, setProfileCompetences] = useState<
     ProfileCompetence[]
@@ -541,15 +546,22 @@ export function ManagerAssessmentSection({
             a.evaluator_type === "user" &&
             (user ? a.evaluator_user_id === user.id : false),
         );
-        if (mine) {
-          setSheet(mine);
-          return;
-        }
-        // No sheet for current evaluator yet — request creation by adding self as evaluator.
-        // We surface a placeholder so the user can still start scoring.
-        setSheet(null);
+        // HRP-629 REDO: keep the colleagues' internal sheets — with no sheet
+        // of one's own they render read-only instead of an empty tab.
+        // External sheets stay behind the invite's "View submission".
+        setOtherSheets(
+          list.filter(
+            (a) => a.evaluator_type === "user" && a !== mine,
+          ),
+        );
+        // With no sheet for the current evaluator yet, `null` surfaces the
+        // "Start scoring" placeholder (creation = adding self as evaluator).
+        setSheet(mine ?? null);
       } catch {
-        if (activeRoundIdRef.current === roundId) setSheet(null);
+        if (activeRoundIdRef.current === roundId) {
+          setSheet(null);
+          setOtherSheets([]);
+        }
       }
     },
     [user],
@@ -585,6 +597,7 @@ export function ManagerAssessmentSection({
       // HRP-550: no round means no sheet. Returning early left the last
       // round's form (and its aggregate) rendered under the new vacancy.
       setSheet(null);
+      setOtherSheets([]);
       setAggregate(null);
       return;
     }
@@ -1183,6 +1196,69 @@ export function ManagerAssessmentSection({
                 )}
               </div>
             ) : null}
+
+            {/* HRP-629 REDO: no sheet of one's own on this round — the
+                evaluators' sheets render read-only instead of an empty tab,
+                for a live round and a closed one alike. Writes stay behind
+                `manage`; the server withholds these rows from an evaluator
+                who has not submitted yet (HRP-373). */}
+            {!sheet && otherSheets.length > 0 && (
+              <div className="space-y-4" data-testid="assessment-readonly-sheets">
+                {/* The closed-round badge normally rides the progress row,
+                    which needs an own sheet or a submitted external — show
+                    it here when that row is absent. */}
+                {roundClosed && !submittedExternal && (
+                  <Badge
+                    variant="outline"
+                    className={
+                      activeRound?.status === "archived"
+                        ? "bg-muted text-muted-foreground"
+                        : "bg-emerald-50 text-emerald-700"
+                    }
+                    data-testid="assessment-round-status-badge"
+                  >
+                    {activeRound?.status === "archived"
+                      ? t("managerAssessmentRoundArchivedBadge")
+                      : t("managerAssessmentRoundCompletedBadge")}
+                  </Badge>
+                )}
+                {otherSheets.map((s) => {
+                  const evaluator = activeRound?.evaluators.find(
+                    (e) => e.user_id === s.evaluator_user_id,
+                  );
+                  return (
+                    <div
+                      key={s.id}
+                      className="space-y-2"
+                      data-testid={`assessment-readonly-sheet-${s.id}`}
+                    >
+                      <h4 className="text-xs font-semibold text-muted-foreground">
+                        {s.evaluator_display_name ||
+                          evaluator?.full_name ||
+                          evaluator?.initials ||
+                          ""}
+                      </h4>
+                      <CompetenceScoreList
+                        competences={profileCompetences}
+                        scaleLevels={scaleLevels}
+                        competenceScores={s.competence_scores}
+                        indicatorScores={s.indicator_scores}
+                        disabled
+                        emptyHint={t("managerAssessmentEmptyHint")}
+                        onCompetenceScore={() => undefined}
+                        onCompetenceComment={() => undefined}
+                        onIndicatorScore={() => undefined}
+                      />
+                      {s.final_notes && (
+                        <div className="rounded-md border bg-muted/20 p-3 text-xs whitespace-pre-wrap">
+                          {s.final_notes}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Invites */}
             <div className="space-y-2 border-t pt-3">

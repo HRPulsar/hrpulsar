@@ -511,6 +511,8 @@ class TestInternalShortlistIsScopedByTheVacancy:
             headers=_headers(hiring["mgr_user"]),
         )
         assert resp.status_code == 403, resp.text
+
+
 class TestManagerReadsTheVersionsPanelAndQuestions:
     """HRP-701: the two GETs HRP-694 left on the narrow role tuple.
 
@@ -557,3 +559,53 @@ class TestManagerReadsTheVersionsPanelAndQuestions:
         ):
             resp = await client.get(path, headers=h)
             assert resp.status_code == 403, f"{path} -> {resp.status_code}"
+
+
+class TestManagerReadsRoundSheets:
+    """HRP-629 REDO (QA 09.10): a manager at ``view`` who is not on a
+    round's evaluator list still reads the round's evaluation sheets —
+    through the real route, so the role gate, the vacancy scope guard and
+    the HRP-373 anchoring gate are all on the path."""
+
+    async def _round_with_a_recruiter_sheet(self, db, tenant, hiring):
+        from app.modules.recruitment import manager_assessment_service as mas
+        from app.modules.recruitment.manager_assessment_schemas import RoundCreate
+
+        rec = hiring["rec_user"]
+        rd = await mas.create_round(
+            db, tenant.id, rec.id, hiring["mine_cv"].id, RoundCreate(type="interview")
+        )
+        rd_id = uuid.UUID(str(rd["id"]))
+        await mas.add_evaluator(db, tenant.id, rec.id, rd_id, rec.id)
+        return rd_id
+
+    async def test_non_evaluator_manager_reads_the_sheets(
+        self, db: AsyncSession, client: AsyncClient, tenant, hiring
+    ):
+        rd_id = await self._round_with_a_recruiter_sheet(db, tenant, hiring)
+        resp = await client.get(
+            f"/api/v1/assessment-rounds/{rd_id}/assessments",
+            headers=_headers(hiring["mgr_user"]),
+        )
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        assert [r["evaluator_user_id"] for r in rows] == [str(hiring["rec_user"].id)]
+
+    async def test_a_neighbouring_division_round_stays_refused(
+        self, db: AsyncSession, client: AsyncClient, tenant, hiring
+    ):
+        from app.modules.recruitment import manager_assessment_service as mas
+        from app.modules.recruitment.manager_assessment_schemas import RoundCreate
+
+        rd = await mas.create_round(
+            db,
+            tenant.id,
+            hiring["rec_user"].id,
+            hiring["theirs_cv"].id,
+            RoundCreate(type="interview"),
+        )
+        resp = await client.get(
+            f"/api/v1/assessment-rounds/{rd['id']}/assessments",
+            headers=_headers(hiring["mgr_user"]),
+        )
+        assert resp.status_code == 403, resp.text

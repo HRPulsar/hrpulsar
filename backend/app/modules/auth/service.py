@@ -418,6 +418,13 @@ async def verify_email(db: AsyncSession, token: str) -> dict[str, Any]:
     if not user:
         raise AppError("invalid_verification_token", status.HTTP_400_BAD_REQUEST)
 
+    # HRP-1035: a verification link in the inbox of a deactivated account —
+    # a deleted employee's, say — is not a way back in. Same guards as
+    # login and magic login; this path minted tokens with neither.
+    if not user.is_active:
+        raise AppError("account_deactivated", status.HTTP_403_FORBIDDEN)
+    await assert_employee_active(db, user)
+
     if user.email_verified_at:
         # Already verified — just return tokens
         await _stamp_first_login(db, user)
@@ -1360,11 +1367,16 @@ async def create_invitation(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
-    # Check that email is not already a user in this tenant
-    existing_user = await db.execute(
-        select(User).where(User.email == data.email, User.tenant_id == tenant_id)
-    )
-    if existing_user.scalar_one_or_none():
+    # Check that email is not already an active user in this tenant.
+    # HRP-1035: a deactivated account — a deleted employee's — does not
+    # block a new invitation: accepting it is the re-hire path that
+    # reactivates the account under a fresh password.
+    existing_user = (
+        await db.execute(
+            select(User).where(User.email == data.email, User.tenant_id == tenant_id)
+        )
+    ).scalar_one_or_none()
+    if existing_user is not None and existing_user.is_active:
         raise AppError("user_email_already_exists", status.HTTP_409_CONFLICT)
 
     # Check no pending invitation for same email in this tenant
@@ -1693,26 +1705,47 @@ async def accept_invitation(
         await db.commit()
         raise AppError("invitation_has_expired", status.HTTP_400_BAD_REQUEST)
 
-    # Check email not already taken in this tenant
-    existing = await db.execute(
-        select(User).where(User.email == inv.email, User.tenant_id == inv.tenant_id)
-    )
-    if existing.scalar_one_or_none():
+    # Check email not already taken by an active user in this tenant
+    existing = (
+        await db.execute(
+            select(User).where(
+                User.email == inv.email, User.tenant_id == inv.tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None and existing.is_active:
         raise AppError("user_email_already_exists", status.HTTP_409_CONFLICT)
 
-    # Create user (invitation proves email ownership)
-    user = User(
-        email=inv.email,
-        password_hash=hash_password(data.password),
-        first_name=data.first_name,
-        last_name=data.last_name,
-        tenant_id=inv.tenant_id,
-        email_verified_at=datetime.now(timezone.utc),
-    )
-    db.add(user)
-    await db.flush()
+    if existing is not None:
+        # HRP-1035: re-hire. Deleting the employee deactivated this account;
+        # a fresh invitation to the address brings the person back under the
+        # password set here. token_version moved at the delete, so every
+        # token from the previous employment stays dead.
+        user = existing
+        user.is_active = True
+        user.password_hash = hash_password(data.password)
+        user.first_name = data.first_name
+        user.last_name = data.last_name
+        user.email_verified_at = datetime.now(timezone.utc)
+        # The previous employment's roles do not survive the re-hire: a
+        # deleted admin re-invited as employee must come back holding
+        # exactly what the invitation grants, not their old authority.
+        await db.execute(user_roles.delete().where(user_roles.c.user_id == user.id))
+        await db.flush()
+    else:
+        # Create user (invitation proves email ownership)
+        user = User(
+            email=inv.email,
+            password_hash=hash_password(data.password),
+            first_name=data.first_name,
+            last_name=data.last_name,
+            tenant_id=inv.tenant_id,
+            email_verified_at=datetime.now(timezone.utc),
+        )
+        db.add(user)
+        await db.flush()
 
-    # Assign role
+    # Assign role (a re-hired account starts from a clean slate — see above)
     role_result = await db.execute(
         select(Role).where(
             Role.code == inv.role_code,

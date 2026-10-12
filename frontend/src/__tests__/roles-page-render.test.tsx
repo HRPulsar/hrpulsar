@@ -70,7 +70,24 @@ vi.mock("@/hooks/use-permissions", () => ({
     canViewSection: () => isAdmin,
     canManageSection: () => isAdmin,
     canViewEmployeeRecords: isAdmin,
+    canAdminister: isAdmin,
   }),
+}));
+
+// HRP-820 QA (06.10): the section-access entry moved here from the company
+// profile; the admin-only fetch behind it answers the hidden-section count.
+vi.mock("@/lib/api/section-access", () => ({
+  sectionAccessApi: {
+    get: vi.fn(() =>
+      Promise.resolve({
+        roles: ["admin"],
+        sections: [
+          { code: "exams", hidden: true },
+          { code: "employees", hidden: false },
+        ],
+      }),
+    ),
+  },
 }));
 
 vi.mock("@/context/auth-context", () => ({
@@ -155,6 +172,21 @@ describe("roles page", () => {
     // unless the tenant wrote its own description.
     expect(text).toContain(enMessages.settings.rolesCapCustom);
     expect(text).toContain("Read-only observer");
+  });
+
+  it("offers the admin the section-access matrix (HRP-820)", async () => {
+    await render();
+
+    const link = container.querySelector(
+      "[data-testid='roles-link-section-access']",
+    );
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("/settings/roles/section-access");
+    // The one-line summary counts the hidden sections the mock returns.
+    expect(
+      container.querySelector("[data-testid='roles-section-access']")
+        ?.textContent,
+    ).toContain("1 section hidden");
   });
 
   it("renders nothing for a caller the matrix closed the section to", async () => {

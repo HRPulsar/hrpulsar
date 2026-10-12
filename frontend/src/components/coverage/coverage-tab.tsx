@@ -512,6 +512,20 @@ function MatchRow({
     !row.agent?.agent_id &&
     !row.agent?.pack_manual;
   const canHaveSkill = candidate;
+  // HRP-809 REDO (QA 09.10): Change sits right after the person it changes,
+  // the way the accountable's Change does - not past the agent hint at the
+  // end of the row. With nobody assigned the row keeps Assign at the end.
+  const assignExecutorButton = canEdit && (
+    <Button
+      size="sm"
+      variant="outline"
+      className="h-7"
+      onClick={() => onAssign("executor_employee_id")}
+      data-testid={`coverage-btn-assign-executor-${row.step_id}`}
+    >
+      {assigned ? t("changeExecutor") : t("assignExecutor")}
+    </Button>
+  );
 
   return (
     <li
@@ -615,6 +629,7 @@ function MatchRow({
                 )}
               </div>
             )}
+            {assigned && assignExecutorButton}
             {assigned && row.agent && (
               <span className="inline-flex items-center gap-1 text-xs" data-testid={`coverage-agent-${row.step_id}`}>
                 <Bot className="size-3.5" />
@@ -739,17 +754,7 @@ function MatchRow({
                 {t(canEdit ? "unclassifiedHint" : "unclassifiedReadOnly")}
               </span>
             )}
-            {canEdit && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7"
-                onClick={() => onAssign("executor_employee_id")}
-                data-testid={`coverage-btn-assign-executor-${row.step_id}`}
-              >
-                {assigned ? t("changeExecutor") : t("assignExecutor")}
-              </Button>
-            )}
+            {!assigned && assignExecutorButton}
           </div>
 
           <AccountableLine row={row} canEdit={canEdit} t={t} onAssign={() => onAssign("accountable_employee_id")} />

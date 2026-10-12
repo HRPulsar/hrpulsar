@@ -458,6 +458,31 @@ async def assert_division_heads_in_scope(
     )
 
 
+async def assert_not_replacing_self_as_head(
+    db: AsyncSession, current_user: User, *current_head_ids: uuid.UUID | None
+) -> None:
+    """HRP-819 (QA 09.10): below the admin level a division head does not
+    hand off a seat they hold themselves.
+
+    ``current_head_ids`` are the *current* holders of the Manager / Deputy
+    Manager fields the caller is changing. When one of them is the caller,
+    the change unseats the caller — and with the seat may go their manager
+    role and this very permission — so it is the admin's or HR's move.
+    """
+    heads = {e for e in current_head_ids if e is not None}
+    if not heads or _is_admin(current_user):
+        return
+    emp = await get_current_employee(db, current_user)
+    if emp is None or emp.id not in heads:
+        return
+    raise AppError(
+        "cannot_replace_self_as_head",
+        status.HTTP_403_FORBIDDEN,
+        detail_extra={},
+        detail_code_key="error_code",
+    )
+
+
 def assert_not_self_edit_via_employees(current_user: User, target: Employee) -> None:
     """Block a non-admin-level writer from their own employee record via /employees.
 

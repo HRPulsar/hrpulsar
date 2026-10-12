@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { AlertTriangle, Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ALERT_TONE } from "@/lib/badge-tones";
 
 type Retention = {
@@ -51,6 +52,9 @@ const FIELDS: {
 export default function RetentionPage() {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  // HRP-1045: PUT /recruitment/settings/retention stays the admin role's —
+  // hr reads the policy, so the fields and Save take no input from them.
+  const { isAdmin: canEdit } = usePermissions();
   const [data, setData] = useState<Retention | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -141,6 +145,7 @@ export default function RetentionPage() {
                     type="number"
                     min={1}
                     max={3650}
+                    disabled={!canEdit}
                     value={draft[f.key]}
                     onChange={(e) =>
                       setDraft((d) => ({
@@ -158,20 +163,22 @@ export default function RetentionPage() {
                   {t("retentionShortWarning")}
                 </div>
               )}
-              <div className="flex justify-end">
-                <Button
-                  onClick={handleSave}
-                  disabled={saving}
-                  data-testid="retention-btn-save"
-                >
-                  {saving ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Save className="size-4" />
-                  )}
-                  {t("save")}
-                </Button>
-              </div>
+              {canEdit && (
+                <div className="flex justify-end">
+                  <Button
+                    onClick={handleSave}
+                    disabled={saving}
+                    data-testid="retention-btn-save"
+                  >
+                    {saving ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Save className="size-4" />
+                    )}
+                    {t("save")}
+                  </Button>
+                </div>
+              )}
             </>
           )}
         </CardContent>

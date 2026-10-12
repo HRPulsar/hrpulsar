@@ -380,6 +380,13 @@ async def create_employee(
     if not user or user.tenant_id != tenant_id:
         raise AppError("employee_invalid_user", status.HTTP_400_BAD_REQUEST)
 
+    # HRP-1035: a deactivated account — a deleted employee's — cannot be
+    # handed a card directly: login would stay refused forever and no
+    # set-password link goes out. Re-hiring goes through a new invitation,
+    # whose acceptance reactivates the account.
+    if not user.is_active:
+        raise AppError("user_account_deactivated", status.HTTP_409_CONFLICT)
+
     # Check not already an employee
     existing = await db.execute(
         select(Employee).where(
@@ -1000,6 +1007,14 @@ async def delete_employee(
     await ensure_not_an_owner(db, emp.id)  # HRP-988: AI agent ownership first
 
     snapshot = _employee_to_read(emp)
+    # HRP-1035: deleting the card removes the person from the company, so
+    # the account goes with it — otherwise auth has no Employee row left to
+    # judge and the deleted employee keeps signing in. Deactivation closes
+    # every token path (login, refresh, magic link, verify link), and the
+    # version bump kills tokens already issued.
+    if emp.user is not None:
+        emp.user.is_active = False
+        emp.user.token_version += 1
     await db.delete(emp)
     await db.commit()
     return snapshot

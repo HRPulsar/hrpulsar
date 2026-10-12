@@ -861,15 +861,18 @@ Next to the level:
   evaluator's cell is `manage`'s (Maxim, 25.09). A hiring-round sheet is its
   evaluator's at every level - scoring it and submitting it. A stage change
   stays inside the vacancy's own funnel.
-- **The tenant settings stay the `admin` role's** - the funnel stages, the
-  consent templates, the LLM and transcription providers, the
+- **The tenant settings' writes stay the `admin` role's** - the funnel
+  stages, the consent templates, the LLM and transcription providers, the
   interview-analysis scales (`/recruitment/settings/scales`), branding,
-  retention and the assessment-matrix settings, as they were. The UI keeps
-  the settings pages behind the admin role too, so the hiring-round scales
-  (`/v1/assessment-scales`, `manage`) are edited from there by an admin who
-  also holds `manage` (Maxim, 25.09). The two reads those pages share with
-  the section - the consent templates and the branding - answer the admin
-  role or `manage`.
+  retention and the assessment-matrix settings, as they were. The settings
+  UI follows the audiences the APIs already admit (HRP-1045): the
+  hiring-round scales tab (`/v1/assessment-scales`) is `manage`'s, reads
+  and writes; branding and the consent templates read at `manage` or the
+  admin role (`reads_hiring_settings`), with the save and create controls
+  kept for admin; retention and the role list read as `admin` or `hr`, and
+  saving retention stays admin's; the LLM and transcription provider tabs
+  stay the admin role's alone. The menu entry and the settings hub show
+  only the tabs the caller can open.
 - **GDPR and the audit log stay `admin` and `hr`** - export, erasure, the
   request list, the audit log, and reading the retention and role settings.
   `manage` alone does not reach them; an `hr` the tenant lowers to `view`
@@ -981,7 +984,8 @@ take it, which says nothing about who competes.
 ## Section access (the tenant matrix)
 
 An admin narrows which menu sections each role opens on
-`/company/profile/section-access` (`GET`/`PUT /api/settings/section-access`,
+`/settings/roles/section-access`, the Roles page's Configure entry
+(`GET`/`PUT /api/settings/section-access`,
 admin only): `none`, `view` or `manage` per section and role, or hidden for
 everyone. The registry in `app/core/sections.py` is the source of truth -
 which API paths make up a section, the defaults below, and the flags. Only

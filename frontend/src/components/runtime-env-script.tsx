@@ -54,6 +54,9 @@ const PUBLIC_ENV_KEYS = [
   // "true" adds a phone field to the demo call-back request — read by the
   // same component; on for the RU site only.
   "NEXT_PUBLIC_DEMO_CONTACT_PHONE",
+  // Google Ads conversion target for the demo sandbox (HRP-1052) — read by
+  // lib/google-ads.ts; unset everywhere but the flagship SaaS.
+  "NEXT_PUBLIC_GOOGLE_ADS_DEMO_CONVERSION",
   // Per-site billing currency/locale (HRP-451) — read by lib/currency.ts.
   "NEXT_PUBLIC_BILLING_CURRENCY",
   "NEXT_PUBLIC_BILLING_LOCALE",

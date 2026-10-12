@@ -92,7 +92,7 @@ vi.mock("sonner", () => ({
 }));
 
 const SectionAccessPage = (
-  await import("@/app/(dashboard)/company/profile/section-access/page")
+  await import("@/app/(dashboard)/settings/roles/section-access/page")
 ).default;
 
 let container: HTMLDivElement;

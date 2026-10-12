@@ -229,7 +229,7 @@ test.describe("Admin section access", () => {
     await completeOnboarding({ page, accessToken: adminAccess });
     const setEmployeeLevel = async (section: string, level: string) => {
       await setAuthTokens(page, adminAccess, adminRefresh);
-      await page.goto("/company/profile/section-access");
+      await page.goto("/settings/roles/section-access");
       await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
       const select = page.getByTestId(`section-access-select-${section}-employee`);
       await select.selectOption(level);
@@ -358,7 +358,8 @@ test.describe("Coverage access", () => {
 
 /**
  * HRP-820: the admin hides a section for everyone on
- * /company/profile/section-access - the entry leaves every sidebar, a
+ * /settings/roles/section-access (moved from the company profile, QA
+ * 06.10) - the entry leaves every sidebar, a
  * direct link bounces, and the API answers 403.
  */
 test.describe("Section access matrix (HRP-820)", () => {
@@ -386,7 +387,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     // role's, so a level under the Employee column would change nothing.
     // Nothing is saved here - the other tests share this tenant.
     await setAuthTokens(page, adminAccess, adminRefresh);
-    await page.goto("/company/profile/section-access");
+    await page.goto("/settings/roles/section-access");
     await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId("section-access-employee-floor")).toBeVisible();
 
@@ -401,8 +402,8 @@ test.describe("Section access matrix (HRP-820)", () => {
 
   test("hiding a section removes it for everyone", async ({ page, request }) => {
     await setAuthTokens(page, adminAccess, adminRefresh);
-    await page.goto("/company/profile");
-    await page.getByTestId("company-profile-link-section-access").click();
+    await page.goto("/settings/roles");
+    await page.getByTestId("roles-link-section-access").click();
     await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
     // "company" is admin_locked (the admin row never drops below manage)
     // and "employees" is never_hidden — both controls stay disabled.
@@ -491,7 +492,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     // Hand the section to the employee role: the button appears and the
     // same call goes through - no role change anywhere.
     await setAuthTokens(page, adminAccess, adminRefresh);
-    await page.goto("/company/profile/section-access");
+    await page.goto("/settings/roles/section-access");
     await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
     await page.getByTestId("section-access-select-talent-market-employee").selectOption("manage");
     await page.getByTestId("section-access-btn-save").click();
@@ -509,7 +510,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     // Take it away: the page bounces and the candidate's half closes too -
     // nothing of this section lives outside the matrix.
     await setAuthTokens(page, adminAccess, adminRefresh);
-    await page.goto("/company/profile/section-access");
+    await page.goto("/settings/roles/section-access");
     await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
     await page.getByTestId("section-access-select-talent-market-employee").selectOption("none");
     await page.getByTestId("section-access-btn-save").click();
@@ -538,7 +539,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     await completeOnboarding({ page, accessToken: adminAccess });
     const setEmployeeLevel = async (level: string) => {
       await setAuthTokens(page, adminAccess, adminRefresh);
-      await page.goto("/company/profile/section-access");
+      await page.goto("/settings/roles/section-access");
       await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
       const select = page.getByTestId("section-access-select-development-employee");
       await select.selectOption(level);
@@ -582,7 +583,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     await completeOnboarding({ page, accessToken: adminAccess });
     const setEmployeeLevel = async (level: string) => {
       await setAuthTokens(page, adminAccess, adminRefresh);
-      await page.goto("/company/profile/section-access");
+      await page.goto("/settings/roles/section-access");
       await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
       const select = page.getByTestId("section-access-select-assessments-employee");
       await select.selectOption(level);
@@ -626,7 +627,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     await completeOnboarding({ page, accessToken: adminAccess });
     const setEmployeeLevel = async (level: string) => {
       await setAuthTokens(page, adminAccess, adminRefresh);
-      await page.goto("/company/profile/section-access");
+      await page.goto("/settings/roles/section-access");
       await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
       const select = page.getByTestId("section-access-select-competences-employee");
       await select.selectOption(level);
@@ -676,7 +677,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     await completeOnboarding({ page, accessToken: adminAccess });
     const setEmployeeLevel = async (level: string) => {
       await setAuthTokens(page, adminAccess, adminRefresh);
-      await page.goto("/company/profile/section-access");
+      await page.goto("/settings/roles/section-access");
       await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
       const select = page.getByTestId("section-access-select-company-employee");
       await select.selectOption(level);
@@ -728,7 +729,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     await completeOnboarding({ page, accessToken: adminAccess });
     const setEmployeeLevel = async (level: string) => {
       await setAuthTokens(page, adminAccess, adminRefresh);
-      await page.goto("/company/profile/section-access");
+      await page.goto("/settings/roles/section-access");
       await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
       const select = page.getByTestId("section-access-select-employees-employee");
       await select.selectOption(level);
@@ -790,7 +791,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     await completeOnboarding({ page, accessToken: adminAccess });
     const setEmployeeLevel = async (level: string) => {
       await setAuthTokens(page, adminAccess, adminRefresh);
-      await page.goto("/company/profile/section-access");
+      await page.goto("/settings/roles/section-access");
       await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
       const select = page.getByTestId("section-access-select-recruitment-employee");
       await select.selectOption(level);

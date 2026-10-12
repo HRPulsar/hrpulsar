@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.access_scope import (
     assert_division_heads_in_scope,
     assert_division_write_scope,
+    assert_not_replacing_self_as_head,
 )
 from app.core.errors import AppError
 from app.core.sections import require_section
@@ -291,6 +292,12 @@ async def update_division(
             for f in ("manager_id", "deputy_manager_id")
             if f in sent and getattr(data, f) != current[f]
         ]
+        # HRP-819 (QA 09.10): a non-admin head does not hand off their own
+        # seat — replacing (or clearing) a Manager / Deputy Manager value
+        # that currently names the caller is the admin's or HR's move.
+        await assert_not_replacing_self_as_head(
+            db, current_user, *(current[f] for f in changed)
+        )
         await assert_division_heads_in_scope(
             db,
             current_user,

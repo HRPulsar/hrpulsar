@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
+import { usePermissions } from "@/hooks/use-permissions";
 
 type Branding = {
   logo_file_id: string | null;
@@ -23,6 +24,9 @@ type Branding = {
 export default function BrandingPage() {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  // HRP-1045: PUT /recruitment/settings/branding stays the admin role's —
+  // `manage` on recruitment reads it, so the fields and Save take no input.
+  const { isAdmin: canEdit } = usePermissions();
   const [branding, setBranding] = useState<Branding | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -106,6 +110,7 @@ export default function BrandingPage() {
                     <Input
                       id="brand-accent"
                       type="color"
+                      disabled={!canEdit}
                       value={draft.accent_color || "#0066ff"}
                       onChange={(e) =>
                         setDraft((d) => ({
@@ -117,6 +122,7 @@ export default function BrandingPage() {
                       data-testid="brand-input-accent"
                     />
                     <Input
+                      disabled={!canEdit}
                       value={draft.accent_color}
                       onChange={(e) =>
                         setDraft((d) => ({
@@ -135,6 +141,7 @@ export default function BrandingPage() {
                     <Input
                       id="brand-secondary"
                       type="color"
+                      disabled={!canEdit}
                       value={draft.secondary_color || "#1a1f36"}
                       onChange={(e) =>
                         setDraft((d) => ({
@@ -145,6 +152,7 @@ export default function BrandingPage() {
                       className="h-8 w-16 cursor-pointer"
                     />
                     <Input
+                      disabled={!canEdit}
                       value={draft.secondary_color}
                       onChange={(e) =>
                         setDraft((d) => ({
@@ -162,6 +170,7 @@ export default function BrandingPage() {
                 <Label htmlFor="brand-watermark">{t("brandingWatermark")}</Label>
                 <Input
                   id="brand-watermark"
+                  disabled={!canEdit}
                   value={draft.watermark_text}
                   onChange={(e) =>
                     setDraft((d) => ({
@@ -173,20 +182,22 @@ export default function BrandingPage() {
                   data-testid="brand-input-watermark"
                 />
               </div>
-              <div className="flex justify-end">
-                <Button
-                  onClick={handleSave}
-                  disabled={saving}
-                  data-testid="brand-btn-save"
-                >
-                  {saving ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Save className="size-4" />
-                  )}
-                  {t("save")}
-                </Button>
-              </div>
+              {canEdit && (
+                <div className="flex justify-end">
+                  <Button
+                    onClick={handleSave}
+                    disabled={saving}
+                    data-testid="brand-btn-save"
+                  >
+                    {saving ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Save className="size-4" />
+                    )}
+                    {t("save")}
+                  </Button>
+                </div>
+              )}
             </>
           )}
         </CardContent>

@@ -90,6 +90,40 @@ describe("Divergence badge tooltip (HRP-507)", () => {
     expect(TABLE).toContain("-divergence-empty`}");
   });
 
+  // HRP-1044: the tooltip's link is hover-only — unreachable on touch and
+  // from the keyboard — so the canvas is also a plain link under the chip.
+  it("offers the canvas as a visible link next to the chip (HRP-1044)", () => {
+    expect(TABLE).toContain(
+      '<Link href={canvasHref} className="text-[11px] underline underline-offset-2 hover:opacity-80" data-testid={`vacancy-candidates-row-${row.id}-divergence-open-canvas`} >',
+    );
+    expect(TABLE).toContain('{t("candidatesTableDivergenceOpenCanvas")}');
+    // The tooltip (and its own link) stays.
+    expect(TABLE).toContain("-divergence-canvas-link`}");
+  });
+
+  it("renders the badge — chip plus visible link — on both surfaces", () => {
+    // The desktop row's divergence cell.
+    expect(TABLE).toContain(
+      "-divergence`} > <DivergenceBadge row={row} vacancyId={vacancyId} /> </td>",
+    );
+    // The mobile card, only when there is something to open.
+    expect(TABLE).toContain(
+      '{(row.divergence_count ?? 0) > 0 && ( <div className="mt-2"> <DivergenceBadge row={row} vacancyId={vacancyId} /> </div> )}',
+    );
+  });
+
+  it("translates the visible link in every catalog", () => {
+    expect(EN.recruitment.candidatesTableDivergenceOpenCanvas).toBe(
+      "Open canvas",
+    );
+    for (const [locale, catalog] of CATALOGS) {
+      expect(
+        catalog.recruitment.candidatesTableDivergenceOpenCanvas,
+        locale,
+      ).toBeTruthy();
+    }
+  });
+
   it("makes Canvas honour ?filter=divergences on first render", () => {
     expect(CANVAS).toContain("const searchParams = useSearchParams();");
     expect(CANVAS).toContain(

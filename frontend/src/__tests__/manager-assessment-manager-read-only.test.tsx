@@ -228,10 +228,35 @@ describe("Manager assessments for a manager below manage (HRP-629)", () => {
     );
   });
 
-  it("shows no sheet on a round they do not evaluate", async () => {
+  // HRP-629 REDO (QA 09.10): not being on the round's evaluator list no
+  // longer means an empty tab — the colleagues' sheets render read-only.
+  it("shows the evaluators' sheets read-only on a round they do not evaluate", async () => {
     await render(["manager"], "view");
     await openTab(OTHER.id);
-    expect(byId("score-stub")).toBeNull();
+    const readonly = anyById("assessment-readonly-sheet-");
+    expect(readonly).not.toBeNull();
+    // The colleague's name heads their sheet.
+    expect(readonly!.textContent).toContain("u-recruiter");
+    const score = byId("score-stub");
+    expect(score).not.toBeNull();
+    expect(score!.disabled).toBe(true);
+    await act(async () => score!.click());
+    await flush();
+    expect(api.patch).not.toHaveBeenCalled();
+  });
+
+  it("shows the same read-only sheets with a status badge once the round is closed", async () => {
+    OTHER.status = "complete";
+    try {
+      await render(["manager"], "view");
+      await openTab(OTHER.id);
+      expect(anyById("assessment-readonly-sheet-")).not.toBeNull();
+      expect(byId("score-stub")!.disabled).toBe(true);
+      expect(byId("assessment-round-status-badge")).not.toBeNull();
+      for (const id of WRITES) expect(anyById(id), id).toBeNull();
+    } finally {
+      OTHER.status = "in_progress";
+    }
   });
 
   // HRP-630 (QA 06.10): the hiring manager at view, named an internal
@@ -245,7 +270,8 @@ describe("Manager assessments for a manager below manage (HRP-629)", () => {
       for (const id of WRITES) expect(anyById(id), `${tab}: ${id}`).toBeNull();
     }
     await openTab(OTHER.id);
-    expect(byId("score-stub")).toBeNull();
+    // HRP-629 REDO: the colleague's sheet reads, it does not take input.
+    expect(byId("score-stub")!.disabled).toBe(true);
     await openTab(MINE.id);
     const score = byId("score-stub");
     expect(score!.disabled).toBe(false);

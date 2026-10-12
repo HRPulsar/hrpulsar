@@ -480,7 +480,7 @@
       "hint": "Invitations sent to colleagues and what became of them — pending, accepted, cancelled or expired. Accepting one creates the account and the employee card in a single step, with the role and division already set."
     },
     "roles": {
-      "hint": "A read-only reference of the roles in this workspace: what each one can actually open and change, and how many people hold it. The count opens the employee list filtered by that role."
+      "hint": "A reference of this workspace's roles: what each role can do and how many people hold it. Following a count opens the employee list filtered by that role. Every account in your workspace is counted here, but an account may have no employee row in that list."
     },
     "aiSettings": {
       "hint": "Which model this workspace uses, how much effort it spends per call, and which language it writes in. The settings apply to every AI action in the product — competence generation, position drafts, plan suggestions, recruitment analyses."
@@ -896,7 +896,7 @@
     "sectionAccessLevelManage": "Manage",
     "sectionAccessLockedAdmin": "The admin role keeps full access to this section.",
     "sectionAccessCannotHide": "This section cannot be hidden.",
-    "sectionAccessBack": "Back to the profile",
+    "sectionAccessBack": "Back to roles",
     "seatFromElsewhere": "An administrator appointed someone from outside your divisions here; only an administrator changes this seat.",
     "sectionAccessEmployeeFloor": "Everyone also holds the Employee role, so no role opens a section less than the Employee column does.",
     "sectionAccessBelowEmployee": "Everyone also holds the Employee role, so this role opens the section at {level} anyway.",
@@ -2730,13 +2730,13 @@
     "aiPresetBalancedDescription": "Balanced quality and cost (default)",
     "aiPresetThoroughDescription": "Highest quality, slower and more expensive",
     "rolesTitle": "Roles",
-    "rolesSubtitle": "Which roles exist in this workspace, what each one can actually do, and how many people hold it.",
+    "rolesSubtitle": "Which roles exist, what each one can do, and how many people hold it.",
     "rolesLoading": "Loading roles…",
     "rolesLoadFailed": "Could not load roles.",
     "rolesColRole": "Role",
     "rolesColCan": "What this role can do",
     "rolesColHolders": "People",
-    "rolesHoldersHint": "Roles stack: every account carries the baseline Employee role on top of whatever else it holds, so these numbers overlap and do not add up to the headcount. Following a count opens the employee list — an account with no employee card of its own is counted here but has no row there.",
+    "rolesHoldersHint": "Roles stack: every account carries the baseline Employee role on top of whatever else it holds, so these counts overlap and do not add up to the headcount. Following a count opens the employee list — every account in your workspace is counted here, but an account may have no row in that list.",
     "rolesHoldersLink": "Show the employees with this role",
     "rolesKindSystem": "System",
     "rolesKindCustom": "Custom",
@@ -5450,6 +5450,7 @@
     "candidatesTableDivergenceMore": "…and {count} more",
     "candidatesTableDivergenceAria": "{count} of {total} competences diverge between the manager and the AI",
     "candidatesTableDivergenceCanvasHint": "Click to view in Canvas",
+    "candidatesTableDivergenceOpenCanvas": "Open canvas",
     "candidatesTableBulkQueuedPartial": "Queued {queued}, {failed} skipped (see candidate cards).",
     "candidatesTableBulkQueued": "Queued resume-only analysis for {count} candidate(s).",
     "candidatesTableBulkFailed": "Failed to start bulk analysis",

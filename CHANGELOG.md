@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.5.0] - 2026-10-12
+
+### Added
+- Recruitment: the divergence canvas opens from a visible link in the candidate row and the mobile candidate card, reachable by keyboard and touch, next to the existing hover tooltip (HRP-1044)
+- Demo: a deployment-configured Google Ads conversion fires when a visitor submits Save access (HRP-1052)
+
+### Changed
+- Recruitment settings tabs open to the audiences their APIs already admit: scales to whoever runs hiring, retention and roles read-only to HR, branding and consent templates read-only below admin; LLM and transcription providers stay admin-only (HRP-1045)
+- Self-hosted and SaaS composes run the stock postgres image now that the pgvector extension is dropped (HRP-1043)
+
+### Fixed
+- Roles: the capability column wraps so the People column fits small screens without scrolling, and the page hints explain the counters and the drill-down (HRP-634)
+- Section access: the matrix screen moved to the Roles page (Configure button, /settings/roles/section-access); the company profile no longer links it (HRP-820)
+- Recruitment: a manager with view access who is not on a round's evaluator list sees the round's evaluation sheets read-only instead of an empty tab, for active and closed rounds alike (HRP-629)
+- Coverage: on a step with an assigned executor the Change button sits right after the executor, before the agent hint (HRP-809)
+- A division manager can no longer replace or clear their own Manager or Deputy Manager seat; that change is for an admin or HR (HRP-819)
+- Deleting an employee deactivates their account: the deleted employee can no longer sign in or keep an existing session, on any sign-in path; a new invitation to the same email re-hires them with a fresh password (HRP-1035)
+
 ## [2.4.0] - 2026-10-09
 
 ### Added
